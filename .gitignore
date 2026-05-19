@@ -1,0 +1,28 @@
+.todo
+.claude
+.codex
+.kiro
+.qwen
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.*_cache
+.ty/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Virtual environments and local environment files
+.venv/
+.env
+.env.*
+!.env.example
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
