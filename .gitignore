@@ -26,3 +26,4 @@ build/
 *.sqlite
 *.sqlite3
 *.db
+.guide.yaml

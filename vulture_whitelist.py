@@ -11,3 +11,4 @@ _ = _Whitelist()
 _.health  # FastAPI route handler registered through APIRouter
 _.init_database  # FastAPI lifespan integration hook, wired when DB startup is enabled
 _.close_database  # FastAPI lifespan integration hook, wired when DB shutdown is enabled
+_.main  # Project script entry point wired through pyproject.toml
