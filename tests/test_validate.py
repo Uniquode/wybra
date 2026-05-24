@@ -1,9 +1,10 @@
 from pathlib import Path
+from shutil import copytree
 
 import pytest
 
 from uniquode.settings import Settings
-from uniquode.validate import _contains_post_form
+from uniquode.validate import _contains_post_form, validate_web
 from uniquode.validate import main as validate_main
 
 
@@ -113,6 +114,35 @@ def test_validate_post_form_detection_accepts_html_attribute_variants() -> None:
     assert not _contains_post_form('<form method="postish" action="/login">')
     assert not _contains_post_form('<form data-method="post" action="/login">')
     assert not _contains_post_form('<form method="post"')
+
+
+def test_validate_web_rejects_post_form_missing_csrf_field(tmp_path) -> None:
+    source_root = Path(__file__).resolve().parents[1]
+    template_root = tmp_path / "templates"
+    static_root = tmp_path / "static"
+    copytree(source_root / "src/templates", template_root)
+    copytree(source_root / "src/static", static_root)
+    (template_root / "identity/pages/login.html").write_text(
+        """
+        <form method="post" action="/login">
+          <input name="email" type="email">
+          <button type="submit">Sign in</button>
+        </form>
+        """,
+        encoding="utf-8",
+    )
+
+    result = validate_web(
+        Settings(
+            template_root=template_root,
+            static_root=static_root,
+        )
+    )
+
+    assert not result.is_ok
+    assert any(
+        "POST form template must include CSRF field" in error for error in result.errors
+    )
 
 
 def test_validate_command_rejects_unsupported_database_url(capsys) -> None:
