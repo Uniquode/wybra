@@ -11,12 +11,12 @@ dependencies = [
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
     "dbscripts",
-    "envex>=4.3.0",
-    "fastapi>=0.136.1",
+    "envex>=4.4.0",
+    "fastapi>=0.136.3",
     "fastapi-users[sqlalchemy]>=15.0.5",
     "jinja2>=3.1.6",
     "sqlalchemy[asyncio]>=2.0.49",
-    "uvicorn>=0.47.0",
+    "uvicorn>=0.48.0",
 ]
 
 [project.scripts]
