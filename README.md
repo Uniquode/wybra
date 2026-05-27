@@ -27,7 +27,20 @@ Run the development server:
 uv run runserver
 uv run runserver --host 127.0.0.1 --port 8000
 uv run runserver --reload
+APP_RELOAD=1 uv run runserver
 ```
+
+## Configuration
+
+Runtime configuration is loaded through `envex`, including local `.env` files.
+`DATABASE_URL` is the database connection string. App settings use concise names
+such as `APP_ENV`, `APP_NAME`, `CSRF_SECRET`, `CSRF_SECURE`, `RESET_SECRET`,
+`VERIFICATION_SECRET`, `SESSION_COOKIE`, `SESSION_SECURE`, `SESSION_LIFETIME`,
+`OAUTH_LINKING`, `ADVANCED_AUTH`, and `APP_RELOAD`.
+
+Local `.env` files are for development only and are ignored by Git. Deployment
+environments should inject secrets through their secret manager or environment
+configuration.
 
 ## Development Notes
 
@@ -40,7 +53,7 @@ Run project validation:
 ```sh
 uv run validate
 uv run validate --verbose
-uv run validate --verbose web persistence
+uv run validate --verbose environment web persistence
 ```
 
 Verbose validation lists the concrete checks performed for each target. Database
