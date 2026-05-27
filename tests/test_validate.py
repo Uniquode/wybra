@@ -3,6 +3,9 @@ from shutil import copytree
 
 import pytest
 
+import uniquode.validate as validate_module
+import uniquode.validation.environment as environment_validation
+from uniquode.configuration import ConfigurationError
 from uniquode.settings import Settings
 from uniquode.validate import _contains_post_form, validate_web
 from uniquode.validate import main as validate_main
@@ -26,12 +29,22 @@ def test_validate_command_checks_persistence_foundation(capsys) -> None:
     assert "persistence: ok" in captured.out
 
 
+def test_validate_command_checks_environment_configuration(capsys) -> None:
+    exit_code = validate_main(["environment"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "environment: ok" in captured.out
+
+
 def test_validate_command_default_runs_registered_targets(capsys) -> None:
     exit_code = validate_main([])
 
     captured = capsys.readouterr()
 
     assert exit_code == 0
+    assert "environment: ok" in captured.out
     assert "web: ok" in captured.out
     assert "persistence: ok" in captured.out
 
@@ -42,8 +55,15 @@ def test_validate_command_verbose_lists_registered_checks(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 0
+    assert "environment: ok" in captured.out
     assert "web: ok" in captured.out
     assert "persistence: ok" in captured.out
+    assert "ok: supported environment variable name is valid: APP_ENV" in captured.out
+    assert (
+        "ok: supported environment variable name is valid: APP_RELOAD" in captured.out
+    )
+    assert "ok: supported environment variable names are unique" in captured.out
+    assert "ok: environment loader returns an envex Env instance" in captured.out
     assert "ok: template root exists:" in captured.out
     assert "ok: route template exists: public:home -> public/pages/home.html" in (
         captured.out
@@ -66,6 +86,89 @@ def test_validate_command_verbose_lists_registered_checks(capsys) -> None:
     assert "ok: development database initialisation command is available:" in (
         captured.out
     )
+
+
+def test_validate_environment_verbose_redacts_database_url_password(
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://user:password@host.example/app",
+    )
+
+    exit_code = validate_main(["environment", "--verbose"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "postgresql+asyncpg://***:***@host.example/app" in captured.out
+    assert "postgresql+asyncpg://user:password@host.example/app" not in captured.out
+    assert "password" not in captured.out
+
+
+def test_validate_command_reports_invalid_environment_configuration(
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("CSRF_SECRET", raising=False)
+    monkeypatch.delenv("RESET_SECRET", raising=False)
+    monkeypatch.delenv("VERIFICATION_SECRET", raising=False)
+
+    exit_code = validate_main(["environment"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "configuration: failed" in captured.err
+    assert "Non-local deployments must configure identity reset" in captured.err
+
+
+def test_validate_command_does_not_mask_unrelated_value_errors(monkeypatch) -> None:
+    def raise_unrelated_value_error(_args: object) -> Settings:
+        raise ValueError("programmer error")
+
+    monkeypatch.setattr(validate_module, "_build_settings", raise_unrelated_value_error)
+
+    with pytest.raises(ValueError, match="programmer error"):
+        validate_module.main(["environment"])
+
+
+def test_validate_environment_loader_error_does_not_emit_exception_detail(
+    monkeypatch,
+) -> None:
+    def raise_sensitive_error(**_kwargs: object) -> None:
+        raise ConfigurationError(
+            "Environment loader failed while initialising envex (RuntimeError)."
+        )
+
+    monkeypatch.setattr(
+        environment_validation, "load_environment", raise_sensitive_error
+    )
+
+    result = environment_validation.validate_environment(Settings())
+
+    assert not result.is_ok
+    assert result.errors == (
+        "Environment loader failed while initialising envex (RuntimeError).",
+    )
+    assert "secret" not in "\n".join(result.errors)
+    assert "DATABASE_URL" not in "\n".join(result.errors)
+
+
+def test_validate_environment_reports_wrong_loader_return_type(monkeypatch) -> None:
+    monkeypatch.setattr(
+        environment_validation,
+        "load_environment",
+        lambda **_kwargs: object(),
+    )
+
+    result = environment_validation.validate_environment(Settings())
+
+    assert not result.is_ok
+    assert result.errors == ("Environment loader returned object; expected envex Env.",)
 
 
 def test_validate_command_unknown_target_raises_system_exit(capsys) -> None:
@@ -95,7 +198,8 @@ def test_validate_command_rejects_blank_static_url_path(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "Static URL path must not be empty." in captured.out
+    assert captured.out == ""
+    assert "Static URL path must not be empty." in captured.err
 
 
 def test_validate_post_form_detection_accepts_html_attribute_variants() -> None:
@@ -151,8 +255,9 @@ def test_validate_command_rejects_unsupported_database_url(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 1
+    assert captured.out == ""
     assert "Database URL must use sqlite+aiosqlite:// or postgresql+asyncpg://" in (
-        captured.out
+        captured.err
     )
 
 
@@ -162,7 +267,8 @@ def test_validate_command_rejects_empty_database_url_override(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "Database URL must not be empty." in captured.out
+    assert captured.out == ""
+    assert "Database URL must not be empty." in captured.err
 
 
 def test_validate_command_verbose_lists_failed_checks(capsys) -> None:
@@ -173,13 +279,14 @@ def test_validate_command_verbose_lists_failed_checks(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "persistence: failed" in captured.out
-    assert "ok: database URL is configured: sqlite://:memory:" in captured.out
+    assert captured.out == ""
+    assert "persistence: failed" in captured.err
+    assert "ok: database URL is configured: sqlite://:memory:" in captured.err
     assert "failed: database URL uses supported async SQLAlchemy driver" in (
-        captured.out
+        captured.err
     )
     assert "Database URL must use sqlite+aiosqlite:// or postgresql+asyncpg://" in (
-        captured.out
+        captured.err
     )
 
 
@@ -235,8 +342,9 @@ def test_validate_command_reports_missing_alembic_structure(tmp_path, capsys) ->
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "Missing Alembic config" in captured.out
-    assert "Missing Alembic migrations root" in captured.out
+    assert captured.out == ""
+    assert "Missing Alembic config" in captured.err
+    assert "Missing Alembic migrations root" in captured.err
 
 
 def test_validate_command_reports_missing_templates(tmp_path, capsys) -> None:
@@ -259,7 +367,8 @@ def test_validate_command_reports_missing_templates(tmp_path, capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "Missing template" in captured.out
+    assert captured.out == ""
+    assert "Missing template" in captured.err
 
 
 def test_validate_command_reports_template_decode_errors(tmp_path, capsys) -> None:
@@ -282,8 +391,9 @@ def test_validate_command_reports_template_decode_errors(tmp_path, capsys) -> No
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "Unable to read" in captured.out
-    assert "identity/pages/login.html" in captured.out
+    assert captured.out == ""
+    assert "Unable to read" in captured.err
+    assert "identity/pages/login.html" in captured.err
 
 
 def test_validate_command_reports_missing_theme_tokens(tmp_path, capsys) -> None:
@@ -330,5 +440,6 @@ def test_validate_command_reports_missing_theme_tokens(tmp_path, capsys) -> None
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "Missing theme token" in captured.out
-    assert "Missing theme selector" in captured.out
+    assert captured.out == ""
+    assert "Missing theme token" in captured.err
+    assert "Missing theme selector" in captured.err

@@ -341,14 +341,14 @@ wheels = [
 
 [[package]]
 name = "envex"
-version = "4.4.0"
+version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pycryptodome" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/a9/b271a6e233f29b47e2f74a594b53ec35dfc8417cde591470a1239d8f6524/envex-4.4.0.tar.gz", hash = "sha256:0449b3d52e4e1d085cc7c5d5b1448854fd39ab1a1165b6b83aaa09ed6a562ad7", size = 25220, upload-time = "2026-05-25T06:56:11.306Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c2/d0/856dbb783d10c343c03dfe717cddd8f3f87934e651c8ea0d77e36f16bd04/envex-5.0.0.tar.gz", hash = "sha256:1a1144c6c112d58a4c21e35f23375c12b1ce25c8ddd4660a6990066dadf2576b", size = 32004, upload-time = "2026-05-27T05:32:19.459Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/8b/2ca888dabc208f242018b7239c0fff88169899a6d6d07599d0252309d2c5/envex-4.4.0-py3-none-any.whl", hash = "sha256:e0becf90ad12f6e7cb06ee84436173a547a3dc8fc43085015f0a939e5979863a", size = 30999, upload-time = "2026-05-25T06:56:12.572Z" },
+    { url = "https://files.pythonhosted.org/packages/85/b0/5bbc112840e632ba44142d8436afb23183b86822c9ef5c013d78fe9cd773/envex-5.0.0-py3-none-any.whl", hash = "sha256:af04b9b03445fb16118d1277458b2ce936a24df5079bcfd9bdc984d69d34dd99", size = 38404, upload-time = "2026-05-27T05:32:18.483Z" },
 ]
 
 [[package]]
@@ -1103,7 +1103,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "dbscripts", git = "https://github.com/deeprave/dbscripts" },
-    { name = "envex", specifier = ">=4.4.0" },
+    { name = "envex", specifier = ">=5.0.0" },
     { name = "fastapi", specifier = ">=0.136.3" },
     { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=15.0.5" },
     { name = "jinja2", specifier = ">=3.1.6" },
