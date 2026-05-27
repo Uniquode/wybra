@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
-from typing import cast
+from typing import Protocol, cast
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import Response
@@ -29,18 +29,29 @@ _CURRENT_USER_CACHE_MISSING = object()
 logger = logging.getLogger(__name__)
 
 
-def _session_factory_from_request(
-    request: Request,
-) -> async_sessionmaker[AsyncSession]:
+class SupportsSessionFactory(Protocol):
+    session_factory: async_sessionmaker[AsyncSession]
+
+
+def _database_from_request(request: Request) -> SupportsSessionFactory:
     database = getattr(request.app.state, "database", None)
     if database is None:
         raise RuntimeError("Database is not configured on the application.")
 
-    session_factory = getattr(database, "session_factory", None)
+    if not hasattr(database, "session_factory"):
+        raise RuntimeError("Database session factory is not configured.")
+
+    return cast(SupportsSessionFactory, database)
+
+
+def _session_factory_from_request(
+    request: Request,
+) -> async_sessionmaker[AsyncSession]:
+    session_factory = _database_from_request(request).session_factory
     if session_factory is None:
         raise RuntimeError("Database session factory is not configured.")
 
-    return cast(async_sessionmaker[AsyncSession], session_factory)
+    return session_factory
 
 
 def _identity_options_from_request(request: Request) -> IdentityOptions:
