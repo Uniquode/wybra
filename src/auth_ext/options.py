@@ -4,7 +4,7 @@ from typing import Literal
 
 from auth_ext.configuration import ConfigurationError
 
-AccountCreationPolicy = Literal["admin-created"]
+AccountCreationPolicy = Literal["admin-created", "public-signup"]
 IdentityIntegration = Literal["oauth-account-linking", "advanced-authentication"]
 
 _GENERATE_LOCAL_SECRET = "__generate-local-identity-secret__"

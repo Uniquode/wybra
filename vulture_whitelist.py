@@ -25,6 +25,7 @@ _.account_creation_policy
 _.integration_enabled
 _.UserRead
 _.UserUpdate
+_.validate_password
 _.on_after_forgot_password
 _.on_after_request_verify
 _.optional_current_user
