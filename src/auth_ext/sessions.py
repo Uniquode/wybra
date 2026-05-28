@@ -303,23 +303,20 @@ async def create_local_user_from_signup(
         return Result.ok({"id": str(user.id), "email": user.email})
 
 
-async def create_session_token(request: Request, user: User) -> str:
-    options = _identity_options_from_request(request)
-    session_factory = _session_factory_from_request(request)
-
-    async with session_factory() as session:
-        strategy = create_database_strategy(session, options)
-        return await strategy.write_token(user)
-
-
 async def complete_authentication_ceremony(
     request: Request,
     user: User,
 ) -> Result[str]:
-    if not user.is_active:
-        return Result.failure(ERROR_INACTIVE_USER)
+    options = _identity_options_from_request(request)
+    session_factory = _session_factory_from_request(request)
 
-    return Result.ok(await create_session_token(request, user))
+    async with session_factory() as session:
+        current_user = await session.get(User, user.id)
+        if current_user is None or not current_user.is_active:
+            return Result.failure(ERROR_INACTIVE_USER)
+
+        strategy = create_database_strategy(session, options)
+        return Result.ok(await strategy.write_token(current_user))
 
 
 async def destroy_session_token(request: Request) -> None:
