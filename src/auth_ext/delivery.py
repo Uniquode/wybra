@@ -2,7 +2,7 @@ from typing import Protocol
 
 from fastapi import Request
 
-from auth_ext.sqlalchemy.models import User
+from auth_ext.models import User
 
 
 class IdentityDelivery(Protocol):

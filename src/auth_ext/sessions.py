@@ -27,7 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from auth_ext.delivery import IdentityDelivery, NullIdentityDelivery
 from auth_ext.manager import UserManager, create_user_manager
+from auth_ext.models import AccessToken, User
 from auth_ext.options import IdentityOptions
+from auth_ext.persistence import (
+    create_database_strategy,
+    delete_session_token_by_value,
+)
 from auth_ext.result import (
     ERROR_ALREADY_EXISTS,
     ERROR_ALREADY_VERIFIED,
@@ -41,11 +46,6 @@ from auth_ext.result import (
     Result,
 )
 from auth_ext.schemas import UserCreate
-from auth_ext.sqlalchemy.models import AccessToken, User
-from auth_ext.sqlalchemy.sessions import (
-    create_database_strategy,
-    delete_session_token_by_value,
-)
 
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"
 _CURRENT_USER_CACHE_VALUE_ATTR = "identity_current_user"

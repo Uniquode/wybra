@@ -58,3 +58,15 @@ class AccessToken(SQLAlchemyBaseAccessTokenTableUUID, Base):
         ForeignKey("identity_user.id", ondelete="cascade"),
         nullable=False,
     )
+
+
+metadata = Base.metadata
+
+__all__ = (
+    "AccessToken",
+    "Base",
+    "InitialAdminBootstrap",
+    "OAuthAccount",
+    "User",
+    "metadata",
+)
