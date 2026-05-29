@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import Response
@@ -11,12 +11,36 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import FastAPIUsers
 from fastapi_users.authentication import AuthenticationBackend, CookieTransport
 from fastapi_users.authentication.strategy.db import DatabaseStrategy
-from fastapi_users.exceptions import FastAPIUsersException, UserNotExists
+from fastapi_users.exceptions import (
+    FastAPIUsersException,
+    InvalidID,
+    InvalidPasswordException,
+    InvalidVerifyToken,
+    UserAlreadyExists,
+    UserAlreadyVerified,
+    UserNotExists,
+)
+from fastapi_users.jwt import decode_jwt
+from jwt import PyJWTError
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from auth_ext.delivery import IdentityDelivery, NullIdentityDelivery
 from auth_ext.manager import UserManager, create_user_manager
 from auth_ext.options import IdentityOptions
+from auth_ext.result import (
+    ERROR_ALREADY_EXISTS,
+    ERROR_ALREADY_VERIFIED,
+    ERROR_IDENTITY_CHANGED,
+    ERROR_INACTIVE_USER,
+    ERROR_INVALID_EMAIL,
+    ERROR_INVALID_PASSWORD,
+    ERROR_INVALID_TOKEN,
+    ERROR_POLICY_DISABLED,
+    ERROR_TOKEN_REJECTED,
+    Result,
+)
+from auth_ext.schemas import UserCreate
 from auth_ext.sqlalchemy.models import AccessToken, User
 from auth_ext.sqlalchemy.sessions import (
     create_database_strategy,
@@ -240,13 +264,59 @@ async def authenticate_user(
         return user
 
 
-async def create_session_token(request: Request, user: User) -> str:
+async def create_local_user_from_signup(
+    request: Request,
+    email: str,
+    password: str,
+) -> Result[dict[str, Any]]:
+    options = _identity_options_from_request(request)
+    if options.account_creation_policy != "public-signup":
+        return Result.failure(ERROR_POLICY_DISABLED)
+
+    if not password.strip():
+        return Result.failure(ERROR_INVALID_PASSWORD)
+
+    session_factory = _session_factory_from_request(request)
+    async with session_factory() as session:
+        manager = create_user_manager(
+            session,
+            options,
+            _delivery_from_request(request),
+        )
+        try:
+            user_create = UserCreate(
+                email=email,
+                password=password,
+            )
+            user = await manager.create(
+                user_create,
+                safe=True,
+                request=request,
+            )
+        except ValidationError:
+            return Result.failure(ERROR_INVALID_EMAIL)
+        except InvalidPasswordException:
+            return Result.failure(ERROR_INVALID_PASSWORD)
+        except UserAlreadyExists:
+            return Result.failure(ERROR_ALREADY_EXISTS)
+
+        return Result.ok({"id": str(user.id), "email": user.email})
+
+
+async def complete_authentication_ceremony(
+    request: Request,
+    user: User,
+) -> Result[str]:
     options = _identity_options_from_request(request)
     session_factory = _session_factory_from_request(request)
 
     async with session_factory() as session:
+        current_user = await session.get(User, user.id)
+        if current_user is None or not current_user.is_active:
+            return Result.failure(ERROR_INACTIVE_USER)
+
         strategy = create_database_strategy(session, options)
-        return await strategy.write_token(user)
+        return Result.ok(await strategy.write_token(current_user))
 
 
 async def destroy_session_token(request: Request) -> None:
@@ -330,7 +400,39 @@ async def request_verification(request: Request, email: str) -> None:
             return
 
 
-async def verify_user(request: Request, token: str) -> bool:
+async def _active_user_from_verification_token(
+    manager: UserManager,
+    token: str,
+) -> Result[str]:
+    try:
+        data = decode_jwt(
+            token,
+            manager.verification_token_secret,
+            [manager.verification_token_audience],
+        )
+        user_id = data["sub"]
+        email = data["email"]
+        parsed_id = manager.parse_id(user_id)
+        user = await manager.get(parsed_id)
+    except KeyError:
+        return Result.failure(ERROR_INVALID_TOKEN)
+    except PyJWTError:
+        return Result.failure(ERROR_INVALID_TOKEN)
+    except InvalidID:
+        return Result.failure(ERROR_INVALID_TOKEN)
+    except UserNotExists:
+        return Result.failure(ERROR_INVALID_TOKEN)
+
+    if email != user.email:
+        return Result.failure(ERROR_IDENTITY_CHANGED)
+
+    if not user.is_active:
+        return Result.failure(ERROR_INACTIVE_USER)
+
+    return Result.ok(str(user.id))
+
+
+async def verify_user(request: Request, token: str) -> Result[str]:
     options = _identity_options_from_request(request)
     session_factory = _session_factory_from_request(request)
 
@@ -340,9 +442,22 @@ async def verify_user(request: Request, token: str) -> bool:
             options,
             _delivery_from_request(request),
         )
-        try:
-            await manager.verify(token, request)
-        except FastAPIUsersException:
-            return False
+        token_result = await _active_user_from_verification_token(manager, token)
+        if token_result.is_failure():
+            return token_result
 
-        return True
+        try:
+            verified_user = await manager.verify(token, request)
+        except InvalidVerifyToken:
+            return Result.failure(ERROR_INVALID_TOKEN)
+        except UserAlreadyVerified:
+            return Result.failure(ERROR_ALREADY_VERIFIED)
+        except FastAPIUsersException as exc:
+            logger.warning(
+                "Verification token was rejected by the identity backend: %s",
+                type(exc).__name__,
+                exc_info=True,
+            )
+            return Result.failure(ERROR_TOKEN_REJECTED)
+
+        return Result.ok(str(verified_user.id))

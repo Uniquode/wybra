@@ -17,6 +17,20 @@ from auth_ext.options import (
     IdentityOptions,
     is_generate_local_identity_secret,
 )
+from auth_ext.result import (
+    ERROR_ALREADY_EXISTS,
+    ERROR_ALREADY_VERIFIED,
+    ERROR_IDENTITY_CHANGED,
+    ERROR_INACTIVE_USER,
+    ERROR_INVALID_EMAIL,
+    ERROR_INVALID_PASSWORD,
+    ERROR_INVALID_TOKEN,
+    ERROR_POLICY_DISABLED,
+    ERROR_TOKEN_REJECTED,
+    Result,
+    ResultErrorType,
+    ResultValue,
+)
 from auth_ext.routing import RouteReplacement, RouterExtensionPlan
 from auth_ext.schemas import UserCreate, UserRead, UserUpdate
 from auth_ext.storage import (
@@ -34,6 +48,15 @@ __all__ = [
     "ChallengeRecord",
     "ChallengeStore",
     "ConfigurationError",
+    "ERROR_ALREADY_EXISTS",
+    "ERROR_ALREADY_VERIFIED",
+    "ERROR_IDENTITY_CHANGED",
+    "ERROR_INACTIVE_USER",
+    "ERROR_INVALID_EMAIL",
+    "ERROR_INVALID_TOKEN",
+    "ERROR_INVALID_PASSWORD",
+    "ERROR_POLICY_DISABLED",
+    "ERROR_TOKEN_REJECTED",
     "IdentityDelivery",
     "IdentityIntegration",
     "IdentityOptions",
@@ -41,6 +64,11 @@ __all__ = [
     "NullIdentityDelivery",
     "PrimaryAuthenticationContext",
     "RecoveryCodeStore",
+    "Result",
+    "ResultErrorType",
+    "ResultValue",
+    "RouteReplacement",
+    "RouterExtensionPlan",
     "TOTPCredentialStore",
     "UserCreate",
     "UserRead",
@@ -48,6 +76,4 @@ __all__ = [
     "WebAuthnCredentialStore",
     "complete_challenge",
     "is_generate_local_identity_secret",
-    "RouteReplacement",
-    "RouterExtensionPlan",
 ]

@@ -1,11 +1,20 @@
 from dataclasses import dataclass, field
 from secrets import token_urlsafe
-from typing import Literal
+from typing import Final, Literal
 
 from auth_ext.configuration import ConfigurationError
 
-AccountCreationPolicy = Literal["admin-created"]
+AccountCreationPolicy = Literal["admin-created", "public-signup"]
 IdentityIntegration = Literal["oauth-account-linking", "advanced-authentication"]
+VALID_ACCOUNT_CREATION_POLICIES: Final[tuple[AccountCreationPolicy, ...]] = (
+    "admin-created",
+    "public-signup",
+)
+ACCOUNT_CREATION_POLICY_ERROR: Final = (
+    "Account creation policy must be one of: "
+    + ", ".join(VALID_ACCOUNT_CREATION_POLICIES)
+    + "."
+)
 
 _GENERATE_LOCAL_SECRET = "__generate-local-identity-secret__"
 
@@ -27,6 +36,9 @@ class IdentityOptions:
     token_secrets_configured: bool = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.account_creation_policy not in VALID_ACCOUNT_CREATION_POLICIES:
+            raise ConfigurationError(ACCOUNT_CREATION_POLICY_ERROR)
+
         if self.session_lifetime_seconds <= 0:
             raise ConfigurationError(
                 "Session lifetime must be a positive number of seconds."

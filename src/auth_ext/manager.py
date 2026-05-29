@@ -4,12 +4,14 @@ import uuid
 
 from fastapi import Request
 from fastapi_users import BaseUserManager, UUIDIDMixin
+from fastapi_users.exceptions import InvalidPasswordException
 from fastapi_users.password import PasswordHelper
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_ext.delivery import IdentityDelivery, NullIdentityDelivery
 from auth_ext.options import IdentityOptions
+from auth_ext.schemas import UserCreate
 from auth_ext.sqlalchemy.models import User
 from auth_ext.sqlalchemy.users import create_user_database
 
@@ -28,6 +30,14 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         self.delivery = delivery or NullIdentityDelivery()
         self.reset_password_token_secret = options.reset_password_token_secret
         self.verification_token_secret = options.verification_token_secret
+
+    async def validate_password(
+        self,
+        password: str,
+        user: UserCreate | User,
+    ) -> None:
+        if not password.strip():
+            raise InvalidPasswordException("Password must not be blank.")
 
     async def on_after_forgot_password(
         self,
