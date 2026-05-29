@@ -1,11 +1,12 @@
 import uuid
 
 from fastapi_users.authentication.strategy.db import DatabaseStrategy
+from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from fastapi_users_db_sqlalchemy.access_token import SQLAlchemyAccessTokenDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth_ext.models import AccessToken, OAuthAccount, User
 from auth_ext.options import IdentityOptions
-from auth_ext.sqlalchemy.models import AccessToken, User
 
 
 def create_access_token_database(
@@ -29,3 +30,9 @@ async def delete_session_token_by_value(session: AsyncSession, token: str) -> No
     access_token = await access_token_database.get_by_token(token)
     if access_token is not None:
         await access_token_database.delete(access_token)
+
+
+def create_user_database(
+    session: AsyncSession,
+) -> SQLAlchemyUserDatabase[User, uuid.UUID]:
+    return SQLAlchemyUserDatabase(session, User, OAuthAccount)

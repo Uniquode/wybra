@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_ext.delivery import IdentityDelivery
 from auth_ext.manager import create_user_manager
+from auth_ext.models import InitialAdminBootstrap, User
 from auth_ext.options import IdentityOptions
 from auth_ext.schemas import UserCreate
-from auth_ext.sqlalchemy.models import InitialAdminBootstrap, User
 
 _INITIAL_ADMIN_BOOTSTRAP_ID = 1
 _INITIAL_ADMIN_BOOTSTRAP_LOOKUP_ATTEMPTS = 10

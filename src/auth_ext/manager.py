@@ -10,10 +10,10 @@ from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_ext.delivery import IdentityDelivery, NullIdentityDelivery
+from auth_ext.models import User
 from auth_ext.options import IdentityOptions
+from auth_ext.persistence import create_user_database
 from auth_ext.schemas import UserCreate
-from auth_ext.sqlalchemy.models import User
-from auth_ext.sqlalchemy.users import create_user_database
 
 
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
