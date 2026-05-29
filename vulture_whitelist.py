@@ -84,7 +84,6 @@ _.has_consent
 _.subject
 _.client
 _.record_consent
-_.allowed_scopes
 _.requested_scopes
 _.store_refresh_token
 _.get_refresh_token_by_verifier
