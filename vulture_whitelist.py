@@ -55,6 +55,46 @@ _.code
 _.oauth_accounts
 _.csrf_token_secret_configured
 
+# auth_provider public contracts intentionally exported before runtime endpoints.
+_.active
+_.display_name
+_.redirect_uris
+_.allowed_scopes
+_.is_confidential
+_.client_id
+_.subject_id
+_.redirect_uri
+_.scopes
+_.family_id
+_.verifier
+_.issued_at
+_.consumed_at
+_.revoked_at
+_.key_id
+_.algorithm
+_.public_jwk
+_.refresh_tokens
+_.resolve_subject
+_.get_client
+_.save_grant
+_.grant
+_.consume_grant
+_.grant_id
+_.has_consent
+_.subject
+_.client
+_.record_consent
+_.requested_scopes
+_.store_refresh_token
+_.get_refresh_token_by_verifier
+_.mark_refresh_token_consumed
+_.token_id
+_.successor
+_.revoke_token_family
+_.revoke_subject_client_token_families
+_.active_signing_key
+_.public_signing_keys
+
 # Alembic revision module entry points and metadata.
 _.revision
 _.down_revision
