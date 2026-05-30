@@ -72,7 +72,13 @@ uv run pytest
 Initialise or update the local SQLite development database:
 
 ```sh
-uv run alembic upgrade head
+uv run migrate upgrade
+```
+
+Use `--database-url` to target an explicit database for one migration command:
+
+```sh
+uv run migrate --database-url sqlite+aiosqlite:///scratch.sqlite3 upgrade
 ```
 
 PostgreSQL environments must provide the database, users, roles, and privileges

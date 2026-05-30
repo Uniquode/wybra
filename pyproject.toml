@@ -20,6 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
+migrate = "uniquode.migrate:main"
 runserver = "uniquode.runserver:main"
 validate = "uniquode.validate:main"
 

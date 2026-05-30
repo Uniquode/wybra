@@ -86,6 +86,7 @@ def test_validate_command_verbose_lists_registered_checks(capsys) -> None:
     assert "ok: development database initialisation command is available:" in (
         captured.out
     )
+    assert "uv run migrate upgrade" in captured.out
 
 
 def test_validate_environment_verbose_redacts_database_url_password(
