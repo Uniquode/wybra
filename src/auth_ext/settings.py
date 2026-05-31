@@ -154,15 +154,11 @@ def _configured_database_url(
     auth_config: Mapping[str, Any],
     env: Mapping[str, str],
 ) -> str:
-    auth_env_value = env.get(AUTH_DATABASE_URL_ENV)
-    if isinstance(auth_env_value, str) and auth_env_value.strip():
-        database_url = auth_env_value
-    else:
-        database_env_value = env.get(DATABASE_URL_ENV)
-        if isinstance(database_env_value, str) and database_env_value.strip():
-            database_url = database_env_value
-        else:
-            database_url = auth_config.get(DATABASE_URL_FIELD)
+    database_url = (
+        _configured_env_value(env, AUTH_DATABASE_URL_ENV)
+        or _configured_env_value(env, DATABASE_URL_ENV)
+        or auth_config.get(DATABASE_URL_FIELD)
+    )
 
     if not isinstance(database_url, str) or not database_url.strip():
         raise ConfigurationError(
@@ -171,6 +167,11 @@ def _configured_database_url(
         )
 
     return database_url
+
+
+def _configured_env_value(env: Mapping[str, str], field_name: str) -> str | None:
+    value = env.get(field_name)
+    return value if value and value.strip() else None
 
 
 def _identity_options_from_auth_config(
