@@ -112,10 +112,7 @@ async def create_local_user_for_management(
     delivery: IdentityDelivery | None = None,
 ) -> Result[dict[str, Any]]:
     if preferred_timezone is not None and not _valid_timezone(preferred_timezone):
-        return Result.failure(
-            ERROR_INVALID_TIMEZONE,
-            f"Unknown preferred timezone: {preferred_timezone}",
-        )
+        return Result.failure(ERROR_INVALID_TIMEZONE)
 
     manager = create_user_manager(session, options, delivery)
     try:
@@ -269,10 +266,7 @@ async def update_local_user_for_management(
         return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
 
     if preferred_timezone is not None and not _valid_timezone(preferred_timezone):
-        return Result.failure(
-            ERROR_INVALID_TIMEZONE,
-            f"Unknown preferred timezone: {preferred_timezone}",
-        )
+        return Result.failure(ERROR_INVALID_TIMEZONE)
 
     has_changes = False
     if is_admin is not None:
