@@ -15,6 +15,7 @@ from auth_ext.models import User
 from auth_ext.options import IdentityOptions
 from auth_ext.persistence import create_user_database
 from auth_ext.result import (
+    ERROR_INVALID_PASSWORD,
     ERROR_PASSWORD_TOO_SHORT,
     ERROR_PASSWORD_TOO_WEAK,
     ResultErrorType,
@@ -105,6 +106,16 @@ def public_password_failure_message(reason: object) -> str:
         return reason
 
     return DEFAULT_PASSWORD_POLICY_MESSAGE
+
+
+def public_password_error_type(reason: object) -> ResultErrorType:
+    if reason == PASSWORD_POLICY_MESSAGES[ERROR_PASSWORD_TOO_SHORT]:
+        return ERROR_PASSWORD_TOO_SHORT
+
+    if reason == PASSWORD_POLICY_MESSAGES[ERROR_PASSWORD_TOO_WEAK]:
+        return ERROR_PASSWORD_TOO_WEAK
+
+    return ERROR_INVALID_PASSWORD
 
 
 def create_user_manager(

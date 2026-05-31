@@ -174,8 +174,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--order",
         choices=("email", "email-domain", "created-at", "modified-at", "last-login-at"),
         default="email",
+        help=(
+            "Sort field. Timestamp fields default to most-recent-first unless "
+            "--direction is set."
+        ),
     )
-    list_parser.add_argument("--direction", choices=("asc", "desc"))
+    list_parser.add_argument(
+        "--direction",
+        choices=("asc", "desc"),
+        help=(
+            "Sort direction. Defaults to asc for email fields and desc for "
+            "timestamp fields."
+        ),
+    )
 
     password = subparsers.add_parser("password", help="Change a local user's password.")
     password.add_argument("target")

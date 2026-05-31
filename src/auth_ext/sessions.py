@@ -27,7 +27,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from auth_ext.delivery import IdentityDelivery, NullIdentityDelivery
 from auth_ext.management import is_user_effectively_active
-from auth_ext.manager import UserManager, create_user_manager
+from auth_ext.manager import (
+    UserManager,
+    create_user_manager,
+    public_password_error_type,
+)
 from auth_ext.models import AccessToken, User
 from auth_ext.options import IdentityOptions
 from auth_ext.persistence import (
@@ -40,14 +44,10 @@ from auth_ext.result import (
     ERROR_IDENTITY_CHANGED,
     ERROR_INACTIVE_USER,
     ERROR_INVALID_EMAIL,
-    ERROR_INVALID_PASSWORD,
     ERROR_INVALID_TOKEN,
-    ERROR_PASSWORD_TOO_SHORT,
-    ERROR_PASSWORD_TOO_WEAK,
     ERROR_POLICY_DISABLED,
     ERROR_TOKEN_REJECTED,
     Result,
-    ResultErrorType,
 )
 from auth_ext.schemas import UserCreate
 from auth_ext.timestamps import current_timestamp
@@ -55,13 +55,6 @@ from auth_ext.timestamps import current_timestamp
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"
 _CURRENT_USER_CACHE_VALUE_ATTR = "identity_current_user"
 _CURRENT_USER_CACHE_MISSING = object()
-_PUBLIC_PASSWORD_ERROR_TYPES: frozenset[ResultErrorType] = frozenset(
-    {
-        ERROR_INVALID_PASSWORD,
-        ERROR_PASSWORD_TOO_SHORT,
-        ERROR_PASSWORD_TOO_WEAK,
-    }
-)
 logger = logging.getLogger(__name__)
 
 
@@ -302,23 +295,16 @@ async def create_local_user_from_signup(
         except ValidationError:
             return Result.failure(ERROR_INVALID_EMAIL)
 
-        password_validation = options.resolved_password_policy().validate(
-            password,
-            user_create,
-        )
-        if password_validation.is_failure():
-            return Result.failure(
-                _public_password_error_type(password_validation.error_type)
-            )
-
         try:
             user = await manager.create(
                 user_create,
                 safe=True,
                 request=request,
             )
-        except InvalidPasswordException:
-            return Result.failure(ERROR_INVALID_PASSWORD)
+        except InvalidPasswordException as exc:
+            return Result.failure(
+                public_password_error_type(getattr(exc, "reason", None))
+            )
         except UserAlreadyExists:
             return Result.failure(ERROR_ALREADY_EXISTS)
 
@@ -501,15 +487,6 @@ async def _reset_token_user_is_effectively_active(
 
     now = current_timestamp()
     return is_user_effectively_active(user, now=now)
-
-
-def _public_password_error_type(
-    error_type: ResultErrorType | None,
-) -> ResultErrorType:
-    if error_type in _PUBLIC_PASSWORD_ERROR_TYPES:
-        return error_type
-
-    return ERROR_INVALID_PASSWORD
 
 
 async def verify_user(request: Request, token: str) -> Result[str]:

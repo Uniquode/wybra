@@ -95,7 +95,8 @@ def resolve_database_url(database_url: str, base_path: Path) -> str:
 
     if not is_supported_database_url(database_url):
         raise ConfigurationError(
-            "Auth database URL must use sqlite+aiosqlite or postgresql+asyncpg."
+            "Auth database URL uses an unsupported scheme; "
+            "must use sqlite+aiosqlite or postgresql+asyncpg."
         )
 
     if database_url.startswith("sqlite+aiosqlite:"):
