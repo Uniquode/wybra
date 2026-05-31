@@ -569,7 +569,7 @@ def _session_dialect_name(session: AsyncSession) -> str:
 
 
 def _invalid_password_message(exc: InvalidPasswordException) -> str:
-    return public_password_failure_message(getattr(exc, "reason", None))
+    return public_password_failure_message(exc)
 
 
 def _sql_wildcard_pattern(pattern: str) -> str:
@@ -582,9 +582,12 @@ def _sql_wildcard_pattern(pattern: str) -> str:
     is emitted as an escaped literal backslash and the following character is
     processed normally.
 
-    Canonical examples are covered in tests and include ``*`` -> ``%``,
-    ``\*`` -> ``*``, ``%`` -> ``\%``, ``_`` -> ``\_``,
-    ``foo\bar`` -> ``foo\\bar``, and ``*\`` -> ``%\``.
+    Canonical examples are covered in tests. In Python string notation,
+    ``"*"`` returns ``"%"``, ``r"\*"`` returns ``"*"``, ``"%"`` returns
+    ``r"\%"``, ``"_"`` returns ``r"\_"``, ``r"foo\bar"`` returns
+    ``r"foo\\bar"``, and ``r"*\\"`` returns ``r"%\\"``. The final example
+    means SQL LIKE sees an application wildcard followed by an escaped literal
+    backslash.
     """
 
     escaped_chars: list[str] = []

@@ -302,9 +302,7 @@ async def create_local_user_from_signup(
                 request=request,
             )
         except InvalidPasswordException as exc:
-            return Result.failure(
-                public_password_error_type(getattr(exc, "reason", None))
-            )
+            return Result.failure(public_password_error_type(exc))
         except UserAlreadyExists:
             return Result.failure(ERROR_ALREADY_EXISTS)
 

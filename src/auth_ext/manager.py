@@ -36,6 +36,14 @@ PUBLIC_PASSWORD_POLICY_MESSAGES = frozenset(
 )
 
 
+class PasswordPolicyException(InvalidPasswordException):
+    """Invalid-password boundary carrying a branchable policy error type."""
+
+    def __init__(self, error_type: ResultErrorType | None) -> None:
+        self.error_type = error_type
+        super().__init__(_password_policy_message(error_type))
+
+
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     """FastAPI Users manager for the canonical local account model."""
 
@@ -69,9 +77,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             )
             # Do not expose arbitrary policy messages here: custom policies may
             # include internal checks or vendor-specific detail in Result.message.
-            raise InvalidPasswordException(
-                _password_policy_message(validation.error_type)
-            )
+            raise PasswordPolicyException(validation.error_type)
 
     async def on_after_forgot_password(
         self,
@@ -101,19 +107,21 @@ def _password_policy_message(error_type: ResultErrorType | None) -> str:
     return PASSWORD_POLICY_MESSAGES.get(error_type, DEFAULT_PASSWORD_POLICY_MESSAGE)
 
 
-def public_password_failure_message(reason: object) -> str:
+def public_password_failure_message(error: object) -> str:
+    if isinstance(error, PasswordPolicyException):
+        return str(error.reason)
+
+    reason = getattr(error, "reason", error)
     if isinstance(reason, str) and reason in PUBLIC_PASSWORD_POLICY_MESSAGES:
         return reason
 
     return DEFAULT_PASSWORD_POLICY_MESSAGE
 
 
-def public_password_error_type(reason: object) -> ResultErrorType:
-    if reason == PASSWORD_POLICY_MESSAGES[ERROR_PASSWORD_TOO_SHORT]:
-        return ERROR_PASSWORD_TOO_SHORT
-
-    if reason == PASSWORD_POLICY_MESSAGES[ERROR_PASSWORD_TOO_WEAK]:
-        return ERROR_PASSWORD_TOO_WEAK
+def public_password_error_type(error: object) -> ResultErrorType:
+    error_type = getattr(error, "error_type", None)
+    if error_type in PASSWORD_POLICY_MESSAGES:
+        return error_type
 
     return ERROR_INVALID_PASSWORD
 
