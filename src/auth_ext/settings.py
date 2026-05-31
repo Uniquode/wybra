@@ -162,8 +162,8 @@ def _configured_database_url(
 
     if not isinstance(database_url, str) or not database_url.strip():
         raise ConfigurationError(
-            "Auth database_url must be configured in [auth], AUTH_DATABASE_URL, "
-            "or DATABASE_URL."
+            "Auth database_url must be configured as [auth].database_url, "
+            "AUTH_DATABASE_URL, or DATABASE_URL."
         )
 
     return database_url
