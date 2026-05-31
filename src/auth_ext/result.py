@@ -14,6 +14,8 @@ ERROR_INACTIVE_USER: Final[ResultErrorType] = "inactive_user"
 ERROR_INVALID_EMAIL: Final[ResultErrorType] = "invalid_email"
 ERROR_INVALID_TOKEN: Final[ResultErrorType] = "invalid_token"
 ERROR_INVALID_PASSWORD: Final[ResultErrorType] = "invalid_password"
+ERROR_PASSWORD_TOO_SHORT: Final[ResultErrorType] = "password_too_short"
+ERROR_PASSWORD_TOO_WEAK: Final[ResultErrorType] = "password_too_weak"
 ERROR_POLICY_DISABLED: Final[ResultErrorType] = "policy_disabled"
 ERROR_TOKEN_REJECTED: Final[ResultErrorType] = "token_rejected"
 
@@ -25,6 +27,8 @@ __all__ = [
     "ERROR_INVALID_EMAIL",
     "ERROR_INVALID_TOKEN",
     "ERROR_INVALID_PASSWORD",
+    "ERROR_PASSWORD_TOO_SHORT",
+    "ERROR_PASSWORD_TOO_WEAK",
     "ERROR_POLICY_DISABLED",
     "ERROR_TOKEN_REJECTED",
     "Result",

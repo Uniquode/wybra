@@ -37,6 +37,7 @@ _.additive_route_names
 _.replaces
 _.id
 _.user_id
+_.hashed_password
 _.kind
 _.expires_at
 _.create_challenge

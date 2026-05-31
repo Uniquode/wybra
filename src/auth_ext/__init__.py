@@ -17,6 +17,12 @@ from auth_ext.options import (
     IdentityOptions,
     is_generate_local_identity_secret,
 )
+from auth_ext.passwords import (
+    DefaultPasswordPolicy,
+    PasswordPolicy,
+    PasswordStrength,
+    PasswordStrengthLabel,
+)
 from auth_ext.result import (
     ERROR_ALREADY_EXISTS,
     ERROR_ALREADY_VERIFIED,
@@ -25,6 +31,8 @@ from auth_ext.result import (
     ERROR_INVALID_EMAIL,
     ERROR_INVALID_PASSWORD,
     ERROR_INVALID_TOKEN,
+    ERROR_PASSWORD_TOO_SHORT,
+    ERROR_PASSWORD_TOO_WEAK,
     ERROR_POLICY_DISABLED,
     ERROR_TOKEN_REJECTED,
     Result,
@@ -48,6 +56,7 @@ __all__ = [
     "ChallengeRecord",
     "ChallengeStore",
     "ConfigurationError",
+    "DefaultPasswordPolicy",
     "ERROR_ALREADY_EXISTS",
     "ERROR_ALREADY_VERIFIED",
     "ERROR_IDENTITY_CHANGED",
@@ -55,6 +64,8 @@ __all__ = [
     "ERROR_INVALID_EMAIL",
     "ERROR_INVALID_TOKEN",
     "ERROR_INVALID_PASSWORD",
+    "ERROR_PASSWORD_TOO_SHORT",
+    "ERROR_PASSWORD_TOO_WEAK",
     "ERROR_POLICY_DISABLED",
     "ERROR_TOKEN_REJECTED",
     "IdentityDelivery",
@@ -62,6 +73,9 @@ __all__ = [
     "IdentityOptions",
     "NoChallengePolicy",
     "NullIdentityDelivery",
+    "PasswordPolicy",
+    "PasswordStrength",
+    "PasswordStrengthLabel",
     "PrimaryAuthenticationContext",
     "RecoveryCodeStore",
     "Result",

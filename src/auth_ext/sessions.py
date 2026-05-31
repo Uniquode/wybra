@@ -26,7 +26,12 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from auth_ext.delivery import IdentityDelivery, NullIdentityDelivery
-from auth_ext.manager import UserManager, create_user_manager
+from auth_ext.management import is_user_effectively_active
+from auth_ext.manager import (
+    UserManager,
+    create_user_manager,
+    public_password_error_type,
+)
 from auth_ext.models import AccessToken, User
 from auth_ext.options import IdentityOptions
 from auth_ext.persistence import (
@@ -39,13 +44,13 @@ from auth_ext.result import (
     ERROR_IDENTITY_CHANGED,
     ERROR_INACTIVE_USER,
     ERROR_INVALID_EMAIL,
-    ERROR_INVALID_PASSWORD,
     ERROR_INVALID_TOKEN,
     ERROR_POLICY_DISABLED,
     ERROR_TOKEN_REJECTED,
     Result,
 )
 from auth_ext.schemas import UserCreate
+from auth_ext.timestamps import current_timestamp
 
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"
 _CURRENT_USER_CACHE_VALUE_ATTR = "identity_current_user"
@@ -210,8 +215,9 @@ async def resolve_current_user(request: Request) -> User | None:
             _delivery_from_request(request),
         )
         strategy = create_database_strategy(session, options)
+        now = current_timestamp()
         user = await strategy.read_token(token, manager)
-        if user is not None and not user.is_active:
+        if user is not None and not is_user_effectively_active(user, now=now):
             await delete_session_token_by_value(session, token)
             return _cache_current_user(request, token, None)
 
@@ -257,8 +263,9 @@ async def authenticate_user(
             options,
             _delivery_from_request(request),
         )
+        now = current_timestamp()
         user = await manager.authenticate(credentials)
-        if user is None or not user.is_active:
+        if user is None or not is_user_effectively_active(user, now=now):
             return None
 
         return user
@@ -273,9 +280,6 @@ async def create_local_user_from_signup(
     if options.account_creation_policy != "public-signup":
         return Result.failure(ERROR_POLICY_DISABLED)
 
-    if not password.strip():
-        return Result.failure(ERROR_INVALID_PASSWORD)
-
     session_factory = _session_factory_from_request(request)
     async with session_factory() as session:
         manager = create_user_manager(
@@ -288,15 +292,17 @@ async def create_local_user_from_signup(
                 email=email,
                 password=password,
             )
+        except ValidationError:
+            return Result.failure(ERROR_INVALID_EMAIL)
+
+        try:
             user = await manager.create(
                 user_create,
                 safe=True,
                 request=request,
             )
-        except ValidationError:
-            return Result.failure(ERROR_INVALID_EMAIL)
-        except InvalidPasswordException:
-            return Result.failure(ERROR_INVALID_PASSWORD)
+        except InvalidPasswordException as exc:
+            return Result.failure(public_password_error_type(exc))
         except UserAlreadyExists:
             return Result.failure(ERROR_ALREADY_EXISTS)
 
@@ -312,9 +318,14 @@ async def complete_authentication_ceremony(
 
     async with session_factory() as session:
         current_user = await session.get(User, user.id)
-        if current_user is None or not current_user.is_active:
+        now = current_timestamp()
+        if current_user is None or not is_user_effectively_active(
+            current_user,
+            now=now,
+        ):
             return Result.failure(ERROR_INACTIVE_USER)
 
+        current_user.last_login_at = now
         strategy = create_database_strategy(session, options)
         return Result.ok(await strategy.write_token(current_user))
 
@@ -347,6 +358,10 @@ async def request_password_reset(request: Request, email: str) -> None:
         except UserNotExists:
             return
 
+        now = current_timestamp()
+        if not is_user_effectively_active(user, now=now):
+            return
+
         try:
             await manager.forgot_password(user, request)
         except FastAPIUsersException:
@@ -367,6 +382,9 @@ async def reset_password(request: Request, token: str, password: str) -> bool:
             options,
             _delivery_from_request(request),
         )
+        if not await _reset_token_user_is_effectively_active(manager, token):
+            return False
+
         try:
             await manager.reset_password(token, password, request)
         except FastAPIUsersException:
@@ -389,6 +407,16 @@ async def request_verification(request: Request, email: str) -> None:
             user = await manager.get_by_email(email)
         except UserNotExists:
             return
+
+        now = current_timestamp()
+        if not is_user_effectively_active(user, now=now):
+            return
+
+        if user.is_verified:
+            return
+
+        user.email_verification_sent_at = now
+        await session.commit()
 
         try:
             await manager.request_verify(user, request)
@@ -426,10 +454,37 @@ async def _active_user_from_verification_token(
     if email != user.email:
         return Result.failure(ERROR_IDENTITY_CHANGED)
 
-    if not user.is_active:
+    now = current_timestamp()
+    if not is_user_effectively_active(user, now=now):
         return Result.failure(ERROR_INACTIVE_USER)
 
     return Result.ok(str(user.id))
+
+
+async def _reset_token_user_is_effectively_active(
+    manager: UserManager,
+    token: str,
+) -> bool:
+    try:
+        data = decode_jwt(
+            token,
+            manager.reset_password_token_secret,
+            [manager.reset_password_token_audience],
+        )
+        user_id = data["sub"]
+        parsed_id = manager.parse_id(user_id)
+        user = await manager.get(parsed_id)
+    except KeyError:
+        return False
+    except PyJWTError:
+        return False
+    except InvalidID:
+        return False
+    except UserNotExists:
+        return False
+
+    now = current_timestamp()
+    return is_user_effectively_active(user, now=now)
 
 
 async def verify_user(request: Request, token: str) -> Result[str]:
