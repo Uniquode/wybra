@@ -546,7 +546,7 @@ def _records_for_human_output(
 
 
 def _format_human_value(field_name: str, value: Any) -> Any:
-    if field_name in TIMESTAMP_FIELDS and isinstance(value, int | float):
+    if field_name in TIMESTAMP_FIELDS and isinstance(value, (int, float)):
         try:
             return datetime.fromtimestamp(float(value), UTC).isoformat()
         except OverflowError:

@@ -153,7 +153,12 @@ def _configured_database_url(
     auth_config: Mapping[str, Any],
     env: Mapping[str, str],
 ) -> str:
-    database_url = env.get(AUTH_DATABASE_URL_ENV, auth_config.get(DATABASE_URL_FIELD))
+    env_value = env.get(AUTH_DATABASE_URL_ENV)
+    if isinstance(env_value, str) and env_value.strip():
+        database_url = env_value
+    else:
+        database_url = auth_config.get(DATABASE_URL_FIELD)
+
     if not isinstance(database_url, str) or not database_url.strip():
         raise ConfigurationError(
             "Auth database_url must be configured in [auth] or AUTH_DATABASE_URL."
