@@ -1,8 +1,16 @@
 from dataclasses import dataclass, field
 from secrets import token_urlsafe
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from auth_ext.configuration import ConfigurationError
+from auth_ext.passwords import (
+    DEFAULT_COMMON_PASSWORD_FRAGMENTS,
+    DEFAULT_MINIMUM_CHARACTER_CATEGORIES,
+    DEFAULT_MINIMUM_LENGTH,
+    DEFAULT_MINIMUM_SCORE,
+    DefaultPasswordPolicy,
+    PasswordPolicy,
+)
 
 AccountCreationPolicy = Literal["admin-created", "public-signup"]
 IdentityIntegration = Literal["oauth-account-linking", "advanced-authentication"]
@@ -33,6 +41,11 @@ class IdentityOptions:
     verification_token_secret: str = _GENERATE_LOCAL_SECRET
     oauth_account_linking_enabled: bool = False
     advanced_authentication_enabled: bool = False
+    password_minimum_length: int = DEFAULT_MINIMUM_LENGTH
+    password_minimum_strength: float = DEFAULT_MINIMUM_SCORE
+    password_minimum_character_categories: int = DEFAULT_MINIMUM_CHARACTER_CATEGORIES
+    password_common_fragments: tuple[str, ...] = DEFAULT_COMMON_PASSWORD_FRAGMENTS
+    password_policy: PasswordPolicy | None = None
     token_secrets_configured: bool = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -44,6 +57,7 @@ class IdentityOptions:
                 "Session lifetime must be a positive number of seconds."
             )
 
+        self._configure_password_policy()
         self._reject_blank_secret(
             "Reset password token secret",
             self.reset_password_token_secret,
@@ -83,6 +97,55 @@ class IdentityOptions:
             return self.oauth_account_linking_enabled
 
         return self.advanced_authentication_enabled
+
+    def resolved_password_policy(self) -> PasswordPolicy:
+        return cast(PasswordPolicy, self.password_policy)
+
+    def _configure_password_policy(self) -> None:
+        if self.password_minimum_length <= 0:
+            raise ConfigurationError("Password minimum length must be positive.")
+
+        if not 0 <= self.password_minimum_strength <= 1:
+            raise ConfigurationError(
+                "Password minimum strength must be between 0 and 1."
+            )
+
+        if self.password_minimum_character_categories <= 0:
+            raise ConfigurationError(
+                "Password minimum character categories must be positive."
+            )
+
+        common_fragments = self._normalise_password_common_fragments()
+        object.__setattr__(self, "password_common_fragments", common_fragments)
+
+        if self.password_policy is None:
+            object.__setattr__(
+                self,
+                "password_policy",
+                DefaultPasswordPolicy(
+                    minimum_length=self.password_minimum_length,
+                    minimum_score=self.password_minimum_strength,
+                    minimum_character_categories=(
+                        self.password_minimum_character_categories
+                    ),
+                    common_fragments=common_fragments,
+                ),
+            )
+
+    def _normalise_password_common_fragments(self) -> tuple[str, ...]:
+        try:
+            common_fragments = tuple(self.password_common_fragments)
+        except TypeError as exc:
+            raise ConfigurationError(
+                "Password common fragments must be a list of strings."
+            ) from exc
+
+        if not all(isinstance(fragment, str) for fragment in common_fragments):
+            raise ConfigurationError(
+                "Password common fragments must be a list of strings."
+            )
+
+        return common_fragments
 
     @staticmethod
     def _reject_blank_secret(label: str, value: str) -> None:

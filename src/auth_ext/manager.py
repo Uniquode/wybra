@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import Request
@@ -13,7 +14,25 @@ from auth_ext.delivery import IdentityDelivery, NullIdentityDelivery
 from auth_ext.models import User
 from auth_ext.options import IdentityOptions
 from auth_ext.persistence import create_user_database
+from auth_ext.result import (
+    ERROR_PASSWORD_TOO_SHORT,
+    ERROR_PASSWORD_TOO_WEAK,
+    ResultErrorType,
+)
 from auth_ext.schemas import UserCreate
+
+logger = logging.getLogger(__name__)
+PASSWORD_POLICY_MESSAGES: dict[ResultErrorType, str] = {
+    ERROR_PASSWORD_TOO_SHORT: "Password does not meet the minimum length requirement.",
+    ERROR_PASSWORD_TOO_WEAK: "Password does not meet the strength requirement.",
+}
+DEFAULT_PASSWORD_POLICY_MESSAGE = "Password is invalid."
+PUBLIC_PASSWORD_POLICY_MESSAGES = frozenset(
+    {
+        DEFAULT_PASSWORD_POLICY_MESSAGE,
+        *PASSWORD_POLICY_MESSAGES.values(),
+    }
+)
 
 
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
@@ -28,6 +47,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     ) -> None:
         super().__init__(user_db, password_helper)
         self.delivery = delivery or NullIdentityDelivery()
+        self.password_policy = options.resolved_password_policy()
         self.reset_password_token_secret = options.reset_password_token_secret
         self.verification_token_secret = options.verification_token_secret
 
@@ -36,8 +56,21 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         password: str,
         user: UserCreate | User,
     ) -> None:
-        if not password.strip():
-            raise InvalidPasswordException("Password must not be blank.")
+        validation = self.password_policy.validate(password, user)
+        if validation.is_failure():
+            logger.warning(
+                "Password policy validation failed",
+                extra={
+                    "error_type": validation.error_type,
+                    "policy_message": validation.message,
+                    "user_id": getattr(user, "id", None),
+                },
+            )
+            # Do not expose arbitrary policy messages here: custom policies may
+            # include internal checks or vendor-specific detail in Result.message.
+            raise InvalidPasswordException(
+                _password_policy_message(validation.error_type)
+            )
 
     async def on_after_forgot_password(
         self,
@@ -58,6 +91,20 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
 
 def create_password_helper() -> PasswordHelper:
     return PasswordHelper()
+
+
+def _password_policy_message(error_type: ResultErrorType | None) -> str:
+    if error_type is None:
+        return DEFAULT_PASSWORD_POLICY_MESSAGE
+
+    return PASSWORD_POLICY_MESSAGES.get(error_type, DEFAULT_PASSWORD_POLICY_MESSAGE)
+
+
+def public_password_failure_message(reason: object) -> str:
+    if isinstance(reason, str) and reason in PUBLIC_PASSWORD_POLICY_MESSAGES:
+        return reason
+
+    return DEFAULT_PASSWORD_POLICY_MESSAGE
 
 
 def create_user_manager(
