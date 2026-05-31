@@ -129,7 +129,12 @@ common_fragments = [
 ]
 ```
 
-`AUTH_DATABASE_URL` can override the configured database for automation.
+Database selection precedence for auth configuration is
+`AUTH_DATABASE_URL`, then generic `DATABASE_URL`, then `[auth].database_url`.
+This lets reusable `auth_ext` tooling share a host application's database
+environment without requiring a host-specific wrapper, while still allowing an
+auth-specific override for automation.
+
 `usermgr` talks to the configured identity database directly. It is not an
 API-backed remote administration client; that mode is deferred until
 administrative API tokens and scopes exist. Passwords are entered through hidden
