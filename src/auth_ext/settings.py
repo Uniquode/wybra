@@ -13,6 +13,7 @@ from auth_ext.options import IdentityOptions
 
 AUTH_CONFIG_ENV = "AUTH_CONFIG"
 AUTH_DATABASE_URL_ENV = "AUTH_DATABASE_URL"
+DATABASE_URL_ENV = "DATABASE_URL"
 DEFAULT_AUTH_CONFIG = Path("auth.toml")
 DATABASE_URL_FIELD = "database_url"
 PASSWORD_SECTION_FIELD = "password"
@@ -153,15 +154,20 @@ def _configured_database_url(
     auth_config: Mapping[str, Any],
     env: Mapping[str, str],
 ) -> str:
-    env_value = env.get(AUTH_DATABASE_URL_ENV)
-    if isinstance(env_value, str) and env_value.strip():
-        database_url = env_value
+    auth_env_value = env.get(AUTH_DATABASE_URL_ENV)
+    if isinstance(auth_env_value, str) and auth_env_value.strip():
+        database_url = auth_env_value
     else:
-        database_url = auth_config.get(DATABASE_URL_FIELD)
+        database_env_value = env.get(DATABASE_URL_ENV)
+        if isinstance(database_env_value, str) and database_env_value.strip():
+            database_url = database_env_value
+        else:
+            database_url = auth_config.get(DATABASE_URL_FIELD)
 
     if not isinstance(database_url, str) or not database_url.strip():
         raise ConfigurationError(
-            "Auth database_url must be configured in [auth] or AUTH_DATABASE_URL."
+            "Auth database_url must be configured in [auth], AUTH_DATABASE_URL, "
+            "or DATABASE_URL."
         )
 
     return database_url
