@@ -199,15 +199,24 @@ def _optional_boolean(
 
 def _ensure_mutually_exclusive(*options: tuple[object, str]) -> None:
     selected = [
-        option_name
-        for value, option_name in options
-        if value is not None and value is not False
+        option_name for value, option_name in options if _option_was_provided(value)
     ]
     if len(selected) > 1:
         first, second = selected[:2]
         raise click.UsageError(
             f"Option '{second}' is not allowed with option '{first}'."
         )
+
+
+def _option_was_provided(value: object) -> bool:
+    """Return whether a Click option value represents an explicit selection.
+
+    Click boolean flags use the ``False`` singleton for omitted flags. Other
+    falsy values such as ``0`` or ``""`` are explicit option values and must
+    still participate in mutual-exclusion checks.
+    """
+
+    return value is not None and value is not False
 
 
 def _config_path(ctx: click.Context) -> Path | None:
