@@ -13,6 +13,18 @@ _.init_database  # FastAPI lifespan integration hook, wired when DB startup is e
 _.close_database  # FastAPI lifespan integration hook, wired when DB shutdown is enabled
 _.main  # Project script entry point wired through pyproject.toml
 
+# Click command callbacks registered through decorators.
+_.create_command
+_.update_command
+_.delete_command
+_.deactivate_command
+_.list_command
+_.password_command
+_.upgrade_command
+_.downgrade_command
+_.current_command
+_.history_command
+
 # FastAPI Users and application identity extension hooks.
 _.AdvancedAuthenticationPolicy
 _.after_primary_authentication

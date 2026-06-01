@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Protocol, cast
+from typing import Any, Final, Protocol, cast
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import Response
@@ -55,6 +55,22 @@ from auth_ext.timestamps import current_timestamp
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"
 _CURRENT_USER_CACHE_VALUE_ATTR = "identity_current_user"
 _CURRENT_USER_CACHE_MISSING = object()
+# Cookie security trust model:
+# - The ASGI request scheme is authoritative only after the server or middleware
+#   has normalised headers from trusted proxies.
+# - Scheme aliases translate already-normalised secure ASGI schemes into
+#   HTTP(S) cookie semantics; they do not inspect raw client headers.
+# - Raw forwarding headers are advisory diagnostics only and never mark cookies
+#   secure by themselves.
+SECURE_COOKIE_SCHEMES: Final = frozenset({"https"})
+SECURE_SCHEME_ALIASES: Final = {
+    "wss": "https",
+}
+FORWARDED_PROTO_HEADER: Final = "x-forwarded-proto"
+FORWARDED_HEADER: Final = "forwarded"
+# Process-scoped warning suppression. A race can only emit a duplicate warning,
+# which is acceptable for this diagnostic path.
+_logged_forward_header_misconfig = False
 logger = logging.getLogger(__name__)
 
 
@@ -129,7 +145,7 @@ def create_authentication_backend(
     transport = CookieTransport(
         cookie_name=options.session_cookie_name,
         cookie_max_age=options.session_lifetime_seconds,
-        cookie_secure=options.session_cookie_secure,
+        cookie_secure=options.session_cookie_force_secure,
         cookie_httponly=True,
         cookie_samesite="lax",
     )
@@ -149,6 +165,7 @@ def create_fastapi_users(options: IdentityOptions) -> FastAPIUsers[User, uuid.UU
 
 def set_session_cookie(
     response: Response,
+    request: Request,
     token: str,
     options: IdentityOptions,
 ) -> None:
@@ -157,22 +174,106 @@ def set_session_cookie(
         token,
         max_age=options.session_lifetime_seconds,
         path="/",
-        secure=options.session_cookie_secure,
+        secure=session_cookie_secure_for_request(
+            request,
+            force_secure=options.session_cookie_force_secure,
+        ),
         httponly=True,
         samesite="lax",
     )
 
 
-def clear_session_cookie(response: Response, options: IdentityOptions) -> None:
+def clear_session_cookie(
+    response: Response,
+    request: Request,
+    options: IdentityOptions,
+) -> None:
     response.set_cookie(
         options.session_cookie_name,
         "",
         max_age=0,
         path="/",
-        secure=options.session_cookie_secure,
+        secure=session_cookie_secure_for_request(
+            request,
+            force_secure=options.session_cookie_force_secure,
+        ),
         httponly=True,
         samesite="lax",
     )
+
+
+def session_cookie_secure_for_request(
+    request: Request,
+    *,
+    force_secure: bool = False,
+) -> bool:
+    """Return whether browser session cookies should be marked secure.
+
+    Reverse proxies must normalise trusted forwarded headers before the request
+    reaches the app, for example with Uvicorn's `--proxy-headers` and a scoped
+    `--forwarded-allow-ips` value. This function deliberately does not trust raw
+    forwarding headers itself. Set ``force_secure`` only when the deployment
+    cannot provide a reliable ASGI request scheme but still terminates TLS
+    before the browser.
+
+    Only HTTP/HTTPS schemes are interpreted directly. Alternate secure schemes
+    can be mapped to their canonical HTTP(S) equivalents through
+    ``SECURE_SCHEME_ALIASES``.
+    """
+
+    if force_secure:
+        return True
+
+    scheme = request.scope.get("scheme")
+    if not isinstance(scheme, str):
+        return False
+
+    normalised_scheme = SECURE_SCHEME_ALIASES.get(scheme, scheme)
+    if normalised_scheme == "http" and _has_secure_forwarded_proto(request):
+        _log_forward_header_misconfig()
+    return normalised_scheme in SECURE_COOKIE_SCHEMES
+
+
+def _log_forward_header_misconfig() -> None:
+    global _logged_forward_header_misconfig
+
+    message = (
+        "Detected HTTPS forwarding headers while ASGI request scheme is "
+        "'http'; session cookies will not be marked Secure. Configure "
+        "trusted proxy headers or set session_cookie_force_secure."
+    )
+    if _logged_forward_header_misconfig:
+        logger.debug(message)
+        return
+
+    logger.warning(message)
+    _logged_forward_header_misconfig = True
+
+
+def _has_secure_forwarded_proto(request: Request) -> bool:
+    """Return whether advisory forwarding headers claim external HTTPS.
+
+    This supports comma-separated ``X-Forwarded-Proto`` values and RFC 7239
+    ``Forwarded`` parameters such as ``proto=https``. The result is used only to
+    warn about proxy misconfiguration; cookie security still depends on the ASGI
+    request scheme or an explicit force-secure setting.
+    """
+
+    forwarded_proto = request.headers.get(FORWARDED_PROTO_HEADER, "")
+    if any(value.strip().lower() == "https" for value in forwarded_proto.split(",")):
+        return True
+
+    forwarded = request.headers.get(FORWARDED_HEADER, "")
+    for entry in forwarded.split(","):
+        for parameter in entry.split(";"):
+            key, separator, value = parameter.partition("=")
+            if separator != "=" or key.strip().lower() != "proto":
+                continue
+
+            if value.strip().strip('"').strip("'").lower() == "https":
+                return True
+
+    return False
 
 
 def _cached_current_user(request: Request, token: str | None) -> User | None | object:

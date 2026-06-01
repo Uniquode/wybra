@@ -22,8 +22,8 @@ IDENTITY_OPTION_FIELDS = frozenset(
     {
         "account_creation_policy",
         "session_cookie_name",
-        "session_cookie_secure",
         "session_lifetime_seconds",
+        "session_cookie_force_secure",
         "reset_password_token_secret",
         "verification_token_secret",
         "oauth_account_linking_enabled",
