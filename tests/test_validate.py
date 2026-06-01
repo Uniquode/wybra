@@ -1,7 +1,9 @@
 from pathlib import Path
 from shutil import copytree
 
+import click
 import pytest
+from click.testing import CliRunner
 
 import uniquode.validate as validate_module
 import uniquode.validation.environment as environment_validation
@@ -47,6 +49,15 @@ def test_validate_command_default_runs_registered_targets(capsys) -> None:
     assert "environment: ok" in captured.out
     assert "web: ok" in captured.out
     assert "persistence: ok" in captured.out
+
+
+def test_validate_command_help_returns_cleanly(capsys) -> None:
+    exit_code = validate_main(["--help"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Run project validation checks" in captured.out
+    assert captured.err == ""
 
 
 def test_validate_command_verbose_lists_registered_checks(capsys) -> None:
@@ -172,16 +183,46 @@ def test_validate_environment_reports_wrong_loader_return_type(monkeypatch) -> N
     assert result.errors == ("Environment loader returned object; expected envex Env.",)
 
 
-def test_validate_command_unknown_target_raises_system_exit(capsys) -> None:
+def test_resolve_targets_raises_domain_error_for_unknown_targets() -> None:
     with pytest.raises(
-        SystemExit, match="Unknown validation target\\(s\\): foo"
-    ) as excinfo:
-        validate_main(["foo"])
+        validate_module.UnknownValidationTargetError,
+        match="Unknown validation target\\(s\\): foo",
+    ):
+        validate_module._resolve_targets(("foo",))
+
+
+def test_validate_command_unknown_target_returns_usage_error(capsys) -> None:
+    exit_code = validate_main(["foo"])
 
     captured = capsys.readouterr()
-    assert "foo" in str(excinfo.value)
+    assert exit_code == 2
     assert captured.out == ""
-    assert captured.err == ""
+    assert "Unknown validation target(s): foo" in captured.err
+
+
+def test_validate_click_command_reports_unknown_target() -> None:
+    result = CliRunner().invoke(validate_module.validate_command, ["foo"])
+
+    assert result.exit_code == 2
+    assert "Unknown validation target(s): foo" in result.output
+
+
+def test_validate_main_treats_falsy_click_exception_as_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FalsyExitClickException(click.ClickException):
+        exit_code = 0
+
+    def raise_click_exception(*_args, **_kwargs) -> None:
+        raise FalsyExitClickException("invalid usage")
+
+    monkeypatch.setattr(validate_module.validate_command, "main", raise_click_exception)
+
+    assert validate_main([]) == 1
+
+    captured = capsys.readouterr()
+    assert "invalid usage" in captured.err
 
 
 def test_validate_command_accepts_normalisable_static_url_path(capsys) -> None:

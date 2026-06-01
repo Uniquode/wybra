@@ -1,16 +1,23 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
 import csv
-import getpass
 import json
+import logging
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal, cast
 
+import click
 import dateparser
+from sqlalchemy import Table
+from sqlalchemy import inspect as sqlalchemy_inspect
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from auth_ext.configuration import ConfigurationError
 from auth_ext.database import close_database, create_database, session_scope
@@ -33,6 +40,7 @@ from auth_ext.management import (
     update_local_user_for_management,
     user_record,
 )
+from auth_ext.models import User
 from auth_ext.result import (
     ERROR_ALREADY_EXISTS,
     ERROR_INVALID_EMAIL,
@@ -42,194 +50,546 @@ from auth_ext.result import (
 from auth_ext.settings import load_auth_settings
 
 TIMESTAMP_FIELDS: frozenset[str] = frozenset(USER_TIMESTAMP_FIELDS)
-PASSWORD_SOURCE_STDIN = "-"
-PASSWORD_SOURCE_PROMPT = "prompt"
+PasswordSource = Literal["-", "prompt"]
+PASSWORD_SOURCE_STDIN: PasswordSource = "-"
+PASSWORD_SOURCE_PROMPT: PasswordSource = "prompt"
+PASSWORD_SOURCE_STDIN_ALIAS = "stdin"
 TIMESTAMP_HELP = (
     "Timestamp options parse numeric input as Unix seconds before date parsing; "
     "use separated calendar forms such as 2025-01-01 for dates."
 )
+SCHEMA_MIGRATION_MESSAGE = (
+    "Auth database schema is not up to date; run `uv run migrate upgrade` for "
+    "the configured database. If using an explicit auth database, run "
+    "`uv run migrate --database-url <auth-database-url> upgrade`."
+)
+SCHEMA_INSPECTION_MESSAGE = (
+    "Auth database schema could not be inspected; verify database connectivity, "
+    "permissions, and locks."
+)
+logger = logging.getLogger(__name__)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="usermgr",
-        description="Manage local identity users through configured services.",
-        epilog=TIMESTAMP_HELP,
-    )
-    parser.add_argument(
-        "--config",
-        help="Path to auth.toml. Defaults to AUTH_CONFIG or ./auth.toml when present.",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+@dataclass(slots=True)
+class UsermgrArgs:
+    command: str
+    config: Path | None = None
+    email: str = ""
+    target: str = ""
+    password: PasswordSource | None = None
+    admin: bool = False
+    superuser: bool = False
+    unverified: bool = False
+    is_admin: bool | None = None
+    is_superuser: bool | None = None
+    is_verified: bool | None = None
+    no_revoke: bool = False
+    display_name: str | None = None
+    clear_display_name: bool = False
+    preferred_name: str | None = None
+    clear_preferred_name: bool = False
+    preferred_timezone: str | None = None
+    clear_preferred_timezone: bool = False
+    expires_at: float | None = None
+    no_expires_at: bool = False
+    force: bool = False
+    json_output: bool = False
+    csv_output: bool = False
+    email_pattern: str | None = None
+    domain_pattern: str | None = None
+    effective_active: bool | None = None
+    since_created_at: float | None = None
+    before_created_at: float | None = None
+    since_modified_at: float | None = None
+    before_modified_at: float | None = None
+    since_last_login_at: float | None = None
+    before_last_login_at: float | None = None
+    never_logged_in: bool | None = None
+    order: str = "email"
+    direction: str | None = None
 
-    create = subparsers.add_parser("create", help="Create a local user.")
-    create.add_argument("email")
-    create.add_argument(
+
+@dataclass(frozen=True, slots=True)
+class IdentitySchemaStatus:
+    table_name: str
+    table_exists: bool
+    missing_columns: tuple[str, ...]
+
+
+class PasswordSourceError(Exception):
+    """Raised when a password source cannot produce a usable password."""
+
+
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+
+
+def _password_source_option(default: PasswordSource | None):
+    """Build the shared password-source option.
+
+    ``default=PASSWORD_SOURCE_PROMPT`` means the command requires a password and
+    omitted ``--password`` still prompts. ``default=None`` means password input is
+    optional; only bare ``--password`` prompts and ``--password -`` reads stdin.
+    """
+
+    return click.option(
         "--password",
-        nargs="?",
-        const=PASSWORD_SOURCE_PROMPT,
-        default=PASSWORD_SOURCE_PROMPT,
-        choices=(PASSWORD_SOURCE_STDIN, PASSWORD_SOURCE_PROMPT),
-    )
-    create.add_argument("--admin", action="store_true")
-    create.add_argument("--superuser", action="store_true")
-    create.add_argument("--unverified", action="store_true")
-    create.add_argument("--display-name")
-    create.add_argument("--preferred-name")
-    create.add_argument("--timezone", dest="preferred_timezone")
-    create.add_argument("--expires-at", type=parse_timestamp_filter)
-
-    update = subparsers.add_parser("update", help="Update a local user.")
-    update.add_argument("target")
-    _add_boolean_pair(update, "--admin", "--no-admin", "is_admin")
-    _add_boolean_pair(update, "--superuser", "--no-superuser", "is_superuser")
-    _add_boolean_pair(update, "--verify", "--no-verify", "is_verified")
-    update.add_argument(
-        "--password",
-        nargs="?",
-        const=PASSWORD_SOURCE_PROMPT,
-        choices=(PASSWORD_SOURCE_STDIN, PASSWORD_SOURCE_PROMPT),
-    )
-    update.add_argument("--no-revoke", action="store_true")
-    display_name_group = update.add_mutually_exclusive_group()
-    display_name_group.add_argument("--display-name")
-    display_name_group.add_argument(
-        "--no-display-name",
-        dest="clear_display_name",
-        action="store_true",
-    )
-    preferred_name_group = update.add_mutually_exclusive_group()
-    preferred_name_group.add_argument("--preferred-name")
-    preferred_name_group.add_argument(
-        "--no-preferred-name",
-        dest="clear_preferred_name",
-        action="store_true",
-    )
-    timezone_group = update.add_mutually_exclusive_group()
-    timezone_group.add_argument("--timezone", dest="preferred_timezone")
-    timezone_group.add_argument(
-        "--no-timezone",
-        dest="clear_preferred_timezone",
-        action="store_true",
-    )
-    expires_group = update.add_mutually_exclusive_group()
-    expires_group.add_argument("--expires-at", type=parse_timestamp_filter)
-    expires_group.add_argument("--no-expires-at", action="store_true")
-
-    delete = subparsers.add_parser("delete", help="Delete a local user.")
-    delete.add_argument("target")
-    delete.add_argument("--force", action="store_true")
-
-    deactivate = subparsers.add_parser("deactivate", help="Deactivate a local user.")
-    deactivate.add_argument("target")
-    deactivate.add_argument("--force", action="store_true")
-
-    list_parser = subparsers.add_parser("list", help="List local users.")
-    output_group = list_parser.add_mutually_exclusive_group()
-    output_group.add_argument("--json", action="store_true", dest="json_output")
-    output_group.add_argument("--csv", action="store_true", dest="csv_output")
-    list_parser.add_argument("--email", "-e", dest="email_pattern")
-    list_parser.add_argument("--domain", "-d", dest="domain_pattern")
-    _add_boolean_pair(list_parser, "--admin", "--non-admin", "is_admin")
-    _add_boolean_pair(list_parser, "--superuser", "--non-superuser", "is_superuser")
-    _add_boolean_pair(list_parser, "--active", "--inactive", "effective_active")
-    _add_boolean_pair(list_parser, "--verified", "--unverified", "is_verified")
-    list_parser.add_argument(
-        "--since-created-at",
-        "-C",
-        type=parse_timestamp_filter,
-    )
-    list_parser.add_argument(
-        "--before-created-at",
-        "-c",
-        type=parse_timestamp_filter,
-    )
-    list_parser.add_argument(
-        "--since-modified-at",
-        "-M",
-        type=parse_timestamp_filter,
-    )
-    list_parser.add_argument(
-        "--before-modified-at",
-        "-m",
-        type=parse_timestamp_filter,
-    )
-    list_parser.add_argument(
-        "--since-last-login-at",
-        "-L",
-        type=parse_timestamp_filter,
-    )
-    list_parser.add_argument(
-        "--before-last-login-at",
-        "-l",
-        type=parse_timestamp_filter,
-    )
-    _add_boolean_pair(
-        list_parser,
-        "--never-logged-in",
-        "--logged-in",
-        "never_logged_in",
-    )
-    list_parser.add_argument(
-        "--order",
-        choices=("email", "email-domain", "created-at", "modified-at", "last-login-at"),
-        default="email",
-        help=(
-            "Sort field. Timestamp fields default to most-recent-first unless "
-            "--direction is set."
-        ),
-    )
-    list_parser.add_argument(
-        "--direction",
-        choices=("asc", "desc"),
-        help=(
-            "Sort direction. Defaults to asc for email fields and desc for "
-            "timestamp fields."
-        ),
+        is_flag=False,
+        flag_value=PASSWORD_SOURCE_PROMPT,
+        default=default,
+        callback=_password_source_callback,
+        metavar="[SOURCE]",
+        help="Password source. Omit the value for a hidden prompt, or use '-'/'stdin'.",
     )
 
-    password = subparsers.add_parser("password", help="Change a local user's password.")
-    password.add_argument("target")
-    password.add_argument(
-        "--password",
-        nargs="?",
-        const=PASSWORD_SOURCE_PROMPT,
-        default=PASSWORD_SOURCE_PROMPT,
-        choices=(PASSWORD_SOURCE_STDIN, PASSWORD_SOURCE_PROMPT),
+
+def _password_source_callback(
+    _ctx: click.Context,
+    param: click.Parameter,
+    value: str | None,
+) -> PasswordSource | None:
+    """Accept only the supported password-source sentinels.
+
+    ``None`` is preserved for optional password-update flows where omitting the
+    option means "leave the password unchanged".
+    """
+
+    if value is None:
+        return value
+
+    if value in {PASSWORD_SOURCE_STDIN, PASSWORD_SOURCE_STDIN_ALIAS}:
+        return PASSWORD_SOURCE_STDIN
+
+    if value == PASSWORD_SOURCE_PROMPT:
+        return PASSWORD_SOURCE_PROMPT
+
+    raise click.BadParameter(
+        "must be '-' or omitted, or one of: stdin, prompt",
+        param=param,
     )
-    password.add_argument("--no-revoke", action="store_true")
-
-    return parser
 
 
-def _add_boolean_pair(
-    parser: argparse.ArgumentParser,
+def _timestamp_callback(
+    _ctx: click.Context,
+    param: click.Parameter,
+    value: str | None,
+) -> float | None:
+    if value is None:
+        return None
+
+    try:
+        return parse_timestamp_filter(value)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param=param) from exc
+
+
+def _optional_boolean(
+    enabled: bool,
+    disabled: bool,
+    *,
     positive: str,
     negative: str,
-    destination: str,
+) -> bool | None:
+    _ensure_mutually_exclusive((enabled, positive), (disabled, negative))
+    if enabled:
+        return True
+    if disabled:
+        return False
+    return None
+
+
+def _ensure_mutually_exclusive(*options: tuple[object, str]) -> None:
+    selected = [
+        option_name
+        for value, option_name in options
+        if value is not None and value is not False
+    ]
+    if len(selected) > 1:
+        first, second = selected[:2]
+        raise click.UsageError(
+            f"Option '{second}' is not allowed with option '{first}'."
+        )
+
+
+def _config_path(ctx: click.Context) -> Path | None:
+    """Return the auth config path from Click context without hiding bad state.
+
+    Unexpected context state is treated as a usage error so operators see a
+    normal CLI failure instead of an internal exception.
+    """
+
+    config = ctx.obj.get("config") if ctx.obj else None
+    if config is None:
+        return None
+    if isinstance(config, Path):
+        return config
+    if isinstance(config, str):
+        return Path(config)
+    raise click.UsageError(
+        f"Invalid type for --config: expected path or string, got {type(config)!r}."
+    )
+
+
+def _run_usermgr(ctx: click.Context, args: UsermgrArgs) -> None:
+    try:
+        exit_code = asyncio.run(_main_async(args))
+    except PasswordSourceError as exc:
+        raise click.BadParameter(str(exc), param_hint=["--password"]) from exc
+    except ConfigurationError as exc:
+        print(f"configuration: {exc}", file=sys.stderr)
+        exit_code = 1
+    except click.Abort:
+        raise
+    ctx.exit(exit_code)
+
+
+@click.group(
+    name="usermgr",
+    context_settings=CONTEXT_SETTINGS,
+    epilog=TIMESTAMP_HELP,
+    help="Manage local identity users through configured services.",
+)
+@click.option(
+    "--config",
+    type=click.Path(path_type=Path),
+    help="Path to auth.toml. Defaults to AUTH_CONFIG or ./auth.toml when present.",
+)
+@click.pass_context
+def usermgr_command(ctx: click.Context, config: Path | None) -> None:
+    ctx.obj = {"config": config}
+
+
+@usermgr_command.command("create", help="Create a local user.")
+@click.argument("email")
+@_password_source_option(default=PASSWORD_SOURCE_PROMPT)
+@click.option("--admin", is_flag=True)
+@click.option("--superuser", is_flag=True)
+@click.option("--unverified", is_flag=True)
+@click.option("--display-name")
+@click.option("--preferred-name")
+@click.option("--timezone", "preferred_timezone")
+@click.option("--expires-at", callback=_timestamp_callback)
+@click.pass_context
+def create_command(
+    ctx: click.Context,
+    email: str,
+    password: PasswordSource,
+    admin: bool,
+    superuser: bool,
+    unverified: bool,
+    display_name: str | None,
+    preferred_name: str | None,
+    preferred_timezone: str | None,
+    expires_at: float | None,
 ) -> None:
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(positive, dest=destination, action="store_true", default=None)
-    group.add_argument(negative, dest=destination, action="store_false")
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="create",
+            config=_config_path(ctx),
+            email=email,
+            password=password,
+            admin=admin,
+            superuser=superuser,
+            unverified=unverified,
+            display_name=display_name,
+            preferred_name=preferred_name,
+            preferred_timezone=preferred_timezone,
+            expires_at=expires_at,
+        ),
+    )
+
+
+@usermgr_command.command("update", help="Update a local user.")
+@click.argument("target")
+@click.option("--admin", "admin", is_flag=True)
+@click.option("--no-admin", "no_admin", is_flag=True)
+@click.option("--superuser", "superuser", is_flag=True)
+@click.option("--no-superuser", "no_superuser", is_flag=True)
+@click.option("--verify", "verify", is_flag=True)
+@click.option("--no-verify", "no_verify", is_flag=True)
+@_password_source_option(default=None)
+@click.option("--no-revoke", is_flag=True)
+@click.option("--display-name")
+@click.option("--no-display-name", "clear_display_name", is_flag=True)
+@click.option("--preferred-name")
+@click.option("--no-preferred-name", "clear_preferred_name", is_flag=True)
+@click.option("--timezone", "preferred_timezone")
+@click.option("--no-timezone", "clear_preferred_timezone", is_flag=True)
+@click.option("--expires-at", callback=_timestamp_callback)
+@click.option("--no-expires-at", is_flag=True)
+@click.pass_context
+def update_command(
+    ctx: click.Context,
+    target: str,
+    admin: bool,
+    no_admin: bool,
+    superuser: bool,
+    no_superuser: bool,
+    verify: bool,
+    no_verify: bool,
+    password: PasswordSource | None,
+    no_revoke: bool,
+    display_name: str | None,
+    clear_display_name: bool,
+    preferred_name: str | None,
+    clear_preferred_name: bool,
+    preferred_timezone: str | None,
+    clear_preferred_timezone: bool,
+    expires_at: float | None,
+    no_expires_at: bool,
+) -> None:
+    _ensure_mutually_exclusive(
+        (display_name, "--display-name"), (clear_display_name, "--no-display-name")
+    )
+    _ensure_mutually_exclusive(
+        (preferred_name, "--preferred-name"),
+        (clear_preferred_name, "--no-preferred-name"),
+    )
+    _ensure_mutually_exclusive(
+        (preferred_timezone, "--timezone"), (clear_preferred_timezone, "--no-timezone")
+    )
+    _ensure_mutually_exclusive(
+        (expires_at, "--expires-at"), (no_expires_at, "--no-expires-at")
+    )
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="update",
+            config=_config_path(ctx),
+            target=target,
+            is_admin=_optional_boolean(
+                admin,
+                no_admin,
+                positive="--admin",
+                negative="--no-admin",
+            ),
+            is_superuser=_optional_boolean(
+                superuser,
+                no_superuser,
+                positive="--superuser",
+                negative="--no-superuser",
+            ),
+            is_verified=_optional_boolean(
+                verify,
+                no_verify,
+                positive="--verify",
+                negative="--no-verify",
+            ),
+            password=password,
+            no_revoke=no_revoke,
+            display_name=display_name,
+            clear_display_name=clear_display_name,
+            preferred_name=preferred_name,
+            clear_preferred_name=clear_preferred_name,
+            preferred_timezone=preferred_timezone,
+            clear_preferred_timezone=clear_preferred_timezone,
+            expires_at=expires_at,
+            no_expires_at=no_expires_at,
+        ),
+    )
+
+
+@usermgr_command.command("delete", help="Delete a local user.")
+@click.argument("target")
+@click.option("--force", is_flag=True)
+@click.pass_context
+def delete_command(ctx: click.Context, target: str, force: bool) -> None:
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="delete",
+            config=_config_path(ctx),
+            target=target,
+            force=force,
+        ),
+    )
+
+
+@usermgr_command.command("deactivate", help="Deactivate a local user.")
+@click.argument("target")
+@click.option("--force", is_flag=True)
+@click.pass_context
+def deactivate_command(ctx: click.Context, target: str, force: bool) -> None:
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="deactivate",
+            config=_config_path(ctx),
+            target=target,
+            force=force,
+        ),
+    )
+
+
+@usermgr_command.command("list", help="List local users.")
+@click.option("--json", "json_output", is_flag=True)
+@click.option("--csv", "csv_output", is_flag=True)
+@click.option("--email", "-e", "email_pattern")
+@click.option("--domain", "-d", "domain_pattern")
+@click.option("--admin", "admin", is_flag=True)
+@click.option("--non-admin", "non_admin", is_flag=True)
+@click.option("--superuser", "superuser", is_flag=True)
+@click.option("--non-superuser", "non_superuser", is_flag=True)
+@click.option("--active", "active", is_flag=True)
+@click.option("--inactive", "inactive", is_flag=True)
+@click.option("--verified", "verified", is_flag=True)
+@click.option("--unverified", "unverified", is_flag=True)
+@click.option("--since-created-at", "-C", callback=_timestamp_callback)
+@click.option("--before-created-at", "-c", callback=_timestamp_callback)
+@click.option("--since-modified-at", "-M", callback=_timestamp_callback)
+@click.option("--before-modified-at", "-m", callback=_timestamp_callback)
+@click.option("--since-last-login-at", "-L", callback=_timestamp_callback)
+@click.option("--before-last-login-at", "-l", callback=_timestamp_callback)
+@click.option("--never-logged-in", is_flag=True)
+@click.option("--logged-in", is_flag=True)
+@click.option(
+    "--order",
+    type=click.Choice(
+        ("email", "email-domain", "created-at", "modified-at", "last-login-at")
+    ),
+    default="email",
+    show_default=True,
+    help=(
+        "Sort field. Timestamp fields default to most-recent-first unless "
+        "--direction is set."
+    ),
+)
+@click.option(
+    "--direction",
+    type=click.Choice(("asc", "desc")),
+    help=(
+        "Sort direction. Defaults to asc for email fields and desc for "
+        "timestamp fields."
+    ),
+)
+@click.pass_context
+def list_command(
+    ctx: click.Context,
+    json_output: bool,
+    csv_output: bool,
+    email_pattern: str | None,
+    domain_pattern: str | None,
+    admin: bool,
+    non_admin: bool,
+    superuser: bool,
+    non_superuser: bool,
+    active: bool,
+    inactive: bool,
+    verified: bool,
+    unverified: bool,
+    since_created_at: float | None,
+    before_created_at: float | None,
+    since_modified_at: float | None,
+    before_modified_at: float | None,
+    since_last_login_at: float | None,
+    before_last_login_at: float | None,
+    never_logged_in: bool,
+    logged_in: bool,
+    order: str,
+    direction: str | None,
+) -> None:
+    _ensure_mutually_exclusive((json_output, "--json"), (csv_output, "--csv"))
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="list",
+            config=_config_path(ctx),
+            json_output=json_output,
+            csv_output=csv_output,
+            email_pattern=email_pattern,
+            domain_pattern=domain_pattern,
+            is_admin=_optional_boolean(
+                admin,
+                non_admin,
+                positive="--admin",
+                negative="--non-admin",
+            ),
+            is_superuser=_optional_boolean(
+                superuser,
+                non_superuser,
+                positive="--superuser",
+                negative="--non-superuser",
+            ),
+            effective_active=_optional_boolean(
+                active,
+                inactive,
+                positive="--active",
+                negative="--inactive",
+            ),
+            is_verified=_optional_boolean(
+                verified,
+                unverified,
+                positive="--verified",
+                negative="--unverified",
+            ),
+            since_created_at=since_created_at,
+            before_created_at=before_created_at,
+            since_modified_at=since_modified_at,
+            before_modified_at=before_modified_at,
+            since_last_login_at=since_last_login_at,
+            before_last_login_at=before_last_login_at,
+            never_logged_in=_optional_boolean(
+                never_logged_in,
+                logged_in,
+                positive="--never-logged-in",
+                negative="--logged-in",
+            ),
+            order=order,
+            direction=direction,
+        ),
+    )
+
+
+@usermgr_command.command("password", help="Change a local user's password.")
+@click.argument("target")
+@_password_source_option(default=PASSWORD_SOURCE_PROMPT)
+@click.option("--no-revoke", is_flag=True)
+@click.pass_context
+def password_command(
+    ctx: click.Context,
+    target: str,
+    password: PasswordSource,
+    no_revoke: bool,
+) -> None:
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="password",
+            config=_config_path(ctx),
+            target=target,
+            password=password,
+            no_revoke=no_revoke,
+        ),
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
     try:
-        return asyncio.run(_main_async(args))
-    except ConfigurationError as exc:
-        print(f"configuration: {exc}", file=sys.stderr)
+        result = usermgr_command.main(
+            args=None if argv is None else list(argv),
+            prog_name="usermgr",
+            standalone_mode=False,
+        )
+    except click.exceptions.Exit as exc:
+        return int(exc.exit_code or 0)
+    except click.Abort:
+        print("Aborted!", file=sys.stderr)
         return 1
+    except click.ClickException as exc:
+        exc.show()
+        return int(exc.exit_code or 1)
+    return int(result or 0)
 
 
-async def _main_async(args: argparse.Namespace) -> int:
+async def _main_async(args: UsermgrArgs) -> int:
     settings = load_auth_settings(config_path=args.config)
     database = create_database(settings.database_url)
     try:
         async with session_scope(database.session_factory) as session:
+            await _verify_identity_schema(session)
             match args.command:
                 case "create":
-                    password = _read_password(args.password)
+                    password = _read_required_password(args.password)
                     result = await create_local_user_for_management(
                         session,
                         settings.identity_options,
@@ -357,7 +717,7 @@ async def _main_async(args: argparse.Namespace) -> int:
                     )
                     return 0
                 case "password":
-                    password = _read_password(args.password)
+                    password = _read_required_password(args.password)
                     result = await update_local_user_for_management(
                         session,
                         settings.identity_options,
@@ -378,32 +738,123 @@ async def _main_async(args: argparse.Namespace) -> int:
         await close_database(database)
 
 
-def _read_password(value: str) -> str:
-    if value == PASSWORD_SOURCE_STDIN:
-        if sys.stdin.isatty():
-            raise ConfigurationError(
-                "Refusing to read password from interactive stdin; "
-                "pipe a password or omit --password for a hidden prompt."
+async def _verify_identity_schema(session: AsyncSession) -> None:
+    try:
+        schema_status = await session.run_sync(_identity_schema_status)
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "Auth database schema inspection failed.",
+            extra={
+                "table_name": User.__tablename__,
+                "schema": getattr(User.__table__, "schema", None),
+            },
+        )
+        _log_schema_inspection_error(exc)
+        raise ConfigurationError(SCHEMA_INSPECTION_MESSAGE) from exc
+
+    table_name = _identity_table_qualified_name()
+    if not schema_status.table_exists:
+        raise ConfigurationError(
+            f"{SCHEMA_MIGRATION_MESSAGE} Missing {table_name} table."
+        )
+
+    if schema_status.missing_columns:
+        raise ConfigurationError(
+            f"{SCHEMA_MIGRATION_MESSAGE} Missing {table_name} columns: "
+            f"{', '.join(schema_status.missing_columns)}."
+        )
+
+
+def _identity_table_qualified_name() -> str:
+    user_table = cast(Table, User.__table__)
+    if user_table.schema:
+        return f"{user_table.schema}.{user_table.name}"
+    return user_table.name
+
+
+def _identity_schema_status(session: Session) -> IdentitySchemaStatus:
+    inspector = sqlalchemy_inspect(session.get_bind())
+    user_table = cast(Table, User.__table__)
+    table_name = user_table.name
+    schema = user_table.schema
+    expected_column_names = tuple(str(column.name) for column in user_table.columns)
+    expected_columns = {
+        _normalise_identifier(column_name): column_name
+        for column_name in expected_column_names
+    }
+    if not inspector.has_table(table_name, schema=schema):
+        return IdentitySchemaStatus(
+            table_name=table_name,
+            table_exists=False,
+            missing_columns=(),
+        )
+
+    database_columns = {
+        _normalise_identifier(column["name"])
+        for column in inspector.get_columns(table_name, schema=schema)
+    }
+    missing_columns = (
+        column_name
+        for normalised_name, column_name in expected_columns.items()
+        if normalised_name not in database_columns
+    )
+    return IdentitySchemaStatus(
+        table_name=table_name,
+        table_exists=True,
+        missing_columns=tuple(sorted(missing_columns)),
+    )
+
+
+def _normalise_identifier(value: object) -> str:
+    return str(value).casefold()
+
+
+def _log_schema_inspection_error(exc: SQLAlchemyError) -> None:
+    logger.debug(
+        "Failed to inspect identity_user schema.",
+        exc_info=True,
+        extra={
+            "table_name": User.__tablename__,
+            "schema": getattr(User.__table__, "schema", None),
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        },
+    )
+
+
+def _read_password(value: PasswordSource) -> str:
+    match value:
+        case "-":
+            if sys.stdin.isatty():
+                raise PasswordSourceError(
+                    "Refusing to read password from interactive stdin; "
+                    "pipe a password or omit --password for a hidden prompt."
+                )
+            line = sys.stdin.readline()
+            if line == "":
+                raise PasswordSourceError("No password received on stdin.")
+
+            password = line.rstrip("\r\n")
+            if sys.stdin.read(1):
+                raise PasswordSourceError(
+                    "Password stdin input must contain exactly one line."
+                )
+            return password
+        case "prompt":
+            return click.prompt(
+                "Password",
+                hide_input=True,
+                confirmation_prompt=True,
+                err=True,
             )
-        line = sys.stdin.readline()
-        if line == "":
-            raise ConfigurationError("No password received on stdin.")
+        case _:
+            raise PasswordSourceError(f"Unsupported password source: {value!r}")
 
-        password = line.rstrip("\r\n")
-        if sys.stdin.read(1):
-            raise ConfigurationError(
-                "Password stdin input must contain exactly one line."
-            )
-        return password
 
-    if value == PASSWORD_SOURCE_PROMPT:
-        password = getpass.getpass("Password: ")
-        confirmation = getpass.getpass("Confirm password: ")
-        if password != confirmation:
-            raise ConfigurationError("Password confirmation does not match.")
-        return password
-
-    raise ConfigurationError(f"Unsupported password source: {value!r}")
+def _read_required_password(value: PasswordSource | None) -> str:
+    if value is None:
+        value = PASSWORD_SOURCE_PROMPT
+    return _read_password(value)
 
 
 def parse_timestamp_filter(value: str) -> float:
@@ -423,7 +874,7 @@ def parse_timestamp_filter(value: str) -> float:
         settings=_timestamp_parser_settings(),
     )
     if parsed is None:
-        raise argparse.ArgumentTypeError(f"Invalid timestamp value: {value}")
+        raise ValueError(f"Invalid timestamp value: {value}")
 
     return parsed.astimezone(UTC).timestamp()
 

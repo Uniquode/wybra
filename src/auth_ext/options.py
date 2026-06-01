@@ -35,7 +35,10 @@ def is_generate_local_identity_secret(value: str) -> bool:
 class IdentityOptions:
     account_creation_policy: AccountCreationPolicy = "admin-created"
     session_cookie_name: str = "uniquode_session"
-    session_cookie_secure: bool = True
+    # Force secure cookies for static transports that cannot inspect a request.
+    # Defaults to False so ordinary HTTP development remains possible; host
+    # applications should require True for non-local deployments.
+    session_cookie_force_secure: bool = False
     session_lifetime_seconds: int = 2_592_000
     reset_password_token_secret: str = _GENERATE_LOCAL_SECRET
     verification_token_secret: str = _GENERATE_LOCAL_SECRET

@@ -27,20 +27,40 @@ Run the development server:
 uv run runserver
 uv run runserver --host 127.0.0.1 --port 8000
 uv run runserver --reload
+uv run runserver --no-reload
 APP_RELOAD=1 uv run runserver
 ```
+
+Additional Uvicorn arguments can be passed after `--`, for example to trust
+forwarded headers from a local TLS-terminating proxy:
+
+```sh
+uv run runserver --host 127.0.0.1 --port 8000 -- --proxy-headers --forwarded-allow-ips 127.0.0.1
+```
+
+See [WEB-SECURITY.md](WEB-SECURITY.md) for reverse-proxy HTTPS setup and secure
+session-cookie guidance.
 
 ## Configuration
 
 Runtime configuration is loaded through `envex`, including local `.env` files.
 `DATABASE_URL` is the database connection string. App settings use concise names
 such as `APP_ENV`, `APP_NAME`, `CSRF_SECRET`, `CSRF_SECURE`, `RESET_SECRET`,
-`VERIFICATION_SECRET`, `SESSION_COOKIE`, `SESSION_SECURE`, `SESSION_LIFETIME`,
-`OAUTH_LINKING`, `ADVANCED_AUTH`, and `APP_RELOAD`.
+`VERIFICATION_SECRET`, `SESSION_COOKIE`, `SESSION_FORCE_SECURE`,
+`SESSION_LIFETIME`, `OAUTH_LINKING`, `ADVANCED_AUTH`, and `APP_RELOAD`.
 
 Local `.env` files are for development only and are ignored by Git. Deployment
 environments should inject secrets through their secret manager or environment
 configuration.
+
+Browser session cookies derive their `Secure` attribute from the request scheme:
+plain HTTP responses use non-secure cookies, and HTTPS responses use secure
+cookies. Prefer trusted proxy-header normalisation for TLS termination; set
+`SESSION_FORCE_SECURE=1` for non-local deployments and any deployment where
+browser traffic is HTTPS but the ASGI request scheme cannot be made reliable.
+See [WEB-SECURITY.md](WEB-SECURITY.md) for Nginx and Apache examples. Non-local
+deployments must explicitly configure identity token secrets and force secure
+session cookies.
 
 ## Development Notes
 
@@ -102,13 +122,16 @@ separated form such as `2025-01-01` for calendar dates.
 
 `usermgr` is owned by the reusable authentication package and loads generic
 auth configuration from `--config`, `AUTH_CONFIG`, or `./auth.toml` when
-present. The file uses an `[auth]` table and may be shared by the host
-application:
+present. The file uses an `[auth]` table. The `uniquode` web application still
+loads its runtime settings from envex environment configuration; a host may
+choose to share `auth.toml`, but only if it explicitly loads that source.
 
 ```toml
 [auth]
 database_url = "sqlite+aiosqlite:///uniquode.sqlite3"
-session_cookie_secure = false
+# Local default. Non-local deployments should force secure cookies.
+# Prefer trusted proxy-header normalisation for TLS termination as well.
+session_cookie_force_secure = false
 
 [auth.password.policy]
 minimum_length = 12

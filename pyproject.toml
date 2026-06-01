@@ -10,6 +10,7 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
+    "click>=8.4.1",
     "dateparser>=1.4.0",
     "dbscripts",
     "envex>=5.0.0",
