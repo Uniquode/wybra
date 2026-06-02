@@ -8,7 +8,17 @@ from fastapi_users_db_sqlalchemy import (
 )
 from fastapi_users_db_sqlalchemy.access_token import SQLAlchemyBaseAccessTokenTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from auth_ext.timestamps import current_timestamp
@@ -89,6 +99,100 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     )
 
 
+class Group(Base):
+    """Authorisation group used to collect reusable scopes."""
+
+    __tablename__ = "identity_group"
+    __table_args__ = (Index("ix_identity_group_abbrev", "abbrev", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    abbrev: Mapped[str] = mapped_column(String(length=120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+
+class Scope(Base):
+    """Described authorisation scope assignable to groups."""
+
+    __tablename__ = "identity_scope"
+
+    scope: Mapped[str] = mapped_column(String(length=255), primary_key=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class GroupScope(Base):
+    """Scope assigned directly to an authorisation group."""
+
+    __tablename__ = "identity_group_scope"
+    __table_args__ = (
+        UniqueConstraint("group_id", "scope", name="uq_identity_group_scope_pair"),
+        Index("ix_identity_group_scope_group_id", "group_id"),
+        Index("ix_identity_group_scope_scope", "scope"),
+    )
+
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_group.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    scope: Mapped[str] = mapped_column(
+        String(length=255),
+        ForeignKey("identity_scope.scope", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+
+
+class GroupUser(Base):
+    """Direct user membership in an authorisation group."""
+
+    __tablename__ = "identity_group_user"
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_identity_group_user_pair"),
+        Index("ix_identity_group_user_group_id", "group_id"),
+        Index("ix_identity_group_user_user_id", "user_id"),
+    )
+
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_group.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_user.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
+class GroupGroup(Base):
+    """Nested child-group membership in an authorisation group."""
+
+    __tablename__ = "identity_group_group"
+    __table_args__ = (
+        UniqueConstraint(
+            "parent_group_id",
+            "child_group_id",
+            name="uq_identity_group_group_pair",
+        ),
+        Index("ix_identity_group_group_parent_group_id", "parent_group_id"),
+        Index("ix_identity_group_group_child_group_id", "child_group_id"),
+        CheckConstraint(
+            "parent_group_id <> child_group_id",
+            name="ck_identity_group_group_no_self_membership",
+        ),
+    )
+
+    parent_group_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_group.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    child_group_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_group.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+
+
 class AccessToken(SQLAlchemyBaseAccessTokenTableUUID, Base):
     """Server-side browser session token managed by FastAPI Users."""
 
@@ -106,8 +210,13 @@ metadata = Base.metadata
 __all__ = (
     "AccessToken",
     "Base",
+    "Group",
+    "GroupGroup",
+    "GroupScope",
+    "GroupUser",
     "InitialAdminBootstrap",
     "OAuthAccount",
+    "Scope",
     "User",
     "metadata",
 )

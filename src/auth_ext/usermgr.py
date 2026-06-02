@@ -10,10 +10,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
+from uuid import UUID
 
 import click
 import dateparser
-from sqlalchemy import Table
+from sqlalchemy import Table, delete, select
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,25 +23,46 @@ from sqlalchemy.orm import Session
 from auth_ext.configuration import ConfigurationError
 from auth_ext.database import close_database, create_database, session_scope
 from auth_ext.management import (
+    ERROR_CYCLIC_GROUP_MEMBERSHIP,
     ERROR_FINAL_SUPERUSER,
+    ERROR_GROUP_HAS_MEMBERSHIPS,
+    ERROR_INVALID_GROUP_ID,
     ERROR_INVALID_TIMEZONE,
     ERROR_INVALID_USER_ID,
     ERROR_NO_CHANGES,
     ERROR_NOT_FOUND,
+    ERROR_SCOPE_IN_USE,
     ERROR_SUPERUSER_PROTECTED,
     ERROR_UNSUPPORTED_ORDER,
     USER_RECORD_FIELDS,
     USER_TIMESTAMP_FIELDS,
+    add_child_group_to_group_for_management,
+    add_scope_to_group_for_management,
+    add_user_to_group_for_management,
+    create_group_for_management,
     create_local_user_for_management,
+    create_scope_for_management,
     deactivate_local_user_for_management,
+    delete_group_for_management,
     delete_local_user_for_management,
+    delete_scope_for_management,
+    effective_scopes_for_user_for_management,
+    get_group_for_management,
+    group_target_error_message,
+    list_groups_for_management,
     list_local_users_for_management,
+    list_scopes_for_management,
+    remove_child_group_from_group_for_management,
+    remove_scope_from_group_for_management,
+    remove_user_from_group_for_management,
     resolve_user_target,
     target_error_message,
+    update_group_for_management,
     update_local_user_for_management,
+    update_scope_for_management,
     user_record,
 )
-from auth_ext.models import User
+from auth_ext.models import Group, GroupGroup, GroupScope, GroupUser, Scope, User
 from auth_ext.result import (
     ERROR_ALREADY_EXISTS,
     ERROR_INVALID_EMAIL,
@@ -76,6 +98,16 @@ class UsermgrArgs:
     config: Path | None = None
     email: str = ""
     target: str = ""
+    group_target: str = ""
+    child_group_target: str = ""
+    user_target: str = ""
+    scope: str = ""
+    description: str | None = None
+    add_scopes: tuple[str, ...] = ()
+    remove_scopes: tuple[str, ...] = ()
+    add_groups: tuple[str, ...] = ()
+    remove_groups: tuple[str, ...] = ()
+    set_groups: tuple[str, ...] = ()
     password: PasswordSource | None = None
     admin: bool = False
     superuser: bool = False
@@ -111,9 +143,10 @@ class UsermgrArgs:
 
 @dataclass(frozen=True, slots=True)
 class IdentitySchemaStatus:
-    table_name: str
+    primary_table_name: str
     table_exists: bool
     missing_columns: tuple[str, ...]
+    missing_tables: tuple[str, ...] = ()
 
 
 class PasswordSourceError(Exception):
@@ -251,6 +284,203 @@ def _run_usermgr(ctx: click.Context, args: UsermgrArgs) -> None:
     ctx.exit(exit_code)
 
 
+def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrArgs:
+    if not tokens:
+        raise click.UsageError("Missing group operation.")
+
+    operation = tokens[0]
+    match operation:
+        case "create":
+            parsed = _parse_cli_tokens(
+                tokens[1:],
+                value_options={"--description", "--scope"},
+                flag_options=set(),
+            )
+            if len(parsed.positionals) != 1:
+                raise click.UsageError("Usage: usermgr group create <abbrev>.")
+            return UsermgrArgs(
+                command="group-create",
+                config=_config_path(ctx),
+                group_target=parsed.positionals[0],
+                description=parsed.single_option("--description"),
+                add_scopes=tuple(parsed.option_values("--scope")),
+            )
+        case "list":
+            parsed = _parse_cli_tokens(
+                tokens[1:],
+                value_options=set(),
+                flag_options={"--json", "--csv"},
+            )
+            if parsed.positionals:
+                raise click.UsageError("Usage: usermgr group list [--json|--csv].")
+            _ensure_mutually_exclusive(
+                (parsed.has_flag("--json"), "--json"),
+                (parsed.has_flag("--csv"), "--csv"),
+            )
+            return UsermgrArgs(
+                command="group-list",
+                config=_config_path(ctx),
+                json_output=parsed.has_flag("--json"),
+                csv_output=parsed.has_flag("--csv"),
+            )
+        case "effective-scopes":
+            parsed = _parse_cli_tokens(
+                tokens[1:],
+                value_options=set(),
+                flag_options={"--json"},
+            )
+            if len(parsed.positionals) != 1:
+                raise click.UsageError(
+                    "Usage: usermgr group effective-scopes <user-target>."
+                )
+            return UsermgrArgs(
+                command="group-effective-scopes",
+                config=_config_path(ctx),
+                user_target=parsed.positionals[0],
+                json_output=parsed.has_flag("--json"),
+            )
+        case _:
+            return _target_group_args(ctx, tokens)
+
+
+def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrArgs:
+    if len(tokens) < 2:
+        raise click.UsageError("Missing group target operation.")
+
+    target, operation, *remaining = tokens
+    match operation:
+        case "show":
+            parsed = _parse_cli_tokens(
+                remaining,
+                value_options=set(),
+                flag_options={"--json"},
+            )
+            if parsed.positionals:
+                raise click.UsageError("Usage: usermgr group <group> show [--json].")
+            return UsermgrArgs(
+                command="group-show",
+                config=_config_path(ctx),
+                group_target=target,
+                json_output=parsed.has_flag("--json"),
+            )
+        case "update":
+            parsed = _parse_cli_tokens(
+                remaining,
+                value_options={"--description", "--scope", "--rm-scope"},
+                flag_options=set(),
+            )
+            if parsed.positionals:
+                raise click.UsageError(
+                    "Usage: usermgr group <group> update "
+                    "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
+                )
+            return UsermgrArgs(
+                command="group-update",
+                config=_config_path(ctx),
+                group_target=target,
+                description=parsed.single_option("--description"),
+                add_scopes=tuple(parsed.option_values("--scope")),
+                remove_scopes=tuple(parsed.option_values("--rm-scope")),
+            )
+        case "delete":
+            parsed = _parse_cli_tokens(
+                remaining,
+                value_options=set(),
+                flag_options={"--force"},
+            )
+            if parsed.positionals:
+                raise click.UsageError("Usage: usermgr group <group> delete [--force].")
+            return UsermgrArgs(
+                command="group-delete",
+                config=_config_path(ctx),
+                group_target=target,
+                force=parsed.has_flag("--force"),
+            )
+        case "add-user" | "remove-user":
+            parsed = _parse_cli_tokens(
+                remaining,
+                value_options=set(),
+                flag_options=set(),
+            )
+            if len(parsed.positionals) != 1:
+                raise click.UsageError(
+                    f"Usage: usermgr group <group> {operation} <user>."
+                )
+            return UsermgrArgs(
+                command=f"group-{operation}",
+                config=_config_path(ctx),
+                group_target=target,
+                user_target=parsed.positionals[0],
+            )
+        case "add-group" | "remove-group":
+            parsed = _parse_cli_tokens(
+                remaining,
+                value_options=set(),
+                flag_options=set(),
+            )
+            if len(parsed.positionals) != 1:
+                raise click.UsageError(
+                    f"Usage: usermgr group <group> {operation} <group>."
+                )
+            return UsermgrArgs(
+                command=f"group-{operation}",
+                config=_config_path(ctx),
+                group_target=target,
+                child_group_target=parsed.positionals[0],
+            )
+        case _:
+            raise click.UsageError(f"Unknown group operation: {operation}.")
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedCliTokens:
+    positionals: list[str]
+    value_options: dict[str, list[str]]
+    flags: set[str]
+
+    def option_values(self, option_name: str) -> list[str]:
+        return self.value_options.get(option_name, [])
+
+    def single_option(self, option_name: str) -> str | None:
+        values = self.option_values(option_name)
+        if len(values) > 1:
+            raise click.UsageError(f"Option {option_name} can only be provided once.")
+        return values[0] if values else None
+
+    def has_flag(self, option_name: str) -> bool:
+        return option_name in self.flags
+
+
+def _parse_cli_tokens(
+    tokens: Sequence[str],
+    *,
+    value_options: set[str],
+    flag_options: set[str],
+) -> ParsedCliTokens:
+    positionals: list[str] = []
+    parsed_value_options: dict[str, list[str]] = {}
+    parsed_flags: set[str] = set()
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in value_options:
+            if index + 1 >= len(tokens):
+                raise click.UsageError(f"Option {token} requires a value.")
+            parsed_value_options.setdefault(token, []).append(tokens[index + 1])
+            index += 2
+            continue
+        if token in flag_options:
+            parsed_flags.add(token)
+            index += 1
+            continue
+        if token.startswith("-"):
+            raise click.UsageError(f"Unknown option: {token}.")
+        positionals.append(token)
+        index += 1
+
+    return ParsedCliTokens(positionals, parsed_value_options, parsed_flags)
+
+
 @click.group(
     name="usermgr",
     context_settings=CONTEXT_SETTINGS,
@@ -277,6 +507,7 @@ def usermgr_command(ctx: click.Context, config: Path | None) -> None:
 @click.option("--preferred-name")
 @click.option("--timezone", "preferred_timezone")
 @click.option("--expires-at", callback=_timestamp_callback)
+@click.option("--group", "groups", multiple=True)
 @click.pass_context
 def create_command(
     ctx: click.Context,
@@ -289,6 +520,7 @@ def create_command(
     preferred_name: str | None,
     preferred_timezone: str | None,
     expires_at: float | None,
+    groups: tuple[str, ...],
 ) -> None:
     _run_usermgr(
         ctx,
@@ -304,6 +536,7 @@ def create_command(
             preferred_name=preferred_name,
             preferred_timezone=preferred_timezone,
             expires_at=expires_at,
+            add_groups=groups,
         ),
     )
 
@@ -326,6 +559,10 @@ def create_command(
 @click.option("--no-timezone", "clear_preferred_timezone", is_flag=True)
 @click.option("--expires-at", callback=_timestamp_callback)
 @click.option("--no-expires-at", is_flag=True)
+@click.option("--add-group", "add_groups", multiple=True)
+@click.option("--rm-group", "remove_groups", multiple=True)
+@click.option("--set-group", "set_groups", multiple=True)
+@click.option("--group", "invalid_groups", multiple=True)
 @click.pass_context
 def update_command(
     ctx: click.Context,
@@ -346,7 +583,16 @@ def update_command(
     clear_preferred_timezone: bool,
     expires_at: float | None,
     no_expires_at: bool,
+    add_groups: tuple[str, ...],
+    remove_groups: tuple[str, ...],
+    set_groups: tuple[str, ...],
+    invalid_groups: tuple[str, ...],
 ) -> None:
+    if invalid_groups:
+        raise click.UsageError(
+            "Do not use --group with update; use --set-group for replacement "
+            "or --add-group/--rm-group for incremental changes."
+        )
     _ensure_mutually_exclusive(
         (display_name, "--display-name"), (clear_display_name, "--no-display-name")
     )
@@ -394,6 +640,9 @@ def update_command(
             clear_preferred_timezone=clear_preferred_timezone,
             expires_at=expires_at,
             no_expires_at=no_expires_at,
+            add_groups=add_groups,
+            remove_groups=remove_groups,
+            set_groups=set_groups,
         ),
     )
 
@@ -572,6 +821,97 @@ def password_command(
     )
 
 
+@usermgr_command.group("scope", help="Manage authorisation scopes.")
+def scope_group() -> None:
+    pass
+
+
+@scope_group.command("create", help="Create an authorisation scope.")
+@click.argument("scope")
+@click.option("--description")
+@click.pass_context
+def scope_create_command(
+    ctx: click.Context,
+    scope: str,
+    description: str | None,
+) -> None:
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="scope-create",
+            config=_config_path(ctx),
+            scope=scope,
+            description=description,
+        ),
+    )
+
+
+@scope_group.command("update", help="Update an authorisation scope.")
+@click.argument("scope")
+@click.option("--description")
+@click.pass_context
+def scope_update_command(
+    ctx: click.Context,
+    scope: str,
+    description: str | None,
+) -> None:
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="scope-update",
+            config=_config_path(ctx),
+            scope=scope,
+            description=description,
+        ),
+    )
+
+
+@scope_group.command("delete", help="Delete an unused authorisation scope.")
+@click.argument("scope")
+@click.pass_context
+def scope_delete_command(ctx: click.Context, scope: str) -> None:
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="scope-delete",
+            config=_config_path(ctx),
+            scope=scope,
+        ),
+    )
+
+
+@scope_group.command("list", help="List authorisation scopes.")
+@click.option("--json", "json_output", is_flag=True)
+@click.option("--csv", "csv_output", is_flag=True)
+@click.pass_context
+def scope_list_command(
+    ctx: click.Context,
+    json_output: bool,
+    csv_output: bool,
+) -> None:
+    _ensure_mutually_exclusive((json_output, "--json"), (csv_output, "--csv"))
+    _run_usermgr(
+        ctx,
+        UsermgrArgs(
+            command="scope-list",
+            config=_config_path(ctx),
+            json_output=json_output,
+            csv_output=csv_output,
+        ),
+    )
+
+
+@usermgr_command.command(
+    "group",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    help="Manage authorisation groups.",
+)
+@click.argument("tokens", nargs=-1, type=click.UNPROCESSED)
+@click.pass_context
+def group_command(ctx: click.Context, tokens: tuple[str, ...]) -> None:
+    _run_usermgr(ctx, _group_args(ctx, tokens))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = usermgr_command.main(
@@ -598,6 +938,22 @@ async def _main_async(args: UsermgrArgs) -> int:
             await _verify_identity_schema(session)
             match args.command:
                 case "create":
+                    replacement_group_ids: list[UUID] = []
+                    if args.add_groups:
+                        group_result = await _resolve_group_targets_for_set(
+                            session,
+                            args.add_groups,
+                        )
+                        if group_result.is_failure():
+                            return _print_failure(
+                                group_result.error_type,
+                                group_result.message,
+                            )
+                        replacement_group_ids = cast(
+                            list[UUID],
+                            (group_result.value or {}).get("group_ids", []),
+                        )
+
                     password = _read_required_password(args.password)
                     result = await create_local_user_for_management(
                         session,
@@ -615,6 +971,23 @@ async def _main_async(args: UsermgrArgs) -> int:
                     if result.is_failure():
                         return _print_failure(result.error_type, result.message)
 
+                    user, target_error = await resolve_user_target(session, args.email)
+                    if target_error is not None:
+                        return _print_failure(
+                            target_error,
+                            target_error_message(target_error),
+                        )
+                    if user is None:
+                        return _print_failure(
+                            ERROR_NOT_FOUND,
+                            "No matching user was found.",
+                        )
+
+                    for group_id in dict.fromkeys(replacement_group_ids):
+                        session.add(GroupUser(group_id=group_id, user_id=user.id))
+                    if replacement_group_ids:
+                        await session.commit()
+
                     value = result.value or {}
                     print(f"created user: {value.get('email', args.email)}")
                     return 0
@@ -624,28 +997,54 @@ async def _main_async(args: UsermgrArgs) -> int:
                         if args.password is not None
                         else None
                     )
-                    result = await update_local_user_for_management(
-                        session,
-                        settings.identity_options,
-                        target=args.target,
-                        is_admin=args.is_admin,
-                        is_superuser=args.is_superuser,
-                        is_verified=args.is_verified,
-                        password=password,
-                        revoke_sessions=not args.no_revoke,
-                        display_name=args.display_name,
-                        clear_display_name=args.clear_display_name,
-                        preferred_name=args.preferred_name,
-                        clear_preferred_name=args.clear_preferred_name,
-                        preferred_timezone=args.preferred_timezone,
-                        clear_preferred_timezone=args.clear_preferred_timezone,
-                        expires_at=args.expires_at,
-                        clear_expires_at=args.no_expires_at,
-                    )
-                    if result.is_failure():
-                        return _print_failure(result.error_type, result.message)
+                    result: Result[dict[str, Any]] = Result.ok({})
+                    if _user_metadata_update_requested(args, password):
+                        result = await update_local_user_for_management(
+                            session,
+                            settings.identity_options,
+                            target=args.target,
+                            is_admin=args.is_admin,
+                            is_superuser=args.is_superuser,
+                            is_verified=args.is_verified,
+                            password=password,
+                            revoke_sessions=not args.no_revoke,
+                            display_name=args.display_name,
+                            clear_display_name=args.clear_display_name,
+                            preferred_name=args.preferred_name,
+                            clear_preferred_name=args.clear_preferred_name,
+                            preferred_timezone=args.preferred_timezone,
+                            clear_preferred_timezone=args.clear_preferred_timezone,
+                            expires_at=args.expires_at,
+                            clear_expires_at=args.no_expires_at,
+                        )
+                        if result.is_failure():
+                            return _print_failure(result.error_type, result.message)
+                    else:
+                        if not (
+                            args.add_groups or args.remove_groups or args.set_groups
+                        ):
+                            return _print_failure(
+                                ERROR_NO_CHANGES,
+                                "No user changes were requested.",
+                            )
+                        result = await _resolve_target_record(session, args.target)
+                        if result.is_failure():
+                            return _print_failure(result.error_type, result.message)
 
-                    value = result.value or {}
+                    membership_result = await _update_user_groups_from_args(
+                        session,
+                        args,
+                    )
+                    if membership_result.is_failure():
+                        return _print_failure(
+                            membership_result.error_type,
+                            membership_result.message,
+                        )
+
+                    value = {
+                        **(result.value or {}),
+                        **(membership_result.value or {}),
+                    }
                     print(f"updated user: {value.get('email', args.target)}")
                     return 0
                 case "delete":
@@ -740,6 +1139,183 @@ async def _main_async(args: UsermgrArgs) -> int:
                     value = result.value or {}
                     print(f"changed password: {value.get('email', args.target)}")
                     return 0
+                case "scope-create":
+                    result = await create_scope_for_management(
+                        session,
+                        scope=args.scope,
+                        description=args.description,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    value = result.value or {}
+                    print(f"created scope: {value.get('scope', args.scope)}")
+                    return 0
+                case "scope-update":
+                    result = await update_scope_for_management(
+                        session,
+                        scope=args.scope,
+                        description=args.description,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    value = result.value or {}
+                    print(f"updated scope: {value.get('scope', args.scope)}")
+                    return 0
+                case "scope-delete":
+                    result = await delete_scope_for_management(
+                        session,
+                        scope=args.scope,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    value = result.value or {}
+                    print(f"deleted scope: {value.get('scope', args.scope)}")
+                    return 0
+                case "scope-list":
+                    result = await list_scopes_for_management(session)
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    _print_records(
+                        (result.value or {}).get("scopes", []),
+                        field_names=("scope", "description"),
+                        json_output=args.json_output,
+                        csv_output=args.csv_output,
+                    )
+                    return 0
+                case "group-create":
+                    result = await create_group_for_management(
+                        session,
+                        abbrev=args.group_target,
+                        description=args.description or "",
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    for scope in args.add_scopes:
+                        result = await add_scope_to_group_for_management(
+                            session,
+                            group_target=args.group_target,
+                            scope=scope,
+                        )
+                        if result.is_failure():
+                            return _print_failure(result.error_type, result.message)
+
+                    value = result.value or {}
+                    print(f"created group: {value.get('abbrev', args.group_target)}")
+                    return 0
+                case "group-list":
+                    result = await list_groups_for_management(session)
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    _print_records(
+                        (result.value or {}).get("groups", []),
+                        field_names=(
+                            "id",
+                            "abbrev",
+                            "description",
+                            "scopes",
+                            "users",
+                            "child_groups",
+                            "parent_groups",
+                        ),
+                        json_output=args.json_output,
+                        csv_output=args.csv_output,
+                    )
+                    return 0
+                case "group-show":
+                    result = await get_group_for_management(
+                        session,
+                        target=args.group_target,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    _print_single_record(
+                        result.value or {},
+                        json_output=args.json_output,
+                    )
+                    return 0
+                case "group-update":
+                    result = await _update_group_from_args(session, args)
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    value = result.value or {}
+                    print(f"updated group: {value.get('abbrev', args.group_target)}")
+                    return 0
+                case "group-delete":
+                    result = await delete_group_for_management(
+                        session,
+                        target=args.group_target,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    value = result.value or {}
+                    print(f"deleted group: {value.get('abbrev', args.group_target)}")
+                    return 0
+                case "group-add-user":
+                    result = await add_user_to_group_for_management(
+                        session,
+                        group_target=args.group_target,
+                        user_target=args.user_target,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    print(f"added user to group: {args.group_target}")
+                    return 0
+                case "group-remove-user":
+                    result = await remove_user_from_group_for_management(
+                        session,
+                        group_target=args.group_target,
+                        user_target=args.user_target,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    print(f"removed user from group: {args.group_target}")
+                    return 0
+                case "group-add-group":
+                    result = await add_child_group_to_group_for_management(
+                        session,
+                        parent_target=args.group_target,
+                        child_target=args.child_group_target,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    print(f"added child group: {args.group_target}")
+                    return 0
+                case "group-remove-group":
+                    result = await remove_child_group_from_group_for_management(
+                        session,
+                        parent_target=args.group_target,
+                        child_target=args.child_group_target,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    print(f"removed child group: {args.group_target}")
+                    return 0
+                case "group-effective-scopes":
+                    result = await effective_scopes_for_user_for_management(
+                        session,
+                        user_target=args.user_target,
+                    )
+                    if result.is_failure():
+                        return _print_failure(result.error_type, result.message)
+
+                    _print_single_record(
+                        result.value or {},
+                        json_output=args.json_output,
+                    )
+                    return 0
                 case _:
                     print(f"{args.command}: not implemented", file=sys.stderr)
                     return 1
@@ -769,8 +1345,14 @@ async def _verify_identity_schema(session: AsyncSession) -> None:
 
     if schema_status.missing_columns:
         raise ConfigurationError(
-            f"{SCHEMA_MIGRATION_MESSAGE} Missing {table_name} columns: "
+            f"{SCHEMA_MIGRATION_MESSAGE} Missing identity schema columns: "
             f"{', '.join(schema_status.missing_columns)}."
+        )
+
+    if schema_status.missing_tables:
+        raise ConfigurationError(
+            f"{SCHEMA_MIGRATION_MESSAGE} "
+            f"{_missing_tables_message(schema_status.missing_tables)}"
         )
 
 
@@ -783,35 +1365,74 @@ def _identity_table_qualified_name() -> str:
 
 def _identity_schema_status(session: Session) -> IdentitySchemaStatus:
     inspector = sqlalchemy_inspect(session.get_bind())
-    user_table = cast(Table, User.__table__)
-    table_name = user_table.name
-    schema = user_table.schema
-    expected_column_names = tuple(str(column.name) for column in user_table.columns)
-    expected_columns = {
-        _normalise_identifier(column_name): column_name
-        for column_name in expected_column_names
-    }
-    if not inspector.has_table(table_name, schema=schema):
+    user_table = _identity_schema_tables()[0]
+    if not inspector.has_table(user_table.name, schema=user_table.schema):
         return IdentitySchemaStatus(
-            table_name=table_name,
+            primary_table_name=user_table.name,
             table_exists=False,
             missing_columns=(),
         )
 
-    database_columns = {
-        _normalise_identifier(column["name"])
-        for column in inspector.get_columns(table_name, schema=schema)
-    }
-    missing_columns = (
-        column_name
-        for normalised_name, column_name in expected_columns.items()
-        if normalised_name not in database_columns
-    )
+    missing_tables: list[str] = []
+    missing_columns: list[str] = []
+    for table in _identity_schema_tables():
+        if not inspector.has_table(table.name, schema=table.schema):
+            missing_tables.append(_qualified_table_name(table))
+            continue
+
+        missing_columns.extend(_missing_schema_columns(inspector, table))
+
     return IdentitySchemaStatus(
-        table_name=table_name,
+        primary_table_name=user_table.name,
         table_exists=True,
         missing_columns=tuple(sorted(missing_columns)),
+        missing_tables=tuple(sorted(missing_tables)),
     )
+
+
+def _identity_schema_tables() -> tuple[Table, ...]:
+    return (
+        cast(Table, User.__table__),
+        cast(Table, Group.__table__),
+        cast(Table, Scope.__table__),
+        cast(Table, GroupScope.__table__),
+        cast(Table, GroupUser.__table__),
+        cast(Table, GroupGroup.__table__),
+    )
+
+
+def _missing_schema_columns(inspector: Any, table: Table) -> list[str]:
+    expected_column_names = tuple(str(column.name) for column in table.columns)
+    expected_columns = {
+        _normalise_identifier(column_name): column_name
+        for column_name in expected_column_names
+    }
+    database_columns = {
+        _normalise_identifier(column["name"])
+        for column in inspector.get_columns(table.name, schema=table.schema)
+    }
+    return [
+        _qualified_column_name(table, column_name)
+        for normalised_name, column_name in expected_columns.items()
+        if normalised_name not in database_columns
+    ]
+
+
+def _qualified_table_name(table: Table) -> str:
+    if table.schema:
+        return f"{table.schema}.{table.name}"
+    return table.name
+
+
+def _qualified_column_name(table: Table, column_name: str) -> str:
+    user_table = cast(Table, User.__table__)
+    if table is user_table:
+        return column_name
+    return f"{_qualified_table_name(table)}.{column_name}"
+
+
+def _missing_tables_message(table_names: tuple[str, ...]) -> str:
+    return " ".join(f"Missing {table_name} table." for table_name in table_names)
 
 
 def _normalise_identifier(value: object) -> str:
@@ -939,16 +1560,191 @@ def _confirm_destructive(action: str, record: dict[str, Any]) -> bool:
     return answer == "yes"
 
 
+async def _update_group_from_args(
+    session: AsyncSession,
+    args: UsermgrArgs,
+) -> Result[dict[str, Any]]:
+    result: Result[dict[str, Any]] | None = None
+    if args.description is not None:
+        result = await update_group_for_management(
+            session,
+            target=args.group_target,
+            description=args.description,
+        )
+        if result.is_failure():
+            return result
+
+    for scope in args.add_scopes:
+        result = await add_scope_to_group_for_management(
+            session,
+            group_target=args.group_target,
+            scope=scope,
+        )
+        if result.is_failure():
+            return result
+
+    for scope in args.remove_scopes:
+        result = await remove_scope_from_group_for_management(
+            session,
+            group_target=args.group_target,
+            scope=scope,
+        )
+        if result.is_failure():
+            return result
+
+    if result is None:
+        return Result.failure(ERROR_NO_CHANGES, "No group changes were requested.")
+
+    return result
+
+
+def _user_metadata_update_requested(
+    args: UsermgrArgs,
+    password: str | None,
+) -> bool:
+    return any(
+        value is not None
+        for value in (
+            args.is_admin,
+            args.is_superuser,
+            args.is_verified,
+            password,
+            args.display_name,
+            args.preferred_name,
+            args.preferred_timezone,
+            args.expires_at,
+        )
+    ) or any(
+        (
+            args.clear_display_name,
+            args.clear_preferred_name,
+            args.clear_preferred_timezone,
+            args.no_expires_at,
+        )
+    )
+
+
+async def _update_user_groups_from_args(
+    session: AsyncSession,
+    args: UsermgrArgs,
+) -> Result[dict[str, Any]]:
+    if not (args.add_groups or args.remove_groups or args.set_groups):
+        return Result.ok({})
+
+    user, target_error = await resolve_user_target(session, args.target)
+    if target_error is not None:
+        return Result.failure(target_error, target_error_message(target_error))
+    if user is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+
+    if args.set_groups:
+        replacement_group_result = await _resolve_group_targets_for_set(
+            session,
+            args.set_groups,
+        )
+        if replacement_group_result.is_failure():
+            return replacement_group_result
+        replacement_group_ids = cast(
+            list[UUID],
+            (replacement_group_result.value or {}).get("group_ids", []),
+        )
+
+        await session.execute(delete(GroupUser).where(GroupUser.user_id == user.id))
+        for group_id in dict.fromkeys(replacement_group_ids):
+            session.add(GroupUser(group_id=group_id, user_id=user.id))
+        await session.commit()
+
+    for group_target in args.add_groups:
+        result = await add_user_to_group_for_management(
+            session,
+            group_target=group_target,
+            user_target=args.target,
+        )
+        if result.is_failure():
+            return result
+
+    for group_target in args.remove_groups:
+        result = await remove_user_from_group_for_management(
+            session,
+            group_target=group_target,
+            user_target=args.target,
+        )
+        if result.is_failure():
+            return result
+
+    return Result.ok(user_record(user))
+
+
+async def _resolve_group_targets_for_set(
+    session: AsyncSession,
+    group_targets: tuple[str, ...],
+) -> Result[dict[str, Any]]:
+    unique_targets = tuple(dict.fromkeys(group_targets))
+    groups_by_abbrev = {
+        group.abbrev: group
+        for group in (
+            await session.execute(select(Group).where(Group.abbrev.in_(unique_targets)))
+        )
+        .scalars()
+        .all()
+    }
+    parsed_ids: dict[str, UUID] = {}
+    invalid_targets: set[str] = set()
+    for target in unique_targets:
+        if target in groups_by_abbrev:
+            continue
+        try:
+            parsed_ids[target] = UUID(target)
+        except ValueError:
+            invalid_targets.add(target)
+
+    groups_by_id: dict[UUID, Group] = {}
+    if parsed_ids:
+        groups_by_id = {
+            group.id: group
+            for group in (
+                await session.execute(
+                    select(Group).where(Group.id.in_(parsed_ids.values()))
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    group_ids = []
+    for target in group_targets:
+        if target in groups_by_abbrev:
+            group_ids.append(groups_by_abbrev[target].id)
+            continue
+
+        if target in invalid_targets:
+            return Result.failure(
+                ERROR_INVALID_GROUP_ID,
+                group_target_error_message(ERROR_INVALID_GROUP_ID),
+            )
+
+        group_id = parsed_ids[target]
+        group = groups_by_id.get(group_id)
+        if group is None:
+            return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
+        group_ids.append(group.id)
+
+    return Result.ok({"group_ids": group_ids})
+
+
 def _print_failure(error_type: str | None, message: str | None) -> int:
     fallback_messages = {
         ERROR_ALREADY_EXISTS: "User already exists.",
+        ERROR_CYCLIC_GROUP_MEMBERSHIP: "Nested group membership would create a cycle.",
         ERROR_FINAL_SUPERUSER: "Cannot remove the final superuser flag.",
+        ERROR_GROUP_HAS_MEMBERSHIPS: "Group still has memberships.",
         ERROR_INVALID_EMAIL: "Email address is invalid.",
         ERROR_INVALID_PASSWORD: "Password is invalid.",
         ERROR_INVALID_TIMEZONE: "Preferred timezone is invalid.",
         ERROR_INVALID_USER_ID: "User target must be an email address or valid user ID.",
         ERROR_NO_CHANGES: "No user changes were requested.",
         ERROR_NOT_FOUND: "No matching user was found.",
+        ERROR_SCOPE_IN_USE: "Scope is assigned to one or more groups.",
         ERROR_SUPERUSER_PROTECTED: "Superuser accounts are protected.",
         ERROR_UNSUPPORTED_ORDER: "Requested ordering is not supported.",
     }
@@ -993,6 +1789,75 @@ def _print_user_records(
                 ]
             )
         )
+
+
+def _print_records(
+    records: list[dict[str, Any]],
+    *,
+    field_names: tuple[str, ...],
+    json_output: bool,
+    csv_output: bool,
+) -> None:
+    cleaned_records = [
+        _record_without_nulls_for_fields(record, field_names) for record in records
+    ]
+    if json_output:
+        print(json.dumps(cleaned_records))
+        return
+
+    formatted_records = [
+        {
+            field_name: _format_record_value(value)
+            for field_name, value in record.items()
+        }
+        for record in cleaned_records
+    ]
+    if csv_output:
+        writer = csv.DictWriter(sys.stdout, fieldnames=list(field_names))
+        writer.writeheader()
+        writer.writerows(formatted_records)
+        return
+
+    for record in formatted_records:
+        print(
+            " ".join(
+                f"{field_name}={record.get(field_name)}"
+                for field_name in field_names
+                if field_name in record
+            )
+        )
+
+
+def _print_single_record(record: dict[str, Any], *, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(_record_without_nulls_for_fields(record, tuple(record))))
+        return
+
+    for field_name, value in _record_without_nulls_for_fields(
+        record,
+        tuple(record),
+    ).items():
+        print(f"{field_name}={_format_record_value(value)}")
+
+
+def _record_without_nulls_for_fields(
+    record: dict[str, Any],
+    field_names: tuple[str, ...],
+) -> dict[str, Any]:
+    return {
+        field_name: record[field_name]
+        for field_name in field_names
+        if field_name in record and record[field_name] is not None
+    }
+
+
+def _format_record_value(value: Any) -> str:
+    if isinstance(value, str | int | float | bool) or value is None:
+        return str(value)
+    try:
+        return json.dumps(value)
+    except TypeError:
+        return str(value)
 
 
 def _record_without_nulls(record: dict[str, Any]) -> dict[str, Any]:
