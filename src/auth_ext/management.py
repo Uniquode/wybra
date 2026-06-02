@@ -141,6 +141,26 @@ def scope_record(scope: Scope) -> dict[str, Any]:
     }
 
 
+def _group_record_from_parts(
+    group: Group,
+    *,
+    scopes: list[str],
+    users: list[str],
+    child_groups: list[str],
+    parent_groups: list[str],
+) -> dict[str, Any]:
+    record = {
+        "id": str(group.id),
+        "abbrev": group.abbrev,
+        "description": group.description,
+        "scopes": scopes,
+        "users": users,
+        "child_groups": child_groups,
+        "parent_groups": parent_groups,
+    }
+    return {field_name: record.get(field_name) for field_name in GROUP_RECORD_FIELDS}
+
+
 async def group_record(session: AsyncSession, group: Group) -> dict[str, Any]:
     scopes = (
         (
@@ -175,16 +195,13 @@ async def group_record(session: AsyncSession, group: Group) -> dict[str, Any]:
         GroupGroup.parent_group_id,
         GroupGroup.child_group_id == group.id,
     )
-    record = {
-        "id": str(group.id),
-        "abbrev": group.abbrev,
-        "description": group.description,
-        "scopes": list(scopes),
-        "users": list(users),
-        "child_groups": child_groups,
-        "parent_groups": parent_groups,
-    }
-    return {field_name: record.get(field_name) for field_name in GROUP_RECORD_FIELDS}
+    return _group_record_from_parts(
+        group,
+        scopes=list(scopes),
+        users=list(users),
+        child_groups=child_groups,
+        parent_groups=parent_groups,
+    )
 
 
 async def group_records(
@@ -244,17 +261,14 @@ async def group_records(
 
     records = []
     for group in groups:
-        record = {
-            "id": str(group.id),
-            "abbrev": group.abbrev,
-            "description": group.description,
-            "scopes": scopes_by_group[group.id],
-            "users": users_by_group[group.id],
-            "child_groups": children_by_group[group.id],
-            "parent_groups": parents_by_group[group.id],
-        }
         records.append(
-            {field_name: record.get(field_name) for field_name in GROUP_RECORD_FIELDS}
+            _group_record_from_parts(
+                group,
+                scopes=scopes_by_group[group.id],
+                users=users_by_group[group.id],
+                child_groups=children_by_group[group.id],
+                parent_groups=parents_by_group[group.id],
+            )
         )
 
     return records

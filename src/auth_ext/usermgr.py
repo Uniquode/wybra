@@ -10,10 +10,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
+from uuid import UUID
 
 import click
 import dateparser
-from sqlalchemy import Table, delete
+from sqlalchemy import Table, delete, select
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,7 @@ from auth_ext.management import (
     ERROR_CYCLIC_GROUP_MEMBERSHIP,
     ERROR_FINAL_SUPERUSER,
     ERROR_GROUP_HAS_MEMBERSHIPS,
+    ERROR_INVALID_GROUP_ID,
     ERROR_INVALID_TIMEZONE,
     ERROR_INVALID_USER_ID,
     ERROR_NO_CHANGES,
@@ -53,7 +55,6 @@ from auth_ext.management import (
     remove_child_group_from_group_for_management,
     remove_scope_from_group_for_management,
     remove_user_from_group_for_management,
-    resolve_group_target,
     resolve_user_target,
     target_error_message,
     update_group_for_management,
@@ -1613,17 +1614,16 @@ async def _update_user_groups_from_args(
         return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
 
     if args.set_groups:
-        replacement_group_ids = []
-        for group_target in args.set_groups:
-            group, group_error = await resolve_group_target(session, group_target)
-            if group_error is not None:
-                return Result.failure(
-                    group_error,
-                    group_target_error_message(group_error),
-                )
-            if group is None:
-                return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
-            replacement_group_ids.append(group.id)
+        replacement_group_result = await _resolve_group_targets_for_set(
+            session,
+            args.set_groups,
+        )
+        if replacement_group_result.is_failure():
+            return replacement_group_result
+        replacement_group_ids = cast(
+            list[UUID],
+            (replacement_group_result.value or {}).get("group_ids", []),
+        )
 
         await session.execute(delete(GroupUser).where(GroupUser.user_id == user.id))
         for group_id in dict.fromkeys(replacement_group_ids):
@@ -1649,6 +1649,63 @@ async def _update_user_groups_from_args(
             return result
 
     return Result.ok(user_record(user))
+
+
+async def _resolve_group_targets_for_set(
+    session: AsyncSession,
+    group_targets: tuple[str, ...],
+) -> Result[dict[str, Any]]:
+    unique_targets = tuple(dict.fromkeys(group_targets))
+    groups_by_abbrev = {
+        group.abbrev: group
+        for group in (
+            await session.execute(select(Group).where(Group.abbrev.in_(unique_targets)))
+        )
+        .scalars()
+        .all()
+    }
+    parsed_ids: dict[str, UUID] = {}
+    invalid_targets: set[str] = set()
+    for target in unique_targets:
+        if target in groups_by_abbrev:
+            continue
+        try:
+            parsed_ids[target] = UUID(target)
+        except ValueError:
+            invalid_targets.add(target)
+
+    groups_by_id: dict[UUID, Group] = {}
+    if parsed_ids:
+        groups_by_id = {
+            group.id: group
+            for group in (
+                await session.execute(
+                    select(Group).where(Group.id.in_(parsed_ids.values()))
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    group_ids = []
+    for target in group_targets:
+        if target in groups_by_abbrev:
+            group_ids.append(groups_by_abbrev[target].id)
+            continue
+
+        if target in invalid_targets:
+            return Result.failure(
+                ERROR_INVALID_GROUP_ID,
+                group_target_error_message(ERROR_INVALID_GROUP_ID),
+            )
+
+        group_id = parsed_ids[target]
+        group = groups_by_id.get(group_id)
+        if group is None:
+            return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
+        group_ids.append(group.id)
+
+    return Result.ok({"group_ids": group_ids})
 
 
 def _print_failure(error_type: str | None, message: str | None) -> int:
