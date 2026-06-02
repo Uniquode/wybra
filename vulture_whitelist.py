@@ -24,6 +24,11 @@ _.upgrade_command
 _.downgrade_command
 _.current_command
 _.history_command
+_.scope_create_command
+_.scope_update_command
+_.scope_delete_command
+_.scope_list_command
+_.group_command
 
 # FastAPI Users and application identity extension hooks.
 _.AdvancedAuthenticationPolicy
@@ -67,6 +72,9 @@ _.consume_recovery_code
 _.code
 _.oauth_accounts
 _.csrf_token_secret_configured
+_.SCOPE_RECORD_FIELDS
+_.primary_table_name
+_.list_candidate_child_groups_for_management
 
 # auth_provider public contracts intentionally exported before runtime endpoints.
 _.active

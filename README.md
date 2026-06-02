@@ -109,10 +109,33 @@ Manage local identity users with the operator CLI:
 ```sh
 uv run usermgr create person@example.com
 uv run usermgr create admin@example.com --admin
+uv run usermgr create reader@example.com --group readers
+uv run usermgr update reader@example.com --add-group editors
+uv run usermgr update reader@example.com --rm-group readers
+uv run usermgr update reader@example.com --set-group operators
 uv run usermgr list
 uv run usermgr list --json
 uv run usermgr password person@example.com
 uv run usermgr delete person@example.com --force
+```
+
+Manage local authorisation scopes and groups with the same CLI:
+
+```sh
+uv run usermgr scope create document:read --description "Read documents"
+uv run usermgr scope update document:read --description "Read published documents"
+uv run usermgr scope list --json
+uv run usermgr scope delete document:read
+
+uv run usermgr group create readers --description "Readers" --scope document:read
+uv run usermgr group readers update --scope document:write --rm-scope document:read
+uv run usermgr group readers add-user person@example.com
+uv run usermgr group readers add-group staff
+uv run usermgr group readers show --json
+uv run usermgr group effective-scopes person@example.com --json
+uv run usermgr group readers remove-user person@example.com
+uv run usermgr group readers remove-group staff
+uv run usermgr group readers delete --force
 ```
 
 `usermgr` timestamp arguments accept Unix seconds directly, such as
@@ -163,7 +186,12 @@ API-backed remote administration client; that mode is deferred until
 administrative API tokens and scopes exist. Passwords are entered through hidden
 prompts by default, or read from stdin with `--password -` for operator
 automation. Password changes revoke existing sessions unless `--no-revoke` is
-supplied. Password writes use the configured `auth_ext` password policy, which
+supplied. Groups are the local authorisation mechanism: scopes are assigned to
+groups, users are assigned to groups, and effective scopes are resolved through
+direct and nested group membership. Scope deletion is refused while any group
+uses that scope, and group deletion is refused while users, child groups, or
+parent groups still reference that group. Password writes use the configured
+`auth_ext` password policy, which
 provides server-side validation and strength feedback for future UI use. The
 committed [auth.toml.example](auth.toml.example) shows the supported generic
 auth configuration shape.
@@ -174,3 +202,5 @@ absolute FastAPI Users privilege flag. Superusers cannot be deleted or
 deactivated, and the final superuser cannot be demoted. A user's preferred
 timezone is stored only when explicitly supplied; otherwise presentation falls
 back to the current server/application timezone at runtime.
+As group and scope administration grows, `usermgr` is expected to become
+`identitymgr`; the current command name remains unchanged in this slice.

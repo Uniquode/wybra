@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from collections import defaultdict
+from threading import RLock
+from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -9,12 +11,20 @@ from fastapi_users.exceptions import (
     UserAlreadyExists,
 )
 from pydantic import EmailStr, TypeAdapter, ValidationError
-from sqlalchemy import Select, delete, func, or_, select
+from sqlalchemy import Select, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_ext.delivery import IdentityDelivery
 from auth_ext.manager import create_user_manager, public_password_failure_message
-from auth_ext.models import AccessToken, User
+from auth_ext.models import (
+    AccessToken,
+    Group,
+    GroupGroup,
+    GroupScope,
+    GroupUser,
+    Scope,
+    User,
+)
 from auth_ext.options import IdentityOptions
 from auth_ext.result import (
     ERROR_ALREADY_EXISTS,
@@ -33,8 +43,26 @@ ERROR_SUPERUSER_PROTECTED = "superuser_protected"
 ERROR_FINAL_SUPERUSER = "final_superuser"
 ERROR_INVALID_USER_ID = "invalid_user_id"
 ERROR_UNSUPPORTED_ORDER = "unsupported_order"
+ERROR_INVALID_GROUP_ID = "invalid_group_id"
+ERROR_GROUP_HAS_MEMBERSHIPS = "group_has_memberships"
+ERROR_CYCLIC_GROUP_MEMBERSHIP = "cyclic_group_membership"
+ERROR_SCOPE_IN_USE = "scope_in_use"
 EMAIL_DOMAIN_ORDER_DIALECTS = frozenset({"postgresql", "sqlite"})
 EMAIL_TARGET_ADAPTER = TypeAdapter(EmailStr)
+# Effective-scope caching is intentionally process-local and rebuilt on demand.
+# Group/scope data is expected to be small and any mutation invalidates every
+# cached result, so a persisted or database-scoped cache would add ownership
+# complexity without a current requirement.
+#
+# Concurrency / asyncio notes:
+# - Access is guarded for processes that run more than one event loop thread.
+# - The lock is a threading.RLock, so it is safe for multi-threaded use but will
+#   block an asyncio event loop if held across an await.
+# - Do not perform any await while holding this lock; it is only intended to
+#   protect simple in-memory get/set operations on the cache.
+# The cache remains only a local request-time optimisation.
+_EFFECTIVE_SCOPE_CACHE_LOCK = RLock()
+_EFFECTIVE_SCOPE_CACHE: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
 USER_TIMESTAMP_FIELDS: tuple[str, ...] = (
     "created_at",
     "modified_at",
@@ -54,6 +82,16 @@ USER_RECORD_FIELDS: tuple[str, ...] = (
     "display_name",
     "preferred_name",
     "preferred_timezone",
+)
+SCOPE_RECORD_FIELDS: tuple[str, ...] = ("scope", "description")
+GROUP_RECORD_FIELDS: tuple[str, ...] = (
+    "id",
+    "abbrev",
+    "description",
+    "scopes",
+    "users",
+    "child_groups",
+    "parent_groups",
 )
 
 
@@ -94,6 +132,587 @@ def user_record(user: User, *, now: float | None = None) -> dict[str, Any]:
         "preferred_timezone": user.preferred_timezone,
     }
     return {field_name: record.get(field_name) for field_name in USER_RECORD_FIELDS}
+
+
+def scope_record(scope: Scope) -> dict[str, Any]:
+    return {
+        "scope": scope.scope,
+        "description": scope.description,
+    }
+
+
+async def group_record(session: AsyncSession, group: Group) -> dict[str, Any]:
+    scopes = (
+        (
+            await session.execute(
+                select(GroupScope.scope)
+                .where(GroupScope.group_id == group.id)
+                .order_by(GroupScope.scope)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    users = (
+        (
+            await session.execute(
+                select(User.__table__.c.email)
+                .join(GroupUser, GroupUser.user_id == User.id)
+                .where(GroupUser.group_id == group.id)
+                .order_by(User.email)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    child_groups = await _related_group_abbrevs(
+        session,
+        GroupGroup.child_group_id,
+        GroupGroup.parent_group_id == group.id,
+    )
+    parent_groups = await _related_group_abbrevs(
+        session,
+        GroupGroup.parent_group_id,
+        GroupGroup.child_group_id == group.id,
+    )
+    record = {
+        "id": str(group.id),
+        "abbrev": group.abbrev,
+        "description": group.description,
+        "scopes": list(scopes),
+        "users": list(users),
+        "child_groups": child_groups,
+        "parent_groups": parent_groups,
+    }
+    return {field_name: record.get(field_name) for field_name in GROUP_RECORD_FIELDS}
+
+
+async def group_records(
+    session: AsyncSession, groups: list[Group]
+) -> list[dict[str, Any]]:
+    if not groups:
+        return []
+
+    group_ids = [group.id for group in groups]
+    scopes_by_group: dict[UUID, list[str]] = defaultdict(list)
+    users_by_group: dict[UUID, list[str]] = defaultdict(list)
+    children_by_group: dict[UUID, list[str]] = defaultdict(list)
+    parents_by_group: dict[UUID, list[str]] = defaultdict(list)
+
+    scope_rows = (
+        await session.execute(
+            select(GroupScope.group_id, GroupScope.scope)
+            .where(GroupScope.group_id.in_(group_ids))
+            .order_by(GroupScope.scope)
+        )
+    ).all()
+    for group_id, scope in scope_rows:
+        scopes_by_group[group_id].append(scope)
+
+    user_rows = (
+        await session.execute(
+            select(GroupUser.group_id, User.__table__.c.email)
+            .join(User, GroupUser.user_id == User.id)
+            .where(GroupUser.group_id.in_(group_ids))
+            .order_by(User.email)
+        )
+    ).all()
+    for group_id, email in user_rows:
+        users_by_group[group_id].append(email)
+
+    child_rows = (
+        await session.execute(
+            select(GroupGroup.parent_group_id, Group.abbrev)
+            .join(Group, Group.id == GroupGroup.child_group_id)
+            .where(GroupGroup.parent_group_id.in_(group_ids))
+            .order_by(Group.abbrev)
+        )
+    ).all()
+    for group_id, abbrev in child_rows:
+        children_by_group[group_id].append(abbrev)
+
+    parent_rows = (
+        await session.execute(
+            select(GroupGroup.child_group_id, Group.abbrev)
+            .join(Group, Group.id == GroupGroup.parent_group_id)
+            .where(GroupGroup.child_group_id.in_(group_ids))
+            .order_by(Group.abbrev)
+        )
+    ).all()
+    for group_id, abbrev in parent_rows:
+        parents_by_group[group_id].append(abbrev)
+
+    records = []
+    for group in groups:
+        record = {
+            "id": str(group.id),
+            "abbrev": group.abbrev,
+            "description": group.description,
+            "scopes": scopes_by_group[group.id],
+            "users": users_by_group[group.id],
+            "child_groups": children_by_group[group.id],
+            "parent_groups": parents_by_group[group.id],
+        }
+        records.append(
+            {field_name: record.get(field_name) for field_name in GROUP_RECORD_FIELDS}
+        )
+
+    return records
+
+
+async def create_scope_for_management(
+    session: AsyncSession,
+    *,
+    scope: str,
+    description: str | None = None,
+) -> Result[dict[str, Any]]:
+    existing_scope = await session.get(Scope, scope)
+    if existing_scope is not None:
+        return Result.failure(ERROR_ALREADY_EXISTS, "Scope already exists.")
+
+    scope_record_model = Scope(scope=scope, description=description)
+    session.add(scope_record_model)
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    await session.refresh(scope_record_model)
+    return Result.ok(scope_record(scope_record_model))
+
+
+async def update_scope_for_management(
+    session: AsyncSession,
+    *,
+    scope: str,
+    description: str | None = None,
+) -> Result[dict[str, Any]]:
+    scope_record_model = await session.get(Scope, scope)
+    if scope_record_model is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching scope was found.")
+
+    scope_record_model.description = description
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    await session.refresh(scope_record_model)
+    return Result.ok(scope_record(scope_record_model))
+
+
+async def list_scopes_for_management(session: AsyncSession) -> Result[dict[str, Any]]:
+    scope_records = (
+        (await session.execute(select(Scope).order_by(Scope.scope))).scalars().all()
+    )
+    return Result.ok({"scopes": [scope_record(scope) for scope in scope_records]})
+
+
+async def delete_scope_for_management(
+    session: AsyncSession,
+    *,
+    scope: str,
+) -> Result[dict[str, Any]]:
+    scope_record_model = await session.get(Scope, scope)
+    if scope_record_model is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching scope was found.")
+
+    assignment_count = await session.scalar(
+        select(func.count()).select_from(GroupScope).where(GroupScope.scope == scope)
+    )
+    if assignment_count:
+        return Result.failure(
+            ERROR_SCOPE_IN_USE,
+            "Scope is assigned to one or more groups.",
+        )
+
+    record = scope_record(scope_record_model)
+    await session.delete(scope_record_model)
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    return Result.ok(record)
+
+
+async def create_group_for_management(
+    session: AsyncSession,
+    *,
+    abbrev: str,
+    description: str,
+) -> Result[dict[str, Any]]:
+    existing_group = (
+        await session.execute(select(Group).where(Group.abbrev == abbrev))
+    ).scalar_one_or_none()
+    if existing_group is not None:
+        return Result.failure(
+            ERROR_ALREADY_EXISTS, "Group abbreviation already exists."
+        )
+
+    group = Group(abbrev=abbrev, description=description)
+    session.add(group)
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    await session.refresh(group)
+    return Result.ok(await group_record(session, group))
+
+
+async def resolve_group_target(
+    session: AsyncSession,
+    target: str,
+) -> tuple[Group | None, ResultErrorType | None]:
+    group = (
+        await session.execute(select(Group).where(Group.abbrev == target))
+    ).scalar_one_or_none()
+    if group is not None:
+        return group, None
+
+    try:
+        group_id = UUID(target)
+    except ValueError:
+        return None, ERROR_INVALID_GROUP_ID
+
+    group = await session.get(Group, group_id)
+    return (group, None) if group is not None else (None, ERROR_NOT_FOUND)
+
+
+async def get_group_for_management(
+    session: AsyncSession,
+    *,
+    target: str,
+) -> Result[dict[str, Any]]:
+    group, target_error = await resolve_group_target(session, target)
+    if target_error is not None:
+        return Result.failure(target_error, group_target_error_message(target_error))
+    if group is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
+
+    return Result.ok(await group_record(session, group))
+
+
+async def update_group_for_management(
+    session: AsyncSession,
+    *,
+    target: str,
+    description: str,
+) -> Result[dict[str, Any]]:
+    group, target_error = await resolve_group_target(session, target)
+    if target_error is not None:
+        return Result.failure(target_error, group_target_error_message(target_error))
+    if group is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
+
+    group.description = description
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    await session.refresh(group)
+    return Result.ok(await group_record(session, group))
+
+
+async def list_groups_for_management(session: AsyncSession) -> Result[dict[str, Any]]:
+    groups = (
+        (await session.execute(select(Group).order_by(Group.abbrev))).scalars().all()
+    )
+    return Result.ok({"groups": await group_records(session, list(groups))})
+
+
+async def delete_group_for_management(
+    session: AsyncSession,
+    *,
+    target: str,
+) -> Result[dict[str, Any]]:
+    group, target_error = await resolve_group_target(session, target)
+    if target_error is not None:
+        return Result.failure(target_error, group_target_error_message(target_error))
+    if group is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
+
+    if await _group_has_memberships(session, group):
+        return Result.failure(
+            ERROR_GROUP_HAS_MEMBERSHIPS,
+            "Group still has user, child group, or parent group memberships.",
+        )
+
+    record = await group_record(session, group)
+    await session.execute(delete(GroupScope).where(GroupScope.group_id == group.id))
+    await session.delete(group)
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    return Result.ok(record)
+
+
+async def add_scope_to_group_for_management(
+    session: AsyncSession,
+    *,
+    group_target: str,
+    scope: str,
+) -> Result[dict[str, Any]]:
+    group_result = await _resolve_group_result(session, group_target)
+    if group_result.is_failure():
+        return group_result
+
+    scope_record_model = await session.get(Scope, scope)
+    if scope_record_model is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching scope was found.")
+
+    group = _group_from_result(group_result)
+    existing = (
+        await session.execute(
+            select(GroupScope).where(
+                GroupScope.group_id == group.id,
+                GroupScope.scope == scope,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return Result.failure(ERROR_ALREADY_EXISTS, "Group already has scope.")
+
+    session.add(GroupScope(group_id=group.id, scope=scope))
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    return Result.ok(await group_record(session, group))
+
+
+async def remove_scope_from_group_for_management(
+    session: AsyncSession,
+    *,
+    group_target: str,
+    scope: str,
+) -> Result[dict[str, Any]]:
+    group_result = await _resolve_group_result(session, group_target)
+    if group_result.is_failure():
+        return group_result
+
+    group = _group_from_result(group_result)
+    existing = (
+        await session.execute(
+            select(GroupScope).where(
+                GroupScope.group_id == group.id,
+                GroupScope.scope == scope,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        return Result.failure(ERROR_NOT_FOUND, "Group scope assignment was not found.")
+
+    await session.execute(
+        delete(GroupScope).where(
+            GroupScope.group_id == group.id,
+            GroupScope.scope == scope,
+        )
+    )
+
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    return Result.ok(await group_record(session, group))
+
+
+async def add_user_to_group_for_management(
+    session: AsyncSession,
+    *,
+    group_target: str,
+    user_target: str,
+) -> Result[dict[str, Any]]:
+    group_result = await _resolve_group_result(session, group_target)
+    if group_result.is_failure():
+        return group_result
+
+    user, target_error = await resolve_user_target(session, user_target)
+    if target_error is not None:
+        return Result.failure(target_error, target_error_message(target_error))
+    if user is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+
+    group = _group_from_result(group_result)
+    existing = (
+        await session.execute(
+            select(GroupUser).where(
+                GroupUser.group_id == group.id,
+                GroupUser.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return Result.failure(ERROR_ALREADY_EXISTS, "User is already in group.")
+
+    session.add(GroupUser(group_id=group.id, user_id=user.id))
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    return Result.ok(await group_record(session, group))
+
+
+async def remove_user_from_group_for_management(
+    session: AsyncSession,
+    *,
+    group_target: str,
+    user_target: str,
+) -> Result[dict[str, Any]]:
+    group_result = await _resolve_group_result(session, group_target)
+    if group_result.is_failure():
+        return group_result
+
+    user, target_error = await resolve_user_target(session, user_target)
+    if target_error is not None:
+        return Result.failure(target_error, target_error_message(target_error))
+    if user is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+
+    group = _group_from_result(group_result)
+    existing = (
+        await session.execute(
+            select(GroupUser).where(
+                GroupUser.group_id == group.id,
+                GroupUser.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        return Result.failure(ERROR_NOT_FOUND, "User group membership was not found.")
+
+    await session.execute(
+        delete(GroupUser).where(
+            GroupUser.group_id == group.id,
+            GroupUser.user_id == user.id,
+        )
+    )
+
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    return Result.ok(await group_record(session, group))
+
+
+async def add_child_group_to_group_for_management(
+    session: AsyncSession,
+    *,
+    parent_target: str,
+    child_target: str,
+) -> Result[dict[str, Any]]:
+    parent_result = await _resolve_group_result(session, parent_target)
+    if parent_result.is_failure():
+        return parent_result
+    child_result = await _resolve_group_result(session, child_target)
+    if child_result.is_failure():
+        return child_result
+
+    parent = _group_from_result(parent_result)
+    child = _group_from_result(child_result)
+    if parent.id == child.id or await _group_reaches(session, child.id, parent.id):
+        return Result.failure(
+            ERROR_CYCLIC_GROUP_MEMBERSHIP,
+            "Nested group membership would create a cycle.",
+        )
+
+    existing = (
+        await session.execute(
+            select(GroupGroup).where(
+                GroupGroup.parent_group_id == parent.id,
+                GroupGroup.child_group_id == child.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return Result.failure(ERROR_ALREADY_EXISTS, "Child group is already assigned.")
+
+    session.add(GroupGroup(parent_group_id=parent.id, child_group_id=child.id))
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    return Result.ok(await group_record(session, parent))
+
+
+async def remove_child_group_from_group_for_management(
+    session: AsyncSession,
+    *,
+    parent_target: str,
+    child_target: str,
+) -> Result[dict[str, Any]]:
+    parent_result = await _resolve_group_result(session, parent_target)
+    if parent_result.is_failure():
+        return parent_result
+    child_result = await _resolve_group_result(session, child_target)
+    if child_result.is_failure():
+        return child_result
+
+    parent = _group_from_result(parent_result)
+    child = _group_from_result(child_result)
+    existing = (
+        await session.execute(
+            select(GroupGroup).where(
+                GroupGroup.parent_group_id == parent.id,
+                GroupGroup.child_group_id == child.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        return Result.failure(ERROR_NOT_FOUND, "Nested group membership was not found.")
+
+    await session.execute(
+        delete(GroupGroup).where(
+            GroupGroup.parent_group_id == parent.id,
+            GroupGroup.child_group_id == child.id,
+        )
+    )
+
+    await session.commit()
+    _invalidate_effective_scope_cache()
+    return Result.ok(await group_record(session, parent))
+
+
+async def list_candidate_child_groups_for_management(
+    session: AsyncSession,
+    *,
+    parent_target: str,
+) -> Result[dict[str, Any]]:
+    parent_result = await _resolve_group_result(session, parent_target)
+    if parent_result.is_failure():
+        return parent_result
+
+    parent = _group_from_result(parent_result)
+    reachable_from_parent = await _reachable_group_ids(session, parent.id)
+    reachable_to_parent = await _group_ids_reaching(session, parent.id)
+    groups = (
+        (await session.execute(select(Group).order_by(Group.abbrev))).scalars().all()
+    )
+    candidate_groups = [
+        group
+        for group in groups
+        if group.id != parent.id
+        and group.id not in reachable_from_parent
+        and group.id not in reachable_to_parent
+    ]
+    candidates = await group_records(session, list(candidate_groups))
+    return Result.ok({"groups": candidates})
+
+
+async def effective_scopes_for_user_for_management(
+    session: AsyncSession,
+    *,
+    user_target: str,
+) -> Result[dict[str, Any]]:
+    user, target_error = await resolve_user_target(session, user_target)
+    if target_error is not None:
+        return Result.failure(target_error, target_error_message(target_error))
+    if user is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+
+    cache_key = str(user.id)
+    with _EFFECTIVE_SCOPE_CACHE_LOCK:
+        cached = _EFFECTIVE_SCOPE_CACHE.get(cache_key)
+    if cached is None:
+        scopes, group_abbrevs = await _resolve_effective_scope_sets(session, user.id)
+        cached = (tuple(sorted(scopes)), tuple(sorted(group_abbrevs)))
+        with _EFFECTIVE_SCOPE_CACHE_LOCK:
+            _EFFECTIVE_SCOPE_CACHE[cache_key] = cached
+
+    scope_values, group_values = cached
+    return Result.ok(
+        {
+            "user": user_record(user),
+            "scopes": list(scope_values),
+            "groups": list(group_values),
+        }
+    )
+
+
+def group_target_error_message(error_type: ResultErrorType) -> str:
+    if error_type == ERROR_INVALID_GROUP_ID:
+        return "Group target must be a valid group ID or abbreviation."
+
+    if error_type == ERROR_NOT_FOUND:
+        return "Group not found."
+
+    return "Group target is invalid."
 
 
 async def create_local_user_for_management(
@@ -405,6 +1024,175 @@ async def _sole_superuser(session: AsyncSession, user: User) -> bool:
 
 async def _delete_user_sessions(session: AsyncSession, user: User) -> None:
     await session.execute(delete(AccessToken).where(AccessToken.user_id == user.id))
+
+
+async def _resolve_group_result(
+    session: AsyncSession,
+    target: str,
+) -> Result[Any]:
+    group, target_error = await resolve_group_target(session, target)
+    if target_error is not None:
+        return Result.failure(target_error, group_target_error_message(target_error))
+    if group is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
+    return Result.ok(group)
+
+
+def _group_from_result(result: Result[Any]) -> Group:
+    return cast(Group, result.value)
+
+
+async def _related_group_abbrevs(
+    session: AsyncSession, group_id_column, predicate
+) -> list[str]:
+    return list(
+        (
+            await session.execute(
+                select(Group.abbrev)
+                .join_from(GroupGroup, Group, Group.id == group_id_column)
+                .where(predicate)
+                .order_by(Group.abbrev)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _group_has_memberships(session: AsyncSession, group: Group) -> bool:
+    checks = (
+        select(exists().where(GroupUser.group_id == group.id)),
+        select(exists().where(GroupGroup.parent_group_id == group.id)),
+        select(exists().where(GroupGroup.child_group_id == group.id)),
+    )
+    for query in checks:
+        if await session.scalar(query):
+            return True
+    return False
+
+
+async def _group_reaches(
+    session: AsyncSession,
+    start_group_id: UUID,
+    target_group_id: UUID,
+) -> bool:
+    return target_group_id in await _reachable_group_ids(session, start_group_id)
+
+
+async def _reachable_group_ids(
+    session: AsyncSession,
+    start_group_id: UUID,
+) -> set[UUID]:
+    visited: set[UUID] = set()
+    pending = {start_group_id}
+    while pending:
+        current_ids = pending - visited
+        if not current_ids:
+            break
+        visited.update(current_ids)
+        child_ids = set(
+            (
+                await session.execute(
+                    select(GroupGroup.child_group_id).where(
+                        GroupGroup.parent_group_id.in_(current_ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pending = child_ids - visited
+
+    visited.discard(start_group_id)
+    return visited
+
+
+async def _group_ids_reaching(
+    session: AsyncSession,
+    target_group_id: UUID,
+) -> set[UUID]:
+    visited: set[UUID] = set()
+    pending = {target_group_id}
+    while pending:
+        current_ids = pending - visited
+        if not current_ids:
+            break
+        visited.update(current_ids)
+        parent_ids = set(
+            (
+                await session.execute(
+                    select(GroupGroup.parent_group_id).where(
+                        GroupGroup.child_group_id.in_(current_ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pending = parent_ids - visited
+
+    visited.discard(target_group_id)
+    return visited
+
+
+async def _resolve_effective_scope_sets(
+    session: AsyncSession,
+    user_id: UUID,
+) -> tuple[set[str], set[str]]:
+    direct_group_ids = set(
+        (
+            await session.execute(
+                select(GroupUser.group_id).where(GroupUser.user_id == user_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not direct_group_ids:
+        return set(), set()
+
+    visited: set[UUID] = set()
+    pending = set(direct_group_ids)
+
+    while pending:
+        current_ids = pending - visited
+        if not current_ids:
+            break
+        visited.update(current_ids)
+        child_ids = set(
+            (
+                await session.execute(
+                    select(GroupGroup.child_group_id).where(
+                        GroupGroup.parent_group_id.in_(current_ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pending = child_ids - visited
+
+    scopes = set(
+        (
+            await session.execute(
+                select(GroupScope.scope).where(GroupScope.group_id.in_(visited))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    group_abbrevs = set(
+        (await session.execute(select(Group.abbrev).where(Group.id.in_(visited))))
+        .scalars()
+        .all()
+    )
+
+    return scopes, group_abbrevs
+
+
+def _invalidate_effective_scope_cache() -> None:
+    with _EFFECTIVE_SCOPE_CACHE_LOCK:
+        _EFFECTIVE_SCOPE_CACHE.clear()
 
 
 def _list_users_query(
