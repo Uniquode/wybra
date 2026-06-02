@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
-class UsermgrArgs:
+class IdentitymgrArgs:
     command: str
     config: Path | None = None
     email: str = ""
@@ -271,7 +271,7 @@ def _config_path(ctx: click.Context) -> Path | None:
     )
 
 
-def _run_usermgr(ctx: click.Context, args: UsermgrArgs) -> None:
+def _run_identitymgr(ctx: click.Context, args: IdentitymgrArgs) -> None:
     try:
         exit_code = asyncio.run(_main_async(args))
     except PasswordSourceError as exc:
@@ -284,7 +284,7 @@ def _run_usermgr(ctx: click.Context, args: UsermgrArgs) -> None:
     ctx.exit(exit_code)
 
 
-def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrArgs:
+def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
     if not tokens:
         raise click.UsageError("Missing group operation.")
 
@@ -297,8 +297,8 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrArgs:
                 flag_options=set(),
             )
             if len(parsed.positionals) != 1:
-                raise click.UsageError("Usage: usermgr group create <abbrev>.")
-            return UsermgrArgs(
+                raise click.UsageError("Usage: identitymgr group create <abbrev>.")
+            return IdentitymgrArgs(
                 command="group-create",
                 config=_config_path(ctx),
                 group_target=parsed.positionals[0],
@@ -312,12 +312,12 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrArgs:
                 flag_options={"--json", "--csv"},
             )
             if parsed.positionals:
-                raise click.UsageError("Usage: usermgr group list [--json|--csv].")
+                raise click.UsageError("Usage: identitymgr group list [--json|--csv].")
             _ensure_mutually_exclusive(
                 (parsed.has_flag("--json"), "--json"),
                 (parsed.has_flag("--csv"), "--csv"),
             )
-            return UsermgrArgs(
+            return IdentitymgrArgs(
                 command="group-list",
                 config=_config_path(ctx),
                 json_output=parsed.has_flag("--json"),
@@ -331,9 +331,9 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrArgs:
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    "Usage: usermgr group effective-scopes <user-target>."
+                    "Usage: identitymgr group effective-scopes <user-target>."
                 )
-            return UsermgrArgs(
+            return IdentitymgrArgs(
                 command="group-effective-scopes",
                 config=_config_path(ctx),
                 user_target=parsed.positionals[0],
@@ -343,7 +343,7 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrArgs:
             return _target_group_args(ctx, tokens)
 
 
-def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrArgs:
+def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
     if len(tokens) < 2:
         raise click.UsageError("Missing group target operation.")
 
@@ -356,8 +356,10 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrAr
                 flag_options={"--json"},
             )
             if parsed.positionals:
-                raise click.UsageError("Usage: usermgr group <group> show [--json].")
-            return UsermgrArgs(
+                raise click.UsageError(
+                    "Usage: identitymgr group <group> show [--json]."
+                )
+            return IdentitymgrArgs(
                 command="group-show",
                 config=_config_path(ctx),
                 group_target=target,
@@ -371,10 +373,10 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrAr
             )
             if parsed.positionals:
                 raise click.UsageError(
-                    "Usage: usermgr group <group> update "
+                    "Usage: identitymgr group <group> update "
                     "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
                 )
-            return UsermgrArgs(
+            return IdentitymgrArgs(
                 command="group-update",
                 config=_config_path(ctx),
                 group_target=target,
@@ -389,8 +391,10 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrAr
                 flag_options={"--force"},
             )
             if parsed.positionals:
-                raise click.UsageError("Usage: usermgr group <group> delete [--force].")
-            return UsermgrArgs(
+                raise click.UsageError(
+                    "Usage: identitymgr group <group> delete [--force]."
+                )
+            return IdentitymgrArgs(
                 command="group-delete",
                 config=_config_path(ctx),
                 group_target=target,
@@ -404,9 +408,9 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrAr
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    f"Usage: usermgr group <group> {operation} <user>."
+                    f"Usage: identitymgr group <group> {operation} <user>."
                 )
-            return UsermgrArgs(
+            return IdentitymgrArgs(
                 command=f"group-{operation}",
                 config=_config_path(ctx),
                 group_target=target,
@@ -420,9 +424,9 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> UsermgrAr
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    f"Usage: usermgr group <group> {operation} <group>."
+                    f"Usage: identitymgr group <group> {operation} <group>."
                 )
-            return UsermgrArgs(
+            return IdentitymgrArgs(
                 command=f"group-{operation}",
                 config=_config_path(ctx),
                 group_target=target,
@@ -482,7 +486,7 @@ def _parse_cli_tokens(
 
 
 @click.group(
-    name="usermgr",
+    name="identitymgr",
     context_settings=CONTEXT_SETTINGS,
     epilog=TIMESTAMP_HELP,
     help="Manage local identity users through configured services.",
@@ -493,11 +497,11 @@ def _parse_cli_tokens(
     help="Path to auth.toml. Defaults to AUTH_CONFIG or ./auth.toml when present.",
 )
 @click.pass_context
-def usermgr_command(ctx: click.Context, config: Path | None) -> None:
+def identitymgr_command(ctx: click.Context, config: Path | None) -> None:
     ctx.obj = {"config": config}
 
 
-@usermgr_command.command("create", help="Create a local user.")
+@identitymgr_command.command("create", help="Create a local user.")
 @click.argument("email")
 @_password_source_option(default=PASSWORD_SOURCE_PROMPT)
 @click.option("--admin", is_flag=True)
@@ -522,9 +526,9 @@ def create_command(
     expires_at: float | None,
     groups: tuple[str, ...],
 ) -> None:
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="create",
             config=_config_path(ctx),
             email=email,
@@ -541,7 +545,7 @@ def create_command(
     )
 
 
-@usermgr_command.command("update", help="Update a local user.")
+@identitymgr_command.command("update", help="Update a local user.")
 @click.argument("target")
 @click.option("--admin", "admin", is_flag=True)
 @click.option("--no-admin", "no_admin", is_flag=True)
@@ -606,9 +610,9 @@ def update_command(
     _ensure_mutually_exclusive(
         (expires_at, "--expires-at"), (no_expires_at, "--no-expires-at")
     )
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="update",
             config=_config_path(ctx),
             target=target,
@@ -647,14 +651,14 @@ def update_command(
     )
 
 
-@usermgr_command.command("delete", help="Delete a local user.")
+@identitymgr_command.command("delete", help="Delete a local user.")
 @click.argument("target")
 @click.option("--force", is_flag=True)
 @click.pass_context
 def delete_command(ctx: click.Context, target: str, force: bool) -> None:
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="delete",
             config=_config_path(ctx),
             target=target,
@@ -663,14 +667,14 @@ def delete_command(ctx: click.Context, target: str, force: bool) -> None:
     )
 
 
-@usermgr_command.command("deactivate", help="Deactivate a local user.")
+@identitymgr_command.command("deactivate", help="Deactivate a local user.")
 @click.argument("target")
 @click.option("--force", is_flag=True)
 @click.pass_context
 def deactivate_command(ctx: click.Context, target: str, force: bool) -> None:
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="deactivate",
             config=_config_path(ctx),
             target=target,
@@ -679,7 +683,7 @@ def deactivate_command(ctx: click.Context, target: str, force: bool) -> None:
     )
 
 
-@usermgr_command.command("list", help="List local users.")
+@identitymgr_command.command("list", help="List local users.")
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--csv", "csv_output", is_flag=True)
 @click.option("--email", "-e", "email_pattern")
@@ -747,9 +751,9 @@ def list_command(
     direction: str | None,
 ) -> None:
     _ensure_mutually_exclusive((json_output, "--json"), (csv_output, "--csv"))
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="list",
             config=_config_path(ctx),
             json_output=json_output,
@@ -798,7 +802,7 @@ def list_command(
     )
 
 
-@usermgr_command.command("password", help="Change a local user's password.")
+@identitymgr_command.command("password", help="Change a local user's password.")
 @click.argument("target")
 @_password_source_option(default=PASSWORD_SOURCE_PROMPT)
 @click.option("--no-revoke", is_flag=True)
@@ -809,9 +813,9 @@ def password_command(
     password: PasswordSource,
     no_revoke: bool,
 ) -> None:
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="password",
             config=_config_path(ctx),
             target=target,
@@ -821,7 +825,7 @@ def password_command(
     )
 
 
-@usermgr_command.group("scope", help="Manage authorisation scopes.")
+@identitymgr_command.group("scope", help="Manage authorisation scopes.")
 def scope_group() -> None:
     pass
 
@@ -835,9 +839,9 @@ def scope_create_command(
     scope: str,
     description: str | None,
 ) -> None:
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="scope-create",
             config=_config_path(ctx),
             scope=scope,
@@ -855,9 +859,9 @@ def scope_update_command(
     scope: str,
     description: str | None,
 ) -> None:
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="scope-update",
             config=_config_path(ctx),
             scope=scope,
@@ -870,9 +874,9 @@ def scope_update_command(
 @click.argument("scope")
 @click.pass_context
 def scope_delete_command(ctx: click.Context, scope: str) -> None:
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="scope-delete",
             config=_config_path(ctx),
             scope=scope,
@@ -890,9 +894,9 @@ def scope_list_command(
     csv_output: bool,
 ) -> None:
     _ensure_mutually_exclusive((json_output, "--json"), (csv_output, "--csv"))
-    _run_usermgr(
+    _run_identitymgr(
         ctx,
-        UsermgrArgs(
+        IdentitymgrArgs(
             command="scope-list",
             config=_config_path(ctx),
             json_output=json_output,
@@ -901,7 +905,7 @@ def scope_list_command(
     )
 
 
-@usermgr_command.command(
+@identitymgr_command.command(
     "group",
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
     help="Manage authorisation groups.",
@@ -909,14 +913,14 @@ def scope_list_command(
 @click.argument("tokens", nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
 def group_command(ctx: click.Context, tokens: tuple[str, ...]) -> None:
-    _run_usermgr(ctx, _group_args(ctx, tokens))
+    _run_identitymgr(ctx, _group_args(ctx, tokens))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
-        result = usermgr_command.main(
+        result = identitymgr_command.main(
             args=None if argv is None else list(argv),
-            prog_name="usermgr",
+            prog_name="identitymgr",
             standalone_mode=False,
         )
     except click.exceptions.Exit as exc:
@@ -930,7 +934,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return int(result or 0)
 
 
-async def _main_async(args: UsermgrArgs) -> int:
+async def _main_async(args: IdentitymgrArgs) -> int:
     settings = load_auth_settings(config_path=args.config)
     database = create_database(settings.database_url)
     try:
@@ -1562,7 +1566,7 @@ def _confirm_destructive(action: str, record: dict[str, Any]) -> bool:
 
 async def _update_group_from_args(
     session: AsyncSession,
-    args: UsermgrArgs,
+    args: IdentitymgrArgs,
 ) -> Result[dict[str, Any]]:
     result: Result[dict[str, Any]] | None = None
     if args.description is not None:
@@ -1599,7 +1603,7 @@ async def _update_group_from_args(
 
 
 def _user_metadata_update_requested(
-    args: UsermgrArgs,
+    args: IdentitymgrArgs,
     password: str | None,
 ) -> bool:
     return any(
@@ -1626,7 +1630,7 @@ def _user_metadata_update_requested(
 
 async def _update_user_groups_from_args(
     session: AsyncSession,
-    args: UsermgrArgs,
+    args: IdentitymgrArgs,
 ) -> Result[dict[str, Any]]:
     if not (args.add_groups or args.remove_groups or args.set_groups):
         return Result.ok({})
