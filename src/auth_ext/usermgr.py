@@ -938,6 +938,22 @@ async def _main_async(args: UsermgrArgs) -> int:
             await _verify_identity_schema(session)
             match args.command:
                 case "create":
+                    replacement_group_ids: list[UUID] = []
+                    if args.add_groups:
+                        group_result = await _resolve_group_targets_for_set(
+                            session,
+                            args.add_groups,
+                        )
+                        if group_result.is_failure():
+                            return _print_failure(
+                                group_result.error_type,
+                                group_result.message,
+                            )
+                        replacement_group_ids = cast(
+                            list[UUID],
+                            (group_result.value or {}).get("group_ids", []),
+                        )
+
                     password = _read_required_password(args.password)
                     result = await create_local_user_for_management(
                         session,
@@ -955,14 +971,22 @@ async def _main_async(args: UsermgrArgs) -> int:
                     if result.is_failure():
                         return _print_failure(result.error_type, result.message)
 
-                    for group_target in args.add_groups:
-                        result = await add_user_to_group_for_management(
-                            session,
-                            group_target=group_target,
-                            user_target=args.email,
+                    user, target_error = await resolve_user_target(session, args.email)
+                    if target_error is not None:
+                        return _print_failure(
+                            target_error,
+                            target_error_message(target_error),
                         )
-                        if result.is_failure():
-                            return _print_failure(result.error_type, result.message)
+                    if user is None:
+                        return _print_failure(
+                            ERROR_NOT_FOUND,
+                            "No matching user was found.",
+                        )
+
+                    for group_id in dict.fromkeys(replacement_group_ids):
+                        session.add(GroupUser(group_id=group_id, user_id=user.id))
+                    if replacement_group_ids:
+                        await session.commit()
 
                     value = result.value or {}
                     print(f"created user: {value.get('email', args.email)}")
@@ -1321,7 +1345,7 @@ async def _verify_identity_schema(session: AsyncSession) -> None:
 
     if schema_status.missing_columns:
         raise ConfigurationError(
-            f"{SCHEMA_MIGRATION_MESSAGE} Missing {table_name} columns: "
+            f"{SCHEMA_MIGRATION_MESSAGE} Missing identity schema columns: "
             f"{', '.join(schema_status.missing_columns)}."
         )
 
