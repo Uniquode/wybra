@@ -107,43 +107,43 @@ before application startup. Alembic handles application schema migrations only.
 Manage local identity users with the operator CLI:
 
 ```sh
-uv run usermgr create person@example.com
-uv run usermgr create admin@example.com --admin
-uv run usermgr create reader@example.com --group readers
-uv run usermgr update reader@example.com --add-group editors
-uv run usermgr update reader@example.com --rm-group readers
-uv run usermgr update reader@example.com --set-group operators
-uv run usermgr list
-uv run usermgr list --json
-uv run usermgr password person@example.com
-uv run usermgr delete person@example.com --force
+uv run identitymgr create person@example.com
+uv run identitymgr create admin@example.com --admin
+uv run identitymgr create reader@example.com --group readers
+uv run identitymgr update reader@example.com --add-group editors
+uv run identitymgr update reader@example.com --rm-group readers
+uv run identitymgr update reader@example.com --set-group operators
+uv run identitymgr list
+uv run identitymgr list --json
+uv run identitymgr password person@example.com
+uv run identitymgr delete person@example.com --force
 ```
 
 Manage local authorisation scopes and groups with the same CLI:
 
 ```sh
-uv run usermgr scope create document:read --description "Read documents"
-uv run usermgr scope update document:read --description "Read published documents"
-uv run usermgr scope list --json
-uv run usermgr scope delete document:read
+uv run identitymgr scope create document:read --description "Read documents"
+uv run identitymgr scope update document:read --description "Read published documents"
+uv run identitymgr scope list --json
+uv run identitymgr scope delete document:read
 
-uv run usermgr group create readers --description "Readers" --scope document:read
-uv run usermgr group readers update --scope document:write --rm-scope document:read
-uv run usermgr group readers add-user person@example.com
-uv run usermgr group readers add-group staff
-uv run usermgr group readers show --json
-uv run usermgr group effective-scopes person@example.com --json
-uv run usermgr group readers remove-user person@example.com
-uv run usermgr group readers remove-group staff
-uv run usermgr group readers delete --force
+uv run identitymgr group create readers --description "Readers" --scope document:read
+uv run identitymgr group readers update --scope document:write --rm-scope document:read
+uv run identitymgr group readers add-user person@example.com
+uv run identitymgr group readers add-group staff
+uv run identitymgr group readers show --json
+uv run identitymgr group effective-scopes person@example.com --json
+uv run identitymgr group readers remove-user person@example.com
+uv run identitymgr group readers remove-group staff
+uv run identitymgr group readers delete --force
 ```
 
-`usermgr` timestamp arguments accept Unix seconds directly, such as
+`identitymgr` timestamp arguments accept Unix seconds directly, such as
 `--expires-at 4102444800`, or supported date/time strings parsed by
 `dateparser`. Numeric input is interpreted first as Unix seconds, so use a
 separated form such as `2025-01-01` for calendar dates.
 
-`usermgr` is owned by the reusable authentication package and loads generic
+`identitymgr` is owned by the reusable authentication package and loads generic
 auth configuration from `--config`, `AUTH_CONFIG`, or `./auth.toml` when
 present. The file uses an `[auth]` table. The `uniquode` web application still
 loads its runtime settings from envex environment configuration; a host may
@@ -181,7 +181,7 @@ This lets reusable `auth_ext` tooling share a host application's database
 environment without requiring a host-specific wrapper, while still allowing an
 auth-specific override for automation.
 
-`usermgr` talks to the configured identity database directly. It is not an
+`identitymgr` talks to the configured identity database directly. It is not an
 API-backed remote administration client; that mode is deferred until
 administrative API tokens and scopes exist. Passwords are entered through hidden
 prompts by default, or read from stdin with `--password -` for operator
@@ -202,5 +202,3 @@ absolute FastAPI Users privilege flag. Superusers cannot be deleted or
 deactivated, and the final superuser cannot be demoted. A user's preferred
 timezone is stored only when explicitly supplied; otherwise presentation falls
 back to the current server/application timezone at runtime.
-As group and scope administration grows, `usermgr` is expected to become
-`identitymgr`; the current command name remains unchanged in this slice.

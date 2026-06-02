@@ -24,7 +24,7 @@ dependencies = [
 [project.scripts]
 migrate = "uniquode.migrate:main"
 runserver = "uniquode.runserver:main"
-usermgr = "auth_ext.usermgr:main"
+identitymgr = "auth_ext.identitymgr:main"
 validate = "uniquode.validate:main"
 
 [build-system]
