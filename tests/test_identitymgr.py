@@ -564,6 +564,21 @@ def test_identitymgr_help_suffix_matches_help_option(
     assert suffix_result.output == option_result.output
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["help", "user"], id="root-help-extra-token"),
+        pytest.param(["user", "help", "create"], id="user-help-extra-token"),
+        pytest.param(["scope", "help", "create"], id="scope-help-extra-token"),
+    ],
+)
+def test_identitymgr_help_suffix_rejects_extra_tokens(argv: list[str]) -> None:
+    result = CliRunner().invoke(identitymgr.identitymgr_command, argv)
+
+    assert result.exit_code == 2
+    assert "No such command 'help'" in result.output
+
+
 def test_identitymgr_preserves_help_as_option_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

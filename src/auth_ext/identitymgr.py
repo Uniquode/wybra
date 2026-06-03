@@ -162,7 +162,7 @@ class HelpSuffixGroup(click.Group):
         ctx: click.Context,
         args: list[str],
     ) -> tuple[str | None, click.Command | None, list[str]]:
-        if args and args[0] == "help":
+        if args == ["help"]:
             click.echo(ctx.get_help(), color=ctx.color)
             ctx.exit()
         return super().resolve_command(ctx, args)
