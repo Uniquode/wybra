@@ -107,16 +107,16 @@ before application startup. Alembic handles application schema migrations only.
 Manage local identity users with the operator CLI:
 
 ```sh
-uv run identitymgr create person@example.com
-uv run identitymgr create admin@example.com --admin
-uv run identitymgr create reader@example.com --group readers
-uv run identitymgr update reader@example.com --add-group editors
-uv run identitymgr update reader@example.com --rm-group readers
-uv run identitymgr update reader@example.com --set-group operators
-uv run identitymgr list
-uv run identitymgr list --json
-uv run identitymgr password person@example.com
-uv run identitymgr delete person@example.com --force
+uv run identitymgr user create person@example.com
+uv run identitymgr user create admin@example.com --admin
+uv run identitymgr user create reader@example.com --group readers
+uv run identitymgr user update reader@example.com --add-group editors
+uv run identitymgr user update reader@example.com --rm-group readers
+uv run identitymgr user update reader@example.com --set-group operators
+uv run identitymgr user list
+uv run identitymgr user list --json
+uv run identitymgr user password person@example.com
+uv run identitymgr user delete person@example.com --force
 ```
 
 Manage local authorisation scopes and groups with the same CLI:

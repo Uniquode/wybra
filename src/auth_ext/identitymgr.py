@@ -156,6 +156,18 @@ class PasswordSourceError(Exception):
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
 
+class HelpSuffixGroup(click.Group):
+    def resolve_command(
+        self,
+        ctx: click.Context,
+        args: list[str],
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        if args and args[0] == "help":
+            click.echo(ctx.get_help(), color=ctx.color)
+            ctx.exit()
+        return super().resolve_command(ctx, args)
+
+
 def _password_source_option(default: PasswordSource | None):
     """Build the shared password-source option.
 
@@ -487,9 +499,10 @@ def _parse_cli_tokens(
 
 @click.group(
     name="identitymgr",
+    cls=HelpSuffixGroup,
     context_settings=CONTEXT_SETTINGS,
     epilog=TIMESTAMP_HELP,
-    help="Manage local identity users through configured services.",
+    help="Manage local identity resources through configured services.",
 )
 @click.option(
     "--config",
@@ -501,7 +514,12 @@ def identitymgr_command(ctx: click.Context, config: Path | None) -> None:
     ctx.obj = {"config": config}
 
 
-@identitymgr_command.command("create", help="Create a local user.")
+@identitymgr_command.group("user", cls=HelpSuffixGroup, help="Manage local users.")
+def user_group() -> None:
+    pass
+
+
+@user_group.command("create", help="Create a local user.")
 @click.argument("email")
 @_password_source_option(default=PASSWORD_SOURCE_PROMPT)
 @click.option("--admin", is_flag=True)
@@ -545,7 +563,7 @@ def create_command(
     )
 
 
-@identitymgr_command.command("update", help="Update a local user.")
+@user_group.command("update", help="Update a local user.")
 @click.argument("target")
 @click.option("--admin", "admin", is_flag=True)
 @click.option("--no-admin", "no_admin", is_flag=True)
@@ -651,7 +669,7 @@ def update_command(
     )
 
 
-@identitymgr_command.command("delete", help="Delete a local user.")
+@user_group.command("delete", help="Delete a local user.")
 @click.argument("target")
 @click.option("--force", is_flag=True)
 @click.pass_context
@@ -667,7 +685,7 @@ def delete_command(ctx: click.Context, target: str, force: bool) -> None:
     )
 
 
-@identitymgr_command.command("deactivate", help="Deactivate a local user.")
+@user_group.command("deactivate", help="Deactivate a local user.")
 @click.argument("target")
 @click.option("--force", is_flag=True)
 @click.pass_context
@@ -683,7 +701,7 @@ def deactivate_command(ctx: click.Context, target: str, force: bool) -> None:
     )
 
 
-@identitymgr_command.command("list", help="List local users.")
+@user_group.command("list", help="List local users.")
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--csv", "csv_output", is_flag=True)
 @click.option("--email", "-e", "email_pattern")
@@ -802,7 +820,7 @@ def list_command(
     )
 
 
-@identitymgr_command.command("password", help="Change a local user's password.")
+@user_group.command("password", help="Change a local user's password.")
 @click.argument("target")
 @_password_source_option(default=PASSWORD_SOURCE_PROMPT)
 @click.option("--no-revoke", is_flag=True)
@@ -825,7 +843,11 @@ def password_command(
     )
 
 
-@identitymgr_command.group("scope", help="Manage authorisation scopes.")
+@identitymgr_command.group(
+    "scope",
+    cls=HelpSuffixGroup,
+    help="Manage authorisation scopes.",
+)
 def scope_group() -> None:
     pass
 
@@ -913,6 +935,9 @@ def scope_list_command(
 @click.argument("tokens", nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
 def group_command(ctx: click.Context, tokens: tuple[str, ...]) -> None:
+    if tokens == ("help",):
+        click.echo(ctx.get_help(), color=ctx.color)
+        return
     _run_identitymgr(ctx, _group_args(ctx, tokens))
 
 
