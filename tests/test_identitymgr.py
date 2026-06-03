@@ -314,7 +314,10 @@ def test_identitymgr_project_script_is_defined() -> None:
 
 
 def test_identitymgr_create_positional_is_email() -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, ["create", "--help"])
+    result = CliRunner().invoke(
+        identitymgr.identitymgr_command,
+        ["user", "create", "--help"],
+    )
 
     assert result.exit_code == 0
     assert "EMAIL" in result.output
@@ -322,7 +325,10 @@ def test_identitymgr_create_positional_is_email() -> None:
 
 
 def test_identitymgr_update_positional_is_target() -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, ["update", "--help"])
+    result = CliRunner().invoke(
+        identitymgr.identitymgr_command,
+        ["user", "update", "--help"],
+    )
 
     assert result.exit_code == 0
     assert "TARGET" in result.output
@@ -355,6 +361,7 @@ def test_identitymgr_loads_auth_toml_configuration(
             [
                 "--config",
                 str(config_path),
+                "user",
                 "create",
                 "configured@example.com",
                 "--password",
@@ -516,17 +523,164 @@ def test_auth_toml_rejects_unknown_password_policy_options(tmp_path: Path) -> No
         load_auth_settings(config_path=config_path, environ={})
 
 
+@pytest.mark.parametrize("command", ["group", "scope", "user"])
+def test_identitymgr_root_help_exposes_resource_command_groups(command: str) -> None:
+    result = CliRunner().invoke(identitymgr.identitymgr_command, ["--help"])
+
+    assert result.exit_code == 0
+    assert command in result.output
+
+
 @pytest.mark.parametrize(
     "command",
     ["create", "update", "delete", "deactivate", "list", "password"],
 )
-def test_identitymgr_click_command_tree_exposes_supported_commands(
-    command: str,
-) -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, [command, "--help"])
+def test_identitymgr_user_help_exposes_user_commands(command: str) -> None:
+    result = CliRunner().invoke(identitymgr.identitymgr_command, ["user", "--help"])
 
     assert result.exit_code == 0
-    assert f"Usage: identitymgr {command}" in result.output
+    assert command in result.output
+
+
+@pytest.mark.parametrize(
+    ("help_suffix_args", "help_option_args"),
+    [
+        pytest.param(["help"], ["--help"], id="root"),
+        pytest.param(["help", "user"], ["user", "--help"], id="root-user-group"),
+        pytest.param(["help", "scope"], ["scope", "--help"], id="root-scope-group"),
+        pytest.param(["help", "group"], ["group", "--help"], id="root-group-command"),
+        pytest.param(
+            ["help", "user", "create"],
+            ["user", "create", "--help"],
+            id="root-user-create",
+        ),
+        pytest.param(
+            ["help", "scope", "create"],
+            ["scope", "create", "--help"],
+            id="root-scope-create",
+        ),
+        pytest.param(["user", "help"], ["user", "--help"], id="user-group"),
+        pytest.param(
+            ["user", "help", "create"],
+            ["user", "create", "--help"],
+            id="user-create",
+        ),
+        pytest.param(["scope", "help"], ["scope", "--help"], id="scope-group"),
+        pytest.param(
+            ["scope", "help", "create"],
+            ["scope", "create", "--help"],
+            id="scope-create",
+        ),
+        pytest.param(["group", "help"], ["group", "--help"], id="group-command"),
+    ],
+)
+def test_identitymgr_help_suffix_matches_help_option(
+    help_suffix_args: list[str],
+    help_option_args: list[str],
+) -> None:
+    runner = CliRunner()
+
+    suffix_result = runner.invoke(identitymgr.identitymgr_command, help_suffix_args)
+    option_result = runner.invoke(identitymgr.identitymgr_command, help_option_args)
+
+    assert suffix_result.exit_code == option_result.exit_code == 0
+    assert suffix_result.output == option_result.output
+
+
+@pytest.mark.parametrize(
+    ("argv", "usage"),
+    [
+        pytest.param(
+            ["help", "group", "create"],
+            "Usage: identitymgr group create <abbrev>",
+            id="root-group-create",
+        ),
+        pytest.param(
+            ["group", "help", "create"],
+            "Usage: identitymgr group create <abbrev>",
+            id="group-create",
+        ),
+        pytest.param(
+            ["group", "help", "project", "update"],
+            "Usage: identitymgr group <group> update",
+            id="group-target-update",
+        ),
+    ],
+)
+def test_identitymgr_help_path_shows_raw_group_operation_usage(
+    argv: list[str],
+    usage: str,
+) -> None:
+    result = CliRunner().invoke(identitymgr.identitymgr_command, argv)
+
+    assert result.exit_code == 0
+    assert usage in result.output
+
+
+def test_identitymgr_preserves_help_as_option_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_args: list[identitymgr.IdentitymgrArgs] = []
+
+    def capture_args(_ctx: click.Context, args: identitymgr.IdentitymgrArgs) -> None:
+        captured_args.append(args)
+
+    monkeypatch.setattr(identitymgr, "_run_identitymgr", capture_args)
+
+    result = CliRunner().invoke(
+        identitymgr.identitymgr_command,
+        ["user", "update", "alice@example.com", "--display-name", "help"],
+    )
+
+    assert result.exit_code == 0
+    assert captured_args[0].display_name == "help"
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_field", "expected_value"),
+    [
+        pytest.param(
+            ["scope", "create", "help"],
+            "scope",
+            "help",
+            id="scope-name",
+        ),
+        pytest.param(
+            ["group", "create", "admins", "--description", "help"],
+            "description",
+            "help",
+            id="group-description",
+        ),
+    ],
+)
+def test_identitymgr_preserves_help_as_command_value(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    expected_field: str,
+    expected_value: str,
+) -> None:
+    captured_args: list[identitymgr.IdentitymgrArgs] = []
+
+    def capture_args(_ctx: click.Context, args: identitymgr.IdentitymgrArgs) -> None:
+        captured_args.append(args)
+
+    monkeypatch.setattr(identitymgr, "_run_identitymgr", capture_args)
+
+    result = CliRunner().invoke(identitymgr.identitymgr_command, argv)
+
+    assert result.exit_code == 0
+    assert getattr(captured_args[0], expected_field) == expected_value
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["create", "update", "delete", "deactivate", "list", "password"],
+)
+def test_identitymgr_rejects_top_level_user_action_commands(command: str) -> None:
+    result = CliRunner().invoke(identitymgr.identitymgr_command, [command])
+
+    assert result.exit_code == 2
+    assert f"No such command '{command}'" in result.output
 
 
 def test_identitymgr_rejects_unknown_command() -> None:
@@ -557,9 +711,9 @@ def test_identitymgr_main_treats_falsy_click_exception_as_failure(
 @pytest.mark.parametrize(
     "argv",
     [
-        ["create", "person@example.com", "--password", "secret"],
-        ["password", "person@example.com", "--password", "secret"],
-        ["update", "person@example.com", "--password", "secret"],
+        ["user", "create", "person@example.com", "--password", "secret"],
+        ["user", "password", "person@example.com", "--password", "secret"],
+        ["user", "update", "person@example.com", "--password", "secret"],
     ],
 )
 def test_identitymgr_rejects_plain_command_line_password(argv: list[str]) -> None:
@@ -578,6 +732,7 @@ def test_identitymgr_rejects_conflicting_expiry_update_options(expires_at: str) 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
         [
+            "user",
             "update",
             "person@example.com",
             "--expires-at",
@@ -594,6 +749,7 @@ def test_identitymgr_rejects_conflicting_display_name_update_with_empty_value() 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
         [
+            "user",
             "update",
             "person@example.com",
             "--display-name",
@@ -615,7 +771,7 @@ def test_identitymgr_accepts_flexible_expiry_timestamp_values() -> None:
 def test_identitymgr_timestamp_parse_error_identifies_option() -> None:
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
-        ["list", "--since-created-at", "not-a-date"],
+        ["user", "list", "--since-created-at", "not-a-date"],
     )
 
     assert result.exit_code == 2
@@ -833,7 +989,9 @@ def test_identitymgr_reports_outdated_identity_schema_before_reading_password(
     stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
     monkeypatch.setattr(sys, "stdin", stdin)
 
-    exit_code = identitymgr.main(["create", "legacy@example.com", "--password", "-"])
+    exit_code = identitymgr.main(
+        ["user", "create", "legacy@example.com", "--password", "-"]
+    )
 
     assert exit_code == 1
     assert stdin.tell() == 0
@@ -859,7 +1017,7 @@ def test_identitymgr_reports_missing_group_tables_before_reading_password(
     monkeypatch.setattr(sys, "stdin", stdin)
 
     exit_code = identitymgr.main(
-        ["create", "missing-groups@example.com", "--password", "-"]
+        ["user", "create", "missing-groups@example.com", "--password", "-"]
     )
 
     assert exit_code == 1
@@ -879,7 +1037,9 @@ def test_identitymgr_reports_missing_identity_table_before_reading_password(
     stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
     monkeypatch.setattr(sys, "stdin", stdin)
 
-    exit_code = identitymgr.main(["create", "missing@example.com", "--password", "-"])
+    exit_code = identitymgr.main(
+        ["user", "create", "missing@example.com", "--password", "-"]
+    )
 
     assert exit_code == 1
     assert stdin.tell() == 0
@@ -1317,6 +1477,7 @@ def test_identitymgr_create_user_with_metadata_from_stdin_password(
 
     exit_code = identitymgr.main(
         [
+            "user",
             "create",
             "operator@example.com",
             "--password",
@@ -1479,7 +1640,10 @@ def test_identitymgr_group_membership_commands_manage_users_and_child_groups(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
-    assert identitymgr.main(["create", "member@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "member@example.com", "--password", "-"])
+        == 0
+    )
     assert identitymgr.main(["group", "create", "parent"]) == 0
     assert identitymgr.main(["group", "create", "child"]) == 0
     assert identitymgr.main(["group", "parent", "add-user", "member@example.com"]) == 0
@@ -1531,6 +1695,7 @@ def test_identitymgr_create_and_update_user_group_memberships(
     assert (
         identitymgr.main(
             [
+                "user",
                 "create",
                 "grouped@example.com",
                 "--password",
@@ -1551,6 +1716,7 @@ def test_identitymgr_create_and_update_user_group_memberships(
     assert (
         identitymgr.main(
             [
+                "user",
                 "update",
                 "grouped@example.com",
                 "--rm-group",
@@ -1570,6 +1736,7 @@ def test_identitymgr_create_and_update_user_group_memberships(
     assert (
         identitymgr.main(
             [
+                "user",
                 "update",
                 "grouped@example.com",
                 "--set-group",
@@ -1596,6 +1763,7 @@ def test_identitymgr_create_with_missing_group_does_not_create_user(
     assert (
         identitymgr.main(
             [
+                "user",
                 "create",
                 "missing-create-group@example.com",
                 "--password",
@@ -1628,6 +1796,7 @@ def test_identitymgr_set_group_validates_targets_before_replacing_memberships(
     assert (
         identitymgr.main(
             [
+                "user",
                 "create",
                 "invalid-set@example.com",
                 "--password",
@@ -1642,6 +1811,7 @@ def test_identitymgr_set_group_validates_targets_before_replacing_memberships(
     assert (
         identitymgr.main(
             [
+                "user",
                 "update",
                 "invalid-set@example.com",
                 "--set-group",
@@ -1661,7 +1831,7 @@ def test_identitymgr_set_group_validates_targets_before_replacing_memberships(
 def test_identitymgr_update_rejects_group_replacement_shortcut() -> None:
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
-        ["update", "user@example.com", "--group", "admins"],
+        ["user", "update", "user@example.com", "--group", "admins"],
     )
 
     assert result.exit_code == 2
@@ -1710,7 +1880,10 @@ def test_identitymgr_group_effective_scopes_reports_folded_scopes(
     assert (
         identitymgr.main(["group", "create", "readers", "--scope", "project:read"]) == 0
     )
-    assert identitymgr.main(["create", "reader@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "reader@example.com", "--password", "-"])
+        == 0
+    )
     assert identitymgr.main(["group", "readers", "add-user", "reader@example.com"]) == 0
 
     assert (
@@ -1736,6 +1909,7 @@ def test_identitymgr_create_rejects_invalid_timezone_without_creating_user(
 
     exit_code = identitymgr.main(
         [
+            "user",
             "create",
             "invalid-timezone@example.com",
             "--password",
@@ -1762,6 +1936,7 @@ def test_identitymgr_update_rejects_invalid_timezone_without_updating_user(
     assert (
         identitymgr.main(
             [
+                "user",
                 "create",
                 "invalid-update-timezone@example.com",
                 "--password",
@@ -1776,6 +1951,7 @@ def test_identitymgr_update_rejects_invalid_timezone_without_updating_user(
 
     exit_code = identitymgr.main(
         [
+            "user",
             "update",
             "invalid-update-timezone@example.com",
             "--timezone",
@@ -1851,10 +2027,15 @@ def test_identitymgr_create_rejects_duplicate_email(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "duplicate@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "duplicate@example.com", "--password", "-"])
+        == 0
+    )
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    exit_code = identitymgr.main(["create", "duplicate@example.com", "--password", "-"])
+    exit_code = identitymgr.main(
+        ["user", "create", "duplicate@example.com", "--password", "-"]
+    )
 
     assert exit_code == 1
     assert "already exists" in capsys.readouterr().err
@@ -1873,6 +2054,7 @@ def test_identitymgr_list_json_omits_null_fields(
     assert (
         identitymgr.main(
             [
+                "user",
                 "create",
                 "listed@example.com",
                 "--password",
@@ -1885,7 +2067,7 @@ def test_identitymgr_list_json_omits_null_fields(
     )
     capsys.readouterr()
 
-    exit_code = identitymgr.main(["list", "--json"])
+    exit_code = identitymgr.main(["user", "list", "--json"])
 
     assert exit_code == 0
     [record] = json.loads(capsys.readouterr().out)
@@ -1904,11 +2086,15 @@ def test_identitymgr_update_resolves_id_and_updates_user_fields(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "update@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "update@example.com", "--password", "-"])
+        == 0
+    )
     [created_user] = identity_users_from_database(database_url)
 
     exit_code = identitymgr.main(
         [
+            "user",
             "update",
             str(created_user.id),
             "--admin",
@@ -1945,11 +2131,16 @@ def test_identitymgr_update_no_expires_at_without_existing_expiry_is_noop(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "no-expiry@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "no-expiry@example.com", "--password", "-"])
+        == 0
+    )
     [created_user] = identity_users_from_database(database_url)
     capsys.readouterr()
 
-    exit_code = identitymgr.main(["update", "no-expiry@example.com", "--no-expires-at"])
+    exit_code = identitymgr.main(
+        ["user", "update", "no-expiry@example.com", "--no-expires-at"]
+    )
 
     assert exit_code == 1
     assert "No user changes" in capsys.readouterr().err
@@ -1966,10 +2157,14 @@ def test_identitymgr_update_can_clear_optional_string_fields(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "clear@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "clear@example.com", "--password", "-"])
+        == 0
+    )
     assert (
         identitymgr.main(
             [
+                "user",
                 "update",
                 "clear@example.com",
                 "--display-name",
@@ -1985,6 +2180,7 @@ def test_identitymgr_update_can_clear_optional_string_fields(
 
     exit_code = identitymgr.main(
         [
+            "user",
             "update",
             "clear@example.com",
             "--no-display-name",
@@ -2018,7 +2214,7 @@ def test_identitymgr_update_reports_malformed_targets(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
 
-    exit_code = identitymgr.main(["update", target, "--admin"])
+    exit_code = identitymgr.main(["user", "update", target, "--admin"])
 
     assert exit_code == 1
     assert expected_message in capsys.readouterr().err
@@ -2035,12 +2231,14 @@ def test_identitymgr_update_rejects_final_superuser_demotion(
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(
-            ["create", "root@example.com", "--password", "-", "--superuser"]
+            ["user", "create", "root@example.com", "--password", "-", "--superuser"]
         )
         == 0
     )
 
-    exit_code = identitymgr.main(["update", "root@example.com", "--no-superuser"])
+    exit_code = identitymgr.main(
+        ["user", "update", "root@example.com", "--no-superuser"]
+    )
 
     assert exit_code == 1
     assert "final superuser" in capsys.readouterr().err
@@ -2059,13 +2257,23 @@ def test_identitymgr_delete_and_deactivate_protect_superusers(
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(
-            ["create", "protected@example.com", "--password", "-", "--superuser"]
+            [
+                "user",
+                "create",
+                "protected@example.com",
+                "--password",
+                "-",
+                "--superuser",
+            ]
         )
         == 0
     )
 
-    assert identitymgr.main(["delete", "protected@example.com", "--force"]) == 1
-    assert identitymgr.main(["deactivate", "protected@example.com", "--force"]) == 1
+    assert identitymgr.main(["user", "delete", "protected@example.com", "--force"]) == 1
+    assert (
+        identitymgr.main(["user", "deactivate", "protected@example.com", "--force"])
+        == 1
+    )
 
     captured = capsys.readouterr()
     assert "superuser" in captured.err
@@ -2084,10 +2292,15 @@ def test_identitymgr_delete_protects_non_final_superuser(
     for email in ("first-root@example.com", "second-root@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
         assert (
-            identitymgr.main(["create", email, "--password", "-", "--superuser"]) == 0
+            identitymgr.main(
+                ["user", "create", email, "--password", "-", "--superuser"]
+            )
+            == 0
         )
 
-    exit_code = identitymgr.main(["delete", "first-root@example.com", "--force"])
+    exit_code = identitymgr.main(
+        ["user", "delete", "first-root@example.com", "--force"]
+    )
 
     assert exit_code == 1
     assert "cannot be deleted" in capsys.readouterr().err
@@ -2105,10 +2318,16 @@ def test_identitymgr_delete_and_deactivate_normal_users_with_force(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "delete@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "delete@example.com", "--password", "-"])
+        == 0
+    )
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
-        identitymgr.main(["create", "deactivate@example.com", "--password", "-"]) == 0
+        identitymgr.main(
+            ["user", "create", "deactivate@example.com", "--password", "-"]
+        )
+        == 0
     )
     delete_token = create_session_token_for_user(database_url, "delete@example.com")
     deactivate_token = create_session_token_for_user(
@@ -2120,10 +2339,13 @@ def test_identitymgr_delete_and_deactivate_normal_users_with_force(
         deactivate_token,
     }
 
-    assert identitymgr.main(["delete", "delete@example.com", "--force"]) == 0
+    assert identitymgr.main(["user", "delete", "delete@example.com", "--force"]) == 0
     assert access_tokens_from_database(database_url) == [deactivate_token]
 
-    assert identitymgr.main(["deactivate", "deactivate@example.com", "--force"]) == 0
+    assert (
+        identitymgr.main(["user", "deactivate", "deactivate@example.com", "--force"])
+        == 0
+    )
 
     [remaining_user] = identity_users_from_database(database_url)
     assert remaining_user.email == "deactivate@example.com"
@@ -2140,13 +2362,13 @@ def test_identitymgr_deactivate_only_revokes_target_user_sessions(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     for email in ("alice@example.com", "bob@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert identitymgr.main(["create", email, "--password", "-"]) == 0
+        assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
 
     alice_token = create_session_token_for_user(database_url, "alice@example.com")
     bob_token = create_session_token_for_user(database_url, "bob@example.com")
     assert set(access_tokens_from_database(database_url)) == {alice_token, bob_token}
 
-    assert identitymgr.main(["deactivate", "alice@example.com", "--force"]) == 0
+    assert identitymgr.main(["user", "deactivate", "alice@example.com", "--force"]) == 0
 
     assert access_tokens_from_database(database_url) == [bob_token]
 
@@ -2160,12 +2382,15 @@ def test_identitymgr_delete_confirmation_identifies_resolved_user(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "confirm@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "confirm@example.com", "--password", "-"])
+        == 0
+    )
     [user] = identity_users_from_database(database_url)
     monkeypatch.setattr("builtins.input", lambda prompt: print(prompt) or "no")
     capsys.readouterr()
 
-    exit_code = identitymgr.main(["delete", str(user.id)])
+    exit_code = identitymgr.main(["user", "delete", str(user.id)])
 
     assert exit_code == 1
     assert "confirm@example.com" in capsys.readouterr().out
@@ -2180,13 +2405,16 @@ def test_identitymgr_password_revokes_sessions_by_default(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "password@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "password@example.com", "--password", "-"])
+        == 0
+    )
     token = create_session_token_for_user(database_url, "password@example.com")
     assert access_tokens_from_database(database_url) == [token]
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n"))
     exit_code = identitymgr.main(
-        ["password", "password@example.com", "--password", "-"]
+        ["user", "password", "password@example.com", "--password", "-"]
     )
 
     assert exit_code == 0
@@ -2202,7 +2430,9 @@ def test_identitymgr_update_password_revokes_sessions_by_default(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
-        identitymgr.main(["create", "update-password@example.com", "--password", "-"])
+        identitymgr.main(
+            ["user", "create", "update-password@example.com", "--password", "-"]
+        )
         == 0
     )
     token = create_session_token_for_user(database_url, "update-password@example.com")
@@ -2210,7 +2440,7 @@ def test_identitymgr_update_password_revokes_sessions_by_default(
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n"))
     exit_code = identitymgr.main(
-        ["update", "update-password@example.com", "--password", "-"]
+        ["user", "update", "update-password@example.com", "--password", "-"]
     )
 
     assert exit_code == 0
@@ -2225,12 +2455,15 @@ def test_identitymgr_password_can_preserve_sessions(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "preserve@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "preserve@example.com", "--password", "-"])
+        == 0
+    )
     token = create_session_token_for_user(database_url, "preserve@example.com")
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n"))
     exit_code = identitymgr.main(
-        ["password", "preserve@example.com", "--password", "-", "--no-revoke"]
+        ["user", "password", "preserve@example.com", "--password", "-", "--no-revoke"]
     )
 
     assert exit_code == 0
@@ -2247,7 +2480,7 @@ def test_identitymgr_interactive_password_mismatch_aborts_when_input_ends(
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
-        ["create", "mismatch@example.com"],
+        ["user", "create", "mismatch@example.com"],
         input="first password\nsecond password\n",
     )
 
@@ -2268,7 +2501,7 @@ def test_identitymgr_interactive_password_prompt_retries_after_mismatch(
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
-        ["create", "retry@example.com"],
+        ["user", "create", "retry@example.com"],
         input=(
             "first password\n"
             "second password\n"
@@ -2299,7 +2532,7 @@ def test_identitymgr_create_with_stdin_password_does_not_prompt(
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
-        ["create", email, "--password", password_source],
+        ["user", "create", email, "--password", password_source],
         input=f"{STRONG_TEST_PASSWORD}\n",
     )
 
@@ -2320,7 +2553,7 @@ def test_identitymgr_create_with_empty_stdin_password_reports_password_option(
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
-        ["create", "empty-stdin@example.com", "--password", "-"],
+        ["user", "create", "empty-stdin@example.com", "--password", "-"],
         input="",
     )
 
@@ -2339,13 +2572,15 @@ def test_identitymgr_password_command_prompts_by_default(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
-        identitymgr.main(["create", "default-prompt@example.com", "--password", "-"])
+        identitymgr.main(
+            ["user", "create", "default-prompt@example.com", "--password", "-"]
+        )
         == 0
     )
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
-        ["password", "default-prompt@example.com"],
+        ["user", "password", "default-prompt@example.com"],
         input=f"{UPDATED_STRONG_TEST_PASSWORD}\n{UPDATED_STRONG_TEST_PASSWORD}\n",
     )
 
@@ -2364,19 +2599,22 @@ def test_identitymgr_list_filters_by_email_domain_flags_and_effective_activity(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     for email in ("alpha@example.com", "beta@example.org", "gamma@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert identitymgr.main(["create", email, "--password", "-"]) == 0
-    assert identitymgr.main(["update", "alpha@example.com", "--admin"]) == 0
-    assert identitymgr.main(["deactivate", "beta@example.org", "--force"]) == 0
+        assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
+    assert identitymgr.main(["user", "update", "alpha@example.com", "--admin"]) == 0
+    assert identitymgr.main(["user", "deactivate", "beta@example.org", "--force"]) == 0
     update_user_fields(database_url, "gamma@example.com", expires_at=time() - 60)
     capsys.readouterr()
 
     assert (
-        identitymgr.main(["list", "--json", "--domain", "example.com", "--admin"]) == 0
+        identitymgr.main(
+            ["user", "list", "--json", "--domain", "example.com", "--admin"]
+        )
+        == 0
     )
     [admin_record] = json.loads(capsys.readouterr().out)
     assert admin_record["email"] == "alpha@example.com"
 
-    assert identitymgr.main(["list", "--json", "--inactive"]) == 0
+    assert identitymgr.main(["user", "list", "--json", "--inactive"]) == 0
     inactive_emails = {
         record["email"] for record in json.loads(capsys.readouterr().out)
     }
@@ -2392,7 +2630,10 @@ def test_identitymgr_list_uses_shared_effective_active_timestamp(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "boundary@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "boundary@example.com", "--password", "-"])
+        == 0
+    )
     update_user_fields(database_url, "boundary@example.com", expires_at=200.0)
     capsys.readouterr()
 
@@ -2402,7 +2643,7 @@ def test_identitymgr_list_uses_shared_effective_active_timestamp(
         lambda: next(clock_values),
     )
 
-    assert identitymgr.main(["list", "--json", "--active"]) == 0
+    assert identitymgr.main(["user", "list", "--json", "--active"]) == 0
 
     [record] = json.loads(capsys.readouterr().out)
     assert record["email"] == "boundary@example.com"
@@ -2418,20 +2659,23 @@ def test_identitymgr_active_filter_uses_exclusive_expiry_boundary(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "boundary@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "boundary@example.com", "--password", "-"])
+        == 0
+    )
     update_user_fields(database_url, "boundary@example.com", expires_at=200.0)
     monkeypatch.setattr("auth_ext.management.current_timestamp", lambda: 200.0)
     capsys.readouterr()
 
-    assert identitymgr.main(["list", "--json"]) == 0
+    assert identitymgr.main(["user", "list", "--json"]) == 0
     [boundary_record] = json.loads(capsys.readouterr().out)
     assert boundary_record["email"] == "boundary@example.com"
     assert boundary_record["effective_active"] is False
 
-    assert identitymgr.main(["list", "--json", "--active"]) == 0
+    assert identitymgr.main(["user", "list", "--json", "--active"]) == 0
     assert json.loads(capsys.readouterr().out) == []
 
-    assert identitymgr.main(["list", "--json", "--inactive"]) == 0
+    assert identitymgr.main(["user", "list", "--json", "--inactive"]) == 0
     [record] = json.loads(capsys.readouterr().out)
     assert record["email"] == "boundary@example.com"
     assert record["effective_active"] is False
@@ -2447,7 +2691,7 @@ def test_identitymgr_list_timestamp_filters_and_ordering(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     for email in ("first@z.example", "second@y.example", "third@y.example"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert identitymgr.main(["create", email, "--password", "-"]) == 0
+        assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
 
     update_user_fields(
         database_url,
@@ -2474,7 +2718,15 @@ def test_identitymgr_list_timestamp_filters_and_ordering(
 
     assert (
         identitymgr.main(
-            ["list", "--json", "--since-created-at", "250", "--order", "email-domain"]
+            [
+                "user",
+                "list",
+                "--json",
+                "--since-created-at",
+                "250",
+                "--order",
+                "email-domain",
+            ]
         )
         == 0
     )
@@ -2484,7 +2736,7 @@ def test_identitymgr_list_timestamp_filters_and_ordering(
         "third@y.example",
     ]
 
-    assert identitymgr.main(["list", "--json", "-l", "450"]) == 0
+    assert identitymgr.main(["user", "list", "--json", "-l", "450"]) == 0
     records = json.loads(capsys.readouterr().out)
     assert {record["email"] for record in records} == {
         "first@z.example",
@@ -2502,12 +2754,12 @@ def test_identitymgr_last_login_order_keeps_nulls_last(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     for email in ("never@example.com", "recent@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert identitymgr.main(["create", email, "--password", "-"]) == 0
+        assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
 
     update_user_fields(database_url, "recent@example.com", last_login_at=100.0)
     capsys.readouterr()
 
-    assert identitymgr.main(["list", "--json", "--order", "last-login-at"]) == 0
+    assert identitymgr.main(["user", "list", "--json", "--order", "last-login-at"]) == 0
 
     records = json.loads(capsys.readouterr().out)
     assert [record["email"] for record in records] == [
@@ -2561,16 +2813,16 @@ def test_identitymgr_list_filters_by_login_presence(
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     for email in ("never@example.com", "recent@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert identitymgr.main(["create", email, "--password", "-"]) == 0
+        assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
 
     update_user_fields(database_url, "recent@example.com", last_login_at=100.0)
     capsys.readouterr()
 
-    assert identitymgr.main(["list", "--json", "--never-logged-in"]) == 0
+    assert identitymgr.main(["user", "list", "--json", "--never-logged-in"]) == 0
     [never_record] = json.loads(capsys.readouterr().out)
     assert never_record["email"] == "never@example.com"
 
-    assert identitymgr.main(["list", "--json", "--logged-in"]) == 0
+    assert identitymgr.main(["user", "list", "--json", "--logged-in"]) == 0
     [logged_in_record] = json.loads(capsys.readouterr().out)
     assert logged_in_record["email"] == "recent@example.com"
 
@@ -2732,11 +2984,13 @@ def test_identitymgr_csv_output_uses_iso_timestamp_strings(
     initialise_identity_database(database_url)
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-    assert identitymgr.main(["create", "csv@example.com", "--password", "-"]) == 0
+    assert (
+        identitymgr.main(["user", "create", "csv@example.com", "--password", "-"]) == 0
+    )
     update_user_fields(database_url, "csv@example.com", created_at=4102444800.0)
     capsys.readouterr()
 
-    assert identitymgr.main(["list", "--csv"]) == 0
+    assert identitymgr.main(["user", "list", "--csv"]) == 0
 
     [record] = csv.DictReader(io.StringIO(capsys.readouterr().out)).__iter__()
     assert record["email"] == "csv@example.com"

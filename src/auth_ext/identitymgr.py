@@ -156,6 +156,41 @@ class PasswordSourceError(Exception):
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
 
+class HelpSuffixGroup(click.Group):
+    def resolve_command(
+        self,
+        ctx: click.Context,
+        args: list[str],
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        if args and args[0] == "help":
+            if len(args) == 1:
+                click.echo(ctx.get_help(), color=ctx.color)
+                ctx.exit()
+            args = self._help_path_args(ctx, args[1:])
+        return super().resolve_command(ctx, args)
+
+    def _help_path_args(self, ctx: click.Context, path: list[str]) -> list[str]:
+        command_name = path[0]
+        command = self.get_command(ctx, command_name)
+        if command is None:
+            raise click.UsageError(f"No such command '{command_name}'.")
+        if isinstance(command, click.Group):
+            return [command_name, "help", *path[1:]]
+        if _accepts_raw_help_path(command):
+            return [command_name, "help", *path[1:]]
+        if len(path) == 1:
+            return [command_name, "--help"]
+        raise click.UsageError(f"Nested help is not available for '{' '.join(path)}'.")
+
+
+def _accepts_raw_help_path(command: click.Command) -> bool:
+    context_settings = command.context_settings or {}
+    return bool(
+        context_settings.get("allow_extra_args")
+        and context_settings.get("ignore_unknown_options")
+    )
+
+
 def _password_source_option(default: PasswordSource | None):
     """Build the shared password-source option.
 
@@ -436,6 +471,47 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             raise click.UsageError(f"Unknown group operation: {operation}.")
 
 
+_GROUP_ROOT_OPERATION_HELP = {
+    "create": (
+        "Usage: identitymgr group create <abbrev> "
+        "[--description <text>] [--scope <scope>]."
+    ),
+    "list": "Usage: identitymgr group list [--json|--csv].",
+    "effective-scopes": (
+        "Usage: identitymgr group effective-scopes <user-target> [--json]."
+    ),
+}
+
+_GROUP_TARGET_OPERATION_HELP = {
+    "show": "Usage: identitymgr group <group> show [--json].",
+    "update": (
+        "Usage: identitymgr group <group> update "
+        "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
+    ),
+    "delete": "Usage: identitymgr group <group> delete [--force].",
+    "add-user": "Usage: identitymgr group <group> add-user <user>.",
+    "remove-user": "Usage: identitymgr group <group> remove-user <user>.",
+    "add-group": "Usage: identitymgr group <group> add-group <group>.",
+    "remove-group": "Usage: identitymgr group <group> remove-group <group>.",
+}
+
+
+def _group_operation_help(tokens: tuple[str, ...]) -> str:
+    help_text: str | None = None
+    if len(tokens) == 1:
+        help_text = _GROUP_ROOT_OPERATION_HELP.get(
+            tokens[0]
+        ) or _GROUP_TARGET_OPERATION_HELP.get(tokens[0])
+    if len(tokens) == 2:
+        help_text = _GROUP_TARGET_OPERATION_HELP.get(tokens[1])
+    if help_text is None:
+        raise click.UsageError(
+            f"Unknown group help topic: {' '.join(tokens)}. "
+            "Try 'identitymgr group --help'."
+        )
+    return help_text
+
+
 @dataclass(frozen=True, slots=True)
 class ParsedCliTokens:
     positionals: list[str]
@@ -487,9 +563,10 @@ def _parse_cli_tokens(
 
 @click.group(
     name="identitymgr",
+    cls=HelpSuffixGroup,
     context_settings=CONTEXT_SETTINGS,
     epilog=TIMESTAMP_HELP,
-    help="Manage local identity users through configured services.",
+    help="Manage local identity resources through configured services.",
 )
 @click.option(
     "--config",
@@ -501,7 +578,12 @@ def identitymgr_command(ctx: click.Context, config: Path | None) -> None:
     ctx.obj = {"config": config}
 
 
-@identitymgr_command.command("create", help="Create a local user.")
+@identitymgr_command.group("user", cls=HelpSuffixGroup, help="Manage local users.")
+def user_group() -> None:
+    pass
+
+
+@user_group.command("create", help="Create a local user.")
 @click.argument("email")
 @_password_source_option(default=PASSWORD_SOURCE_PROMPT)
 @click.option("--admin", is_flag=True)
@@ -545,7 +627,7 @@ def create_command(
     )
 
 
-@identitymgr_command.command("update", help="Update a local user.")
+@user_group.command("update", help="Update a local user.")
 @click.argument("target")
 @click.option("--admin", "admin", is_flag=True)
 @click.option("--no-admin", "no_admin", is_flag=True)
@@ -651,7 +733,7 @@ def update_command(
     )
 
 
-@identitymgr_command.command("delete", help="Delete a local user.")
+@user_group.command("delete", help="Delete a local user.")
 @click.argument("target")
 @click.option("--force", is_flag=True)
 @click.pass_context
@@ -667,7 +749,7 @@ def delete_command(ctx: click.Context, target: str, force: bool) -> None:
     )
 
 
-@identitymgr_command.command("deactivate", help="Deactivate a local user.")
+@user_group.command("deactivate", help="Deactivate a local user.")
 @click.argument("target")
 @click.option("--force", is_flag=True)
 @click.pass_context
@@ -683,7 +765,7 @@ def deactivate_command(ctx: click.Context, target: str, force: bool) -> None:
     )
 
 
-@identitymgr_command.command("list", help="List local users.")
+@user_group.command("list", help="List local users.")
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--csv", "csv_output", is_flag=True)
 @click.option("--email", "-e", "email_pattern")
@@ -802,7 +884,7 @@ def list_command(
     )
 
 
-@identitymgr_command.command("password", help="Change a local user's password.")
+@user_group.command("password", help="Change a local user's password.")
 @click.argument("target")
 @_password_source_option(default=PASSWORD_SOURCE_PROMPT)
 @click.option("--no-revoke", is_flag=True)
@@ -825,7 +907,11 @@ def password_command(
     )
 
 
-@identitymgr_command.group("scope", help="Manage authorisation scopes.")
+@identitymgr_command.group(
+    "scope",
+    cls=HelpSuffixGroup,
+    help="Manage authorisation scopes.",
+)
 def scope_group() -> None:
     pass
 
@@ -913,6 +999,12 @@ def scope_list_command(
 @click.argument("tokens", nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
 def group_command(ctx: click.Context, tokens: tuple[str, ...]) -> None:
+    if tokens == ("help",):
+        click.echo(ctx.get_help(), color=ctx.color)
+        return
+    if tokens and tokens[0] == "help":
+        click.echo(_group_operation_help(tokens[1:]), color=ctx.color)
+        return
     _run_identitymgr(ctx, _group_args(ctx, tokens))
 
 
