@@ -162,10 +162,33 @@ class HelpSuffixGroup(click.Group):
         ctx: click.Context,
         args: list[str],
     ) -> tuple[str | None, click.Command | None, list[str]]:
-        if args == ["help"]:
-            click.echo(ctx.get_help(), color=ctx.color)
-            ctx.exit()
+        if args and args[0] == "help":
+            if len(args) == 1:
+                click.echo(ctx.get_help(), color=ctx.color)
+                ctx.exit()
+            args = self._help_path_args(ctx, args[1:])
         return super().resolve_command(ctx, args)
+
+    def _help_path_args(self, ctx: click.Context, path: list[str]) -> list[str]:
+        command_name = path[0]
+        command = self.get_command(ctx, command_name)
+        if command is None:
+            raise click.UsageError(f"No such command '{command_name}'.")
+        if isinstance(command, click.Group):
+            return [command_name, "help", *path[1:]]
+        if _accepts_raw_help_path(command):
+            return [command_name, "help", *path[1:]]
+        if len(path) == 1:
+            return [command_name, "--help"]
+        raise click.UsageError(f"Nested help is not available for '{' '.join(path)}'.")
+
+
+def _accepts_raw_help_path(command: click.Command) -> bool:
+    context_settings = command.context_settings or {}
+    return bool(
+        context_settings.get("allow_extra_args")
+        and context_settings.get("ignore_unknown_options")
+    )
 
 
 def _password_source_option(default: PasswordSource | None):
@@ -446,6 +469,47 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
         case _:
             raise click.UsageError(f"Unknown group operation: {operation}.")
+
+
+_GROUP_ROOT_OPERATION_HELP = {
+    "create": (
+        "Usage: identitymgr group create <abbrev> "
+        "[--description <text>] [--scope <scope>]."
+    ),
+    "list": "Usage: identitymgr group list [--json|--csv].",
+    "effective-scopes": (
+        "Usage: identitymgr group effective-scopes <user-target> [--json]."
+    ),
+}
+
+_GROUP_TARGET_OPERATION_HELP = {
+    "show": "Usage: identitymgr group <group> show [--json].",
+    "update": (
+        "Usage: identitymgr group <group> update "
+        "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
+    ),
+    "delete": "Usage: identitymgr group <group> delete [--force].",
+    "add-user": "Usage: identitymgr group <group> add-user <user>.",
+    "remove-user": "Usage: identitymgr group <group> remove-user <user>.",
+    "add-group": "Usage: identitymgr group <group> add-group <group>.",
+    "remove-group": "Usage: identitymgr group <group> remove-group <group>.",
+}
+
+
+def _group_operation_help(tokens: tuple[str, ...]) -> str:
+    help_text: str | None = None
+    if len(tokens) == 1:
+        help_text = _GROUP_ROOT_OPERATION_HELP.get(
+            tokens[0]
+        ) or _GROUP_TARGET_OPERATION_HELP.get(tokens[0])
+    if len(tokens) == 2:
+        help_text = _GROUP_TARGET_OPERATION_HELP.get(tokens[1])
+    if help_text is None:
+        raise click.UsageError(
+            f"Unknown group help topic: {' '.join(tokens)}. "
+            "Try 'identitymgr group --help'."
+        )
+    return help_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -937,6 +1001,9 @@ def scope_list_command(
 def group_command(ctx: click.Context, tokens: tuple[str, ...]) -> None:
     if tokens == ("help",):
         click.echo(ctx.get_help(), color=ctx.color)
+        return
+    if tokens and tokens[0] == "help":
+        click.echo(_group_operation_help(tokens[1:]), color=ctx.color)
         return
     _run_identitymgr(ctx, _group_args(ctx, tokens))
 

@@ -546,8 +546,31 @@ def test_identitymgr_user_help_exposes_user_commands(command: str) -> None:
     ("help_suffix_args", "help_option_args"),
     [
         pytest.param(["help"], ["--help"], id="root"),
+        pytest.param(["help", "user"], ["user", "--help"], id="root-user-group"),
+        pytest.param(["help", "scope"], ["scope", "--help"], id="root-scope-group"),
+        pytest.param(["help", "group"], ["group", "--help"], id="root-group-command"),
+        pytest.param(
+            ["help", "user", "create"],
+            ["user", "create", "--help"],
+            id="root-user-create",
+        ),
+        pytest.param(
+            ["help", "scope", "create"],
+            ["scope", "create", "--help"],
+            id="root-scope-create",
+        ),
         pytest.param(["user", "help"], ["user", "--help"], id="user-group"),
+        pytest.param(
+            ["user", "help", "create"],
+            ["user", "create", "--help"],
+            id="user-create",
+        ),
         pytest.param(["scope", "help"], ["scope", "--help"], id="scope-group"),
+        pytest.param(
+            ["scope", "help", "create"],
+            ["scope", "create", "--help"],
+            id="scope-create",
+        ),
         pytest.param(["group", "help"], ["group", "--help"], id="group-command"),
     ],
 )
@@ -565,18 +588,33 @@ def test_identitymgr_help_suffix_matches_help_option(
 
 
 @pytest.mark.parametrize(
-    "argv",
+    ("argv", "usage"),
     [
-        pytest.param(["help", "user"], id="root-help-extra-token"),
-        pytest.param(["user", "help", "create"], id="user-help-extra-token"),
-        pytest.param(["scope", "help", "create"], id="scope-help-extra-token"),
+        pytest.param(
+            ["help", "group", "create"],
+            "Usage: identitymgr group create <abbrev>",
+            id="root-group-create",
+        ),
+        pytest.param(
+            ["group", "help", "create"],
+            "Usage: identitymgr group create <abbrev>",
+            id="group-create",
+        ),
+        pytest.param(
+            ["group", "help", "project", "update"],
+            "Usage: identitymgr group <group> update",
+            id="group-target-update",
+        ),
     ],
 )
-def test_identitymgr_help_suffix_rejects_extra_tokens(argv: list[str]) -> None:
+def test_identitymgr_help_path_shows_raw_group_operation_usage(
+    argv: list[str],
+    usage: str,
+) -> None:
     result = CliRunner().invoke(identitymgr.identitymgr_command, argv)
 
-    assert result.exit_code == 2
-    assert "No such command 'help'" in result.output
+    assert result.exit_code == 0
+    assert usage in result.output
 
 
 def test_identitymgr_preserves_help_as_option_value(
