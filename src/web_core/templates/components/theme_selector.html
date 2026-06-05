@@ -1,0 +1,67 @@
+<form
+  id="theme-selector"
+  class="theme-selector-form"
+  method="post"
+  action="{{ theme_update_path }}"
+  hx-post="{{ theme_update_path }}"
+  hx-target="this"
+  hx-swap="outerHTML"
+>
+  <input type="hidden" name="{{ csrf_field_name }}" value="{{ csrf_token }}" />
+  <input type="hidden" name="theme_mode" value="{{ theme_next_mode }}" />
+  <input type="hidden" name="return_to" value="{{ theme_return_path }}" />
+  <button
+    class="theme-selector"
+    type="submit"
+    title="Theme mode: {{ theme_label }}. Activate to switch to {{ theme_next_mode.title() }}."
+    aria-label="Theme mode: {{ theme_label }}. Activate to switch to {{ theme_next_mode.title() }}."
+  >
+  {% if theme_mode == "light" %}
+  <svg
+    aria-hidden="true"
+    class="theme-selector__icon"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="1.75"
+  >
+    <circle cx="12" cy="12" r="4"></circle>
+    <path d="M12 2.5v2.5"></path>
+    <path d="M12 19v2.5"></path>
+    <path d="M4.9 4.9l1.8 1.8"></path>
+    <path d="M17.3 17.3l1.8 1.8"></path>
+    <path d="M2.5 12H5"></path>
+    <path d="M19 12h2.5"></path>
+    <path d="M4.9 19.1l1.8-1.8"></path>
+    <path d="M17.3 6.7l1.8-1.8"></path>
+  </svg>
+  {% elif theme_mode == "dark" %}
+  <svg
+    aria-hidden="true"
+    class="theme-selector__icon"
+    viewBox="0 0 24 24"
+    fill="currentColor"
+  >
+    <path d="M12.2 3.2a8.8 8.8 0 1 0 8.6 10.9 9.3 9.3 0 0 1-8.6-10.9Z"></path>
+  </svg>
+  {% else %}
+  <svg
+    aria-hidden="true"
+    class="theme-selector__icon"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="1.75"
+  >
+    <rect x="4" y="5" width="16" height="10" rx="1.75"></rect>
+    <path d="M9 19h6"></path>
+    <path d="M12 15v4"></path>
+  </svg>
+  {% endif %}
+  <span class="sr-only">Theme mode: {{ theme_label }}</span>
+  </button>
+</form>

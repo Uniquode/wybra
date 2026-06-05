@@ -1,0 +1,29 @@
+{% extends "layouts/page.html" %}
+
+{% block content %}
+<section class="surface-panel">
+  <p class="eyebrow">Identity</p>
+  <h1>Create account</h1>
+  {% if form_message is defined and form_message %}
+  <p role="status">{{ form_message }}</p>
+  {% endif %}
+  {% if form_error is defined and form_error %}
+  <p role="alert">{{ form_error }}</p>
+  {% endif %}
+  <form action="{{ request.url_for('identity:signup-submit') }}" method="post">
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    <label>
+      Email
+      <input autocomplete="email" name="email" required type="email" value="{{ email or '' }}">
+    </label>
+    <label>
+      Password
+      <input autocomplete="new-password" name="password" required type="password">
+    </label>
+    <button type="submit">Create account</button>
+  </form>
+  <p class="muted-copy">
+    <a href="{{ request.url_for('identity:login') }}">Sign in</a>
+  </p>
+</section>
+{% endblock %}

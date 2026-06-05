@@ -23,7 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 import auth_ext.identitymgr as identitymgr
 import auth_ext.management as identity_management
 import auth_ext.sessions as identity_sessions
-import uniquode.migrate as migrate_module
+import tools.migrate as migrate_module
 from auth_ext import ERROR_INACTIVE_USER
 from auth_ext.configuration import ConfigurationError
 from auth_ext.database import parse_sqlite_database_url, resolve_database_url
@@ -33,13 +33,13 @@ from auth_ext.options import IdentityOptions
 from auth_ext.persistence import create_database_strategy
 from auth_ext.schemas import UserCreate
 from auth_ext.settings import load_auth_settings
-from uniquode.app import create_app
-from uniquode.persistence import (
+from data_core.persistence import (
     close_database,
     create_database_engine,
     create_session_factory,
     session_scope,
 )
+from uniquode.app import create_app
 from uniquode.settings import SQLITE_MEMORY_DATABASE_URL, Settings
 
 STRONG_TEST_PASSWORD = "Correct horse 42!"

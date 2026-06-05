@@ -1,16 +1,101 @@
+import ast
 from pathlib import Path
 from shutil import copytree
+from textwrap import dedent
 
 import click
 import pytest
 from click.testing import CliRunner
 
-import uniquode.validate as validate_module
+import tools.validate as validate_module
 import uniquode.validation.environment as environment_validation
+from tools.validate import main as validate_main
+from tools.validation.core import ValidationResult
+from tools.validation.registry import (
+    ValidationDiscoveryError,
+    discover_validation_targets,
+)
 from uniquode.configuration import ConfigurationError
 from uniquode.settings import Settings
-from uniquode.validate import _contains_post_form, validate_web
-from uniquode.validate import main as validate_main
+from uniquode.validation.persistence import validate_persistence
+from web_core.composition import AppConfig, RouteOptions, StaticOptions, TemplateOptions
+from web_core.validation import _contains_post_form, validate_web
+
+
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    imported_modules.update(
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    )
+    return imported_modules
+
+
+def _write_validation_module(
+    root: Path,
+    module_name: str,
+    validation_body: str,
+) -> None:
+    module_root = root / module_name
+    module_root.mkdir()
+    (module_root / "__init__.py").write_text("", encoding="utf-8")
+    (module_root / "validation.py").write_text(
+        dedent(validation_body),
+        encoding="utf-8",
+    )
+
+
+def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
+    return AppConfig(
+        config_path=tmp_path / "app.toml",
+        project_root=tmp_path,
+        modules=modules,
+        routes=RouteOptions(prefixes={}),
+        templates=TemplateOptions(auto_reload=True, cache_size=0),
+        static=StaticOptions(url_path="/static/", export_root=Path("static")),
+    )
+
+
+def test_tools_modules_do_not_import_auth_or_runtime_startup() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    forbidden_modules = (
+        "auth_ext",
+        "uniquode.app",
+        "uniquode.asgi",
+        "uniquode.routes",
+    )
+    tools_files = sorted((project_root / "src/tools").rglob("*.py"))
+
+    assert tools_files
+    for path in tools_files:
+        imported_modules = _imported_modules(path)
+        assert not any(
+            module == forbidden_module or module.startswith(f"{forbidden_module}.")
+            for module in imported_modules
+            for forbidden_module in forbidden_modules
+        )
+
+
+def test_tools_validation_modules_do_not_import_application_or_auth_packages() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    forbidden_modules = ("auth_ext", "uniquode")
+    validation_files = sorted((project_root / "src/tools/validation").rglob("*.py"))
+
+    assert validation_files
+    for path in validation_files:
+        imported_modules = _imported_modules(path)
+        assert not any(
+            module == forbidden_module or module.startswith(f"{forbidden_module}.")
+            for module in imported_modules
+            for forbidden_module in forbidden_modules
+        )
 
 
 def test_validate_command_checks_web_foundation(capsys) -> None:
@@ -29,6 +114,15 @@ def test_validate_command_checks_persistence_foundation(capsys) -> None:
 
     assert exit_code == 0
     assert "persistence: ok" in captured.out
+
+
+def test_validate_persistence_allows_no_model_composition(tmp_path: Path) -> None:
+    result = validate_persistence(
+        Settings(app_config=_app_config(tmp_path, ("web_core", "public", "uniquode")))
+    )
+
+    assert result.is_ok
+    assert "At least one Alembic migration revision is required." not in result.errors
 
 
 def test_validate_command_checks_environment_configuration(capsys) -> None:
@@ -76,6 +170,12 @@ def test_validate_command_verbose_lists_registered_checks(capsys) -> None:
     assert "ok: supported environment variable names are unique" in captured.out
     assert "ok: environment loader returns an envex Env instance" in captured.out
     assert "ok: template root exists:" in captured.out
+    assert (
+        "ok: configured module surfaces load: web_core, public, uniquode, auth_ext"
+        in captured.out
+    )
+    assert "ok: template context providers validate" in captured.out
+    assert "ok: module routes compose" in captured.out
     assert "ok: route template exists: public:home -> public/pages/home.html" in (
         captured.out
     )
@@ -86,12 +186,13 @@ def test_validate_command_verbose_lists_registered_checks(capsys) -> None:
         captured.out
     )
     assert "ok: static asset exists: styles/app.css" in captured.out
-    assert "ok: theme token present: --u-colour-page-bg" in captured.out
+    assert "ok: theme token present: --web-core-colour-page-bg" in captured.out
     assert "ok: default database URL uses persistent SQLite file:" in captured.out
     assert "ok: database URL uses supported async SQLAlchemy driver" in captured.out
     assert "ok: Alembic config exists:" in captured.out
     assert "ok: Alembic config does not force in-memory SQLite" in captured.out
     assert "ok: Alembic migration file exists: env.py" in captured.out
+    assert "ok: module migration version locations exist:" in captured.out
     assert "ok: Alembic migration revision exists" in captured.out
     assert "ok: Alembic migration creates table: identity_user" in captured.out
     assert "ok: development database initialisation command is available:" in (
@@ -188,7 +289,164 @@ def test_resolve_targets_raises_domain_error_for_unknown_targets() -> None:
         validate_module.UnknownValidationTargetError,
         match="Unknown validation target\\(s\\): foo",
     ):
-        validate_module._resolve_targets(("foo",))
+        validate_module._resolve_targets(("foo",), ("web", "environment"))
+
+
+def test_validation_targets_are_discovered_from_configured_modules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_validation_module(
+        tmp_path,
+        "first_validation_module",
+        """
+        from tools.validation.core import ValidationResult
+
+        def validate_first(settings):
+            return ValidationResult(name="first", errors=())
+
+        validation_targets = {"first": validate_first}
+        """,
+    )
+    _write_validation_module(
+        tmp_path,
+        "second_validation_module",
+        """
+        from tools.validation.core import ValidationResult
+
+        def validate_second(settings):
+            return ValidationResult(name="second", errors=())
+
+        validation_targets = {"second": validate_second}
+        """,
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    targets = discover_validation_targets(
+        ("first_validation_module", "second_validation_module")
+    )
+
+    assert tuple(targets) == ("first", "second")
+    assert isinstance(targets["first"](Settings()), ValidationResult)
+
+
+def test_unlisted_module_validation_targets_are_not_discovered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_validation_module(
+        tmp_path,
+        "listed_validation_module",
+        """
+        from tools.validation.core import ValidationResult
+
+        def validate_listed(settings):
+            return ValidationResult(name="listed", errors=())
+
+        validation_targets = {"listed": validate_listed}
+        """,
+    )
+    _write_validation_module(
+        tmp_path,
+        "unlisted_validation_module",
+        """
+        from tools.validation.core import ValidationResult
+
+        def validate_unlisted(settings):
+            return ValidationResult(name="unlisted", errors=())
+
+        validation_targets = {"unlisted": validate_unlisted}
+        """,
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    targets = discover_validation_targets(("listed_validation_module",))
+
+    assert tuple(targets) == ("listed",)
+    assert "unlisted" not in targets
+
+
+def test_malformed_validation_surface_fails_clearly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_validation_module(
+        tmp_path,
+        "malformed_validation_module",
+        """
+        validation_targets = {"broken": object()}
+        """,
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(ValidationDiscoveryError, match="must be callable"):
+        discover_validation_targets(("malformed_validation_module",))
+
+
+def test_validate_command_runs_discovered_module_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    _write_validation_module(
+        tmp_path,
+        "command_validation_module",
+        """
+        from tools.validation.core import ValidationResult
+
+        def validate_command_target(settings):
+            return ValidationResult(name="command-target", errors=())
+
+        validation_targets = {"command-target": validate_command_target}
+        """,
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        validate_module,
+        "_build_settings",
+        lambda _overrides: Settings(
+            project_root=tmp_path,
+            app_config=_app_config(tmp_path, ("command_validation_module",)),
+        ),
+    )
+
+    exit_code = validate_main([])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out == "command-target: ok\n"
+    assert captured.err == ""
+
+
+def test_validate_command_reports_malformed_validation_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    _write_validation_module(
+        tmp_path,
+        "command_malformed_validation_module",
+        """
+        validation_targets = ["not", "a", "mapping"]
+        """,
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        validate_module,
+        "_build_settings",
+        lambda _overrides: Settings(
+            project_root=tmp_path,
+            app_config=_app_config(tmp_path, ("command_malformed_validation_module",)),
+        ),
+    )
+
+    exit_code = validate_main([])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "validation discovery: failed" in captured.err
+    assert "must expose `validation_targets` as a mapping" in captured.err
 
 
 def test_validate_command_unknown_target_returns_usage_error(capsys) -> None:
@@ -244,6 +502,20 @@ def test_validate_command_rejects_blank_static_url_path(capsys) -> None:
     assert "Static URL path must not be empty." in captured.err
 
 
+def test_validate_web_omitting_web_core_does_not_use_default_static_root(
+    tmp_path: Path,
+) -> None:
+    result = validate_web(
+        Settings(
+            project_root=tmp_path,
+            app_config=_app_config(tmp_path, ("public",)),
+        )
+    )
+
+    assert not result.is_ok
+    assert "Missing static asset: styles/app.css" in result.errors
+
+
 def test_validate_post_form_detection_accepts_html_attribute_variants() -> None:
     assert _contains_post_form("<form METHOD='POST' action='/login'>")
     assert _contains_post_form('<form action="/login" method = "post">')
@@ -266,8 +538,16 @@ def test_validate_web_rejects_post_form_missing_csrf_field(tmp_path) -> None:
     source_root = Path(__file__).resolve().parents[1]
     template_root = tmp_path / "templates"
     static_root = tmp_path / "static"
-    copytree(source_root / "src/templates", template_root)
-    copytree(source_root / "src/static", static_root)
+    copytree(source_root / "src/web_core/templates", template_root)
+    copytree(source_root / "src/web_core/static", static_root)
+    (template_root / "public/pages").mkdir(parents=True)
+    (template_root / "public/pages/home.html").write_text(
+        (source_root / "src/public/templates/public/pages/home.html").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+    (template_root / "identity/pages").mkdir(parents=True)
     (template_root / "identity/pages/login.html").write_text(
         """
         <form method="post" action="/login">
@@ -288,6 +568,28 @@ def test_validate_web_rejects_post_form_missing_csrf_field(tmp_path) -> None:
     assert not result.is_ok
     assert any(
         "POST form template must include CSRF field" in error for error in result.errors
+    )
+
+
+def test_validate_web_reports_missing_configured_module(tmp_path) -> None:
+    settings = Settings(
+        project_root=tmp_path,
+        app_config=AppConfig(
+            config_path=tmp_path / "app.toml",
+            project_root=tmp_path,
+            modules=("missing_validation_app",),
+            routes=RouteOptions(prefixes={}),
+            templates=TemplateOptions(auto_reload=True, cache_size=0),
+            static=StaticOptions(url_path="/static/", export_root=Path("static")),
+        ),
+    )
+
+    result = validate_web(settings)
+
+    assert not result.is_ok
+    assert result.errors == (
+        "Configured module surface validation failed: Configured module "
+        "'missing_validation_app' could not be imported.",
     )
 
 
@@ -452,19 +754,32 @@ def test_validate_command_reports_missing_theme_tokens(tmp_path, capsys) -> None
     source_root = Path(__file__).resolve().parents[1]
     template_paths = (
         "public/pages/home.html",
-        "identity/pages/account.html",
-        "identity/pages/login.html",
-        "identity/pages/logout.html",
-        "identity/pages/password_reset.html",
-        "identity/pages/verify.html",
         "layouts/page.html",
         "components/theme_switcher.html",
         "components/theme_selector.html",
         "errors/base.html",
     )
     for template_path in template_paths:
-        source = source_root / "src/templates" / template_path
+        source_base = (
+            source_root / "src/public/templates"
+            if template_path.startswith("public/")
+            else source_root / "src/web_core/templates"
+        )
+        source = source_base / template_path
         destination = template_root / template_path
+        destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    identity_template_paths = (
+        "identity/pages/account.html",
+        "identity/pages/login.html",
+        "identity/pages/logout.html",
+        "identity/pages/password_reset.html",
+        "identity/pages/signup.html",
+        "identity/pages/verify.html",
+    )
+    for template_path in identity_template_paths:
+        source = source_root / "src/auth_ext/templates" / template_path
+        destination = template_root / template_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(source.read_text())
 
     (static_root / "styles/app.css").write_text(":root {}")
