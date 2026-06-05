@@ -1,10 +1,11 @@
 import json
 from dataclasses import dataclass
 from typing import Literal, cast
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
+from starlette.datastructures import FormData
 
 from web_core.csrf import request_form_data
 from web_core.renderer import TemplateRenderer
@@ -30,6 +31,24 @@ def normalise_theme_mode(value: str | None) -> ThemeMode:
         return cast(ThemeMode, value)
 
     return "auto"
+
+
+def normalise_theme_return_path(value: str | None, default: str = "/") -> str:
+    candidate = (value or "").strip()
+    if (
+        not candidate.startswith("/")
+        or candidate.startswith("//")
+        or "\\" in candidate
+        or "\r" in candidate
+        or "\n" in candidate
+    ):
+        return default
+
+    parsed = urlsplit(candidate)
+    if parsed.scheme or parsed.netloc:
+        return default
+
+    return candidate
 
 
 def resolve_theme_mode(request: Request) -> ThemeMode:
@@ -82,7 +101,49 @@ def theme_return_context(
     if return_path is None:
         return {}
 
-    return {"theme_return_path": return_path}
+    return {"theme_return_path": normalise_theme_return_path(return_path)}
+
+
+def _form_value(form_data: FormData, name: str, default: str) -> str:
+    value = form_data.get(name, default)
+    return value if isinstance(value, str) else default
+
+
+async def _theme_form_values(request: Request) -> tuple[str, str]:
+    try:
+        form_data = await request_form_data(request)
+    except Exception:
+        parsed_form_data = await _parse_urlencoded_body(request)
+        return (
+            _first_parsed_form_value(parsed_form_data, "theme_mode", "auto"),
+            _first_parsed_form_value(parsed_form_data, "return_to", "/"),
+        )
+
+    return (
+        _form_value(form_data, "theme_mode", "auto"),
+        _form_value(form_data, "return_to", "/"),
+    )
+
+
+async def _parse_urlencoded_body(request: Request) -> dict[str, list[str]]:
+    try:
+        body = await request.body()
+    except Exception:
+        return {}
+
+    return parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+
+
+def _first_parsed_form_value(
+    parsed_form_data: dict[str, list[str]],
+    name: str,
+    default: str,
+) -> str:
+    values = parsed_form_data.get(name)
+    if not values:
+        return default
+
+    return values[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,24 +155,9 @@ class ThemeStatusPartialView(TemplateView):
 @dataclass(frozen=True, slots=True)
 class ThemeModePartialView(HtmlView):
     async def render(self, request: Request, renderer: TemplateRenderer) -> Response:
-        try:
-            form_data = await request_form_data(request)
-            submitted_mode = form_data.get("theme_mode", "auto")
-            return_path = form_data.get("return_to", "/")
-        except AssertionError:
-            body = (await request.body()).decode("utf-8")
-            parsed_form_data = parse_qs(body, keep_blank_values=True)
-            submitted_mode = next(
-                iter(parsed_form_data.get("theme_mode", ["auto"])), "auto"
-            )
-            return_path = next(iter(parsed_form_data.get("return_to", ["/"])), "/")
-
-        theme_mode = normalise_theme_mode(
-            submitted_mode if isinstance(submitted_mode, str) else "auto"
-        )
-        redirect_path = (
-            return_path if isinstance(return_path, str) and return_path else "/"
-        )
+        submitted_mode, return_path = await _theme_form_values(request)
+        theme_mode = normalise_theme_mode(submitted_mode)
+        redirect_path = normalise_theme_return_path(return_path)
 
         if request.headers.get("HX-Request") != "true":
             response = RedirectResponse(url=redirect_path, status_code=303)
@@ -140,6 +186,7 @@ __all__ = [
     "ThemeStatusPartialView",
     "next_theme_mode",
     "normalise_theme_mode",
+    "normalise_theme_return_path",
     "resolve_theme_mode",
     "set_theme_mode_cookie",
     "set_theme_mode_trigger",
