@@ -1,0 +1,44 @@
+{% extends "layouts/page.html" %}
+
+{% block content %}
+{% set has_form_error = form_error is defined and form_error %}
+<section class="surface-panel">
+  <p class="eyebrow">Identity</p>
+  <h1>Sign in</h1>
+  {% if has_form_error %}
+  <p id="login-form-error" role="alert">{{ form_error }}</p>
+  {% endif %}
+  <form action="{{ request.url_for('identity:login-submit') }}" method="post">
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    <input name="return_to" type="hidden" value="{{ return_to or '/account' }}">
+    <label>
+      Email
+      <input
+        autocomplete="email"
+        {% if has_form_error %}aria-describedby="login-form-error" aria-invalid="true" autofocus{% endif %}
+        name="email"
+        required
+        type="email"
+        value="{{ email or '' }}"
+      >
+    </label>
+    <label>
+      Password
+      <input
+        autocomplete="current-password"
+        {% if has_form_error %}aria-describedby="login-form-error" aria-invalid="true"{% endif %}
+        name="password"
+        required
+        type="password"
+      >
+    </label>
+    <button type="submit">Sign in</button>
+  </form>
+  <p class="muted-copy">
+    <a href="{{ request.url_for('identity:password-reset') }}">Reset password</a>
+    {% if public_signup_enabled is defined and public_signup_enabled %}
+    &middot; <a href="{{ request.url_for('identity:signup') }}">Create account</a>
+    {% endif %}
+  </p>
+</section>
+{% endblock %}

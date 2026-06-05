@@ -75,6 +75,10 @@ _.csrf_token_secret_configured
 _.SCOPE_RECORD_FIELDS
 _.primary_table_name
 _.list_candidate_child_groups_for_management
+_.shadowed
+
+# Public reusable composition helpers consumed by tests and downstream callers.
+_.discover_model_metadata
 
 # auth_provider public contracts intentionally exported before runtime endpoints.
 _.active

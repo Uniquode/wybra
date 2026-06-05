@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"{% if theme_attribute %} data-theme="{{ theme_attribute }}"{% endif %}>
+  <head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <title>{{ page_title }}</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+      rel="stylesheet"
+    >
+    <link href="{{ static_mount_path }}/styles/app.css" rel="stylesheet">
+    <script defer src="https://unpkg.com/htmx.org@2.0.7"></script>
+    <script>
+      document.addEventListener("theme-mode-changed", (event) => {
+        const { theme_mode: themeMode } = event.detail;
+
+        if (themeMode === "auto") {
+          document.documentElement.removeAttribute("data-theme");
+          return;
+        }
+
+        document.documentElement.setAttribute("data-theme", themeMode);
+      });
+    </script>
+  </head>
+  <body data-route-name="{{ route_name }}">
+    {% if theme_update_path is defined and theme_update_path %}
+    <div class="page-tools" aria-label="Page controls">
+      {% include "components/theme_selector.html" %}
+    </div>
+    {% endif %}
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

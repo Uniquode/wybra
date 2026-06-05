@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"{% if theme_attribute is defined and theme_attribute %} data-theme="{{ theme_attribute }}"{% endif %}>
+  <head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <title>{{ page_title or "Error" }}</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+      rel="stylesheet"
+    >
+    <link href="{{ static_mount_path }}/styles/app.css" rel="stylesheet">
+  </head>
+  <body data-route-name="{{ route_name if route_name is defined else 'error' }}">
+    <main class="container surface-panel">
+      <h1>{{ heading or "Something went wrong" }}</h1>
+      <p class="muted-copy">{{ detail or "The request could not be completed." }}</p>
+      {% if form_errors %}
+      <ul>
+        {% for field_name, messages in form_errors.items() %}
+        <li><strong>{{ field_name }}</strong>: {{ messages|join(", ") }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </main>
+  </body>
+</html>

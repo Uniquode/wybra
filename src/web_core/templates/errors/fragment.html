@@ -1,0 +1,12 @@
+<section class="surface-panel" data-route-name="{{ route_name if route_name is defined else 'error' }}">
+  <p class="eyebrow">{{ status_code }}</p>
+  <h1>{{ heading or "Something went wrong" }}</h1>
+  <p class="muted-copy">{{ detail or "The request could not be completed." }}</p>
+  {% if form_errors %}
+  <ul>
+    {% for field_name, messages in form_errors.items() %}
+    <li><strong>{{ field_name }}</strong>: {{ messages|join(", ") }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>

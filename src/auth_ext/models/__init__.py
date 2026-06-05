@@ -19,13 +19,10 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from auth_ext.timestamps import current_timestamp
-
-
-class Base(DeclarativeBase):
-    """Declarative base for authentication extension SQLAlchemy models."""
+from data_core.models import Base
 
 
 class InitialAdminBootstrap(Base):

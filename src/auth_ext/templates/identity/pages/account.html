@@ -1,0 +1,25 @@
+{% extends "layouts/page.html" %}
+
+{% block content %}
+<section class="surface-panel">
+  <p class="eyebrow">Account</p>
+  {% if user %}
+  <h1>{{ user.email }}</h1>
+  <p class="muted-copy">Signed in as a local account.</p>
+  <dl>
+    <dt>Verified</dt>
+    <dd>{{ "Yes" if user.is_verified else "No" }}</dd>
+    <dt>Active</dt>
+    <dd>{{ "Yes" if user.is_active else "No" }}</dd>
+  </dl>
+  <form action="{{ request.url_for('identity:logout') }}" method="post">
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    <button type="submit">Sign out</button>
+  </form>
+  {% else %}
+  <h1>Not signed in</h1>
+  <p class="muted-copy">Sign in to view account status.</p>
+  <p><a href="{{ request.url_for('identity:login') }}">Sign in</a></p>
+  {% endif %}
+</section>
+{% endblock %}
