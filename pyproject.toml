@@ -32,7 +32,7 @@ requires = ["uv_build>=0.11.18,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = ["auth_ext", "auth_provider", "data_core", "public", "tools", "uniquode", "web_core"]
+module-name = ["auth_ext", "data_core", "public", "tools", "uniquode", "web_core"]
 
 [dependency-groups]
 dev = [
