@@ -20,27 +20,38 @@ from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-import auth_ext.identitymgr as identitymgr
-import auth_ext.management as identity_management
-import auth_ext.sessions as identity_sessions
-import tools.migrate as migrate_module
-from auth_ext import ERROR_INACTIVE_USER
-from auth_ext.configuration import ConfigurationError
-from auth_ext.database import parse_sqlite_database_url, resolve_database_url
-from auth_ext.manager import create_user_manager
-from auth_ext.models import Base, Group, GroupGroup, GroupScope, GroupUser, Scope, User
-from auth_ext.options import IdentityOptions
-from auth_ext.persistence import create_database_strategy
-from auth_ext.schemas import UserCreate
-from auth_ext.settings import load_auth_settings
-from data_core.persistence import (
+import wevra.auth.admin.management as identity_management
+import wevra.auth.cli.identitymgr as identitymgr
+import wevra.auth.sessions as identity_sessions
+import wevra.tools.migrate as migrate_module
+from uniquode.app import create_app
+from uniquode.settings import SQLITE_MEMORY_DATABASE_URL, Settings
+from wevra.auth import ERROR_INACTIVE_USER
+from wevra.auth.accounts.manager import create_user_manager
+from wevra.auth.accounts.schemas import UserCreate
+from wevra.auth.configuration import ConfigurationError
+from wevra.auth.models import (
+    Base,
+    Group,
+    GroupGroup,
+    GroupScope,
+    GroupUser,
+    Scope,
+    User,
+)
+from wevra.auth.options import IdentityOptions
+from wevra.auth.persistence import create_database_strategy
+from wevra.auth.persistence.database import (
+    parse_sqlite_database_url,
+    resolve_database_url,
+)
+from wevra.auth.settings import load_auth_settings
+from wevra.db.persistence import (
     close_database,
     create_database_engine,
     create_session_factory,
     session_scope,
 )
-from uniquode.app import create_app
-from uniquode.settings import SQLITE_MEMORY_DATABASE_URL, Settings
 
 STRONG_TEST_PASSWORD = "Correct horse 42!"
 UPDATED_STRONG_TEST_PASSWORD = "New correct horse 42!"
@@ -160,7 +171,7 @@ def identity_user_from_database(database_url: str, email: str) -> User | None:
 
 
 def access_tokens_from_database(database_url: str) -> list[str]:
-    from auth_ext.models import AccessToken
+    from wevra.auth.models import AccessToken
 
     settings = Settings(database_url=database_url)
     engine = create_database_engine(settings)
@@ -309,7 +320,9 @@ def update_user_fields(database_url: str, email: str, **values: object) -> None:
 def test_identitymgr_project_script_is_defined() -> None:
     data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert data["project"]["scripts"]["identitymgr"] == "auth_ext.identitymgr:main"
+    assert (
+        data["project"]["scripts"]["identitymgr"] == "wevra.auth.cli.identitymgr:main"
+    )
     assert "usermgr" not in data["project"]["scripts"]
 
 
@@ -1142,7 +1155,7 @@ def test_identitymgr_reports_schema_inspection_error_without_leaking_context(
         async def run_sync(self, _function):
             raise SQLAlchemyError("database is locked")
 
-    with caplog.at_level(logging.DEBUG, logger="auth_ext.identitymgr"):
+    with caplog.at_level(logging.DEBUG, logger="wevra.auth.cli.identitymgr"):
         with pytest.raises(ConfigurationError) as exc_info:
             asyncio.run(identitymgr._verify_identity_schema(FailingSession()))  # type: ignore[arg-type]
 
@@ -2639,7 +2652,7 @@ def test_identitymgr_list_uses_shared_effective_active_timestamp(
 
     clock_values = iter([100.0, 300.0])
     monkeypatch.setattr(
-        "auth_ext.management.current_timestamp",
+        "wevra.auth.admin.management.current_timestamp",
         lambda: next(clock_values),
     )
 
@@ -2664,7 +2677,7 @@ def test_identitymgr_active_filter_uses_exclusive_expiry_boundary(
         == 0
     )
     update_user_fields(database_url, "boundary@example.com", expires_at=200.0)
-    monkeypatch.setattr("auth_ext.management.current_timestamp", lambda: 200.0)
+    monkeypatch.setattr("wevra.auth.admin.management.current_timestamp", lambda: 200.0)
     capsys.readouterr()
 
     assert identitymgr.main(["user", "list", "--json"]) == 0

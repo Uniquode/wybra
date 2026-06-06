@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import Request
 
-from web_core.csrf import (
+from wevra.web.forms.csrf import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
     CsrfProtector,
@@ -109,7 +109,7 @@ def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
         },
         body=body,
     )
-    caplog.set_level(logging.DEBUG, logger="web_core.csrf")
+    caplog.set_level(logging.DEBUG, logger="wevra.web.forms.csrf")
 
     assert asyncio.run(protector.validate_request(request)) is False
     assert "CSRF request rejected." in caplog.text

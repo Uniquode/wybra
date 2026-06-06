@@ -7,19 +7,24 @@ import click
 import pytest
 from click.testing import CliRunner
 
-import tools.validate as validate_module
 import uniquode.validation.environment as environment_validation
-from tools.validate import main as validate_main
-from tools.validation.core import ValidationResult
-from tools.validation.registry import (
-    ValidationDiscoveryError,
-    discover_validation_targets,
-)
+import wevra.tools.validate as validate_module
 from uniquode.configuration import ConfigurationError
 from uniquode.settings import Settings
 from uniquode.validation.persistence import validate_persistence
-from web_core.composition import AppConfig, RouteOptions, StaticOptions, TemplateOptions
-from web_core.validation import _contains_post_form, validate_web
+from wevra.core.composition import (
+    AppConfig,
+    RouteOptions,
+    StaticOptions,
+    TemplateOptions,
+)
+from wevra.tools.validate import main as validate_main
+from wevra.tools.validation.core import ValidationResult
+from wevra.tools.validation.registry import (
+    ValidationDiscoveryError,
+    discover_validation_targets,
+)
+from wevra.web.validation import _contains_post_form, validate_web
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -66,12 +71,12 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
 def test_tools_modules_do_not_import_auth_or_runtime_startup() -> None:
     project_root = Path(__file__).resolve().parents[1]
     forbidden_modules = (
-        "auth_ext",
+        "wevra.auth",
         "uniquode.app",
         "uniquode.asgi",
         "uniquode.routes",
     )
-    tools_files = sorted((project_root / "src/tools").rglob("*.py"))
+    tools_files = sorted((project_root / "src/wevra/tools").rglob("*.py"))
 
     assert tools_files
     for path in tools_files:
@@ -85,8 +90,10 @@ def test_tools_modules_do_not_import_auth_or_runtime_startup() -> None:
 
 def test_tools_validation_modules_do_not_import_application_or_auth_packages() -> None:
     project_root = Path(__file__).resolve().parents[1]
-    forbidden_modules = ("auth_ext", "uniquode")
-    validation_files = sorted((project_root / "src/tools/validation").rglob("*.py"))
+    forbidden_modules = ("wevra.auth", "uniquode")
+    validation_files = sorted(
+        (project_root / "src/wevra/tools/validation").rglob("*.py")
+    )
 
     assert validation_files
     for path in validation_files:
@@ -118,7 +125,7 @@ def test_validate_command_checks_persistence_foundation(capsys) -> None:
 
 def test_validate_persistence_allows_no_model_composition(tmp_path: Path) -> None:
     result = validate_persistence(
-        Settings(app_config=_app_config(tmp_path, ("web_core", "public", "uniquode")))
+        Settings(app_config=_app_config(tmp_path, ("uniquode", "wevra.web")))
     )
 
     assert result.is_ok
@@ -171,7 +178,7 @@ def test_validate_command_verbose_lists_registered_checks(capsys) -> None:
     assert "ok: environment loader returns an envex Env instance" in captured.out
     assert "ok: template root exists:" in captured.out
     assert (
-        "ok: configured module surfaces load: web_core, public, uniquode, auth_ext"
+        "ok: configured module surfaces load: uniquode, wevra.web, wevra.auth"
         in captured.out
     )
     assert "ok: template context providers validate" in captured.out
@@ -300,7 +307,7 @@ def test_validation_targets_are_discovered_from_configured_modules(
         tmp_path,
         "first_validation_module",
         """
-        from tools.validation.core import ValidationResult
+        from wevra.tools.validation.core import ValidationResult
 
         def validate_first(settings):
             return ValidationResult(name="first", errors=())
@@ -312,7 +319,7 @@ def test_validation_targets_are_discovered_from_configured_modules(
         tmp_path,
         "second_validation_module",
         """
-        from tools.validation.core import ValidationResult
+        from wevra.tools.validation.core import ValidationResult
 
         def validate_second(settings):
             return ValidationResult(name="second", errors=())
@@ -338,7 +345,7 @@ def test_unlisted_module_validation_targets_are_not_discovered(
         tmp_path,
         "listed_validation_module",
         """
-        from tools.validation.core import ValidationResult
+        from wevra.tools.validation.core import ValidationResult
 
         def validate_listed(settings):
             return ValidationResult(name="listed", errors=())
@@ -350,7 +357,7 @@ def test_unlisted_module_validation_targets_are_not_discovered(
         tmp_path,
         "unlisted_validation_module",
         """
-        from tools.validation.core import ValidationResult
+        from wevra.tools.validation.core import ValidationResult
 
         def validate_unlisted(settings):
             return ValidationResult(name="unlisted", errors=())
@@ -392,7 +399,7 @@ def test_validate_command_runs_discovered_module_targets(
         tmp_path,
         "command_validation_module",
         """
-        from tools.validation.core import ValidationResult
+        from wevra.tools.validation.core import ValidationResult
 
         def validate_command_target(settings):
             return ValidationResult(name="command-target", errors=())
@@ -502,13 +509,13 @@ def test_validate_command_rejects_blank_static_url_path(capsys) -> None:
     assert "Static URL path must not be empty." in captured.err
 
 
-def test_validate_web_omitting_web_core_does_not_use_default_static_root(
+def test_validate_web_omitting_wevra_web_does_not_use_default_static_root(
     tmp_path: Path,
 ) -> None:
     result = validate_web(
         Settings(
             project_root=tmp_path,
-            app_config=_app_config(tmp_path, ("public",)),
+            app_config=_app_config(tmp_path, ("uniquode",)),
         )
     )
 
@@ -538,11 +545,11 @@ def test_validate_web_rejects_post_form_missing_csrf_field(tmp_path) -> None:
     source_root = Path(__file__).resolve().parents[1]
     template_root = tmp_path / "templates"
     static_root = tmp_path / "static"
-    copytree(source_root / "src/web_core/templates", template_root)
-    copytree(source_root / "src/web_core/static", static_root)
+    copytree(source_root / "src/wevra/web/templates", template_root)
+    copytree(source_root / "src/wevra/web/static", static_root)
     (template_root / "public/pages").mkdir(parents=True)
     (template_root / "public/pages/home.html").write_text(
-        (source_root / "src/public/templates/public/pages/home.html").read_text(
+        (source_root / "src/uniquode/templates/public/pages/home.html").read_text(
             encoding="utf-8"
         ),
         encoding="utf-8",
@@ -761,9 +768,9 @@ def test_validate_command_reports_missing_theme_tokens(tmp_path, capsys) -> None
     )
     for template_path in template_paths:
         source_base = (
-            source_root / "src/public/templates"
+            source_root / "src/uniquode/templates"
             if template_path.startswith("public/")
-            else source_root / "src/web_core/templates"
+            else source_root / "src/wevra/web/templates"
         )
         source = source_base / template_path
         destination = template_root / template_path
@@ -777,7 +784,7 @@ def test_validate_command_reports_missing_theme_tokens(tmp_path, capsys) -> None
         "identity/pages/verify.html",
     )
     for template_path in identity_template_paths:
-        source = source_root / "src/auth_ext/templates" / template_path
+        source = source_root / "src/wevra/auth/templates" / template_path
         destination = template_root / template_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(source.read_text())
