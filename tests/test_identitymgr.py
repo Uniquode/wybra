@@ -5,17 +5,19 @@ import json
 import logging
 import sqlite3
 import sys
+import tempfile
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from textwrap import dedent
 from time import time
 from types import SimpleNamespace
 
 import click
 import pytest
 from click.testing import CliRunner
-from fastapi import Request
+from fastapi import FastAPI, Request
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,9 +25,7 @@ from sqlalchemy.exc import SQLAlchemyError
 import wevra.auth.admin.management as identity_management
 import wevra.auth.cli.identitymgr as identitymgr
 import wevra.auth.sessions as identity_sessions
-import wevra.tools.migrate as migrate_module
-from uniquode.app import create_app
-from uniquode.settings import SQLITE_MEMORY_DATABASE_URL, Settings
+import wevra.db.migrate as migrate_module
 from wevra.auth import ERROR_INACTIVE_USER
 from wevra.auth.accounts.manager import create_user_manager
 from wevra.auth.accounts.schemas import UserCreate
@@ -42,12 +42,14 @@ from wevra.auth.models import (
 from wevra.auth.options import IdentityOptions
 from wevra.auth.persistence import create_database_strategy
 from wevra.auth.persistence.database import (
+    SQLITE_MEMORY_DATABASE_URL,
     parse_sqlite_database_url,
     resolve_database_url,
 )
 from wevra.auth.settings import load_auth_settings
 from wevra.db.persistence import (
     close_database,
+    create_database,
     create_database_engine,
     create_session_factory,
     session_scope,
@@ -55,6 +57,24 @@ from wevra.db.persistence import (
 
 STRONG_TEST_PASSWORD = "Correct horse 42!"
 UPDATED_STRONG_TEST_PASSWORD = "New correct horse 42!"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthTestSettings:
+    database_url: str
+    identity_options: IdentityOptions = field(default_factory=IdentityOptions)
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationTestSettings:
+    database_url: str
+    alembic_config: Path
+    migrations_root: Path | None = None
+    app_config: None = None
+
+    @property
+    def modules(self) -> tuple[str, ...]:
+        return ("wevra.auth",)
 
 
 @dataclass(slots=True)
@@ -95,6 +115,89 @@ def sqlite_file_url(path: Path) -> str:
     return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
 
 
+def create_auth_test_app(
+    *,
+    database_url: str = SQLITE_MEMORY_DATABASE_URL,
+    identity_options: IdentityOptions | None = None,
+) -> FastAPI:
+    options = identity_options or IdentityOptions()
+    settings = AuthTestSettings(database_url=database_url, identity_options=options)
+    app = FastAPI()
+    app.state.settings = settings
+    app.state.identity_options = options
+    app.state.database = create_database(settings)
+    return app
+
+
+def run_auth_migration(argv: list[str]) -> int:
+    alembic_config = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        suffix=".ini",
+        delete=False,
+    )
+    alembic_config.write(
+        dedent(
+            """
+        [alembic]
+
+        [loggers]
+        keys = root,sqlalchemy,alembic
+
+        [handlers]
+        keys = console
+
+        [formatters]
+        keys = generic
+
+        [logger_root]
+        level = WARNING
+        handlers = console
+        qualname =
+
+        [logger_sqlalchemy]
+        level = WARNING
+        handlers =
+        qualname = sqlalchemy.engine
+
+        [logger_alembic]
+        level = INFO
+        handlers =
+        qualname = alembic
+
+        [handler_console]
+        class = StreamHandler
+        args = (sys.stderr,)
+        level = NOTSET
+        formatter = generic
+
+        [formatter_generic]
+        format = %(levelname)-5.5s [%(name)s] %(message)s
+        datefmt = %H:%M:%S
+        """
+        )
+    )
+    alembic_config.close()
+    alembic_config_path = Path(alembic_config.name)
+
+    def load_settings(database_url: str | None) -> MigrationTestSettings:
+        if database_url is None:
+            raise migrate_module.MigrationConfigurationError(
+                "Test database URL is required."
+            )
+
+        return MigrationTestSettings(
+            database_url=database_url,
+            alembic_config=alembic_config_path,
+        )
+
+    try:
+        command = migrate_module.create_migrate_command(load_settings)
+        return migrate_module.run_migrate_command(command, argv)
+    finally:
+        alembic_config_path.unlink(missing_ok=True)
+
+
 def write_auth_toml(
     tmp_path: Path,
     *auth_lines: str,
@@ -109,7 +212,7 @@ def write_auth_toml(
 
 
 def initialise_identity_database(database_url: str) -> None:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
 
     async def initialise() -> None:
@@ -139,7 +242,7 @@ def initialise_legacy_identity_database(database_path: Path) -> None:
 
 
 def identity_users_from_database(database_url: str) -> list[User]:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -154,7 +257,7 @@ def identity_users_from_database(database_url: str) -> list[User]:
 
 
 def identity_user_from_database(database_url: str, email: str) -> User | None:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -173,7 +276,7 @@ def identity_user_from_database(database_url: str, email: str) -> User | None:
 def access_tokens_from_database(database_url: str) -> list[str]:
     from wevra.auth.models import AccessToken
 
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -193,7 +296,7 @@ def access_tokens_from_database(database_url: str) -> list[str]:
 
 
 def scopes_from_database(database_url: str) -> list[Scope]:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -208,7 +311,7 @@ def scopes_from_database(database_url: str) -> list[Scope]:
 
 
 def group_from_database(database_url: str, abbrev: str) -> Group:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -225,7 +328,7 @@ def group_from_database(database_url: str, abbrev: str) -> Group:
 
 
 def group_scopes_from_database(database_url: str, abbrev: str) -> list[str]:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -251,7 +354,7 @@ def group_scopes_from_database(database_url: str, abbrev: str) -> list[str]:
 
 
 def user_group_abbrevs_from_database(database_url: str, email: str) -> list[str]:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -279,7 +382,7 @@ def user_group_abbrevs_from_database(database_url: str, email: str) -> list[str]
 
 
 def create_session_token_for_user(database_url: str, email: str) -> str:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -298,7 +401,7 @@ def create_session_token_for_user(database_url: str, email: str) -> str:
 
 
 def update_user_fields(database_url: str, email: str, **values: object) -> None:
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -829,7 +932,7 @@ def test_user_model_updates_modified_at_on_orm_update() -> None:
 
 
 def test_user_management_metadata_defaults() -> None:
-    settings = Settings(database_url=SQLITE_MEMORY_DATABASE_URL)
+    settings = AuthTestSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
@@ -877,7 +980,7 @@ def test_migrate_upgrade_creates_user_management_metadata_columns(
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{(tmp_path / 'metadata.sqlite3').as_posix()}"
 
-    exit_code = migrate_module.main(["--database-url", database_url, "upgrade"])
+    exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
 
     assert exit_code == 0
 
@@ -917,7 +1020,7 @@ def test_migrate_upgrade_creates_authorisation_group_tables(
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{(tmp_path / 'groups.sqlite3').as_posix()}"
 
-    exit_code = migrate_module.main(["--database-url", database_url, "upgrade"])
+    exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
 
     assert exit_code == 0
 
@@ -1022,7 +1125,7 @@ def test_identitymgr_reports_missing_group_tables_before_reading_password(
     database_path = tmp_path / "users-only.sqlite3"
     database_url = sqlite_file_url(database_path)
     assert (
-        migrate_module.main(["--database-url", database_url, "upgrade", "b7f8c3b4b2a1"])
+        run_auth_migration(["--database-url", database_url, "upgrade", "b7f8c3b4b2a1"])
         == 0
     )
     monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
@@ -1168,12 +1271,7 @@ def test_identitymgr_reports_schema_inspection_error_without_leaking_context(
 
 
 def test_authentication_finalisation_updates_last_login_timestamp() -> None:
-    web_app = create_app(
-        Settings(
-            database_url=SQLITE_MEMORY_DATABASE_URL,
-            identity_options=IdentityOptions(),
-        )
-    )
+    web_app = create_auth_test_app()
 
     async def assert_last_login_update() -> None:
         async with web_app.state.database.engine.begin() as connection:
@@ -1213,12 +1311,7 @@ def test_authentication_finalisation_updates_last_login_timestamp() -> None:
 
 
 def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
-    web_app = create_app(
-        Settings(
-            database_url=SQLITE_MEMORY_DATABASE_URL,
-            identity_options=IdentityOptions(),
-        )
-    )
+    web_app = create_auth_test_app()
 
     async def assert_expired_user_rejected() -> None:
         async with web_app.state.database.engine.begin() as connection:
@@ -1259,12 +1352,7 @@ def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
 
 
 def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
-    web_app = create_app(
-        Settings(
-            database_url=SQLITE_MEMORY_DATABASE_URL,
-            identity_options=IdentityOptions(),
-        )
-    )
+    web_app = create_auth_test_app()
 
     async def assert_inactive_user_rejected() -> None:
         async with web_app.state.database.engine.begin() as connection:
@@ -1317,7 +1405,7 @@ def test_is_user_effectively_active_uses_exclusive_expiry_boundary() -> None:
 
 
 def test_request_verification_records_email_verification_sent_timestamp() -> None:
-    web_app = create_app(Settings(database_url=SQLITE_MEMORY_DATABASE_URL))
+    web_app = create_auth_test_app()
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def seed_user() -> None:
@@ -1360,7 +1448,7 @@ def test_request_verification_records_email_verification_sent_timestamp() -> Non
 
 
 def test_request_verification_commits_timestamp_before_delivery() -> None:
-    web_app = create_app(Settings(database_url=SQLITE_MEMORY_DATABASE_URL))
+    web_app = create_auth_test_app()
     delivery = TimestampVisibleVerificationDelivery(
         session_factory=web_app.state.database.session_factory,
         verification_tokens=[],
@@ -1403,7 +1491,7 @@ def test_request_verification_commits_timestamp_before_delivery() -> None:
 
 
 def test_request_verification_ignores_missing_users_without_modifying_rows() -> None:
-    web_app = create_app(Settings(database_url=SQLITE_MEMORY_DATABASE_URL))
+    web_app = create_auth_test_app()
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_missing_user_is_ignored() -> None:
@@ -1437,7 +1525,7 @@ def test_request_verification_does_not_overwrite_ineligible_user_timestamp(
     field_name: str,
     field_value: object,
 ) -> None:
-    web_app = create_app(Settings(database_url=SQLITE_MEMORY_DATABASE_URL))
+    web_app = create_auth_test_app()
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_ineligible_user_timestamp_is_preserved() -> None:
@@ -2787,7 +2875,7 @@ def test_identitymgr_email_domain_order_rejects_unsupported_dialect(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "email-domain-unsupported.sqlite3")
     initialise_identity_database(database_url)
-    settings = Settings(database_url=database_url)
+    settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
     monkeypatch.setattr(

@@ -111,8 +111,8 @@ def test_wevra_web_package_is_independent_from_application_and_auth_modules() ->
             if isinstance(node, ast.ImportFrom) and node.module is not None
         }
         assert not any(
-            module == "uniquode"
-            or module.startswith("uniquode.")
+            module == "host_app"
+            or module.startswith("host_app.")
             or module == "wevra.auth"
             or module.startswith("wevra.auth.")
             for module in imported_modules
@@ -137,9 +137,9 @@ def test_wevra_web_composition_loader_is_cli_safe() -> None:
         "wevra.auth",
         "fastapi",
         "jinja2",
-        "uniquode.app",
-        "uniquode.routes",
-        "uniquode.settings",
+        "host_app.app",
+        "host_app.routes",
+        "host_app.settings",
     }
     assert not any(
         module == forbidden_module or module.startswith(f"{forbidden_module}.")
@@ -287,9 +287,9 @@ def test_module_routes_default_to_empty_web_contributions() -> None:
 
 
 def test_module_surface_default_to_empty_optional_contributions() -> None:
-    surface = ModuleSurface(module_name="uniquode")
+    surface = ModuleSurface(module_name="host_app")
 
-    assert surface.module_name == "uniquode"
+    assert surface.module_name == "host_app"
     assert surface.routes == ModuleRoutes()
     assert surface.template_sources == ()
     assert surface.static_sources == ()
@@ -467,14 +467,50 @@ def test_load_module_routes_reads_configured_route_surfaces_in_order(
     )
 
 
-def test_configured_module_routes_and_registration_are_wevra_web_concerns() -> None:
+def test_configured_module_routes_and_registration_are_wevra_web_concerns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_name = "route_host_app"
+    package_root = tmp_path / module_name
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi.responses import Response
+            from wevra.web.routes import HtmlRouteDefinition, ModuleRoutes
+
+            class View:
+                async def render(self, request, renderer):
+                    del request, renderer
+                    return Response()
+
+            module_routes = ModuleRoutes(
+                page_routes=(
+                    HtmlRouteDefinition(
+                        path="/",
+                        name="public:home",
+                        methods=("GET",),
+                        surface="page",
+                        view=View(),
+                    ),
+                ),
+            )
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
     class Settings:
-        modules = ("uniquode",)
+        modules = (module_name,)
         app_config = AppConfig(
             config_path=Path("app.toml"),
             project_root=Path.cwd(),
             modules=modules,
-            routes=RouteOptions(prefixes={"uniquode": "/site"}),
+            routes=RouteOptions(prefixes={module_name: "/site"}),
             templates=TemplateOptions(auto_reload=True, cache_size=0),
             static=StaticOptions(url_path="/static/", export_root=Path("static")),
         )
@@ -492,7 +528,7 @@ def test_configured_module_routes_and_registration_are_wevra_web_concerns() -> N
 
     register_module_routes(app, dispatcher, route_set)  # type: ignore[arg-type]
 
-    assert route_prefixes_from_app_config(Settings.app_config) == {"uniquode": "/site"}
+    assert route_prefixes_from_app_config(Settings.app_config) == {module_name: "/site"}
     assert tuple(route.name for route in dispatcher.registered_routes) == (
         "public:home",
     )
@@ -964,7 +1000,7 @@ def test_load_app_config_reads_modules_from_app_toml(
     config_path = tmp_path / "app.toml"
     config_path.write_text(
         """
-        modules = ["uniquode", "wevra.auth"]
+        modules = ["host_app", "wevra.auth"]
 
         [routes]
         "wevra.auth" = "/"
@@ -984,7 +1020,7 @@ def test_load_app_config_reads_modules_from_app_toml(
 
     assert isinstance(config, AppConfig)
     assert config.config_path == config_path.resolve()
-    assert config.modules == ("uniquode", "wevra.auth")
+    assert config.modules == ("host_app", "wevra.auth")
     assert config.routes == RouteOptions(
         prefixes={"wevra.auth": "/"},
     )
@@ -1011,17 +1047,17 @@ def test_load_app_config_modules_uses_defaults_when_app_toml_is_absent(
 ) -> None:
     modules = load_app_config_modules(
         project_root=tmp_path,
-        default_modules=("uniquode", "wevra.web"),
+        default_modules=("host_app", "wevra.web"),
     )
 
-    assert modules == ("uniquode", "wevra.web")
+    assert modules == ("host_app", "wevra.web")
 
 
 def test_load_app_config_allows_reserved_auth_table(tmp_path: Path) -> None:
     config_path = tmp_path / "app.toml"
     config_path.write_text(
         """
-        modules = ["uniquode"]
+        modules = ["host_app"]
 
         [templates]
         auto_reload = true
@@ -1039,26 +1075,19 @@ def test_load_app_config_allows_reserved_auth_table(tmp_path: Path) -> None:
     config = load_app_config(project_root=tmp_path)
 
     assert config.config_path == config_path.resolve()
-    assert config.modules == ("uniquode",)
+    assert config.modules == ("host_app",)
     assert config.static.export_root == Path("static")
     assert not hasattr(config, "auth")
 
 
-def test_repository_app_toml_preserves_current_default_modules() -> None:
+def test_framework_repository_does_not_ship_host_app_config() -> None:
     project_root = Path(__file__).resolve().parents[1]
 
-    config = load_app_config(project_root=project_root)
-
-    assert config.modules == ("uniquode", "wevra.web", "wevra.auth")
-    assert config.routes == RouteOptions(prefixes={"wevra.auth": "/"})
-    assert config.templates == TemplateOptions(
-        auto_reload=True,
-        cache_size=0,
-    )
-    assert config.static == StaticOptions(
-        url_path="/static/",
-        export_root=Path("static"),
-    )
+    assert not (project_root / "app.toml").exists()
+    assert load_app_config_modules(
+        project_root=project_root,
+        default_modules=("wevra.web",),
+    ) == ("wevra.web",)
 
 
 def test_load_app_config_uses_app_config_environment_override(
@@ -1068,7 +1097,7 @@ def test_load_app_config_uses_app_config_environment_override(
     config_path.parent.mkdir()
     config_path.write_text(
         """
-        modules = ["uniquode"]
+        modules = ["host_app"]
 
         [templates]
         auto_reload = true
@@ -1087,7 +1116,7 @@ def test_load_app_config_uses_app_config_environment_override(
     )
 
     assert config.config_path == config_path.resolve()
-    assert config.modules == ("uniquode",)
+    assert config.modules == ("host_app",)
 
 
 def test_load_app_config_explicit_path_overrides_app_config_environment(
@@ -1111,7 +1140,7 @@ def test_load_app_config_explicit_path_overrides_app_config_environment(
     )
     explicit_config_path.write_text(
         """
-        modules = ["uniquode"]
+        modules = ["host_app"]
 
         [templates]
         auto_reload = true
@@ -1131,4 +1160,4 @@ def test_load_app_config_explicit_path_overrides_app_config_environment(
     )
 
     assert config.config_path == explicit_config_path.resolve()
-    assert config.modules == ("uniquode",)
+    assert config.modules == ("host_app",)

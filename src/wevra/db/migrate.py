@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable, Sequence
+from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -21,6 +23,7 @@ from wevra.db.surfaces import (
 
 DEFAULT_DATABASE_URL_CONFIG_KEY = "default_database_url"
 DEFAULT_MODULES_CONFIG_KEY = "default_modules"
+DEFAULT_MIGRATIONS_SCRIPT_LOCATION = "wevra.db:migrations"
 
 DATABASE_URL_HELP = (
     "Override the configured SQLAlchemy async database URL for this migration command."
@@ -37,7 +40,7 @@ class MigrationSettings(Protocol):
 
     database_url: str
     alembic_config: Path
-    migrations_root: Path
+    migrations_root: Path | None
     app_config: AppConfig | None
 
     @property
@@ -195,7 +198,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def build_alembic_config(settings: MigrationSettings) -> Config:
     config = Config(str(settings.alembic_config))
-    config.set_main_option("script_location", settings.migrations_root.as_posix())
+    config.set_main_option(
+        "script_location",
+        migration_script_location(settings.migrations_root),
+    )
     version_locations = migration_version_locations_from_modules(settings.modules)
     if version_locations:
         config.set_main_option("version_path_separator", "os")
@@ -217,6 +223,20 @@ def build_alembic_config(settings: MigrationSettings) -> Config:
     if settings.app_config is not None:
         config.set_main_option("app_config", settings.app_config.config_path.as_posix())
     return config
+
+
+def migration_script_location(migrations_root: Path | None = None) -> str:
+    if migrations_root is None:
+        return DEFAULT_MIGRATIONS_SCRIPT_LOCATION
+
+    return migrations_root.as_posix()
+
+
+def migration_script_root(migrations_root: Path | None = None) -> Path | Traversable:
+    if migrations_root is None:
+        return resources.files("wevra.db") / "migrations"
+
+    return migrations_root
 
 
 def _alembic_config_value(value: str) -> str:

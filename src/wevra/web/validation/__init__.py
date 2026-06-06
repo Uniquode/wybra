@@ -32,13 +32,13 @@ ResourceForValidation = Traversable | Path
 class WebValidationSettings(Protocol):
     """Settings shape required by reusable web validation.
 
-    This extends the route-composition shape with template/static roots and
-    renderer policy. Concrete applications may expose these fields through a
-    dataclass, settings object, or test double.
+    This extends the route-composition shape with optional filesystem override
+    roots and renderer policy. Concrete applications may expose these fields
+    through a dataclass, settings object, or test double.
     """
 
-    template_root: Path
-    static_root: Path
+    template_root: Path | None
+    static_root: Path | None
     static_url_path: str
     template_auto_reload: bool | None
     template_cache_size: int
@@ -78,21 +78,24 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
     errors: list[str] = []
     checks: list[ValidationCheck] = []
 
-    record_check(
-        checks,
-        errors,
-        passed=settings.template_root.is_dir(),
-        description=f"template root exists: {settings.template_root}",
-        error=f"Missing template root: {settings.template_root}",
-    )
-
-    if _uses_filesystem_static_root(settings):
+    if _uses_filesystem_template_root(settings):
+        template_root = settings.template_root
         record_check(
             checks,
             errors,
-            passed=settings.static_root.is_dir(),
-            description=f"static root exists: {settings.static_root}",
-            error=f"Missing static root: {settings.static_root}",
+            passed=template_root is not None and template_root.is_dir(),
+            description=f"template root exists: {template_root}",
+            error=f"Missing template root: {template_root}",
+        )
+
+    if _uses_filesystem_static_root(settings):
+        static_root = settings.static_root
+        record_check(
+            checks,
+            errors,
+            passed=static_root is not None and static_root.is_dir(),
+            description=f"static root exists: {static_root}",
+            error=f"Missing static root: {static_root}",
         )
 
     record_check(
@@ -159,7 +162,7 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
         description="module routes compose",
     )
     template_sources = _template_sources(settings)
-    renderer = _template_renderer(settings, template_sources)
+    renderer: TemplateRenderer | None = None
 
     route_definitions = tuple(route_set.page_routes) + tuple(route_set.partial_routes)
     for definition in route_definitions:
@@ -204,6 +207,8 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
             )
 
         try:
+            if renderer is None:
+                renderer = _template_renderer(settings, template_sources)
             renderer.environment.get_template(template_name)
         except Exception as exc:  # pragma: no cover - defensive guard
             record_check(
@@ -277,9 +282,6 @@ def _contains_post_form(template_content: str) -> bool:
 def _template_sources(
     settings: WebValidationSettings,
 ) -> tuple[PackageResourceSource, ...]:
-    if _uses_filesystem_template_root(settings):
-        return ()
-
     return template_sources_from_modules(settings.modules)
 
 
@@ -287,14 +289,14 @@ def _template_renderer(
     settings: WebValidationSettings,
     template_sources: tuple[PackageResourceSource, ...],
 ) -> TemplateRenderer:
-    if template_sources:
-        return TemplateRenderer(
-            template_sources=template_sources,
-            auto_reload=settings.template_auto_reload,
-            cache_size=settings.template_cache_size,
-        )
-
-    return TemplateRenderer(settings.template_root)
+    return TemplateRenderer(
+        template_root=(
+            settings.template_root if _uses_filesystem_template_root(settings) else None
+        ),
+        template_sources=template_sources,
+        auto_reload=settings.template_auto_reload,
+        cache_size=settings.template_cache_size,
+    )
 
 
 def _template_resource(
@@ -302,11 +304,12 @@ def _template_resource(
     template_sources: tuple[PackageResourceSource, ...],
     template_name: str,
 ) -> ResourceForValidation | None:
-    if template_sources:
-        return first_existing_resource(template_sources, template_name)
+    if _uses_filesystem_template_root(settings) and settings.template_root is not None:
+        template_path = settings.template_root / template_name
+        if template_path.is_file():
+            return template_path
 
-    template_path = settings.template_root / template_name
-    return template_path if template_path.is_file() else None
+    return first_existing_resource(template_sources, template_name)
 
 
 def _static_sources(
@@ -326,6 +329,9 @@ def _static_resource(
     if static_sources:
         return first_existing_resource(static_sources, asset)
     if not _uses_filesystem_static_root(settings):
+        return None
+
+    if settings.static_root is None:
         return None
 
     asset_path = settings.static_root / asset
@@ -368,14 +374,14 @@ def _read_resource_content(
 
 
 def _template_location(settings: WebValidationSettings, template_name: str) -> str:
-    if _uses_filesystem_template_root(settings):
+    if _uses_filesystem_template_root(settings) and settings.template_root is not None:
         return str(settings.template_root / template_name)
 
     return template_name
 
 
 def _static_location(settings: WebValidationSettings, asset: str) -> str:
-    if _uses_filesystem_static_root(settings):
+    if _uses_filesystem_static_root(settings) and settings.static_root is not None:
         return str(settings.static_root / asset)
 
     return asset

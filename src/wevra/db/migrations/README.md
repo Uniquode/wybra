@@ -1,4 +1,4 @@
-# Data Core Migration Environment
+# Wevra DB Migration Environment
 
 Generic Alembic environment files for the project migration command live here.
 Host applications inject their settings through the command adapter and Alembic
@@ -13,11 +13,8 @@ Alembic migration graph.
 
 ## Local Development
 
-The default development database is the project-root SQLite file
-`uniquode.sqlite3`, supplied by this repository's Alembic configuration. It is
-ignored by Git.
-
-Initialise or update the local schema with:
+Host projects supply the concrete database URL and configured module list.
+Initialise or update a host schema with:
 
 ```sh
 uv run migrate upgrade

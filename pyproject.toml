@@ -1,9 +1,10 @@
 [project]
-name = "uniquode"
+name = "wevra"
 version = "0.1.0"
-description = "FastAPI based website for uniquode.io"
+description = "Reusable async FastAPI web, database, tooling, and auth framework components"
+readme = "README.md"
 authors = [
-    { name = "David Nugent", email = "davidn@uniquode.io" }
+    { name = "David Nugent" }
 ]
 requires-python = ">=3.13"
 dependencies = [
@@ -17,30 +18,22 @@ dependencies = [
     "fastapi>=0.136.3",
     "fastapi-users[sqlalchemy]>=15.0.5",
     "jinja2>=3.1.6",
+    "pydantic>=2.12.5",
+    "pyjwt>=2.10.1",
     "sqlalchemy[asyncio]>=2.0.50",
+    "starlette>=0.50.0",
     "uvicorn>=0.48.0",
 ]
 
 [project.scripts]
-migrate = "wevra.tools.migrate:main"
-runserver = "wevra.tools.runserver:main"
 identitymgr = "wevra.auth.cli.identitymgr:main"
-validate = "wevra.tools.validate:main"
 
 [build-system]
 requires = ["uv_build>=0.11.18,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = ["uniquode", "wevra"]
-
-[tool.wevra]
-settings_loader = "uniquode.settings:load_settings"
-configuration_error = "uniquode.configuration:ConfigurationError"
-environment_loader = "uniquode.environment:load_environment"
-database_url_env = "DATABASE_URL"
-runserver_reload_env = "APP_RELOAD"
-runserver_app = "uniquode.asgi:app"
+module-name = ["wevra"]
 
 [dependency-groups]
 dev = [

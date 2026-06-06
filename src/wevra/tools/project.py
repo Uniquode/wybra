@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any
 
 
-def runtime_project_root() -> Path:
-    for candidate in Path(__file__).resolve().parents:
+def runtime_project_root(start: Path | None = None) -> Path:
+    root = (start or Path.cwd()).resolve()
+    for candidate in (root, *root.parents):
         if (candidate / "pyproject.toml").is_file():
             return candidate
 
-    return Path.cwd()
+    return root
 
 
 class ProjectToolConfigurationError(ValueError):

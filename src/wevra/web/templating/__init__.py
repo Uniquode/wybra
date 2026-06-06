@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jinja2 import BaseLoader, ChoiceLoader, FileSystemLoader, PackageLoader
+from jinja2 import BaseLoader, ChoiceLoader, DictLoader, FileSystemLoader, PackageLoader
 
 from wevra.core.resources import PackageResourceSource
 
@@ -22,7 +22,7 @@ def build_template_loader(
         PackageLoader(source.package, source.directory) for source in template_sources
     )
     if not loaders:
-        raise ValueError("At least one template source is required.")
+        return DictLoader({})
 
     if len(loaders) == 1:
         return loaders[0]

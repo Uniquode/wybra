@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from importlib.resources.abc import Traversable
 from pathlib import Path
 
 
@@ -35,7 +36,7 @@ def record_check(
 
 
 def read_text_for_validation(
-    path: Path,
+    path: Path | Traversable,
     checks: list[ValidationCheck],
     errors: list[str],
     *,

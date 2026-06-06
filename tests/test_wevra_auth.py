@@ -106,7 +106,8 @@ def test_wevra_auth_package_is_independent_from_application_modules() -> None:
     source_root = Path(__file__).resolve().parents[1] / "src"
 
     for package_name in ("wevra.auth",):
-        for path in (source_root / package_name).rglob("*.py"):
+        package_root = source_root.joinpath(*package_name.split("."))
+        for path in package_root.rglob("*.py"):
             tree = ast.parse(path.read_text(), filename=str(path))
             imported_modules = {
                 alias.name
@@ -119,7 +120,7 @@ def test_wevra_auth_package_is_independent_from_application_modules() -> None:
                 if isinstance(node, ast.ImportFrom) and node.module is not None
             }
             assert not any(
-                module == "uniquode" or module.startswith("uniquode.")
+                module == "host_app" or module.startswith("host_app.")
                 for module in imported_modules
             )
 

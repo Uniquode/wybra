@@ -1,12 +1,16 @@
 import ast
 import importlib
-import importlib.util
 import tomllib
 from pathlib import Path
 
 import pytest
 from sqlalchemy import MetaData
 
+from wevra.db.migrate import (
+    DEFAULT_MIGRATIONS_SCRIPT_LOCATION,
+    migration_script_location,
+    migration_script_root,
+)
 from wevra.db.models import Base, metadata
 from wevra.db.surfaces import (
     DataCompositionError,
@@ -47,7 +51,7 @@ def test_wevra_db_package_imports() -> None:
 
 def test_wevra_db_modules_do_not_import_application_or_auth_packages() -> None:
     project_root = Path(__file__).resolve().parents[1]
-    forbidden_modules = ("wevra.auth", "uniquode")
+    forbidden_modules = ("wevra.auth", "host_app")
     wevra_db_files = sorted((project_root / "src/wevra/db").rglob("*.py"))
 
     assert wevra_db_files
@@ -83,8 +87,15 @@ def test_wevra_db_owns_database_url_helpers(tmp_path: Path) -> None:
         redact_database_url("postgresql+asyncpg://user:password@host.example/app")
         == "postgresql+asyncpg://***:***@host.example/app"
     )
-    assert importlib.util.find_spec("uniquode.database_urls") is None
-    assert importlib.util.find_spec("uniquode.persistence") is None
+
+
+def test_wevra_db_owns_default_migration_script_location() -> None:
+    script_root = migration_script_root()
+
+    assert migration_script_location() == DEFAULT_MIGRATIONS_SCRIPT_LOCATION
+    assert script_root.is_dir()
+    assert script_root.joinpath("env.py").is_file()
+    assert script_root.joinpath("script.py.mako").is_file()
 
 
 def test_redact_database_url_masks_sensitive_query_parameters() -> None:
@@ -101,14 +112,23 @@ def test_redact_database_url_masks_sensitive_query_parameters() -> None:
     ) == ("postgresql+asyncpg://host.example/app?api_key=%2A%2A%2A&sslmode=require")
 
 
-def test_migration_version_locations_are_discovered_from_configured_modules() -> None:
+def test_migration_version_locations_are_discovered_from_configured_modules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "host_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
     version_locations = migration_version_locations_from_modules(
-        ("uniquode", "wevra.auth")
+        ("host_app", "wevra.auth")
     )
 
     assert len(version_locations) == 1
     assert version_locations[0].as_posix().endswith("wevra/auth/migrations/versions")
-    assert discover_migration_version_locations("uniquode") == ()
+    assert discover_migration_version_locations("host_app") == ()
 
 
 def test_model_packages_from_modules_uses_conventional_models_surface(

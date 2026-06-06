@@ -15,7 +15,7 @@ FORBIDDEN_TEXT_TOKENS = (
     "src/public",
     "src/tools",
 )
-LIVE_TEXT_FILE_NAMES = ("README.md", "app.toml", "alembic.ini", "pyproject.toml")
+LIVE_TEXT_FILE_NAMES = ("README.md", "pyproject.toml")
 
 
 def _python_files(project_root: Path) -> tuple[Path, ...]:
@@ -32,22 +32,6 @@ def _live_text_files(project_root: Path) -> tuple[Path, ...]:
         for file_name in LIVE_TEXT_FILE_NAMES
         if (path := project_root / file_name).is_file()
     )
-
-
-def _live_openspec_text_files(project_root: Path) -> tuple[Path, ...]:
-    specs_root = project_root / "openspec" / "specs"
-    changes_root = project_root / "openspec" / "changes"
-    files: list[Path] = []
-    if specs_root.is_dir():
-        files.extend(path for path in specs_root.rglob("*.md") if path.is_file())
-    if changes_root.is_dir():
-        files.extend(
-            path
-            for path in changes_root.rglob("*.md")
-            if path.is_file()
-            and path.relative_to(changes_root).parts[:1] != ("archive",)
-        )
-    return tuple(files)
 
 
 def test_live_python_imports_do_not_reference_old_reusable_package_roots() -> None:
@@ -78,18 +62,6 @@ def test_live_project_metadata_does_not_reference_old_reusable_package_names() -
     project_root = Path(__file__).resolve().parents[1]
     offenders: list[str] = []
     for path in _live_text_files(project_root):
-        content = path.read_text(encoding="utf-8")
-        for token in FORBIDDEN_TEXT_TOKENS:
-            if token in content:
-                offenders.append(f"{path.relative_to(project_root)} contains {token!r}")
-
-    assert offenders == []
-
-
-def test_live_openspec_docs_do_not_reference_old_reusable_package_names() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    offenders: list[str] = []
-    for path in _live_openspec_text_files(project_root):
         content = path.read_text(encoding="utf-8")
         for token in FORBIDDEN_TEXT_TOKENS:
             if token in content:

@@ -25,6 +25,7 @@ ACCOUNT_CREATION_POLICY_ERROR: Final = (
 )
 
 _GENERATE_LOCAL_SECRET = "__generate-local-identity-secret__"
+DEFAULT_SESSION_COOKIE_NAME: Final = "wevra_session"
 
 
 def is_generate_local_identity_secret(value: str) -> bool:
@@ -34,7 +35,7 @@ def is_generate_local_identity_secret(value: str) -> bool:
 @dataclass(frozen=True, slots=True)
 class IdentityOptions:
     account_creation_policy: AccountCreationPolicy = "admin-created"
-    session_cookie_name: str = "uniquode_session"
+    session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
     # Force secure cookies for static transports that cannot inspect a request.
     # Defaults to False so ordinary HTTP development remains possible; host
     # applications should require True for non-local deployments.

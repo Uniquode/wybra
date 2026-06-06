@@ -1,23 +1,21 @@
 import ast
+from dataclasses import dataclass
 from pathlib import Path
-from shutil import copytree
 from textwrap import dedent
+from types import SimpleNamespace
 
 import click
 import pytest
-from click.testing import CliRunner
 
-import uniquode.validation.environment as environment_validation
 import wevra.tools.validate as validate_module
-from uniquode.configuration import ConfigurationError
-from uniquode.settings import Settings
-from uniquode.validation.persistence import validate_persistence
+import wevra.web
 from wevra.core.composition import (
     AppConfig,
     RouteOptions,
     StaticOptions,
     TemplateOptions,
 )
+from wevra.tools.project import ProjectToolConfigurationError, runtime_project_root
 from wevra.tools.validate import main as validate_main
 from wevra.tools.validation.core import ValidationResult
 from wevra.tools.validation.registry import (
@@ -25,6 +23,20 @@ from wevra.tools.validation.registry import (
     discover_validation_targets,
 )
 from wevra.web.validation import _contains_post_form, validate_web
+
+
+@dataclass(frozen=True, slots=True)
+class WebSettings:
+    project_root: Path
+    modules: tuple[str, ...]
+    template_root: Path
+    static_root: Path
+    static_url_path: str = "/static/"
+    template_auto_reload: bool | None = None
+    template_cache_size: int = 400
+    app_config: AppConfig | None = None
+    uses_filesystem_template_root: bool = False
+    uses_filesystem_static_root: bool = False
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -68,13 +80,25 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
     )
 
 
-def test_tools_modules_do_not_import_auth_or_runtime_startup() -> None:
+def _web_settings(
+    tmp_path: Path,
+    modules: tuple[str, ...] = ("wevra.web",),
+) -> WebSettings:
+    wevra_web_root = Path(wevra.web.__file__).resolve().parent
+    return WebSettings(
+        project_root=tmp_path,
+        modules=modules,
+        template_root=wevra_web_root / "templates",
+        static_root=wevra_web_root / "static",
+        app_config=_app_config(tmp_path, modules),
+    )
+
+
+def test_tools_modules_do_not_import_auth_or_host_runtime_startup() -> None:
     project_root = Path(__file__).resolve().parents[1]
     forbidden_modules = (
         "wevra.auth",
-        "uniquode.app",
-        "uniquode.asgi",
-        "uniquode.routes",
+        "host_app",
     )
     tools_files = sorted((project_root / "src/wevra/tools").rglob("*.py"))
 
@@ -88,9 +112,9 @@ def test_tools_modules_do_not_import_auth_or_runtime_startup() -> None:
         )
 
 
-def test_tools_validation_modules_do_not_import_application_or_auth_packages() -> None:
+def test_tools_validation_modules_do_not_import_host_or_auth_packages() -> None:
     project_root = Path(__file__).resolve().parents[1]
-    forbidden_modules = ("wevra.auth", "uniquode")
+    forbidden_modules = ("wevra.auth", "host_app")
     validation_files = sorted(
         (project_root / "src/wevra/tools/validation").rglob("*.py")
     )
@@ -105,51 +129,42 @@ def test_tools_validation_modules_do_not_import_application_or_auth_packages() -
         )
 
 
-def test_validate_command_checks_web_foundation(capsys) -> None:
+def test_runtime_project_root_uses_invoking_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "host_project"
+    child = project_root / "src/host_app"
+    child.mkdir(parents=True)
+    (project_root / "pyproject.toml").write_text(
+        '[project]\nname = "host-project"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(child)
+
+    assert runtime_project_root() == project_root.resolve()
+
+
+def test_validate_web_checks_framework_web_foundation(tmp_path: Path) -> None:
+    result = validate_web(_web_settings(tmp_path))
+
+    assert result.is_ok
+    assert result.name == "web"
+    assert any(
+        check.description == "configured module surfaces load: wevra.web"
+        for check in result.checks
+    )
+
+
+def test_validate_command_reports_missing_host_adapter_configuration(capsys) -> None:
     exit_code = validate_main(["web"])
 
     captured = capsys.readouterr()
 
-    assert exit_code == 0
-    assert "web: ok" in captured.out
-
-
-def test_validate_command_checks_persistence_foundation(capsys) -> None:
-    exit_code = validate_main(["persistence"])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "persistence: ok" in captured.out
-
-
-def test_validate_persistence_allows_no_model_composition(tmp_path: Path) -> None:
-    result = validate_persistence(
-        Settings(app_config=_app_config(tmp_path, ("uniquode", "wevra.web")))
-    )
-
-    assert result.is_ok
-    assert "At least one Alembic migration revision is required." not in result.errors
-
-
-def test_validate_command_checks_environment_configuration(capsys) -> None:
-    exit_code = validate_main(["environment"])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "environment: ok" in captured.out
-
-
-def test_validate_command_default_runs_registered_targets(capsys) -> None:
-    exit_code = validate_main([])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "environment: ok" in captured.out
-    assert "web: ok" in captured.out
-    assert "persistence: ok" in captured.out
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "configuration: failed" in captured.err
+    assert "[tool.wevra].settings_loader" in captured.err
 
 
 def test_validate_command_help_returns_cleanly(capsys) -> None:
@@ -161,134 +176,16 @@ def test_validate_command_help_returns_cleanly(capsys) -> None:
     assert captured.err == ""
 
 
-def test_validate_command_verbose_lists_registered_checks(capsys) -> None:
-    exit_code = validate_main(["--verbose"])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "environment: ok" in captured.out
-    assert "web: ok" in captured.out
-    assert "persistence: ok" in captured.out
-    assert "ok: supported environment variable name is valid: APP_ENV" in captured.out
-    assert (
-        "ok: supported environment variable name is valid: APP_RELOAD" in captured.out
-    )
-    assert "ok: supported environment variable names are unique" in captured.out
-    assert "ok: environment loader returns an envex Env instance" in captured.out
-    assert "ok: template root exists:" in captured.out
-    assert (
-        "ok: configured module surfaces load: uniquode, wevra.web, wevra.auth"
-        in captured.out
-    )
-    assert "ok: template context providers validate" in captured.out
-    assert "ok: module routes compose" in captured.out
-    assert "ok: route template exists: public:home -> public/pages/home.html" in (
-        captured.out
-    )
-    assert "ok: route template exists: identity:login -> identity/pages/login.html" in (
-        captured.out
-    )
-    assert "ok: POST form CSRF field exists: identity/pages/login.html" in (
-        captured.out
-    )
-    assert "ok: static asset exists: styles/app.css" in captured.out
-    assert "ok: theme token present: --web-core-colour-page-bg" in captured.out
-    assert "ok: default database URL uses persistent SQLite file:" in captured.out
-    assert "ok: database URL uses supported async SQLAlchemy driver" in captured.out
-    assert "ok: Alembic config exists:" in captured.out
-    assert "ok: Alembic config does not force in-memory SQLite" in captured.out
-    assert "ok: Alembic migration file exists: env.py" in captured.out
-    assert "ok: module migration version locations exist:" in captured.out
-    assert "ok: Alembic migration revision exists" in captured.out
-    assert "ok: Alembic migration creates table: identity_user" in captured.out
-    assert "ok: development database initialisation command is available:" in (
-        captured.out
-    )
-    assert "uv run migrate upgrade" in captured.out
-
-
-def test_validate_environment_verbose_redacts_database_url_password(
-    capsys,
-    monkeypatch,
+def test_validate_command_does_not_mask_unrelated_value_errors(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://user:password@host.example/app",
-    )
-
-    exit_code = validate_main(["environment", "--verbose"])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "postgresql+asyncpg://***:***@host.example/app" in captured.out
-    assert "postgresql+asyncpg://user:password@host.example/app" not in captured.out
-    assert "password" not in captured.out
-
-
-def test_validate_command_reports_invalid_environment_configuration(
-    capsys,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.delenv("CSRF_SECRET", raising=False)
-    monkeypatch.delenv("RESET_SECRET", raising=False)
-    monkeypatch.delenv("VERIFICATION_SECRET", raising=False)
-
-    exit_code = validate_main(["environment"])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert captured.out == ""
-    assert "configuration: failed" in captured.err
-    assert "Non-local deployments must configure identity reset" in captured.err
-
-
-def test_validate_command_does_not_mask_unrelated_value_errors(monkeypatch) -> None:
-    def raise_unrelated_value_error(_args: object) -> Settings:
+    def raise_unrelated_value_error(_args: object) -> object:
         raise ValueError("programmer error")
 
     monkeypatch.setattr(validate_module, "_build_settings", raise_unrelated_value_error)
 
     with pytest.raises(ValueError, match="programmer error"):
-        validate_module.main(["environment"])
-
-
-def test_validate_environment_loader_error_does_not_emit_exception_detail(
-    monkeypatch,
-) -> None:
-    def raise_sensitive_error(**_kwargs: object) -> None:
-        raise ConfigurationError(
-            "Environment loader failed while initialising envex (RuntimeError)."
-        )
-
-    monkeypatch.setattr(
-        environment_validation, "load_environment", raise_sensitive_error
-    )
-
-    result = environment_validation.validate_environment(Settings())
-
-    assert not result.is_ok
-    assert result.errors == (
-        "Environment loader failed while initialising envex (RuntimeError).",
-    )
-    assert "secret" not in "\n".join(result.errors)
-    assert "DATABASE_URL" not in "\n".join(result.errors)
-
-
-def test_validate_environment_reports_wrong_loader_return_type(monkeypatch) -> None:
-    monkeypatch.setattr(
-        environment_validation,
-        "load_environment",
-        lambda **_kwargs: object(),
-    )
-
-    result = environment_validation.validate_environment(Settings())
-
-    assert not result.is_ok
-    assert result.errors == ("Environment loader returned object; expected envex Env.",)
+        validate_module.main(["web"])
 
 
 def test_resolve_targets_raises_domain_error_for_unknown_targets() -> None:
@@ -334,7 +231,7 @@ def test_validation_targets_are_discovered_from_configured_modules(
     )
 
     assert tuple(targets) == ("first", "second")
-    assert isinstance(targets["first"](Settings()), ValidationResult)
+    assert isinstance(targets["first"](object()), ValidationResult)
 
 
 def test_unlisted_module_validation_targets_are_not_discovered(
@@ -393,7 +290,7 @@ def test_malformed_validation_surface_fails_clearly(
 def test_validate_command_runs_discovered_module_targets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _write_validation_module(
         tmp_path,
@@ -411,10 +308,7 @@ def test_validate_command_runs_discovered_module_targets(
     monkeypatch.setattr(
         validate_module,
         "_build_settings",
-        lambda _overrides: Settings(
-            project_root=tmp_path,
-            app_config=_app_config(tmp_path, ("command_validation_module",)),
-        ),
+        lambda _overrides: SimpleNamespace(modules=("command_validation_module",)),
     )
 
     exit_code = validate_main([])
@@ -428,7 +322,7 @@ def test_validate_command_runs_discovered_module_targets(
 def test_validate_command_reports_malformed_validation_surface(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _write_validation_module(
         tmp_path,
@@ -441,9 +335,8 @@ def test_validate_command_reports_malformed_validation_surface(
     monkeypatch.setattr(
         validate_module,
         "_build_settings",
-        lambda _overrides: Settings(
-            project_root=tmp_path,
-            app_config=_app_config(tmp_path, ("command_malformed_validation_module",)),
+        lambda _overrides: SimpleNamespace(
+            modules=("command_malformed_validation_module",),
         ),
     )
 
@@ -456,20 +349,22 @@ def test_validate_command_reports_malformed_validation_surface(
     assert "must expose `validation_targets` as a mapping" in captured.err
 
 
-def test_validate_command_unknown_target_returns_usage_error(capsys) -> None:
+def test_validate_command_unknown_target_returns_usage_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        validate_module,
+        "_build_settings",
+        lambda _overrides: SimpleNamespace(modules=("wevra.web",)),
+    )
+
     exit_code = validate_main(["foo"])
 
     captured = capsys.readouterr()
     assert exit_code == 2
     assert captured.out == ""
     assert "Unknown validation target(s): foo" in captured.err
-
-
-def test_validate_click_command_reports_unknown_target() -> None:
-    result = CliRunner().invoke(validate_module.validate_command, ["foo"])
-
-    assert result.exit_code == 2
-    assert "Unknown validation target(s): foo" in result.output
 
 
 def test_validate_main_treats_falsy_click_exception_as_failure(
@@ -490,320 +385,120 @@ def test_validate_main_treats_falsy_click_exception_as_failure(
     assert "invalid usage" in captured.err
 
 
-def test_validate_command_accepts_normalisable_static_url_path(capsys) -> None:
-    exit_code = validate_main(["web", "--static-url-path", "static"])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "web: ok" in captured.out
-
-
-def test_validate_command_rejects_blank_static_url_path(capsys) -> None:
-    exit_code = validate_main(["web", "--static-url-path", "   "])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert captured.out == ""
-    assert "Static URL path must not be empty." in captured.err
-
-
 def test_validate_web_omitting_wevra_web_does_not_use_default_static_root(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = validate_web(
-        Settings(
-            project_root=tmp_path,
-            app_config=_app_config(tmp_path, ("uniquode",)),
-        )
-    )
+    package_root = tmp_path / "staticless_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = validate_web(_web_settings(tmp_path, ("staticless_app",)))
 
     assert not result.is_ok
     assert "Missing static asset: styles/app.css" in result.errors
 
 
 def test_validate_post_form_detection_accepts_html_attribute_variants() -> None:
-    assert _contains_post_form("<form METHOD='POST' action='/login'>")
-    assert _contains_post_form('<form action="/login" method = "post">')
-    assert _contains_post_form("<form action=/login method=post>")
-    assert _contains_post_form(
-        """
-        <form
-          action="/login"
-          method = " POST "
-        >
-        """
+    assert _contains_post_form('<form method="post"></form>')
+    assert _contains_post_form('<form class="x" method="POST"></form>')
+    assert _contains_post_form('<form method=" post "></form>')
+    assert not _contains_post_form('<form method="get"></form>')
+    assert not _contains_post_form("<form></form>")
+
+
+def test_validate_web_rejects_post_form_missing_csrf_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "csrf_missing_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "missing_csrf.html").write_text(
+        '<form method="post"></form>',
+        encoding="utf-8",
     )
-    assert not _contains_post_form('<form method="get" action="/login">')
-    assert not _contains_post_form('<form method="postish" action="/login">')
-    assert not _contains_post_form('<form data-method="post" action="/login">')
-    assert not _contains_post_form('<form method="post"')
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi.responses import Response
+            from wevra.web.routes import HtmlRouteDefinition, ModuleRoutes
 
+            class View:
+                template_name = "missing_csrf.html"
 
-def test_validate_web_rejects_post_form_missing_csrf_field(tmp_path) -> None:
-    source_root = Path(__file__).resolve().parents[1]
-    template_root = tmp_path / "templates"
-    static_root = tmp_path / "static"
-    copytree(source_root / "src/wevra/web/templates", template_root)
-    copytree(source_root / "src/wevra/web/static", static_root)
-    (template_root / "public/pages").mkdir(parents=True)
-    (template_root / "public/pages/home.html").write_text(
-        (source_root / "src/uniquode/templates/public/pages/home.html").read_text(
-            encoding="utf-8"
+                async def render(self, request, renderer):
+                    del request, renderer
+                    return Response()
+
+            module_routes = ModuleRoutes(
+                page_routes=(
+                    HtmlRouteDefinition(
+                        path="/form",
+                        name="form",
+                        methods=("GET",),
+                        surface="page",
+                        view=View(),
+                    ),
+                ),
+            )
+            """
         ),
         encoding="utf-8",
     )
-    (template_root / "identity/pages").mkdir(parents=True)
-    (template_root / "identity/pages/login.html").write_text(
-        """
-        <form method="post" action="/login">
-          <input name="email" type="email">
-          <button type="submit">Sign in</button>
-        </form>
-        """,
-        encoding="utf-8",
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = validate_web(_web_settings(tmp_path, ("csrf_missing_app", "wevra.web")))
+
+    assert not result.is_ok
+    assert "POST form template must include CSRF field: missing_csrf.html" in (
+        result.errors
     )
 
-    result = validate_web(
-        Settings(
-            template_root=template_root,
-            static_root=static_root,
-        )
-    )
+
+def test_validate_web_rejects_stylesheet_missing_theme_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "theme_contract_app"
+    stylesheet_root = package_root / "static/styles"
+    stylesheet_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (stylesheet_root / "app.css").write_text(":root {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = validate_web(_web_settings(tmp_path, ("theme_contract_app",)))
+
+    assert not result.is_ok
+    assert any("Missing theme token" in error for error in result.errors)
+    assert any("Missing theme selector" in error for error in result.errors)
+
+
+def test_validate_web_reports_missing_configured_module(tmp_path: Path) -> None:
+    result = validate_web(_web_settings(tmp_path, ("missing_validation_app",)))
 
     assert not result.is_ok
     assert any(
-        "POST form template must include CSRF field" in error for error in result.errors
+        "Configured module 'missing_validation_app' could not be imported" in error
+        for error in result.errors
     )
 
 
-def test_validate_web_reports_missing_configured_module(tmp_path) -> None:
-    settings = Settings(
-        project_root=tmp_path,
-        app_config=AppConfig(
-            config_path=tmp_path / "app.toml",
-            project_root=tmp_path,
-            modules=("missing_validation_app",),
-            routes=RouteOptions(prefixes={}),
-            templates=TemplateOptions(auto_reload=True, cache_size=0),
-            static=StaticOptions(url_path="/static/", export_root=Path("static")),
-        ),
-    )
-
-    result = validate_web(settings)
-
-    assert not result.is_ok
-    assert result.errors == (
-        "Configured module surface validation failed: Configured module "
-        "'missing_validation_app' could not be imported.",
-    )
-
-
-def test_validate_command_rejects_unsupported_database_url(capsys) -> None:
-    exit_code = validate_main(["persistence", "--database-url", "sqlite://:memory:"])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert captured.out == ""
-    assert "Database URL must use sqlite+aiosqlite:// or postgresql+asyncpg://" in (
-        captured.err
-    )
-
-
-def test_validate_command_rejects_empty_database_url_override(capsys) -> None:
-    exit_code = validate_main(["persistence", "--database-url", ""])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert captured.out == ""
-    assert "Database URL must not be empty." in captured.err
-
-
-def test_validate_command_verbose_lists_failed_checks(capsys) -> None:
-    exit_code = validate_main(
-        ["persistence", "--verbose", "--database-url", "sqlite://:memory:"]
-    )
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert captured.out == ""
-    assert "persistence: failed" in captured.err
-    assert "ok: database URL is configured: sqlite://:memory:" in captured.err
-    assert "failed: database URL uses supported async SQLAlchemy driver" in (
-        captured.err
-    )
-    assert "Database URL must use sqlite+aiosqlite:// or postgresql+asyncpg://" in (
-        captured.err
-    )
-
-
-def test_validate_command_redacts_database_url_password(capsys) -> None:
-    exit_code = validate_main(
-        [
-            "persistence",
-            "--verbose",
-            "--database-url",
-            "postgresql+asyncpg://user:password@host.example/app",
-        ]
-    )
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "postgresql+asyncpg://***:***@host.example/app" in captured.out
-    assert "postgresql+asyncpg://user:password@host.example/app" not in captured.out
-    assert "password" not in captured.out
-
-
-def test_validate_command_redacts_database_url_username_without_password(
-    capsys,
+def test_validate_command_reports_host_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    exit_code = validate_main(
-        [
-            "persistence",
-            "--verbose",
-            "--database-url",
-            "postgresql+asyncpg://alice@host.example/app",
-        ]
-    )
+    def raise_configuration_error(_overrides: object) -> object:
+        raise ProjectToolConfigurationError("host adapter is invalid")
+
+    monkeypatch.setattr(validate_module, "_build_settings", raise_configuration_error)
+
+    exit_code = validate_main(["web"])
 
     captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "postgresql+asyncpg://***@host.example/app" in captured.out
-    assert "postgresql+asyncpg://alice@host.example/app" not in captured.out
-    assert "alice" not in captured.out
-
-
-def test_validate_command_reports_missing_alembic_structure(tmp_path, capsys) -> None:
-    exit_code = validate_main(
-        [
-            "persistence",
-            "--migrations-root",
-            str(tmp_path / "missing-migrations"),
-            "--alembic-config",
-            str(tmp_path / "missing-alembic.ini"),
-        ]
-    )
-
-    captured = capsys.readouterr()
-
     assert exit_code == 1
     assert captured.out == ""
-    assert "Missing Alembic config" in captured.err
-    assert "Missing Alembic migrations root" in captured.err
-
-
-def test_validate_command_reports_missing_templates(tmp_path, capsys) -> None:
-    settings = Settings(
-        template_root=tmp_path / "templates",
-        static_root=tmp_path / "static",
-    )
-    settings.static_root.mkdir()
-
-    exit_code = validate_main(
-        [
-            "web",
-            "--template-root",
-            str(settings.template_root),
-            "--static-root",
-            str(settings.static_root),
-        ]
-    )
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert captured.out == ""
-    assert "Missing template" in captured.err
-
-
-def test_validate_command_reports_template_decode_errors(tmp_path, capsys) -> None:
-    template_root = tmp_path / "templates"
-    static_root = tmp_path / "static"
-    (template_root / "identity/pages").mkdir(parents=True)
-    static_root.mkdir()
-    (template_root / "identity/pages/login.html").write_bytes(b"\xff")
-
-    exit_code = validate_main(
-        [
-            "web",
-            "--template-root",
-            str(template_root),
-            "--static-root",
-            str(static_root),
-        ]
-    )
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert captured.out == ""
-    assert "Unable to read" in captured.err
-    assert "identity/pages/login.html" in captured.err
-
-
-def test_validate_command_reports_missing_theme_tokens(tmp_path, capsys) -> None:
-    template_root = tmp_path / "templates"
-    static_root = tmp_path / "static"
-    (template_root / "public/pages").mkdir(parents=True)
-    (template_root / "public/partials").mkdir(parents=True)
-    (template_root / "identity/pages").mkdir(parents=True)
-    (template_root / "layouts").mkdir(parents=True)
-    (template_root / "components").mkdir(parents=True)
-    (template_root / "errors").mkdir(parents=True)
-    (static_root / "styles").mkdir(parents=True)
-
-    source_root = Path(__file__).resolve().parents[1]
-    template_paths = (
-        "public/pages/home.html",
-        "layouts/page.html",
-        "components/theme_switcher.html",
-        "components/theme_selector.html",
-        "errors/base.html",
-    )
-    for template_path in template_paths:
-        source_base = (
-            source_root / "src/uniquode/templates"
-            if template_path.startswith("public/")
-            else source_root / "src/wevra/web/templates"
-        )
-        source = source_base / template_path
-        destination = template_root / template_path
-        destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    identity_template_paths = (
-        "identity/pages/account.html",
-        "identity/pages/login.html",
-        "identity/pages/logout.html",
-        "identity/pages/password_reset.html",
-        "identity/pages/signup.html",
-        "identity/pages/verify.html",
-    )
-    for template_path in identity_template_paths:
-        source = source_root / "src/wevra/auth/templates" / template_path
-        destination = template_root / template_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(source.read_text())
-
-    (static_root / "styles/app.css").write_text(":root {}")
-
-    exit_code = validate_main(
-        [
-            "web",
-            "--template-root",
-            str(template_root),
-            "--static-root",
-            str(static_root),
-        ]
-    )
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert captured.out == ""
-    assert "Missing theme token" in captured.err
-    assert "Missing theme selector" in captured.err
+    assert "configuration: failed" in captured.err
+    assert "host adapter is invalid" in captured.err

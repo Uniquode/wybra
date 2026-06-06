@@ -7,6 +7,7 @@ from typing import Literal, cast
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from jinja2.exceptions import TemplateNotFound
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from wevra.web.rendering import TemplateRenderer
@@ -133,22 +134,24 @@ def _build_error_response(
         "status_code": str(presentation.status_code),
     }
 
-    if surface == "partial":
-        response = renderer.render_partial(
-            _error_options(request).partial_template,
-            request,
-            context,
-            status_code=presentation.status_code,
-        )
-        _apply_headers(response, headers)
-        return response
+    try:
+        if surface == "partial":
+            response = renderer.render_partial(
+                _error_options(request).partial_template,
+                request,
+                context,
+                status_code=presentation.status_code,
+            )
+        else:
+            response = renderer.render_page(
+                _error_options(request).page_template,
+                request,
+                context,
+                status_code=presentation.status_code,
+            )
+    except TemplateNotFound:
+        return _fallback_error_response(surface, presentation, headers=headers)
 
-    response = renderer.render_page(
-        _error_options(request).page_template,
-        request,
-        context,
-        status_code=presentation.status_code,
-    )
     _apply_headers(response, headers)
     return response
 
