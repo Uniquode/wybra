@@ -12,9 +12,10 @@ identity support.
 - Jinja2 server-rendered pages with `htmx` used only for progressive
   enhancement.
 - Package-owned static assets and templates under configured modules, including
-  reusable web foundation defaults in `src/web_core/templates/` and
-  `src/web_core/static/`, public page templates in `src/public/templates/`, and
-  identity defaults in `src/auth_ext/templates/`.
+  reusable web foundation defaults in `src/wevra/web/templates/` and
+  `src/wevra/web/static/`, application-owned public page templates in
+  `src/uniquode/templates/`, and identity defaults in
+  `src/wevra/auth/templates/`.
 - SQLAlchemy async persistence with Alembic migrations.
 - Local account support using FastAPI Users, including password sign-in,
   database-backed browser sessions, password reset hooks, and email verification
@@ -51,42 +52,42 @@ Runtime configuration is loaded through `envex`, including local `.env` files.
 such as `APP_ENV`, `APP_NAME`, `CSRF_SECRET`, `CSRF_SECURE`, `RESET_SECRET`,
 `VERIFICATION_SECRET`, `SESSION_COOKIE`, `SESSION_FORCE_SECURE`,
 `SESSION_LIFETIME`, `OAUTH_LINKING`, `ADVANCED_AUTH`, and `APP_RELOAD`.
-`web_core` owns the reusable envex/app.toml settings-loading mechanics, while
+`wevra.core` owns the reusable envex/app.toml settings-loading mechanics, while
 `uniquode.settings` owns this application's concrete settings fields, defaults,
 deployment policy, CSRF policy, and identity policy adapter.
 
 Application composition is loaded from [app.toml](app.toml) in the project root,
 or from the path named by `APP_CONFIG`. This file is the shared source for
 configured modules and web resource defaults used by runtime startup, Alembic,
-validation, and future project tooling. `data_core` discovers model metadata
+validation, and future project tooling. `wevra.db` discovers model metadata
 from `<module>.models` and Alembic version locations from
 `<module>/migrations/versions/` when those surfaces exist; it also owns the
 reusable database URL parsing and async SQLAlchemy engine/session helpers. The
-project `migrate` entry point is a `tools.migrate` adapter that injects
-`uniquode.settings` into the generic `data_core` migration command factory.
-Page, partial, and API routes are discovered and registered through `web_core`
+project `migrate` entry point is a `wevra.tools.migrate` adapter that loads the
+configured host settings adapter from `[tool.wevra]` and passes those settings
+into the generic `wevra.db` migration command factory.
+Page, partial, and API routes are discovered and registered through `wevra.web`
 from `<module>.routes` through a `module_routes` export, and template context
 providers are registered from `<module>.context` with `add_to_context`.
 Validation targets are discovered from
 `<module>.validation` through a `validation_targets` mapping. Runtime template
-and static serving resolve configured module package sources directly, so a
-later configured module can override an earlier module by providing the same
-logical template or static path. Static defaults from `web_core` are available
-only when `web_core` is configured, unless an explicit filesystem `STATIC_ROOT`
+and static serving resolve configured module package sources directly, so an
+earlier configured module can override a later module by providing the same
+logical template or static path. Static defaults from `wevra.web` are available
+only when `wevra.web` is configured, unless an explicit filesystem `STATIC_ROOT`
 is supplied. Static collection is only needed when exporting assets for an
 external static server such as Nginx, and the reusable static export boundary
 writes the composed logical static namespace to `[static].export_root`.
 
 ```toml
 modules = [
-  "web_core",
-  "public",
   "uniquode",
-  "auth_ext",
+  "wevra.web",
+  "wevra.auth",
 ]
 
 [routes]
-auth_ext = "/"
+"wevra.auth" = "/"
 
 [templates]
 auto_reload = true
@@ -103,13 +104,13 @@ remains `auth.toml`; `app.toml` may reserve compatible auth directives for a
 future unification change, but this application does not currently load auth
 settings from it.
 
-The current identity browser surface is published by `auth_ext.routes`, default
-identity templates live under `src/auth_ext/templates/identity/`, and safe
-identity template state is provided by `auth_ext.context`. Identity model
-metadata and migration revisions are bundled with `auth_ext` alongside those
+The current identity browser surface is published by `wevra.auth.routes`, default
+identity templates live under `src/wevra/auth/templates/identity/`, and safe
+identity template state is provided by `wevra.auth.context`. Identity model
+metadata and migration revisions are bundled with `wevra.auth` alongside those
 models. Reusable layout, theme, error, form, and stylesheet defaults are
-published by `web_core`; host applications can omit `web_core` or override its
-logical template/static paths from later configured modules.
+published by `wevra.web`; host applications can omit `wevra.web` or override its
+logical template/static paths from earlier configured modules.
 Application-specific navigation and product policy remain application-owned.
 
 Local `.env` files are for development only and are ignored by Git. Deployment
@@ -143,9 +144,10 @@ Verbose validation lists the concrete checks performed for each target. Database
 URLs printed by validation are redacted when credentials are embedded, for
 example `postgresql+asyncpg://***:***@host.example/app`.
 
-Project command wrappers such as `runserver` and `validate` live in the
-top-level `tools` package. The current application remains the command target
-where appropriate, for example `runserver` starts `uniquode.asgi:app`.
+Project command wrappers such as `runserver` and `validate` live in
+`wevra.tools`. The current application remains the configured command target
+where appropriate, for example `runserver` starts `uniquode.asgi:app` through
+the `[tool.wevra]` adapter metadata.
 
 Run the main checks:
 
@@ -244,7 +246,7 @@ common_fragments = [
 
 Database selection precedence for auth configuration is
 `AUTH_DATABASE_URL`, then generic `DATABASE_URL`, then `[auth].database_url`.
-This lets reusable `auth_ext` tooling share a host application's database
+This lets reusable `wevra.auth` tooling share a host application's database
 environment without requiring a host-specific wrapper, while still allowing an
 auth-specific override for automation.
 
@@ -258,7 +260,7 @@ groups, users are assigned to groups, and effective scopes are resolved through
 direct and nested group membership. Scope deletion is refused while any group
 uses that scope, and group deletion is refused while users, child groups, or
 parent groups still reference that group. Password writes use the configured
-`auth_ext` password policy, which
+`wevra.auth` password policy, which
 provides server-side validation and strength feedback for future UI use. The
 committed [auth.toml.example](auth.toml.example) shows the supported generic
 auth configuration shape.

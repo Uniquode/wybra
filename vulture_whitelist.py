@@ -32,9 +32,11 @@ _.group_command
 
 # FastAPI Users and application identity extension hooks.
 _.AdvancedAuthenticationPolicy
+_.NoChallengePolicy
 _.after_primary_authentication
 _.available_methods
 _.requires_challenge
+_.complete_challenge
 _.fastapi_users
 _.bootstrap_initial_admin
 _.created
@@ -58,14 +60,17 @@ _.hashed_password
 _.kind
 _.expires_at
 _.create_challenge
+_.TOTPCredentialStore
 _.create_pending_totp_credential
 _.activate_totp_credential
 _.disable_totp_credential
+_.WebAuthnCredentialStore
 _.store_webauthn_credential
 _.credential_id
 _.public_key
 _.sign_count
 _.update_webauthn_sign_count
+_.RecoveryCodeStore
 _.replace_recovery_codes
 _.code_hashes
 _.consume_recovery_code
@@ -79,6 +84,7 @@ _.shadowed
 
 # Public reusable composition helpers consumed by tests and downstream callers.
 _.discover_model_metadata
+_.__getattr__
 
 # auth_provider public contracts intentionally exported before runtime endpoints.
 _.active
