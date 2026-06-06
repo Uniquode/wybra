@@ -4,6 +4,8 @@
 composition, database and migration helpers, project command adapters, and
 reusable local authentication building blocks.
 
+Repository: <https://github.com/Uniquode/wevra>
+
 The package is currently developed beside its host application:
 
 ```text
