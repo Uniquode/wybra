@@ -6,17 +6,6 @@ reusable local authentication building blocks.
 
 Repository: <https://github.com/Uniquode/wevra>
 
-The package is currently developed beside its host application:
-
-```text
-wevra-workspace/
-  app/
-  wevra/
-```
-
-Host applications can depend on this project through an editable `../wevra`
-path source while developing framework and application code together.
-
 ## Package Areas
 
 - `wevra.core`: module composition, package resource helpers, settings loading,
