@@ -1,0 +1,51 @@
+name: Dependabot Auto-Merge
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - synchronize
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    name: Enable auto-merge
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Dependabot metadata
+        id: dependabot-metadata
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Generate auto-merge app token
+        id: app-token
+        if: >-
+          steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' &&
+          steps.dependabot-metadata.outputs.package-ecosystem == 'uv'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: "${{ vars.AUTOMERGE_APP_CLIENT_ID }}"
+          private-key: "${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}"
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Enable auto-merge for Python patch updates
+        if: >-
+          steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' &&
+          steps.dependabot-metadata.outputs.package-ecosystem == 'uv'
+        run: gh pr merge --auto --rebase "$PR_URL"
+        env:
+          GH_TOKEN: "${{ steps.app-token.outputs.token }}"
+          PR_URL: "${{ github.event.pull_request.html_url }}"
