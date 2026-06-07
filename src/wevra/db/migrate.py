@@ -64,7 +64,7 @@ def create_migrate_command(
     settings_loader: MigrationSettingsLoader,
 ) -> click.Group:
     @click.group(
-        name="migrate",
+        name="wevra-migrate",
         context_settings={"help_option_names": ["-h", "--help"]},
         help="Run application schema migrations through Alembic.",
     )
@@ -134,7 +134,7 @@ def _database_url_for_command(
 
     if not isinstance(ctx.obj, dict):
         raise click.UsageError(
-            "Invalid Click context object for migrate; expected a dictionary."
+            "Invalid Click context object for wevra-migrate; expected a dictionary."
         )
 
     root_database_url = ctx.obj.get("database_url")
@@ -181,7 +181,7 @@ def run_migrate_command(
     try:
         result = migrate_command.main(
             args=None if argv is None else list(argv),
-            prog_name="migrate",
+            prog_name="wevra-migrate",
             standalone_mode=False,
         )
     except click.exceptions.Exit as exc:

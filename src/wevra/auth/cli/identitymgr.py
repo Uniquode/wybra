@@ -85,9 +85,9 @@ TIMESTAMP_HELP = (
     "use separated calendar forms such as 2025-01-01 for dates."
 )
 SCHEMA_MIGRATION_MESSAGE = (
-    "Auth database schema is not up to date; run `uv run migrate upgrade` for "
-    "the configured database. If using an explicit auth database, run "
-    "`uv run migrate --database-url <auth-database-url> upgrade`."
+    "Auth database schema is not up to date; run `uv run wevra-migrate "
+    "upgrade` for the configured database. If using an explicit auth database, "
+    "run `uv run wevra-migrate --database-url <auth-database-url> upgrade`."
 )
 SCHEMA_INSPECTION_MESSAGE = (
     "Auth database schema could not be inspected; verify database connectivity, "
@@ -336,7 +336,9 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
                 flag_options=set(),
             )
             if len(parsed.positionals) != 1:
-                raise click.UsageError("Usage: identitymgr group create <abbrev>.")
+                raise click.UsageError(
+                    "Usage: wevra-identitymgr group create <abbrev>."
+                )
             return IdentitymgrArgs(
                 command="group-create",
                 config=_config_path(ctx),
@@ -351,7 +353,9 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
                 flag_options={"--json", "--csv"},
             )
             if parsed.positionals:
-                raise click.UsageError("Usage: identitymgr group list [--json|--csv].")
+                raise click.UsageError(
+                    "Usage: wevra-identitymgr group list [--json|--csv]."
+                )
             _ensure_mutually_exclusive(
                 (parsed.has_flag("--json"), "--json"),
                 (parsed.has_flag("--csv"), "--csv"),
@@ -370,7 +374,7 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    "Usage: identitymgr group effective-scopes <user-target>."
+                    "Usage: wevra-identitymgr group effective-scopes <user-target>."
                 )
             return IdentitymgrArgs(
                 command="group-effective-scopes",
@@ -396,7 +400,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if parsed.positionals:
                 raise click.UsageError(
-                    "Usage: identitymgr group <group> show [--json]."
+                    "Usage: wevra-identitymgr group <group> show [--json]."
                 )
             return IdentitymgrArgs(
                 command="group-show",
@@ -412,7 +416,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if parsed.positionals:
                 raise click.UsageError(
-                    "Usage: identitymgr group <group> update "
+                    "Usage: wevra-identitymgr group <group> update "
                     "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
                 )
             return IdentitymgrArgs(
@@ -431,7 +435,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if parsed.positionals:
                 raise click.UsageError(
-                    "Usage: identitymgr group <group> delete [--force]."
+                    "Usage: wevra-identitymgr group <group> delete [--force]."
                 )
             return IdentitymgrArgs(
                 command="group-delete",
@@ -447,7 +451,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    f"Usage: identitymgr group <group> {operation} <user>."
+                    f"Usage: wevra-identitymgr group <group> {operation} <user>."
                 )
             return IdentitymgrArgs(
                 command=f"group-{operation}",
@@ -463,7 +467,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    f"Usage: identitymgr group <group> {operation} <group>."
+                    f"Usage: wevra-identitymgr group <group> {operation} <group>."
                 )
             return IdentitymgrArgs(
                 command=f"group-{operation}",
@@ -477,26 +481,26 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
 
 _GROUP_ROOT_OPERATION_HELP = {
     "create": (
-        "Usage: identitymgr group create <abbrev> "
+        "Usage: wevra-identitymgr group create <abbrev> "
         "[--description <text>] [--scope <scope>]."
     ),
-    "list": "Usage: identitymgr group list [--json|--csv].",
+    "list": "Usage: wevra-identitymgr group list [--json|--csv].",
     "effective-scopes": (
-        "Usage: identitymgr group effective-scopes <user-target> [--json]."
+        "Usage: wevra-identitymgr group effective-scopes <user-target> [--json]."
     ),
 }
 
 _GROUP_TARGET_OPERATION_HELP = {
-    "show": "Usage: identitymgr group <group> show [--json].",
+    "show": "Usage: wevra-identitymgr group <group> show [--json].",
     "update": (
-        "Usage: identitymgr group <group> update "
+        "Usage: wevra-identitymgr group <group> update "
         "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
     ),
-    "delete": "Usage: identitymgr group <group> delete [--force].",
-    "add-user": "Usage: identitymgr group <group> add-user <user>.",
-    "remove-user": "Usage: identitymgr group <group> remove-user <user>.",
-    "add-group": "Usage: identitymgr group <group> add-group <group>.",
-    "remove-group": "Usage: identitymgr group <group> remove-group <group>.",
+    "delete": "Usage: wevra-identitymgr group <group> delete [--force].",
+    "add-user": "Usage: wevra-identitymgr group <group> add-user <user>.",
+    "remove-user": "Usage: wevra-identitymgr group <group> remove-user <user>.",
+    "add-group": "Usage: wevra-identitymgr group <group> add-group <group>.",
+    "remove-group": "Usage: wevra-identitymgr group <group> remove-group <group>.",
 }
 
 
@@ -511,7 +515,7 @@ def _group_operation_help(tokens: tuple[str, ...]) -> str:
     if help_text is None:
         raise click.UsageError(
             f"Unknown group help topic: {' '.join(tokens)}. "
-            "Try 'identitymgr group --help'."
+            "Try 'wevra-identitymgr group --help'."
         )
     return help_text
 
@@ -566,7 +570,7 @@ def _parse_cli_tokens(
 
 
 @click.group(
-    name="identitymgr",
+    name="wevra-identitymgr",
     cls=HelpSuffixGroup,
     context_settings=CONTEXT_SETTINGS,
     epilog=TIMESTAMP_HELP,
@@ -1016,7 +1020,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = identitymgr_command.main(
             args=None if argv is None else list(argv),
-            prog_name="identitymgr",
+            prog_name="wevra-identitymgr",
             standalone_mode=False,
         )
     except click.exceptions.Exit as exc:

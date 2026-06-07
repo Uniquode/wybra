@@ -125,10 +125,30 @@ def register_module_routes(
     app: FastAPI,
     configured_routers: Iterable[ConfiguredModuleRouter],
 ) -> None:
+    from wevra.web.routes.inspection import RouteOrigin, record_route_origin
+
     routers = tuple(configured_routers)
     _validate_configured_routers(routers)
     for configured_router in routers:
+        route_start = len(app.routes)
         app.include_router(configured_router.router, prefix=configured_router.prefix)
+        for route in app.routes[route_start:]:
+            route_path = getattr(route, "path", None)
+            route_name = getattr(route, "name", None)
+            if not isinstance(route_path, str):
+                continue
+            record_route_origin(
+                app,
+                route,
+                RouteOrigin(
+                    module_name=configured_router.module_name,
+                    router_label=configured_router.label,
+                    include_prefix=configured_router.prefix,
+                    route_name=route_name if isinstance(route_name, str) else None,
+                    path=route_path,
+                    methods=_route_origin_methods(route),
+                ),
+            )
 
 
 def _prefix_for_module_router(
@@ -268,6 +288,19 @@ def _normalised_methods(
         )
 
     return tuple(normalised_methods)
+
+
+def _route_origin_methods(route: object) -> tuple[str, ...]:
+    methods = getattr(route, "methods", None)
+    if methods is None:
+        return ()
+    return tuple(
+        sorted(
+            method.strip().upper()
+            for method in methods
+            if isinstance(method, str) and method.strip()
+        )
+    )
 
 
 __all__ = [

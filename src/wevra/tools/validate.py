@@ -100,11 +100,11 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
 
 
 @click.command(
-    name="validate",
+    name="wevra-validate",
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
-        "Run project validation checks. Examples: validate, "
-        "validate --verbose web persistence."
+        "Run project validation checks. Examples: wevra-validate, "
+        "wevra-validate --verbose web persistence."
     ),
 )
 @click.option(
@@ -194,7 +194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = validate_command.main(
             args=None if argv is None else list(argv),
-            prog_name="validate",
+            prog_name="wevra-validate",
             standalone_mode=False,
         )
     except click.exceptions.Exit as exc:
