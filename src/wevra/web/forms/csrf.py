@@ -2,8 +2,10 @@ import base64
 import hashlib
 import hmac
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from secrets import token_urlsafe
+from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
@@ -35,7 +37,7 @@ async def request_form_data(request: Request) -> FormData:
     return form_data
 
 
-def csrf_exempt[CallableT](func: CallableT) -> CallableT:
+def csrf_exempt(func: Callable[..., Any]) -> Callable[..., Any]:
     setattr(func, CSRF_EXEMPT_ENDPOINT_ATTR, True)
     return func
 

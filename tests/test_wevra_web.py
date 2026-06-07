@@ -231,6 +231,34 @@ def test_security_headers_preserve_explicit_response_header() -> None:
     assert response.headers[COOP_HEADER_NAME] == "unsafe-none"
 
 
+def test_security_header_options_reject_invalid_cross_origin_opener_policy() -> None:
+    with pytest.raises(ValueError, match="Cross-Origin-Opener-Policy.*invalid"):
+        SecurityHeaderOptions(cross_origin_opener_policy="invalid")  # type: ignore[arg-type]
+
+
+def test_cross_origin_opener_policy_dependency_rejects_invalid_policy() -> None:
+    with pytest.raises(ValueError, match="Cross-Origin-Opener-Policy.*invalid"):
+        cross_origin_opener_policy("invalid")  # type: ignore[arg-type]
+
+
+def test_register_security_headers_is_idempotent_and_updates_options() -> None:
+    app = FastAPI()
+    register_security_headers(app)
+    register_security_headers(
+        app,
+        options=SecurityHeaderOptions(cross_origin_opener_policy="unsafe-none"),
+    )
+
+    @app.get("/")
+    async def home() -> Response:
+        return Response("ok")
+
+    response = TestClient(app).get("/")
+
+    assert len(app.user_middleware) == 1
+    assert response.headers[COOP_HEADER_NAME] == "unsafe-none"
+
+
 def test_composed_settings_loader_builds_framework_settings(tmp_path: Path) -> None:
     @dataclass(frozen=True, slots=True)
     class FrameworkSettings:
@@ -735,6 +763,40 @@ def test_load_module_routes_rejects_missing_router_prefix_config(
         )
 
 
+def test_load_module_routes_defaults_missing_module_prefix_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "default_prefix_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+
+            router = APIRouter()
+
+            @router.get('/home', name='default:home')
+            async def home():
+                return 'home'
+
+            module_routers = {'pages': router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    routes = load_module_routes(
+        ("default_prefix_route_app",),
+        route_prefixes={},
+    )
+
+    assert tuple(route.prefix for route in routes) == ("",)
+
+
 def test_load_module_routes_rejects_empty_router_surface(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -784,6 +846,40 @@ def test_load_module_routes_rejects_invalid_include_prefixes(
         )
 
 
+def test_load_module_routes_normalises_trailing_include_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "trailing_prefix_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+
+            router = APIRouter()
+
+            @router.get('/home', name='trailing:home')
+            async def home():
+                return 'home'
+
+            module_routers = {'pages': router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    routes = load_module_routes(
+        ("trailing_prefix_route_app",),
+        route_prefixes={"trailing_prefix_route_app": {"pages": "/account/"}},
+    )
+
+    assert tuple(route.prefix for route in routes) == ("/account",)
+
+
 def test_discover_module_routers_rejects_malformed_present_surface(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -803,6 +899,42 @@ def test_discover_module_routers_rejects_malformed_present_surface(
         match="bad_routes_surface_app.routes.*module_routers",
     ):
         discover_module_routers("bad_routes_surface_app")
+
+
+def test_discover_module_routers_rejects_blank_router_label(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "blank_label_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\nmodule_routers = {' ': APIRouter()}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(CompositionError, match="non-blank string router labels"):
+        discover_module_routers("blank_label_app")
+
+
+def test_discover_module_routers_rejects_non_apirouter_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "non_apirouter_value_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "module_routers = {'default': object()}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(CompositionError, match="fastapi.APIRouter"):
+        discover_module_routers("non_apirouter_value_app")
 
 
 def test_discover_package_resource_sources_without_route_import(

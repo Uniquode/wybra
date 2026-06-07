@@ -11,8 +11,8 @@ from fastapi.routing import APIRouter
 
 from wevra.core.composition import AppConfig, CompositionError
 
-type ModuleRouters = Mapping[str, APIRouter]
-type RoutePrefixMap = Mapping[str, Mapping[str, str]]
+ModuleRouters = Mapping[str, APIRouter]
+RoutePrefixMap = Mapping[str, Mapping[str, str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +68,6 @@ def load_module_routes(
                 module_name,
                 label,
                 module_prefixes,
-                allow_missing=route_prefixes is None,
             )
             configured_routers.append(
                 ConfiguredModuleRouter(
@@ -136,16 +135,9 @@ def _prefix_for_module_router(
     module_name: str,
     label: str,
     module_prefixes: Mapping[str, str] | None,
-    *,
-    allow_missing: bool,
 ) -> str:
     if module_prefixes is None:
-        if allow_missing:
-            return ""
-
-        raise RouteCompositionError(
-            f"Route config for configured module {module_name!r} is missing."
-        )
+        return ""
 
     if label not in module_prefixes:
         raise RouteCompositionError(
@@ -163,16 +155,16 @@ def _normalise_include_prefix(module_name: str, label: str, prefix: str) -> str:
         )
     if prefix == "":
         return ""
-    if not prefix.startswith("/"):
+
+    normalised_prefix = prefix.rstrip("/")
+    if not normalised_prefix:
+        return ""
+    if not normalised_prefix.startswith("/"):
         raise RouteCompositionError(
             f"Route prefix for {module_name!r} router {label!r} must start with '/'."
         )
-    if prefix.endswith("/"):
-        raise RouteCompositionError(
-            f"Route prefix for {module_name!r} router {label!r} must not end with '/'."
-        )
 
-    return prefix
+    return normalised_prefix
 
 
 def _validate_configured_routers(

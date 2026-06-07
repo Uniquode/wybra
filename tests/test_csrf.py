@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Any
 
+import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -137,6 +138,47 @@ def test_csrf_dependency_allows_safe_methods_on_protected_router() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_csrf_dependency_is_noop_when_csrf_protector_missing() -> None:
+    app = FastAPI()
+    router = APIRouter(dependencies=[Depends(validate_csrf)])
+
+    @router.get("/form")
+    async def form() -> dict[str, bool]:
+        return {"ok": True}
+
+    @router.post("/submit")
+    async def submit() -> dict[str, bool]:
+        return {"ok": True}
+
+    app.include_router(router)
+    client = TestClient(app)
+
+    get_response = client.get("/form")
+    post_response = client.post("/submit", data={"field": "value"})
+
+    assert get_response.status_code == 200
+    assert get_response.json() == {"ok": True}
+    assert post_response.status_code == 200
+    assert post_response.json() == {"ok": True}
+
+
+def test_csrf_dependency_raises_when_csrf_protector_misconfigured() -> None:
+    app = FastAPI()
+    app.state.csrf = object()
+    router = APIRouter(dependencies=[Depends(validate_csrf)])
+
+    @router.post("/submit")
+    async def submit() -> dict[str, bool]:
+        return {"ok": True}
+
+    app.include_router(router)
+
+    with pytest.raises(
+        RuntimeError, match="CSRF protector is not configured correctly"
+    ):
+        TestClient(app).post("/submit", data={"field": "value"})
 
 
 def test_csrf_dependency_rejects_unsafe_methods_without_token() -> None:

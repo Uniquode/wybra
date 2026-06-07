@@ -17,6 +17,7 @@ CrossOriginOpenerPolicy = Literal[
 ]
 COOP_HEADER_NAME = "Cross-Origin-Opener-Policy"
 COOP_STATE_ATTRIBUTE = "wevra_cross_origin_opener_policy"
+SECURITY_MIDDLEWARE_STATE_ATTRIBUTE = "wevra_web_security_middleware_registered"
 SECURITY_OPTIONS_STATE_ATTRIBUTE = "wevra_web_security_options"
 _ALLOWED_COOP_POLICIES = frozenset(get_args(CrossOriginOpenerPolicy))
 _UNSET = object()
@@ -46,12 +47,13 @@ def register_security_headers(
     *,
     options: SecurityHeaderOptions | None = None,
 ) -> None:
-    setattr(
-        app.state,
-        SECURITY_OPTIONS_STATE_ATTRIBUTE,
-        options or SecurityHeaderOptions(),
-    )
+    security_options = options or SecurityHeaderOptions()
+    setattr(app.state, SECURITY_OPTIONS_STATE_ATTRIBUTE, security_options)
+    if getattr(app.state, SECURITY_MIDDLEWARE_STATE_ATTRIBUTE, False):
+        return
+
     app.middleware("http")(_security_header_middleware)
+    setattr(app.state, SECURITY_MIDDLEWARE_STATE_ATTRIBUTE, True)
 
 
 async def _security_header_middleware(
@@ -93,7 +95,8 @@ def _validate_cross_origin_opener_policy(
     if policy not in _ALLOWED_COOP_POLICIES:
         allowed = ", ".join(sorted(_ALLOWED_COOP_POLICIES))
         raise ValueError(
-            f"Cross-Origin-Opener-Policy must be one of {allowed}, or None."
+            "Cross-Origin-Opener-Policy must be one of "
+            f"{allowed}, or None; got {policy!r}."
         )
 
 
@@ -101,6 +104,7 @@ __all__ = [
     "COOP_HEADER_NAME",
     "COOP_STATE_ATTRIBUTE",
     "CrossOriginOpenerPolicy",
+    "SECURITY_MIDDLEWARE_STATE_ATTRIBUTE",
     "SECURITY_OPTIONS_STATE_ATTRIBUTE",
     "SecurityHeaderOptions",
     "cross_origin_opener_policy",

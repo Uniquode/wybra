@@ -45,7 +45,7 @@ def wevra_tool_options(project_root: Path | None = None) -> dict[str, Any]:
     try:
         with pyproject_path.open("rb") as handle:
             pyproject = tomllib.load(handle)
-    except OSError as exc:
+    except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ProjectToolConfigurationError(
             f"Wevra project metadata could not be read from {pyproject_path}."
         ) from exc
@@ -66,6 +66,10 @@ def _read_pyproject(project_root: Path) -> dict[str, Any] | None:
             pyproject = tomllib.load(handle)
     except OSError:
         return None
+    except tomllib.TOMLDecodeError as exc:
+        raise ProjectToolConfigurationError(
+            f"Project metadata is invalid TOML: {pyproject_path}."
+        ) from exc
 
     return pyproject if isinstance(pyproject, dict) else None
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from html.parser import HTMLParser
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -12,7 +11,7 @@ from wevra.core.resources import PackageResourceSource, first_existing_resource
 from wevra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 from wevra.web.context import validate_context_providers
 from wevra.web.rendering import TemplateRenderer
-from wevra.web.routes import load_module_routes
+from wevra.web.routes import load_module_routes, route_prefixes_from_settings
 from wevra.web.routes.discovery import (
     discover_module_surfaces,
     static_sources_from_modules,
@@ -144,7 +143,7 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
     try:
         configured_routers = load_module_routes(
             settings.modules,
-            route_prefixes=_route_prefixes(settings),
+            route_prefixes=route_prefixes_from_settings(settings),
         )
     except CompositionError as exc:
         record_check(
@@ -452,21 +451,6 @@ def _uses_filesystem_template_root(settings: WebValidationSettings) -> bool:
 
 def _uses_filesystem_static_root(settings: WebValidationSettings) -> bool:
     return settings.uses_filesystem_static_root
-
-
-def _route_prefixes(settings: WebValidationSettings) -> Mapping[str, Mapping[str, str]]:
-    route_prefixes = getattr(settings, "route_prefixes", None)
-    if isinstance(route_prefixes, Mapping):
-        return route_prefixes
-
-    app_config = settings.app_config
-    if app_config is None:
-        return {}
-    prefixes = app_config.routes.prefixes
-    if isinstance(prefixes, Mapping):
-        return prefixes
-
-    return {}
 
 
 validation_targets = {"web": validate_web}

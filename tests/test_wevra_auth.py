@@ -59,6 +59,7 @@ from wevra.auth.persistence.database import (
     create_database,
     session_scope,
 )
+from wevra.auth.routes import normalise_return_to
 
 
 def sqlite_file_url(path: Path) -> str:
@@ -954,3 +955,25 @@ def test_wevra_auth_router_extension_plan_tracks_explicit_replacements() -> None
 
     assert plan.replaces("post", "/login") is True
     assert plan.replaces("GET", "/login") is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        (None, "/account"),
+        ("", "/account"),
+        ("/dashboard", "/dashboard"),
+        ("/dashboard?tab=billing", "/dashboard?tab=billing"),
+        ("/dashboard#ignored", "/dashboard"),
+        ("https://evil.example/account", "/account"),
+        ("//evil.example/account", "/account"),
+        ("/%2f%2fevil.example/account", "/account"),
+        ("/%5cevil.example/account", "/account"),
+        ("/account%0d%0aLocation:%20https://evil.example", "/account"),
+    ),
+)
+def test_normalise_return_to_accepts_only_local_redirect_paths(
+    value: str | None,
+    expected: str,
+) -> None:
+    assert normalise_return_to(value) == expected

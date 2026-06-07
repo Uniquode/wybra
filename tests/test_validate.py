@@ -154,6 +154,21 @@ def test_runtime_project_root_uses_invoking_project(
     assert runtime_project_root() == project_root.resolve()
 
 
+def test_runtime_project_root_reports_malformed_pyproject(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "host_project"
+    child = project_root / "src/host_app"
+    child.mkdir(parents=True)
+    pyproject_path = project_root / "pyproject.toml"
+    pyproject_path.write_text("[project\n", encoding="utf-8")
+    monkeypatch.chdir(child)
+
+    with pytest.raises(ProjectToolConfigurationError, match=str(pyproject_path)):
+        runtime_project_root()
+
+
 def test_validate_web_checks_framework_web_foundation(tmp_path: Path) -> None:
     result = validate_web(_web_settings(tmp_path))
 

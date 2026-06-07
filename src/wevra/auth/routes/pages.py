@@ -1,5 +1,5 @@
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
@@ -73,11 +73,22 @@ def normalise_return_to(value: str | None, default: str = "/account") -> str:
     ):
         return default
 
+    decoded_candidate = unquote(candidate)
+    if (
+        decoded_candidate.startswith("//")
+        or "\\" in decoded_candidate
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in decoded_candidate
+        )
+    ):
+        return default
+
     parsed = urlsplit(candidate)
     if parsed.scheme or parsed.netloc:
         return default
 
-    return candidate
+    return urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
 
 
 @api_router.get(
