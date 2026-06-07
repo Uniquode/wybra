@@ -424,8 +424,10 @@ def test_identitymgr_project_script_is_defined() -> None:
     data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert (
-        data["project"]["scripts"]["identitymgr"] == "wevra.auth.cli.identitymgr:main"
+        data["project"]["scripts"]["wevra-identitymgr"]
+        == "wevra.auth.cli.identitymgr:main"
     )
+    assert "identitymgr" not in data["project"]["scripts"]
     assert "usermgr" not in data["project"]["scripts"]
 
 
@@ -708,17 +710,17 @@ def test_identitymgr_help_suffix_matches_help_option(
     [
         pytest.param(
             ["help", "group", "create"],
-            "Usage: identitymgr group create <abbrev>",
+            "Usage: wevra-identitymgr group create <abbrev>",
             id="root-group-create",
         ),
         pytest.param(
             ["group", "help", "create"],
-            "Usage: identitymgr group create <abbrev>",
+            "Usage: wevra-identitymgr group create <abbrev>",
             id="group-create",
         ),
         pytest.param(
             ["group", "help", "project", "update"],
-            "Usage: identitymgr group <group> update",
+            "Usage: wevra-identitymgr group <group> update",
             id="group-target-update",
         ),
     ],
@@ -1113,7 +1115,7 @@ def test_identitymgr_reports_outdated_identity_schema_before_reading_password(
     assert stdin.tell() == 0
     captured = capsys.readouterr()
     assert "Auth database schema is not up to date" in captured.err
-    assert "uv run migrate upgrade" in captured.err
+    assert "uv run wevra-migrate upgrade" in captured.err
     assert "is_admin" in captured.err
 
 

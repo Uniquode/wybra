@@ -17,7 +17,7 @@ Host projects supply the concrete database URL and configured module list.
 Initialise or update a host schema with:
 
 ```sh
-uv run migrate upgrade
+uv run wevra-migrate upgrade
 ```
 
 Use direct Alembic commands only when you need Alembic-specific flags that the

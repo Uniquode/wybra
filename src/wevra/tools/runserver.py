@@ -64,8 +64,8 @@ def _reject_extra_app_target(
         if _same_app_target(arg, app_target):
             continue
         raise click.UsageError(
-            "runserver owns the Uvicorn app target; pass Uvicorn options after "
-            "`--`, not another app target."
+            "wevra-runserver owns the Uvicorn app target; pass Uvicorn options "
+            "after `--`, not another app target."
         )
 
 
@@ -104,7 +104,7 @@ def load_environment(**kwargs: object):
 
 
 @click.command(
-    name="runserver",
+    name="wevra-runserver",
     context_settings=CONTEXT_SETTINGS,
     help="Start the local Uvicorn development server.",
 )
@@ -156,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = runserver_command.main(
             args=None if argv is None else list(argv),
-            prog_name="runserver",
+            prog_name="wevra-runserver",
             standalone_mode=False,
         )
     except click.exceptions.Exit as exc:

@@ -26,7 +26,11 @@ dependencies = [
 ]
 
 [project.scripts]
-identitymgr = "wevra.auth.cli.identitymgr:main"
+wevra-identitymgr = "wevra.auth.cli.identitymgr:main"
+wevra-migrate = "wevra.tools.migrate:main"
+wevra-routes = "wevra.tools.routes:main"
+wevra-runserver = "wevra.tools.runserver:main"
+wevra-validate = "wevra.tools.validate:main"
 
 [build-system]
 requires = ["uv_build>=0.11.18,<0.12.0"]

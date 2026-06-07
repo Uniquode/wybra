@@ -19,7 +19,7 @@ Repository: <https://github.com/Uniquode/wevra>
   own `[tool.wevra]` metadata.
 - `wevra.auth`: local identity models, FastAPI Users integration, browser auth
   routes, auth templates, password policy, group/scope administration, and the
-  `identitymgr` operator CLI.
+  `wevra-identitymgr` operator CLI.
 
 ## Local Development
 
@@ -35,13 +35,45 @@ uv build
 ```
 
 The framework project does not contain host application settings, `app.toml`,
-or change-management artifacts. Host-facing commands such as migration,
-validation, and runserver adapters are configured by the application that
-exposes them.
+or change-management artifacts. Host-facing commands resolve the configured
+application through the host project's `[tool.wevra]` metadata and `app.toml`.
+
+## Project Commands
+
+Wevra publishes prefixed console scripts to avoid collisions with host
+application or environment-specific tooling:
+
+- `wevra-runserver`: start the configured ASGI application with Uvicorn.
+- `wevra-migrate`: run Alembic migrations for the configured application.
+- `wevra-routes`: inspect the configured application's installed route tree.
+- `wevra-validate`: run configured project validation targets.
+- `wevra-identitymgr`: manage local identity users, scopes, and groups.
+
+Host applications may add their own short aliases when appropriate, but the
+portable package-owned command names are the `wevra-*` commands.
+
+## Route Inspection
+
+Inspect the installed route tree:
+
+```sh
+uv run wevra-routes
+uv run wevra-routes --graph
+uv run wevra-routes --mermaid
+uv run wevra-routes --json
+uv run wevra-routes --check
+uv run wevra-routes --check --quiet
+```
+
+The route-tree command imports the configured ASGI app target and reports the
+final installed FastAPI/Starlette route graph. Use it for route review and for
+explicit route smoke checks. Use `--check --quiet` when only the exit status is
+needed. It is separate from `wevra-validate`, which remains the broad
+project-structure validation command.
 
 ## Auth Configuration
 
-The standalone `identitymgr` CLI loads generic auth configuration from
+The standalone `wevra-identitymgr` CLI loads generic auth configuration from
 `--config`, `AUTH_CONFIG`, or `./auth.toml` when present. The file uses an
 `[auth]` table:
 
