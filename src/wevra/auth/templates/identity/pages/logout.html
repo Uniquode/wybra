@@ -5,7 +5,7 @@
   <p class="eyebrow">Account</p>
   <h1>Sign out</h1>
   <p class="muted-copy">End the current browser session.</p>
-  <form action="{{ request.url_for('identity:logout') }}" method="post">
+  <form action="{{ request.url_for('auth:logout') }}" method="post">
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
     <button type="submit">Sign out</button>
   </form>

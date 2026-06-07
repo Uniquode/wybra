@@ -22,7 +22,7 @@ class CompositionError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class RouteOptions:
-    prefixes: dict[str, str] = field(default_factory=dict)
+    prefixes: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +79,7 @@ def load_app_config(
             "modules",
         ),
         routes=RouteOptions(
-            prefixes=_optional_str_dict(
+            prefixes=_optional_route_prefixes(
                 _optional_table(data, "routes"),
                 "routes",
             ),
@@ -218,19 +218,47 @@ def _required_non_negative_int(data: dict[str, Any], name: str) -> int:
     raise CompositionError(f"App config {name} must be a non-negative integer.")
 
 
-def _optional_str_dict(data: dict[str, Any], name: str) -> dict[str, str]:
-    if not all(
-        isinstance(key, str)
-        and key.strip()
-        and isinstance(value, str)
-        and value.strip()
-        for key, value in data.items()
-    ):
-        raise CompositionError(
-            f"App config {name} must contain only non-blank string values."
+def _optional_route_prefixes(
+    data: dict[str, Any],
+    name: str,
+) -> dict[str, dict[str, str]]:
+    prefixes: dict[str, dict[str, str]] = {}
+    for module_name, module_routes in data.items():
+        if not isinstance(module_name, str) or not module_name.strip():
+            raise CompositionError(
+                f"App config {name} must contain only non-blank module names."
+            )
+        if not isinstance(module_routes, dict):
+            raise CompositionError(
+                f"App config {name}.{module_name} must be a table of router labels."
+            )
+
+        prefixes[module_name] = _route_label_prefixes(
+            module_routes,
+            f"{name}.{module_name}",
         )
 
-    return dict(data)
+    return prefixes
+
+
+def _route_label_prefixes(
+    data: dict[str, Any],
+    name: str,
+) -> dict[str, str]:
+    prefixes: dict[str, str] = {}
+    for label, prefix in data.items():
+        if not isinstance(label, str) or not label.strip():
+            raise CompositionError(
+                f"App config {name} must contain only non-blank router labels."
+            )
+        if not isinstance(prefix, str):
+            raise CompositionError(
+                f"App config {name}.{label} must be a string prefix."
+            )
+
+        prefixes[label] = prefix
+
+    return prefixes
 
 
 def _load_template_options(data: dict[str, Any]) -> TemplateOptions:

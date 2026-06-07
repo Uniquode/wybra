@@ -1,98 +1,109 @@
-"""Route composition contracts and helpers."""
+"""FastAPI router composition contracts and helpers."""
+
+from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import Protocol
 
-from fastapi import APIRouter, FastAPI, Request
-from fastapi.responses import Response
+from fastapi import FastAPI
+from fastapi.routing import APIRouter
 
-from wevra.core.composition import CompositionError
-from wevra.core.diagnostics import surface_message
+from wevra.core.composition import AppConfig, CompositionError
 
-if TYPE_CHECKING:
-    from wevra.core.composition import AppConfig
-    from wevra.web.routes.dispatcher import HtmlDispatcher
-
-HtmlSurface = Literal["page", "partial"]
-
-
-@runtime_checkable
-class HtmlView(Protocol):
-    async def render(self, request: Request, renderer: Any) -> Response: ...
+ModuleRouters = Mapping[str, APIRouter]
+RoutePrefixMap = Mapping[str, Mapping[str, str]]
 
 
 @dataclass(frozen=True, slots=True)
-class HtmlRouteDefinition:
-    path: str
-    name: str
-    methods: tuple[str, ...]
-    surface: HtmlSurface
-    view: HtmlView
-
-
-@dataclass(frozen=True, slots=True)
-class ModuleRoutes:
-    page_routes: tuple[HtmlRouteDefinition, ...] = ()
-    partial_routes: tuple[HtmlRouteDefinition, ...] = ()
-    api_routers: tuple[APIRouter, ...] = ()
+class ConfiguredModuleRouter:
+    module_name: str
+    label: str
+    router: APIRouter
+    prefix: str
 
 
 class RouteCompositionError(CompositionError):
-    """Raised when configured module routes cannot be composed safely."""
+    """Raised when configured module routers cannot be composed safely."""
 
 
 class ConfiguredRouteSettings(Protocol):
-    """Minimal settings shape for route composition.
-
-    This is intentionally narrower than `WebValidationSettings`; runtime route
-    registration only needs configured modules and optional route prefixes from
-    app composition.
-    """
+    """Minimal settings shape for route composition."""
 
     @property
     def modules(self) -> tuple[str, ...]: ...
 
     @property
-    def app_config(self) -> "AppConfig | None": ...
+    def app_config(self) -> AppConfig | None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class _RouteOwner:
     module_name: str
-    surface: str
+    router_label: str
 
     @property
     def label(self) -> str:
-        return f"{self.module_name} {self.surface}"
+        return f"{self.module_name} router {self.router_label}"
 
 
 def load_module_routes(
     module_names: Iterable[str],
     *,
-    route_prefixes: Mapping[str, str] | None = None,
-) -> ModuleRoutes:
-    from wevra.web.routes.discovery import discover_module_routes
+    route_prefixes: RoutePrefixMap | None = None,
+) -> tuple[ConfiguredModuleRouter, ...]:
+    from wevra.web.routes.discovery import discover_module_routers
 
-    return compose_module_routes(
-        (
-            (module_name, discover_module_routes(module_name))
-            for module_name in module_names
-        ),
-        route_prefixes=route_prefixes,
-    )
+    configured_routers: list[ConfiguredModuleRouter] = []
+    for module_name in module_names:
+        module_routers = discover_module_routers(module_name)
+        if not module_routers:
+            continue
+
+        module_prefixes = (
+            None if route_prefixes is None else route_prefixes.get(module_name)
+        )
+        for label, router in module_routers.items():
+            prefix = _prefix_for_module_router(
+                module_name,
+                label,
+                module_prefixes,
+            )
+            configured_routers.append(
+                ConfiguredModuleRouter(
+                    module_name=module_name,
+                    label=label,
+                    router=router,
+                    prefix=prefix,
+                )
+            )
+
+    _validate_configured_routers(configured_routers)
+    return tuple(configured_routers)
 
 
-def load_configured_module_routes(settings: ConfiguredRouteSettings) -> ModuleRoutes:
+def load_configured_module_routes(
+    settings: ConfiguredRouteSettings,
+) -> tuple[ConfiguredModuleRouter, ...]:
     return load_module_routes(
         settings.modules,
-        route_prefixes=route_prefixes_from_app_config(settings.app_config),
+        route_prefixes=route_prefixes_from_settings(settings),
     )
+
+
+def route_prefixes_from_settings(
+    settings: ConfiguredRouteSettings,
+) -> RoutePrefixMap:
+    explicit_route_prefixes = getattr(settings, "route_prefixes", None)
+    if isinstance(explicit_route_prefixes, Mapping):
+        return explicit_route_prefixes
+
+    return route_prefixes_from_app_config(settings.app_config)
 
 
 def route_prefixes_from_app_config(
-    app_config: "AppConfig | None",
-) -> Mapping[str, str]:
+    app_config: AppConfig | None,
+) -> RoutePrefixMap:
     if app_config is None:
         return {}
 
@@ -106,177 +117,100 @@ def route_prefixes_from_app_config(
 def register_configured_module_routes(
     app: FastAPI,
     settings: ConfiguredRouteSettings,
-    dispatcher: "HtmlDispatcher",
 ) -> None:
-    register_module_routes(app, dispatcher, load_configured_module_routes(settings))
+    register_module_routes(app, load_configured_module_routes(settings))
 
 
 def register_module_routes(
     app: FastAPI,
-    dispatcher: "HtmlDispatcher",
-    route_set: ModuleRoutes,
+    configured_routers: Iterable[ConfiguredModuleRouter],
 ) -> None:
-    from wevra.web.routes.dispatcher import register_html_routes
-
-    register_html_routes(app, dispatcher, route_set.page_routes)
-    register_html_routes(app, dispatcher, route_set.partial_routes)
-    for api_router in route_set.api_routers:
-        app.include_router(api_router)
+    routers = tuple(configured_routers)
+    _validate_configured_routers(routers)
+    for configured_router in routers:
+        app.include_router(configured_router.router, prefix=configured_router.prefix)
 
 
-def merge_module_routes(*route_sets: ModuleRoutes) -> ModuleRoutes:
-    return ModuleRoutes(
-        page_routes=tuple(
-            route for route_set in route_sets for route in route_set.page_routes
-        ),
-        partial_routes=tuple(
-            route for route_set in route_sets for route in route_set.partial_routes
-        ),
-        api_routers=tuple(
-            router for route_set in route_sets for router in route_set.api_routers
-        ),
-    )
+def _prefix_for_module_router(
+    module_name: str,
+    label: str,
+    module_prefixes: Mapping[str, str] | None,
+) -> str:
+    if module_prefixes is None:
+        return ""
+
+    if label not in module_prefixes:
+        raise RouteCompositionError(
+            f"Route config for configured module {module_name!r} is missing "
+            f"router label {label!r}."
+        )
+
+    return _normalise_include_prefix(module_name, label, module_prefixes[label])
 
 
-def compose_module_routes(
-    module_route_sets: Iterable[tuple[str, ModuleRoutes]],
-    *,
-    route_prefixes: Mapping[str, str] | None = None,
-) -> ModuleRoutes:
-    prefixes = route_prefixes or {}
+def _normalise_include_prefix(module_name: str, label: str, prefix: str) -> str:
+    if not isinstance(prefix, str):
+        raise RouteCompositionError(
+            f"Route prefix for {module_name!r} router {label!r} must be a string."
+        )
+    if prefix == "":
+        return ""
+
+    normalised_prefix = prefix.rstrip("/")
+    if not normalised_prefix:
+        return ""
+    if not normalised_prefix.startswith("/"):
+        raise RouteCompositionError(
+            f"Route prefix for {module_name!r} router {label!r} must start with '/'."
+        )
+
+    return normalised_prefix
+
+
+def _validate_configured_routers(
+    configured_routers: Iterable[ConfiguredModuleRouter],
+) -> None:
     route_names: dict[str, _RouteOwner] = {}
     method_paths: dict[tuple[str, str], _RouteOwner] = {}
-    page_routes: list[HtmlRouteDefinition] = []
-    partial_routes: list[HtmlRouteDefinition] = []
-    api_routers: list[APIRouter] = []
-
-    for module_name, route_set in module_route_sets:
-        if not isinstance(route_set, ModuleRoutes):
+    for configured_router in configured_routers:
+        owner = _RouteOwner(
+            module_name=configured_router.module_name,
+            router_label=configured_router.label,
+        )
+        if not configured_router.router.routes:
             raise RouteCompositionError(
-                surface_message(
-                    "Route surface",
-                    module_name,
-                    "must be a ModuleRoutes instance.",
+                f"Route surface for {owner.label} did not register any routes; "
+                "ensure decorated handler modules are imported before exposing "
+                "module_routers."
+            )
+
+        for route in configured_router.router.routes:
+            route_name = getattr(route, "name", None)
+            if isinstance(route_name, str) and route_name:
+                _record_route_name(route_name, owner, route_names)
+
+            route_path = getattr(route, "path", None)
+            route_methods = getattr(route, "methods", None)
+            if route_path is None or route_methods is None:
+                continue
+            if not isinstance(route_path, str):
+                raise RouteCompositionError(
+                    f"Route {owner.label} has invalid path {route_path!r}; "
+                    "paths must be strings."
                 )
-            )
+            if route_path != "" and not route_path.startswith("/"):
+                raise RouteCompositionError(
+                    f"Route {owner.label} has invalid path {route_path!r}; "
+                    "paths must be empty or start with '/'."
+                )
 
-        prefix = prefixes.get(module_name, "")
-        prefixed_page_routes = tuple(
-            _prefixed_route_definition(module_name, prefix, definition)
-            for definition in route_set.page_routes
-        )
-        prefixed_partial_routes = tuple(
-            _prefixed_route_definition(module_name, prefix, definition)
-            for definition in route_set.partial_routes
-        )
-
-        for definition in prefixed_page_routes:
-            _record_html_route(
-                module_name,
-                definition,
-                route_names,
-                method_paths,
-            )
-        for definition in prefixed_partial_routes:
-            _record_html_route(
-                module_name,
-                definition,
-                route_names,
-                method_paths,
-            )
-        for router in route_set.api_routers:
-            _record_api_router(module_name, router, route_names, method_paths)
-
-        page_routes.extend(prefixed_page_routes)
-        partial_routes.extend(prefixed_partial_routes)
-        api_routers.extend(route_set.api_routers)
-
-    return ModuleRoutes(
-        page_routes=tuple(page_routes),
-        partial_routes=tuple(partial_routes),
-        api_routers=tuple(api_routers),
-    )
-
-
-def _prefixed_route_definition(
-    module_name: str,
-    prefix: str,
-    definition: HtmlRouteDefinition,
-) -> HtmlRouteDefinition:
-    path = _compose_route_path(module_name, definition.path, prefix)
-    if path == definition.path:
-        return definition
-
-    return HtmlRouteDefinition(
-        path=path,
-        name=definition.name,
-        methods=definition.methods,
-        surface=definition.surface,
-        view=definition.view,
-    )
-
-
-def _compose_route_path(module_name: str, path: str, prefix: str) -> str:
-    route_path = path.strip()
-    if not route_path:
-        raise RouteCompositionError(
-            f"Route path for configured module {module_name!r} must not be blank."
-        )
-
-    if route_path.startswith("/"):
-        return route_path
-
-    relative_path = route_path.strip("/")
-    route_prefix = _normalise_route_prefix(prefix)
-    if not route_prefix:
-        return f"/{relative_path}"
-    if not relative_path:
-        return route_prefix
-
-    return f"{route_prefix}/{relative_path}"
-
-
-def _normalise_route_prefix(prefix: str) -> str:
-    stripped_prefix = prefix.strip()
-    if not stripped_prefix or stripped_prefix == "/":
-        return ""
-    if not stripped_prefix.startswith("/"):
-        stripped_prefix = f"/{stripped_prefix}"
-
-    return stripped_prefix.rstrip("/")
-
-
-def _record_html_route(
-    module_name: str,
-    definition: HtmlRouteDefinition,
-    route_names: dict[str, _RouteOwner],
-    method_paths: dict[tuple[str, str], _RouteOwner],
-) -> None:
-    owner = _RouteOwner(module_name=module_name, surface=definition.surface)
-    _record_route_name(definition.name, owner, route_names)
-    for method in _normalised_methods(definition.methods, owner, definition.path):
-        _record_method_path(method, definition.path, owner, method_paths)
-
-
-def _record_api_router(
-    module_name: str,
-    router: APIRouter,
-    route_names: dict[str, _RouteOwner],
-    method_paths: dict[tuple[str, str], _RouteOwner],
-) -> None:
-    owner = _RouteOwner(module_name=module_name, surface="api")
-    for route in router.routes:
-        route_name = getattr(route, "name", None)
-        if isinstance(route_name, str) and route_name:
-            _record_route_name(route_name, owner, route_names)
-
-        route_path = getattr(route, "path", None)
-        route_methods = getattr(route, "methods", None)
-        if not isinstance(route_path, str) or route_methods is None:
-            continue
-
-        for method in _normalised_methods(route_methods, owner, route_path):
-            _record_method_path(method, route_path, owner, method_paths)
+            full_path = f"{configured_router.prefix}{route_path}"
+            if not full_path:
+                raise RouteCompositionError(
+                    f"Route {owner.label} resolves to an empty path."
+                )
+            for method in _normalised_methods(route_methods, owner, full_path):
+                _record_method_path(method, full_path, owner, method_paths)
 
 
 def _record_route_name(
@@ -337,17 +271,15 @@ def _normalised_methods(
 
 
 __all__ = [
+    "ConfiguredModuleRouter",
     "ConfiguredRouteSettings",
-    "HtmlRouteDefinition",
-    "HtmlSurface",
-    "HtmlView",
-    "ModuleRoutes",
+    "ModuleRouters",
     "RouteCompositionError",
-    "compose_module_routes",
+    "RoutePrefixMap",
     "load_configured_module_routes",
     "load_module_routes",
-    "merge_module_routes",
     "register_configured_module_routes",
     "register_module_routes",
     "route_prefixes_from_app_config",
+    "route_prefixes_from_settings",
 ]

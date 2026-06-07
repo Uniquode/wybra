@@ -70,11 +70,20 @@ def _write_validation_module(
 
 
 def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
+    route_prefixes = {
+        "wevra.web": {"partials": "", "api": ""},
+    }
     return AppConfig(
         config_path=tmp_path / "app.toml",
         project_root=tmp_path,
         modules=modules,
-        routes=RouteOptions(prefixes={}),
+        routes=RouteOptions(
+            prefixes={
+                module_name: route_prefixes[module_name]
+                for module_name in modules
+                if module_name in route_prefixes
+            }
+        ),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
         static=StaticOptions(url_path="/static/", export_root=Path("static")),
     )
@@ -143,6 +152,21 @@ def test_runtime_project_root_uses_invoking_project(
     monkeypatch.chdir(child)
 
     assert runtime_project_root() == project_root.resolve()
+
+
+def test_runtime_project_root_reports_malformed_pyproject(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "host_project"
+    child = project_root / "src/host_app"
+    child.mkdir(parents=True)
+    pyproject_path = project_root / "pyproject.toml"
+    pyproject_path.write_text("[project\n", encoding="utf-8")
+    monkeypatch.chdir(child)
+
+    with pytest.raises(ProjectToolConfigurationError, match=str(pyproject_path)):
+        runtime_project_root()
 
 
 def test_validate_web_checks_framework_web_foundation(tmp_path: Path) -> None:
@@ -418,34 +442,6 @@ def test_validate_web_rejects_post_form_missing_csrf_field(
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (template_root / "missing_csrf.html").write_text(
         '<form method="post"></form>',
-        encoding="utf-8",
-    )
-    (package_root / "routes.py").write_text(
-        dedent(
-            """
-            from fastapi.responses import Response
-            from wevra.web.routes import HtmlRouteDefinition, ModuleRoutes
-
-            class View:
-                template_name = "missing_csrf.html"
-
-                async def render(self, request, renderer):
-                    del request, renderer
-                    return Response()
-
-            module_routes = ModuleRoutes(
-                page_routes=(
-                    HtmlRouteDefinition(
-                        path="/form",
-                        name="form",
-                        methods=("GET",),
-                        surface="page",
-                        view=View(),
-                    ),
-                ),
-            )
-            """
-        ),
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))

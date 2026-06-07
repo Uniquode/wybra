@@ -10,7 +10,7 @@ override precedence over later foundation modules.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module, resources
 from importlib.util import find_spec
@@ -31,13 +31,13 @@ from wevra.core.resources import PackageResourceSource
 from wevra.web.context import ContextProvider, get_context_providers
 
 if TYPE_CHECKING:
-    from wevra.web.routes.registration import ModuleRoutes
+    from wevra.web.routes.registration import ModuleRouters
 
 
 @dataclass(frozen=True, slots=True)
 class ModuleSurface:
     module_name: str
-    routes: ModuleRoutes = field(default_factory=lambda: _empty_module_routes())
+    module_routers: ModuleRouters = field(default_factory=dict)
     template_sources: tuple[PackageResourceSource, ...] = ()
     static_sources: tuple[PackageResourceSource, ...] = ()
     context_providers: tuple[ContextProvider, ...] = ()
@@ -67,12 +67,12 @@ def discover_module_surface(
 ) -> ModuleSurface:
     _require_configured_module(module_name)
     if include_routes:
-        routes = discover_module_routes(module_name)
+        module_routers = discover_module_routers(module_name)
     else:
-        routes = _empty_module_routes()
+        module_routers = {}
     return ModuleSurface(
         module_name=module_name,
-        routes=routes,
+        module_routers=module_routers,
         template_sources=discover_template_sources(module_name),
         static_sources=discover_static_sources(module_name),
         context_providers=(
@@ -81,34 +81,49 @@ def discover_module_surface(
     )
 
 
-def discover_module_routes(module_name: str) -> ModuleRoutes:
-    from wevra.web.routes.registration import ModuleRoutes
+def discover_module_routers(module_name: str) -> ModuleRouters:
+    from fastapi.routing import APIRouter
 
     route_module_name = module_surface_name(module_name, ROUTE_SURFACE_MODULE)
     if _find_module_spec(route_module_name) is None:
-        return ModuleRoutes()
+        return {}
 
     route_module = _import_surface_module(route_module_name)
-    module_routes = getattr(route_module, ROUTE_EXPORT_ATTRIBUTE, None)
-    if not isinstance(module_routes, ModuleRoutes):
+    module_routers = getattr(route_module, ROUTE_EXPORT_ATTRIBUTE, None)
+    if not isinstance(module_routers, Mapping):
         raise CompositionError(
             surface_message(
                 "Route surface",
                 route_module_name,
                 (
                     f"must expose `{ROUTE_EXPORT_ATTRIBUTE}` as a "
-                    "wevra.web.routes.ModuleRoutes instance."
+                    "mapping of router labels to fastapi.APIRouter instances."
                 ),
             )
         )
 
-    return module_routes
+    routers: dict[str, APIRouter] = {}
+    for label, router in module_routers.items():
+        if not isinstance(label, str) or not label.strip():
+            raise CompositionError(
+                surface_message(
+                    "Route surface",
+                    route_module_name,
+                    "must use non-blank string router labels.",
+                )
+            )
+        if not isinstance(router, APIRouter):
+            raise CompositionError(
+                surface_message(
+                    "Route surface",
+                    route_module_name,
+                    f"router label {label!r} must be a fastapi.APIRouter instance.",
+                )
+            )
 
+        routers[label] = router
 
-def _empty_module_routes() -> ModuleRoutes:
-    from wevra.web.routes.registration import ModuleRoutes
-
-    return ModuleRoutes()
+    return routers
 
 
 def discover_template_sources(module_name: str) -> tuple[PackageResourceSource, ...]:
@@ -229,7 +244,7 @@ __all__ = [
     "TEMPLATE_RESOURCE_DIRECTORY",
     "discover_context_providers",
     "context_providers_from_modules",
-    "discover_module_routes",
+    "discover_module_routers",
     "discover_module_surface",
     "discover_module_surfaces",
     "discover_static_sources",

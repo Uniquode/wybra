@@ -141,3 +141,41 @@ class TemplateRenderer:
         return self.render_page(
             template_name, request, context, status_code=status_code
         )
+
+
+def renderer_from(request: Request) -> TemplateRenderer:
+    renderer = getattr(request.app.state, "renderer", None)
+    if not isinstance(renderer, TemplateRenderer):
+        raise RuntimeError("Template renderer is not configured on the application.")
+
+    return renderer
+
+
+def render_page(
+    request: Request,
+    template_name: str,
+    context: dict[str, Any] | None = None,
+    *,
+    status_code: int = 200,
+) -> HTMLResponse:
+    return renderer_from(request).render_page(
+        template_name,
+        request,
+        context or {},
+        status_code=status_code,
+    )
+
+
+def render_partial(
+    request: Request,
+    template_name: str,
+    context: dict[str, Any] | None = None,
+    *,
+    status_code: int = 200,
+) -> HTMLResponse:
+    return renderer_from(request).render_partial(
+        template_name,
+        request,
+        context or {},
+        status_code=status_code,
+    )

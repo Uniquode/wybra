@@ -10,7 +10,7 @@
   {% if form_error is defined and form_error %}
   <p role="alert">{{ form_error }}</p>
   {% endif %}
-  <form action="{{ request.url_for('identity:signup-submit') }}" method="post">
+  <form action="{{ request.url_for('auth:signup') }}" method="post">
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
     <label>
       Email
@@ -23,7 +23,7 @@
     <button type="submit">Create account</button>
   </form>
   <p class="muted-copy">
-    <a href="{{ request.url_for('identity:login') }}">Sign in</a>
+    <a href="{{ request.url_for('auth:login') }}">Sign in</a>
   </p>
 </section>
 {% endblock %}

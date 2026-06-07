@@ -12,14 +12,14 @@
     <dt>Active</dt>
     <dd>{{ "Yes" if user.is_active else "No" }}</dd>
   </dl>
-  <form action="{{ request.url_for('identity:logout') }}" method="post">
+  <form action="{{ request.url_for('auth:logout') }}" method="post">
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
     <button type="submit">Sign out</button>
   </form>
   {% else %}
   <h1>Not signed in</h1>
   <p class="muted-copy">Sign in to view account status.</p>
-  <p><a href="{{ request.url_for('identity:login') }}">Sign in</a></p>
+  <p><a href="{{ request.url_for('auth:login') }}">Sign in</a></p>
   {% endif %}
 </section>
 {% endblock %}

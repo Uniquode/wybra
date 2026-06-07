@@ -5,13 +5,13 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, get_type_hints
 
 import pytest
 from envex import Env
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI
 from fastapi.responses import Response
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
+from fastapi.testclient import TestClient
 from jinja2 import Environment, select_autoescape
 from jinja2.exceptions import TemplateNotFound
 
@@ -34,12 +34,8 @@ from wevra.core.settings import (
 )
 from wevra.web.context import ContextProviderError, resolve_context_providers
 from wevra.web.routes import (
-    HtmlRouteDefinition,
-    HtmlSurface,
-    HtmlView,
-    ModuleRoutes,
+    ConfiguredModuleRouter,
     RouteCompositionError,
-    compose_module_routes,
     load_configured_module_routes,
     load_module_routes,
     register_module_routes,
@@ -49,13 +45,19 @@ from wevra.web.routes.discovery import (
     ModuleSurface,
     context_providers_from_modules,
     discover_context_providers,
-    discover_module_routes,
+    discover_module_routers,
     discover_module_surface,
     discover_module_surfaces,
     discover_static_sources,
     discover_template_sources,
     static_sources_from_modules,
     template_sources_from_modules,
+)
+from wevra.web.security import (
+    COOP_HEADER_NAME,
+    SecurityHeaderOptions,
+    cross_origin_opener_policy,
+    register_security_headers,
 )
 from wevra.web.staticfiles import (
     StaticAssetDuplicate,
@@ -77,12 +79,12 @@ def test_wevra_web_package_exposes_expected_submodules() -> None:
         "wevra.core.composition",
         "wevra.web.context",
         "wevra.web.forms.csrf",
-        "wevra.web.routes.dispatcher",
         "wevra.web.errors",
         "wevra.web.forms.security",
         "wevra.core.resources",
         "wevra.web.routes.contracts",
         "wevra.web.routes",
+        "wevra.web.security",
         "wevra.core.settings",
         "wevra.web.routes",
         "wevra.web.style_contract",
@@ -154,6 +156,107 @@ def test_wevra_web_package_is_included_in_build_modules() -> None:
     )
 
     assert "wevra" in pyproject["tool"]["uv"]["build-backend"]["module-name"]
+
+
+def test_security_headers_apply_default_cross_origin_opener_policy() -> None:
+    app = FastAPI()
+    register_security_headers(app)
+
+    @app.get("/")
+    async def home() -> Response:
+        return Response("ok")
+
+    response = TestClient(app).get("/")
+
+    assert response.headers[COOP_HEADER_NAME] == "same-origin"
+
+
+def test_security_headers_can_disable_default_cross_origin_opener_policy() -> None:
+    app = FastAPI()
+    register_security_headers(
+        app,
+        options=SecurityHeaderOptions(cross_origin_opener_policy=None),
+    )
+
+    @app.get("/")
+    async def home() -> Response:
+        return Response("ok")
+
+    response = TestClient(app).get("/")
+
+    assert COOP_HEADER_NAME not in response.headers
+
+
+def test_security_headers_can_override_cross_origin_opener_policy_per_route() -> None:
+    app = FastAPI()
+    register_security_headers(app)
+
+    @app.get(
+        "/popup",
+        dependencies=[
+            Depends(cross_origin_opener_policy("same-origin-allow-popups")),
+        ],
+    )
+    async def popup() -> Response:
+        return Response("popup")
+
+    response = TestClient(app).get("/popup")
+
+    assert response.headers[COOP_HEADER_NAME] == "same-origin-allow-popups"
+
+
+def test_security_headers_can_exempt_cross_origin_opener_policy_per_route() -> None:
+    app = FastAPI()
+    register_security_headers(app)
+
+    @app.get("/embed", dependencies=[Depends(cross_origin_opener_policy(None))])
+    async def embed() -> Response:
+        return Response("embed")
+
+    response = TestClient(app).get("/embed")
+
+    assert COOP_HEADER_NAME not in response.headers
+
+
+def test_security_headers_preserve_explicit_response_header() -> None:
+    app = FastAPI()
+    register_security_headers(app)
+
+    @app.get("/")
+    async def home() -> Response:
+        return Response("ok", headers={COOP_HEADER_NAME: "unsafe-none"})
+
+    response = TestClient(app).get("/")
+
+    assert response.headers[COOP_HEADER_NAME] == "unsafe-none"
+
+
+def test_security_header_options_reject_invalid_cross_origin_opener_policy() -> None:
+    with pytest.raises(ValueError, match="Cross-Origin-Opener-Policy.*invalid"):
+        SecurityHeaderOptions(cross_origin_opener_policy="invalid")  # type: ignore[arg-type]
+
+
+def test_cross_origin_opener_policy_dependency_rejects_invalid_policy() -> None:
+    with pytest.raises(ValueError, match="Cross-Origin-Opener-Policy.*invalid"):
+        cross_origin_opener_policy("invalid")  # type: ignore[arg-type]
+
+
+def test_register_security_headers_is_idempotent_and_updates_options() -> None:
+    app = FastAPI()
+    register_security_headers(app)
+    register_security_headers(
+        app,
+        options=SecurityHeaderOptions(cross_origin_opener_policy="unsafe-none"),
+    )
+
+    @app.get("/")
+    async def home() -> Response:
+        return Response("ok")
+
+    response = TestClient(app).get("/")
+
+    assert len(app.user_middleware) == 1
+    assert response.headers[COOP_HEADER_NAME] == "unsafe-none"
 
 
 def test_composed_settings_loader_builds_framework_settings(tmp_path: Path) -> None:
@@ -243,54 +346,11 @@ def test_composed_settings_loader_reports_invalid_typed_env_values() -> None:
         )
 
 
-def test_html_route_definition_captures_route_contract() -> None:
-    class View:
-        async def render(self, request: Request, renderer: object) -> Response:
-            del request, renderer
-            return Response()
-
-    definition = HtmlRouteDefinition(
-        path="/account",
-        name="identity:account",
-        methods=("GET",),
-        surface="page",
-        view=View(),
-    )
-
-    assert definition.path == "/account"
-    assert definition.name == "identity:account"
-    assert definition.methods == ("GET",)
-    assert definition.surface == "page"
-    assert isinstance(definition.view, HtmlView)
-
-
-def test_html_route_definition_rejects_unknown_surfaces_at_type_boundary() -> None:
-    hints = get_type_hints(HtmlRouteDefinition)
-
-    assert hints["surface"] == HtmlSurface
-
-
-def test_html_view_contract_uses_fastapi_engine_types() -> None:
-    hints = get_type_hints(HtmlView.render)
-
-    assert hints["request"] is Request
-    assert hints["renderer"] is Any
-    assert hints["return"] is Response
-
-
-def test_module_routes_default_to_empty_web_contributions() -> None:
-    routes = ModuleRoutes()
-
-    assert routes.page_routes == ()
-    assert routes.partial_routes == ()
-    assert routes.api_routers == ()
-
-
 def test_module_surface_default_to_empty_optional_contributions() -> None:
     surface = ModuleSurface(module_name="host_app")
 
     assert surface.module_name == "host_app"
-    assert surface.routes == ModuleRoutes()
+    assert surface.module_routers == {}
     assert surface.template_sources == ()
     assert surface.static_sources == ()
     assert surface.context_providers == ()
@@ -300,39 +360,17 @@ def test_module_surface_accepts_declared_contract_contributions() -> None:
     api_router = APIRouter()
     template_source = PackageResourceSource(package="wevra.auth", directory="templates")
     static_source = PackageResourceSource(package="wevra.auth", directory="static")
-    routes = ModuleRoutes(api_routers=(api_router,))
 
     surface = ModuleSurface(
         module_name="wevra.auth",
-        routes=routes,
+        module_routers={"api": api_router},
         template_sources=(template_source,),
         static_sources=(static_source,),
     )
 
-    assert surface.routes.api_routers == (api_router,)
+    assert surface.module_routers == {"api": api_router}
     assert surface.template_sources == (template_source,)
     assert surface.static_sources == (static_source,)
-
-
-class _RouteCompositionView:
-    async def render(self, request: Request, renderer: object) -> Response:
-        del request, renderer
-        return Response()
-
-
-def _route_definition(
-    path: str,
-    name: str,
-    methods: tuple[str, ...] = ("GET",),
-    surface: HtmlSurface = "page",
-) -> HtmlRouteDefinition:
-    return HtmlRouteDefinition(
-        path=path,
-        name=name,
-        methods=methods,
-        surface=surface,
-        view=_RouteCompositionView(),
-    )
 
 
 def test_discover_module_surface_treats_missing_optional_surfaces_as_empty(
@@ -381,7 +419,7 @@ def test_discover_module_surface_reports_missing_configured_module() -> None:
         discover_module_surface("missing_surface_app")
 
 
-def test_discover_module_routes_reads_module_routes_export(
+def test_discover_module_routers_reads_module_routers_export(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -389,13 +427,41 @@ def test_discover_module_routes_reads_module_routes_export(
     package_root.mkdir()
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (package_root / "routes.py").write_text(
-        "from wevra.web.routes import ModuleRoutes\nmodule_routes = ModuleRoutes()\n",
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "module_routers = {'default': router}\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
 
-    assert discover_module_routes("routes_surface_app") == ModuleRoutes()
+    routers = discover_module_routers("routes_surface_app")
+
+    assert tuple(routers) == ("default",)
+    assert isinstance(routers["default"], APIRouter)
+
+
+def test_discover_module_routers_accepts_mapping_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "routes_mapping_surface_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "from types import MappingProxyType\n"
+        "router = APIRouter()\n"
+        "module_routers = MappingProxyType({'default': router})\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    routers = discover_module_routers("routes_mapping_surface_app")
+
+    assert tuple(routers) == ("default",)
+    assert isinstance(routers["default"], APIRouter)
 
 
 def test_load_module_routes_reads_configured_route_surfaces_in_order(
@@ -414,30 +480,19 @@ def test_load_module_routes_reads_configured_route_surfaces_in_order(
             dedent(
                 f"""
             from fastapi import APIRouter
-            from fastapi.responses import Response
-            from wevra.web.routes import HtmlRouteDefinition, ModuleRoutes
-
-            class View:
-                async def render(self, request, renderer):
-                    del request, renderer
-                    return Response()
 
             router = APIRouter()
+            api_router = APIRouter(prefix='/api')
 
-            @router.get('/{package_name}/api', name={api_route_name!r})
+            @router.get('/home', name={route_name!r})
+            async def home():
+                return 'home'
+
+            @api_router.get('/{package_name}', name={api_route_name!r})
             async def api():
                 return {{'ok': True}}
 
-            module_routes = ModuleRoutes(
-                page_routes=(HtmlRouteDefinition(
-                    path='home',
-                    name={route_name!r},
-                    methods=('GET',),
-                    surface='page',
-                    view=View(),
-                ),),
-                api_routers=(router,),
-            )
+            module_routers = {{'pages': router, 'api': api_router}}
             """
             ),
             encoding="utf-8",
@@ -448,21 +503,27 @@ def test_load_module_routes_reads_configured_route_surfaces_in_order(
     routes = load_module_routes(
         ("first_routes_app", "second_routes_app"),
         route_prefixes={
-            "first_routes_app": "/first",
-            "second_routes_app": "/second",
+            "first_routes_app": {"pages": "/first", "api": ""},
+            "second_routes_app": {"pages": "/second", "api": ""},
         },
     )
 
-    assert tuple(route.name for route in routes.page_routes) == (
+    assert tuple(
+        (route.module_name, route.label, route.prefix) for route in routes
+    ) == (
+        ("first_routes_app", "pages", "/first"),
+        ("first_routes_app", "api", ""),
+        ("second_routes_app", "pages", "/second"),
+        ("second_routes_app", "api", ""),
+    )
+    assert tuple(
+        route.name
+        for configured_router in routes
+        for route in configured_router.router.routes
+    ) == (
         "first:home",
-        "second:home",
-    )
-    assert tuple(route.path for route in routes.page_routes) == (
-        "/first/home",
-        "/second/home",
-    )
-    assert tuple(router.routes[0].name for router in routes.api_routers) == (
         "first:home:api",
+        "second:home",
         "second:home:api",
     )
 
@@ -478,25 +539,16 @@ def test_configured_module_routes_and_registration_are_wevra_web_concerns(
     (package_root / "routes.py").write_text(
         dedent(
             """
+            from fastapi import APIRouter
             from fastapi.responses import Response
-            from wevra.web.routes import HtmlRouteDefinition, ModuleRoutes
 
-            class View:
-                async def render(self, request, renderer):
-                    del request, renderer
-                    return Response()
+            router = APIRouter()
 
-            module_routes = ModuleRoutes(
-                page_routes=(
-                    HtmlRouteDefinition(
-                        path="/",
-                        name="public:home",
-                        methods=("GET",),
-                        surface="page",
-                        view=View(),
-                    ),
-                ),
-            )
+            @router.get("/ping", name="public:ping")
+            async def ping():
+                return Response("pong")
+
+            module_routers = {"default": router}
             """
         ),
         encoding="utf-8",
@@ -510,139 +562,325 @@ def test_configured_module_routes_and_registration_are_wevra_web_concerns(
             config_path=Path("app.toml"),
             project_root=Path.cwd(),
             modules=modules,
-            routes=RouteOptions(prefixes={module_name: "/site"}),
+            routes=RouteOptions(prefixes={module_name: {"default": "/site"}}),
             templates=TemplateOptions(auto_reload=True, cache_size=0),
             static=StaticOptions(url_path="/static/", export_root=Path("static")),
         )
 
-    class Dispatcher:
-        def __init__(self) -> None:
-            self.registered_routes: tuple[HtmlRouteDefinition, ...] = ()
-
-        def register(self, definitions) -> None:
-            self.registered_routes = self.registered_routes + tuple(definitions)
-
     route_set = load_configured_module_routes(Settings())
     app = FastAPI()
-    dispatcher = Dispatcher()
 
-    register_module_routes(app, dispatcher, route_set)  # type: ignore[arg-type]
+    register_module_routes(app, route_set)
 
-    assert route_prefixes_from_app_config(Settings.app_config) == {module_name: "/site"}
-    assert tuple(route.name for route in dispatcher.registered_routes) == (
-        "public:home",
-    )
-    assert tuple(route.path for route in dispatcher.registered_routes) == ("/",)
-    assert "public:home" in {getattr(route, "name", None) for route in app.routes}
+    assert route_prefixes_from_app_config(Settings.app_config) == {
+        module_name: {"default": "/site"}
+    }
+    assert "public:ping" in {getattr(route, "name", None) for route in app.routes}
+    assert TestClient(app).get("/site/ping").text == "pong"
 
 
-def test_compose_module_routes_applies_prefixes_to_relative_paths() -> None:
-    routes = compose_module_routes(
+def test_register_module_routes_applies_labelled_prefixes() -> None:
+    router = APIRouter()
+
+    @router.get("/dashboard", name="admin:dashboard")
+    async def dashboard() -> Response:
+        return Response("dashboard")
+
+    app = FastAPI()
+    register_module_routes(
+        app,
         (
-            (
-                "admin",
-                ModuleRoutes(
-                    page_routes=(_route_definition("dashboard", "admin:dashboard"),),
-                    partial_routes=(
-                        _route_definition(
-                            "summary",
-                            "admin:partial:summary",
-                            surface="partial",
-                        ),
-                    ),
-                ),
+            ConfiguredModuleRouter(
+                module_name="admin",
+                label="pages",
+                router=router,
+                prefix="/admin",
             ),
         ),
-        route_prefixes={"admin": "/admin/"},
     )
 
-    assert tuple(route.path for route in routes.page_routes) == ("/admin/dashboard",)
-    assert tuple(route.path for route in routes.partial_routes) == ("/admin/summary",)
+    assert TestClient(app).get("/admin/dashboard").text == "dashboard"
 
 
-def test_compose_module_routes_preserves_absolute_paths() -> None:
-    routes = compose_module_routes(
+def test_module_router_can_bypass_module_prefix_with_separate_label() -> None:
+    account_router = APIRouter()
+    callback_router = APIRouter()
+
+    @account_router.get("/login", name="auth:login")
+    async def login() -> Response:
+        return Response("login")
+
+    @callback_router.get("/oauth/callback", name="auth:oauth-callback")
+    async def callback() -> Response:
+        return Response("callback")
+
+    app = FastAPI()
+    register_module_routes(
+        app,
         (
-            (
-                "identity",
-                ModuleRoutes(
-                    page_routes=(_route_definition("/login", "identity:login"),),
-                ),
+            ConfiguredModuleRouter(
+                module_name="auth",
+                label="account",
+                router=account_router,
+                prefix="/account",
+            ),
+            ConfiguredModuleRouter(
+                module_name="auth",
+                label="callbacks",
+                router=callback_router,
+                prefix="",
             ),
         ),
-        route_prefixes={"identity": "/identity"},
     )
 
-    assert tuple(route.path for route in routes.page_routes) == ("/login",)
+    client = TestClient(app)
+    assert client.get("/account/login").text == "login"
+    assert client.get("/oauth/callback").text == "callback"
+    assert client.get("/account/oauth/callback").status_code == 404
 
 
-def test_compose_module_routes_rejects_route_name_conflicts() -> None:
+def test_register_module_routes_rejects_route_name_conflicts() -> None:
+    first_router = APIRouter()
+    second_router = APIRouter()
+
+    @first_router.get("/first", name="shared:home")
+    async def first() -> Response:
+        return Response()
+
+    @second_router.get("/second", name="shared:home")
+    async def second() -> Response:
+        return Response()
+
     with pytest.raises(
         RouteCompositionError,
         match="Route name conflict.*shared:home.*first.*second",
     ):
-        compose_module_routes(
+        register_module_routes(
+            FastAPI(),
             (
-                (
-                    "first",
-                    ModuleRoutes(
-                        page_routes=(_route_definition("/first", "shared:home"),),
-                    ),
+                ConfiguredModuleRouter(
+                    module_name="first",
+                    label="pages",
+                    router=first_router,
+                    prefix="",
                 ),
-                (
-                    "second",
-                    ModuleRoutes(
-                        page_routes=(_route_definition("/second", "shared:home"),),
-                    ),
+                ConfiguredModuleRouter(
+                    module_name="second",
+                    label="pages",
+                    router=second_router,
+                    prefix="",
                 ),
             ),
-            route_prefixes={},
         )
 
 
-def test_compose_module_routes_rejects_html_api_method_path_conflicts() -> None:
-    api_router = APIRouter()
+def test_register_module_routes_rejects_method_path_conflicts() -> None:
+    first_router = APIRouter()
+    second_router = APIRouter()
 
-    @api_router.get("/shared", name="api:shared")
-    async def shared() -> dict[str, bool]:
-        return {"ok": True}
+    @first_router.get("/shared", name="first:shared")
+    async def first() -> Response:
+        return Response()
+
+    @second_router.get("/shared", name="second:shared")
+    async def second() -> Response:
+        return Response()
 
     with pytest.raises(
         RouteCompositionError,
-        match="Route method/path conflict.*GET /shared.*page.*api",
+        match="Route method/path conflict.*GET /shared.*first.*second",
     ):
-        compose_module_routes(
+        register_module_routes(
+            FastAPI(),
             (
-                (
-                    "page",
-                    ModuleRoutes(
-                        page_routes=(_route_definition("/shared", "page:shared"),),
-                    ),
+                ConfiguredModuleRouter(
+                    module_name="first",
+                    label="pages",
+                    router=first_router,
+                    prefix="",
                 ),
-                ("api", ModuleRoutes(api_routers=(api_router,))),
+                ConfiguredModuleRouter(
+                    module_name="second",
+                    label="pages",
+                    router=second_router,
+                    prefix="",
+                ),
             ),
-            route_prefixes={},
         )
 
 
-def test_compose_module_routes_rejects_non_string_http_methods() -> None:
-    invalid_route = _route_definition(
-        "/bad-method",
-        "bad:method",
-        methods=("GET", 123),  # type: ignore[arg-type]
-    )
+def test_register_module_routes_rejects_non_string_http_methods() -> None:
+    router = APIRouter()
+
+    @router.get("/bad-method", name="bad:method")
+    async def bad_method() -> Response:
+        return Response()
+
+    route = router.routes[0]
+    assert isinstance(route, APIRoute)
+    route.methods.add(123)  # type: ignore[arg-type]
 
     with pytest.raises(
         RouteCompositionError,
         match=r"invalid HTTP method 123; methods must be strings",
     ):
-        compose_module_routes(
-            (("bad", ModuleRoutes(page_routes=(invalid_route,))),),
-            route_prefixes={},
+        register_module_routes(
+            FastAPI(),
+            (
+                ConfiguredModuleRouter(
+                    module_name="bad",
+                    label="pages",
+                    router=router,
+                    prefix="",
+                ),
+            ),
         )
 
 
-def test_discover_module_routes_rejects_malformed_present_surface(
+def test_load_module_routes_rejects_missing_router_prefix_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "missing_prefix_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "module_routers = {'pages': router}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(
+        RouteCompositionError,
+        match="missing router label 'pages'",
+    ):
+        load_module_routes(
+            ("missing_prefix_route_app",),
+            route_prefixes={"missing_prefix_route_app": {}},
+        )
+
+
+def test_load_module_routes_defaults_missing_module_prefix_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "default_prefix_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+
+            router = APIRouter()
+
+            @router.get('/home', name='default:home')
+            async def home():
+                return 'home'
+
+            module_routers = {'pages': router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    routes = load_module_routes(
+        ("default_prefix_route_app",),
+        route_prefixes={},
+    )
+
+    assert tuple(route.prefix for route in routes) == ("",)
+
+
+def test_load_module_routes_rejects_empty_router_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "empty_router_surface_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "module_routers = {'pages': router}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(
+        RouteCompositionError,
+        match="did not register any routes.*decorated handler modules",
+    ):
+        load_module_routes(
+            ("empty_router_surface_app",),
+            route_prefixes={"empty_router_surface_app": {"pages": ""}},
+        )
+
+
+def test_load_module_routes_rejects_invalid_include_prefixes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "invalid_prefix_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "module_routers = {'pages': router}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(RouteCompositionError, match="must start with '/'"):
+        load_module_routes(
+            ("invalid_prefix_route_app",),
+            route_prefixes={"invalid_prefix_route_app": {"pages": "bad"}},
+        )
+
+
+def test_load_module_routes_normalises_trailing_include_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "trailing_prefix_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+
+            router = APIRouter()
+
+            @router.get('/home', name='trailing:home')
+            async def home():
+                return 'home'
+
+            module_routers = {'pages': router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    routes = load_module_routes(
+        ("trailing_prefix_route_app",),
+        route_prefixes={"trailing_prefix_route_app": {"pages": "/account/"}},
+    )
+
+    assert tuple(route.prefix for route in routes) == ("/account",)
+
+
+def test_discover_module_routers_rejects_malformed_present_surface(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -650,7 +888,7 @@ def test_discover_module_routes_rejects_malformed_present_surface(
     package_root.mkdir()
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (package_root / "routes.py").write_text(
-        "module_routes = object()\n",
+        "module_routers = object()\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -658,9 +896,45 @@ def test_discover_module_routes_rejects_malformed_present_surface(
 
     with pytest.raises(
         CompositionError,
-        match="bad_routes_surface_app.routes.*module_routes",
+        match="bad_routes_surface_app.routes.*module_routers",
     ):
-        discover_module_routes("bad_routes_surface_app")
+        discover_module_routers("bad_routes_surface_app")
+
+
+def test_discover_module_routers_rejects_blank_router_label(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "blank_label_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\nmodule_routers = {' ': APIRouter()}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(CompositionError, match="non-blank string router labels"):
+        discover_module_routers("blank_label_app")
+
+
+def test_discover_module_routers_rejects_non_apirouter_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "non_apirouter_value_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "module_routers = {'default': object()}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(CompositionError, match="fastapi.APIRouter"):
+        discover_module_routers("non_apirouter_value_app")
 
 
 def test_discover_package_resource_sources_without_route_import(
@@ -987,13 +1261,6 @@ def test_load_modules_fails_clearly_for_missing_module() -> None:
         load_modules(("wevra.web.missing",))
 
 
-def test_wevra_web_dispatcher_owns_route_contracts() -> None:
-    from wevra.web.routes import dispatcher
-
-    assert dispatcher.HtmlRouteDefinition is HtmlRouteDefinition
-    assert dispatcher.HtmlView is HtmlView
-
-
 def test_load_app_config_reads_modules_from_app_toml(
     tmp_path: Path,
 ) -> None:
@@ -1002,8 +1269,9 @@ def test_load_app_config_reads_modules_from_app_toml(
         """
         modules = ["host_app", "wevra.auth"]
 
-        [routes]
-        "wevra.auth" = "/"
+        [routes."wevra.auth"]
+        account = "/account"
+        api = ""
 
         [templates]
         auto_reload = false
@@ -1022,7 +1290,7 @@ def test_load_app_config_reads_modules_from_app_toml(
     assert config.config_path == config_path.resolve()
     assert config.modules == ("host_app", "wevra.auth")
     assert config.routes == RouteOptions(
-        prefixes={"wevra.auth": "/"},
+        prefixes={"wevra.auth": {"account": "/account", "api": ""}},
     )
     assert config.templates == TemplateOptions(
         auto_reload=False,

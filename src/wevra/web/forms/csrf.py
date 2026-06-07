@@ -2,10 +2,12 @@ import base64
 import hashlib
 import hmac
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from secrets import token_urlsafe
+from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from starlette.datastructures import FormData
 
@@ -20,6 +22,7 @@ CSRF_NONCE_MAX_LENGTH = 256
 CSRF_NONCE_MIN_LENGTH = 32
 CSRF_TOKEN_BYTES = 32
 CSRF_TOKEN_SEPARATOR = "."
+CSRF_EXEMPT_ENDPOINT_ATTR = "__wevra_csrf_exempt__"
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,26 @@ async def request_form_data(request: Request) -> FormData:
     form_data = await request.form()
     setattr(request.state, CSRF_FORM_DATA_STATE_ATTR, form_data)
     return form_data
+
+
+def csrf_exempt(func: Callable[..., Any]) -> Callable[..., Any]:
+    setattr(func, CSRF_EXEMPT_ENDPOINT_ATTR, True)
+    return func
+
+
+async def validate_csrf(request: Request) -> None:
+    endpoint = request.scope.get("endpoint")
+    if getattr(endpoint, CSRF_EXEMPT_ENDPOINT_ATTR, False):
+        return
+
+    protector = getattr(request.app.state, "csrf", None)
+    if protector is None:
+        return
+    if not isinstance(protector, CsrfProtector):  # pragma: no cover - defensive
+        raise RuntimeError("CSRF protector is not configured correctly.")
+
+    if not await protector.validate_request(request):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token.")
 
 
 @dataclass(frozen=True, slots=True)
