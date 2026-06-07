@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, TextIO
 
@@ -49,6 +49,8 @@ def render_inspection(
             return render_mermaid(inspection)
         case RouteOutputFormat.JSON:
             return render_json(inspection)
+        case _:
+            raise ValueError(f"Unsupported route output format: {output_format!r}")
 
 
 @click.command(
@@ -132,7 +134,27 @@ def routes_command(
         )
         return 1
 
-    inspection = inspect_route_tree(app)
+    routes = app.routes
+    if not _is_supported_route_tree(routes):
+        print("configuration: failed", file=sys.stderr)
+        print(
+            "- Configured ASGI app target exposes an unsupported route tree; "
+            "expected an iterable of route objects on 'app.routes'.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        inspection = inspect_route_tree(app)
+    except TypeError as exc:
+        print("configuration: failed", file=sys.stderr)
+        print(
+            "- Failed to inspect configured ASGI app route tree. Ensure "
+            "'app.routes' is an iterable of Starlette routes.",
+            file=sys.stderr,
+        )
+        print(f"- {exc}", file=sys.stderr)
+        return 1
     if not quiet:
         _write_output(render_inspection(inspection, route_output_format))
     return 1 if check and inspection.problems else 0
@@ -162,6 +184,13 @@ def _resolve_output_format(
         raise click.UsageError("Choose only one route tree output format.")
 
     return selected[0] if selected else RouteOutputFormat.SUCCINCT
+
+
+def _is_supported_route_tree(routes: object) -> bool:
+    return isinstance(routes, Iterable) and not isinstance(
+        routes,
+        (Mapping, str, bytes),
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

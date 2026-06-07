@@ -2,6 +2,7 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
 from fastapi import APIRouter, FastAPI, Form
 from fastapi.responses import HTMLResponse
 from starlette.routing import Route
@@ -44,6 +45,16 @@ def test_wevra_package_command_scripts_are_prefixed() -> None:
 
 def _app() -> FastAPI:
     return FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+
+class _AppWithRoutes:
+    def __init__(self, routes: object) -> None:
+        self.routes = routes
+
+
+class _BrokenRouteIterable:
+    def __iter__(self):
+        raise TypeError("route iterator failed")
 
 
 def test_inspect_route_tree_reports_installed_routes_and_endpoint_shape(
@@ -236,6 +247,13 @@ def test_renderers_use_the_same_route_tree_model() -> None:
     assert "/api/status" in mermaid
     assert json_output["routes"][0]["path"] == "/api/status"
     assert json_output["tree"]["children"][0]["label"] == "api"
+
+
+def test_render_inspection_rejects_unknown_output_format() -> None:
+    inspection = inspect_route_tree(_app())
+
+    with pytest.raises(ValueError, match="Unsupported route output format"):
+        routes_tool.render_inspection(inspection, "yaml")
 
 
 def test_graph_renderer_uses_compact_visual_tree() -> None:
@@ -510,3 +528,44 @@ def test_routes_command_reports_configuration_failure(
     assert captured.out == ""
     assert "configuration: failed" in captured.err
     assert "missing app target" in captured.err
+
+
+@pytest.mark.parametrize("routes", [42, {"route": object()}, "not routes"])
+def test_routes_command_reports_unsupported_route_tree_shape(
+    monkeypatch,
+    capsys,
+    routes: object,
+) -> None:
+    monkeypatch.setattr(
+        routes_tool,
+        "load_configured_asgi_app",
+        lambda: _AppWithRoutes(routes),
+    )
+
+    exit_code = routes_tool.main([])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "configuration: failed" in captured.err
+    assert "unsupported route tree" in captured.err
+
+
+def test_routes_command_reports_route_tree_inspection_type_error(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        routes_tool,
+        "load_configured_asgi_app",
+        lambda: _AppWithRoutes(_BrokenRouteIterable()),
+    )
+
+    exit_code = routes_tool.main([])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "configuration: failed" in captured.err
+    assert "Failed to inspect configured ASGI app route tree" in captured.err
+    assert "route iterator failed" in captured.err
