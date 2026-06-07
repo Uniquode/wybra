@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from html.parser import HTMLParser
+from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -141,7 +142,7 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
     )
 
     try:
-        route_set = load_module_routes(
+        configured_routers = load_module_routes(
             settings.modules,
             route_prefixes=_route_prefixes(settings),
         )
@@ -150,7 +151,7 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
             checks,
             errors,
             passed=False,
-            description="module routes compose",
+            description="module routers compose",
             error=f"Module route composition failed: {exc}",
         )
         return ValidationResult(name="web", errors=tuple(errors), checks=tuple(checks))
@@ -159,17 +160,17 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
         checks,
         errors,
         passed=True,
-        description="module routes compose",
+        description=(
+            "module routers compose: "
+            + ", ".join(
+                f"{router.module_name}.{router.label}" for router in configured_routers
+            )
+        ),
     )
     template_sources = _template_sources(settings)
     renderer: TemplateRenderer | None = None
 
-    route_definitions = tuple(route_set.page_routes) + tuple(route_set.partial_routes)
-    for definition in route_definitions:
-        template_name = getattr(definition.view, "template_name", None)
-        if template_name is None:
-            continue
-
+    for template_name in _template_names(settings, template_sources):
         template_resource = _template_resource(
             settings,
             template_sources,
@@ -179,7 +180,7 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
             checks,
             errors,
             passed=template_resource is not None,
-            description=f"route template exists: {definition.name} -> {template_name}",
+            description=f"template exists: {template_name}",
             error=f"Missing template: {_template_location(settings, template_name)}",
         ):
             continue
@@ -299,6 +300,64 @@ def _template_renderer(
     )
 
 
+def _template_names(
+    settings: WebValidationSettings,
+    template_sources: tuple[PackageResourceSource, ...],
+) -> tuple[str, ...]:
+    template_names: list[str] = []
+    seen: set[str] = set()
+    for template_name in _filesystem_template_names(settings):
+        if template_name not in seen:
+            seen.add(template_name)
+            template_names.append(template_name)
+
+    for source in template_sources:
+        for template_name in _package_template_names(source):
+            if template_name not in seen:
+                seen.add(template_name)
+                template_names.append(template_name)
+
+    return tuple(template_names)
+
+
+def _filesystem_template_names(settings: WebValidationSettings) -> tuple[str, ...]:
+    if not _uses_filesystem_template_root(settings) or settings.template_root is None:
+        return ()
+
+    root = settings.template_root
+    return tuple(
+        path.relative_to(root).as_posix()
+        for path in sorted(root.rglob("*.html"))
+        if path.is_file()
+    )
+
+
+def _package_template_names(source: PackageResourceSource) -> tuple[str, ...]:
+    try:
+        root = resources.files(source.package).joinpath(source.directory)
+    except (ModuleNotFoundError, TypeError):
+        return ()
+    if not root.is_dir():
+        return ()
+
+    return tuple(_traversable_template_names(root))
+
+
+def _traversable_template_names(
+    root: Traversable,
+    prefix: str = "",
+) -> tuple[str, ...]:
+    template_names: list[str] = []
+    for child in sorted(root.iterdir(), key=lambda item: item.name):
+        child_name = f"{prefix}/{child.name}" if prefix else child.name
+        if child.is_dir():
+            template_names.extend(_traversable_template_names(child, child_name))
+        elif child.name.endswith(".html"):
+            template_names.append(child_name)
+
+    return tuple(template_names)
+
+
 def _template_resource(
     settings: WebValidationSettings,
     template_sources: tuple[PackageResourceSource, ...],
@@ -395,11 +454,14 @@ def _uses_filesystem_static_root(settings: WebValidationSettings) -> bool:
     return settings.uses_filesystem_static_root
 
 
-def _route_prefixes(settings: WebValidationSettings) -> Mapping[str, str]:
+def _route_prefixes(settings: WebValidationSettings) -> Mapping[str, Mapping[str, str]]:
+    route_prefixes = getattr(settings, "route_prefixes", None)
+    if isinstance(route_prefixes, Mapping):
+        return route_prefixes
+
     app_config = settings.app_config
     if app_config is None:
         return {}
-
     prefixes = app_config.routes.prefixes
     if isinstance(prefixes, Mapping):
         return prefixes

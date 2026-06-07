@@ -1,5 +1,4 @@
 import json
-from dataclasses import dataclass
 from typing import Literal, cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -8,9 +7,7 @@ from fastapi.responses import RedirectResponse, Response
 from starlette.datastructures import FormData
 
 from wevra.web.forms.csrf import request_form_data
-from wevra.web.rendering import TemplateRenderer
-from wevra.web.routes.registration import HtmlView
-from wevra.web.views import ContextBuilder, TemplateView
+from wevra.web.rendering import render_partial
 
 ThemeMode = Literal["auto", "light", "dark"]
 THEME_MODES: tuple[ThemeMode, ...] = ("auto", "light", "dark")
@@ -146,31 +143,27 @@ def _first_parsed_form_value(
     return values[0]
 
 
-@dataclass(frozen=True, slots=True)
-class ThemeStatusPartialView(TemplateView):
-    template_name: str = THEME_STATUS_TEMPLATE
-    context_builder: ContextBuilder | None = theme_return_context
+async def theme_status_partial(request: Request) -> Response:
+    return render_partial(request, THEME_STATUS_TEMPLATE, theme_return_context(request))
 
 
-@dataclass(frozen=True, slots=True)
-class ThemeModePartialView(HtmlView):
-    async def render(self, request: Request, renderer: TemplateRenderer) -> Response:
-        submitted_mode, return_path = await _theme_form_values(request)
-        theme_mode = normalise_theme_mode(submitted_mode)
-        redirect_path = normalise_theme_return_path(return_path)
+async def theme_mode_partial(request: Request) -> Response:
+    submitted_mode, return_path = await _theme_form_values(request)
+    theme_mode = normalise_theme_mode(submitted_mode)
+    redirect_path = normalise_theme_return_path(return_path)
 
-        if request.headers.get("HX-Request") != "true":
-            response = RedirectResponse(url=redirect_path, status_code=303)
-            set_theme_mode_cookie(response, theme_mode)
-            return response
-
-        context = theme_template_context(
-            request, theme_mode=theme_mode
-        ) | theme_return_context(request, return_path=redirect_path)
-        response = renderer.render_partial(THEME_STATUS_TEMPLATE, request, context)
+    if request.headers.get("HX-Request") != "true":
+        response = RedirectResponse(url=redirect_path, status_code=303)
         set_theme_mode_cookie(response, theme_mode)
-        set_theme_mode_trigger(response, theme_mode)
         return response
+
+    context = theme_template_context(
+        request, theme_mode=theme_mode
+    ) | theme_return_context(request, return_path=redirect_path)
+    response = render_partial(request, THEME_STATUS_TEMPLATE, context)
+    set_theme_mode_cookie(response, theme_mode)
+    set_theme_mode_trigger(response, theme_mode)
+    return response
 
 
 __all__ = [
@@ -182,8 +175,6 @@ __all__ = [
     "THEME_STATUS_ROUTE_NAME",
     "THEME_STATUS_TEMPLATE",
     "ThemeMode",
-    "ThemeModePartialView",
-    "ThemeStatusPartialView",
     "next_theme_mode",
     "normalise_theme_mode",
     "normalise_theme_return_path",
@@ -191,6 +182,8 @@ __all__ = [
     "set_theme_mode_cookie",
     "set_theme_mode_trigger",
     "theme_return_context",
+    "theme_mode_partial",
     "theme_state",
+    "theme_status_partial",
     "theme_template_context",
 ]

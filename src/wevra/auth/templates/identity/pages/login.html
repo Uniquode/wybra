@@ -8,7 +8,7 @@
   {% if has_form_error %}
   <p id="login-form-error" role="alert">{{ form_error }}</p>
   {% endif %}
-  <form action="{{ request.url_for('identity:login-submit') }}" method="post">
+  <form action="{{ request.url_for('auth:login') }}" method="post">
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
     <input name="return_to" type="hidden" value="{{ return_to or '/account' }}">
     <label>
@@ -35,9 +35,9 @@
     <button type="submit">Sign in</button>
   </form>
   <p class="muted-copy">
-    <a href="{{ request.url_for('identity:password-reset') }}">Reset password</a>
+    <a href="{{ request.url_for('auth:password-reset') }}">Reset password</a>
     {% if public_signup_enabled is defined and public_signup_enabled %}
-    &middot; <a href="{{ request.url_for('identity:signup') }}">Create account</a>
+    &middot; <a href="{{ request.url_for('auth:signup') }}">Create account</a>
     {% endif %}
   </p>
 </section>

@@ -1,26 +1,26 @@
 """Authentication route pages, context providers, and router wiring.
 
-Hosts normally import ``module_routes`` or the route builders when composing
-auth pages into an application-selected route prefix.
+Hosts normally compose the ``module_routers`` route surface through configured
+application modules rather than importing routers directly.
 """
 
 from wevra.auth.routes.pages import (
-    IdentityRouteSet,
-    build_identity_module_routes,
-    build_identity_route_set,
+    account_router,
+    api_router,
+    current_user_api,
     current_user_state,
-    module_routes,
+    module_routers,
     normalise_return_to,
 )
 from wevra.auth.routes.wiring import RouteReplacement, RouterExtensionPlan
 
 __all__ = [
-    "IdentityRouteSet",
     "RouteReplacement",
     "RouterExtensionPlan",
-    "build_identity_module_routes",
-    "build_identity_route_set",
+    "account_router",
+    "api_router",
+    "current_user_api",
     "current_user_state",
-    "module_routes",
+    "module_routers",
     "normalise_return_to",
 ]

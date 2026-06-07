@@ -3,13 +3,16 @@ import json
 import logging
 from typing import Any
 
-from fastapi import Request
+from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi.testclient import TestClient
 
 from wevra.web.forms.csrf import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
     CsrfProtector,
+    csrf_exempt,
     request_form_data,
+    validate_csrf,
 )
 
 
@@ -117,3 +120,55 @@ def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
         getattr(record, "csrf_reason", None) == "missing_content_length"
         for record in caplog.records
     )
+
+
+def test_csrf_dependency_allows_safe_methods_on_protected_router() -> None:
+    app = FastAPI()
+    app.state.csrf = CsrfProtector("test-secret")
+    router = APIRouter(dependencies=[Depends(validate_csrf)])
+
+    @router.get("/form")
+    async def form() -> dict[str, bool]:
+        return {"ok": True}
+
+    app.include_router(router)
+
+    response = TestClient(app).get("/form")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_csrf_dependency_rejects_unsafe_methods_without_token() -> None:
+    app = FastAPI()
+    app.state.csrf = CsrfProtector("test-secret")
+    router = APIRouter(dependencies=[Depends(validate_csrf)])
+
+    @router.post("/form")
+    async def submit() -> dict[str, bool]:
+        return {"ok": True}
+
+    app.include_router(router)
+
+    response = TestClient(app).post("/form", data={"field": "value"})
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Invalid CSRF token."}
+
+
+def test_csrf_exempt_allows_route_to_bypass_protected_router() -> None:
+    app = FastAPI()
+    app.state.csrf = CsrfProtector("test-secret")
+    router = APIRouter(dependencies=[Depends(validate_csrf)])
+
+    @router.post("/callback")
+    @csrf_exempt
+    async def callback() -> dict[str, bool]:
+        return {"ok": True}
+
+    app.include_router(router)
+
+    response = TestClient(app).post("/callback", data={"field": "value"})
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
