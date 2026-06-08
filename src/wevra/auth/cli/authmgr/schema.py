@@ -14,10 +14,13 @@ from wevra.auth.configuration import ConfigurationError
 from wevra.auth.models import Group, GroupGroup, GroupScope, GroupUser, Scope, User
 
 SCHEMA_MIGRATION_MESSAGE = (
-    "Auth database schema is not up to date; run `uv run wevra-migrate "
-    "upgrade` from the host app project, or set APP_CONFIG to the same "
-    "app.toml used by wevra-authmgr. If deliberately overriding the application "
-    "database, run `uv run wevra-migrate --database-url <database-url> upgrade`."
+    "Auth database schema is not up to date; run `uv run wevra-migrate init` "
+    "for first-time database provisioning and migration-state setup, then "
+    "`uv run wevra-migrate upgrade` to apply schema migrations from the host "
+    "app project, or set APP_CONFIG to the same app.toml used by wevra-authmgr. "
+    "If deliberately overriding the application database, run "
+    "`uv run wevra-migrate --database-url <database-url> init` followed by "
+    "`uv run wevra-migrate --database-url <database-url> upgrade`."
 )
 SCHEMA_INSPECTION_MESSAGE = (
     "Auth database schema could not be inspected; verify database connectivity, "

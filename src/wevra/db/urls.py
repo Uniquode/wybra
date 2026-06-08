@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import (
@@ -27,6 +28,9 @@ SENSITIVE_QUERY_PARAMS = frozenset(
         "secret",
         "token",
     }
+)
+DATABASE_URL_TEXT_PATTERN = re.compile(
+    r"(?:sqlite\+aiosqlite|postgresql(?:\+[A-Za-z0-9_]+)?)://[^\s]+"
 )
 
 
@@ -137,6 +141,17 @@ def redact_database_url(value: str) -> str:
             fragment=parsed.fragment,
         )
     )
+
+
+def redact_database_urls(value: str) -> str:
+    return DATABASE_URL_TEXT_PATTERN.sub(
+        lambda match: redact_database_url(match.group(0)),
+        value,
+    )
+
+
+def safe_database_error_message(exc: BaseException) -> str:
+    return redact_database_urls(str(exc))
 
 
 def _redact_query(query: str) -> str:
