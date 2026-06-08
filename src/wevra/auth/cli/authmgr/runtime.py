@@ -583,7 +583,7 @@ def _load_auth_settings_for_command() -> AuthSettings:
 
 
 async def _resolve_target_record(
-    session,
+    session: AsyncSession,
     target: str,
 ) -> Result[dict[str, Any]]:
     user, target_error = await resolve_user_target(session, target)

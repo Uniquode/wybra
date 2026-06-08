@@ -6,6 +6,23 @@ from .args import AuthmgrArgs
 from .clicking import _ensure_mutually_exclusive, _parse_cli_tokens
 from .runtime import _run_authmgr
 
+_OPTION_TERMINATOR_SENTINEL = "\0wevra-authmgr-option-terminator"
+
+
+class _GroupCommand(click.Command):
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        if "--" in args:
+            normalised_args = list(args)
+            normalised_args[normalised_args.index("--")] = _OPTION_TERMINATOR_SENTINEL
+            args = normalised_args
+        return super().parse_args(ctx, args)
+
+
+def _restore_option_terminator(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        "--" if token == _OPTION_TERMINATOR_SENTINEL else token for token in tokens
+    )
+
 
 def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrArgs:
     if not tokens:
@@ -197,12 +214,14 @@ def _group_operation_help(tokens: tuple[str, ...]) -> str:
 def register_group_commands(root_command: click.Group) -> None:
     @root_command.command(
         "group",
+        cls=_GroupCommand,
         context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
         help="Manage authorisation groups.",
     )
     @click.argument("tokens", nargs=-1, type=click.UNPROCESSED)
     @click.pass_context
     def group_command(ctx: click.Context, tokens: tuple[str, ...]) -> None:
+        tokens = _restore_option_terminator(tokens)
         if tokens == ("help",):
             click.echo(ctx.get_help(), color=ctx.color)
             return

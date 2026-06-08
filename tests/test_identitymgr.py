@@ -28,6 +28,8 @@ from sqlalchemy.exc import SQLAlchemyError
 import wevra.auth.admin.management as identity_management
 import wevra.auth.cli.authmgr as identitymgr
 import wevra.auth.cli.authmgr.groups as authmgr_groups
+import wevra.auth.cli.authmgr.output as authmgr_output
+import wevra.auth.cli.authmgr.passwords as authmgr_passwords
 import wevra.auth.cli.authmgr.runtime as authmgr_runtime
 import wevra.auth.cli.authmgr.schema as authmgr_schema
 import wevra.auth.cli.authmgr.scopes as authmgr_scopes
@@ -945,6 +947,26 @@ def test_identitymgr_preserves_help_as_command_value(
     assert getattr(captured_args[0], expected_field) == expected_value
 
 
+def test_identitymgr_group_create_accepts_dash_prefixed_abbrev_after_terminator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_args: list[identitymgr.AuthmgrArgs] = []
+
+    def capture_args(_ctx: click.Context, args: identitymgr.AuthmgrArgs) -> None:
+        captured_args.append(args)
+
+    monkeypatch.setattr(authmgr_groups, "_run_authmgr", capture_args)
+
+    result = CliRunner().invoke(
+        identitymgr.authmgr_command,
+        ["group", "create", "--", "-admins"],
+    )
+
+    assert result.exit_code == 0
+    assert captured_args[0].command == "group-create"
+    assert captured_args[0].group_target == "-admins"
+
+
 @pytest.mark.parametrize(
     "command",
     ["create", "update", "delete", "deactivate", "list", "password"],
@@ -1036,9 +1058,12 @@ def test_identitymgr_rejects_conflicting_display_name_update_with_empty_value() 
 
 
 def test_identitymgr_accepts_flexible_expiry_timestamp_values() -> None:
-    assert identitymgr.parse_timestamp_filter("2100-01-01T00:00:00Z") == 4102444800.0
-    assert identitymgr.parse_timestamp_filter("4102444800") == 4102444800.0
-    assert identitymgr.parse_timestamp_filter("20250101") == 20250101.0
+    assert (
+        authmgr_timestamps.parse_timestamp_filter("2100-01-01T00:00:00Z")
+        == 4102444800.0
+    )
+    assert authmgr_timestamps.parse_timestamp_filter("4102444800") == 4102444800.0
+    assert authmgr_timestamps.parse_timestamp_filter("20250101") == 20250101.0
 
 
 def test_identitymgr_timestamp_parse_error_identifies_option() -> None:
@@ -1329,7 +1354,7 @@ def test_identitymgr_identity_schema_error_uses_qualified_table_name(
 ) -> None:
     class MissingTableSession:
         async def run_sync(self, _function):
-            return identitymgr.IdentitySchemaStatus(
+            return authmgr_schema.IdentitySchemaStatus(
                 primary_table_name="identity_user",
                 table_exists=False,
                 missing_columns=(),
@@ -1338,7 +1363,7 @@ def test_identitymgr_identity_schema_error_uses_qualified_table_name(
     monkeypatch.setattr(User.__table__, "schema", "auth")
 
     with pytest.raises(ConfigurationError) as exc_info:
-        asyncio.run(identitymgr._verify_identity_schema(MissingTableSession()))  # type: ignore[arg-type]
+        asyncio.run(authmgr_schema._verify_identity_schema(MissingTableSession()))  # type: ignore[arg-type]
 
     assert "Missing auth.identity_user table" in str(exc_info.value)
 
@@ -1348,14 +1373,14 @@ def test_identitymgr_identity_schema_missing_columns_are_table_aware(
 ) -> None:
     class MissingColumnSession:
         async def run_sync(self, _function):
-            return identitymgr.IdentitySchemaStatus(
+            return authmgr_schema.IdentitySchemaStatus(
                 primary_table_name="identity_user",
                 table_exists=True,
                 missing_columns=("identity_group.description",),
             )
 
     with pytest.raises(ConfigurationError) as exc_info:
-        asyncio.run(identitymgr._verify_identity_schema(MissingColumnSession()))  # type: ignore[arg-type]
+        asyncio.run(authmgr_schema._verify_identity_schema(MissingColumnSession()))  # type: ignore[arg-type]
 
     message = str(exc_info.value)
     assert "Missing identity schema columns: identity_group.description" in message
@@ -1404,7 +1429,7 @@ def test_identitymgr_identity_schema_status_normalises_column_name_case(
         authmgr_schema, "sqlalchemy_inspect", lambda _bind: FakeInspector()
     )
 
-    status = identitymgr._identity_schema_status(FakeSession())  # type: ignore[arg-type]
+    status = authmgr_schema._identity_schema_status(FakeSession())  # type: ignore[arg-type]
 
     assert status.table_exists is True
     assert status.missing_columns == ()
@@ -1419,7 +1444,7 @@ def test_identitymgr_reports_schema_inspection_error_without_leaking_context(
 
     with caplog.at_level(logging.DEBUG, logger="wevra.auth.cli.authmgr"):
         with pytest.raises(ConfigurationError) as exc_info:
-            asyncio.run(identitymgr._verify_identity_schema(FailingSession()))  # type: ignore[arg-type]
+            asyncio.run(authmgr_schema._verify_identity_schema(FailingSession()))  # type: ignore[arg-type]
 
     message = str(exc_info.value)
     assert "Auth database schema could not be inspected" in message
@@ -1924,11 +1949,13 @@ def test_identitymgr_group_membership_commands_manage_users_and_child_groups(
 def test_identitymgr_group_parser_disambiguates_user_and_group_targets() -> None:
     ctx = click.Context(identitymgr.authmgr_command, obj={})
 
-    user_args = identitymgr._target_group_args(
+    user_args = authmgr_groups._target_group_args(
         ctx,
         ("parent", "add-user", "member@example.com"),
     )
-    group_args = identitymgr._target_group_args(ctx, ("parent", "add-group", "child"))
+    group_args = authmgr_groups._target_group_args(
+        ctx, ("parent", "add-group", "child")
+    )
 
     assert user_args.user_target == "member@example.com"
     assert user_args.child_group_target == ""
@@ -2098,6 +2125,27 @@ def test_identitymgr_update_rejects_group_replacement_shortcut() -> None:
     assert "use --set-group for replacement" in result.output
 
 
+@pytest.mark.parametrize("incremental_option", ["--add-group", "--rm-group"])
+def test_identitymgr_update_rejects_group_replacement_with_incremental_edits(
+    incremental_option: str,
+) -> None:
+    result = CliRunner().invoke(
+        identitymgr.authmgr_command,
+        [
+            "user",
+            "update",
+            "user@example.com",
+            "--set-group",
+            "admins",
+            incremental_option,
+            "editors",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--set-group cannot be used with --add-group or --rm-group." in result.output
+
+
 def test_identitymgr_record_formatting_json_encodes_nested_values(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -2106,11 +2154,11 @@ def test_identitymgr_record_formatting_json_encodes_nested_values(
         "groups": [{"abbrev": "admins", "scopes": ["read", "write"]}],
     }
 
-    assert identitymgr._format_record_value(record["groups"]) == (
+    assert authmgr_output._format_record_value(record["groups"]) == (
         '[{"abbrev": "admins", "scopes": ["read", "write"]}]'
     )
 
-    identitymgr._print_records(
+    authmgr_output._print_records(
         [record],
         field_names=("email", "groups"),
         json_output=False,
@@ -2230,7 +2278,7 @@ def test_identitymgr_password_from_stdin_trims_crlf(
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("correct horse\r\n"))
 
-    assert identitymgr._read_password("-") == "correct horse"
+    assert authmgr_passwords._read_password("-") == "correct horse"
 
 
 def test_identitymgr_password_from_stdin_rejects_extra_data(
@@ -2238,8 +2286,8 @@ def test_identitymgr_password_from_stdin_rejects_extra_data(
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("correct horse\nextra\n"))
 
-    with pytest.raises(identitymgr.PasswordSourceError, match="exactly one line"):
-        identitymgr._read_password("-")
+    with pytest.raises(authmgr_passwords.PasswordSourceError, match="exactly one line"):
+        authmgr_passwords._read_password("-")
 
 
 def test_identitymgr_password_from_stdin_preserves_whitespace_and_strips_newline(
@@ -2247,7 +2295,7 @@ def test_identitymgr_password_from_stdin_preserves_whitespace_and_strips_newline
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("  spacey  \n"))
 
-    assert identitymgr._read_password("-") == "  spacey  "
+    assert authmgr_passwords._read_password("-") == "  spacey  "
 
 
 def test_identitymgr_password_from_stdin_rejects_empty_input(
@@ -2255,8 +2303,10 @@ def test_identitymgr_password_from_stdin_rejects_empty_input(
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
 
-    with pytest.raises(identitymgr.PasswordSourceError, match="No password received"):
-        identitymgr._read_password("-")
+    with pytest.raises(
+        authmgr_passwords.PasswordSourceError, match="No password received"
+    ):
+        authmgr_passwords._read_password("-")
 
 
 def test_identitymgr_password_from_stdin_rejects_tty(
@@ -2266,15 +2316,17 @@ def test_identitymgr_password_from_stdin_rejects_tty(
     stdin.isatty = lambda: True  # type: ignore[method-assign]
     monkeypatch.setattr(sys, "stdin", stdin)
 
-    with pytest.raises(identitymgr.PasswordSourceError, match="interactive stdin"):
-        identitymgr._read_password("-")
+    with pytest.raises(
+        authmgr_passwords.PasswordSourceError, match="interactive stdin"
+    ):
+        authmgr_passwords._read_password("-")
 
 
 def test_identitymgr_read_password_rejects_invalid_source() -> None:
     with pytest.raises(
-        identitymgr.PasswordSourceError, match="Unsupported password source"
+        authmgr_passwords.PasswordSourceError, match="Unsupported password source"
     ):
-        identitymgr._read_password("invalid")
+        authmgr_passwords._read_password("invalid")
 
 
 def test_identitymgr_create_rejects_duplicate_email(
@@ -3088,15 +3140,18 @@ def test_identitymgr_list_filters_by_login_presence(
 
 
 def test_identitymgr_timestamp_parser_handles_numeric_iso_and_natural_values() -> None:
-    assert identitymgr.parse_timestamp_filter("4102444800") == 4102444800.0
-    assert identitymgr.parse_timestamp_filter("20250101") == 20250101.0
-    assert identitymgr.parse_timestamp_filter("2100-01-01T00:00:00Z") == 4102444800.0
-    assert isinstance(identitymgr.parse_timestamp_filter("1 June 2030"), float)
+    assert authmgr_timestamps.parse_timestamp_filter("4102444800") == 4102444800.0
+    assert authmgr_timestamps.parse_timestamp_filter("20250101") == 20250101.0
+    assert (
+        authmgr_timestamps.parse_timestamp_filter("2100-01-01T00:00:00Z")
+        == 4102444800.0
+    )
+    assert isinstance(authmgr_timestamps.parse_timestamp_filter("1 June 2030"), float)
 
 
 def test_identitymgr_timestamp_parser_rejects_invalid_values() -> None:
     with pytest.raises(ValueError, match="Invalid timestamp value"):
-        identitymgr.parse_timestamp_filter("not-a-date")
+        authmgr_timestamps.parse_timestamp_filter("not-a-date")
 
 
 def test_identitymgr_timestamp_parser_uses_day_month_year_order(
@@ -3105,7 +3160,7 @@ def test_identitymgr_timestamp_parser_uses_day_month_year_order(
     monkeypatch.setattr(authmgr_timestamps, "_local_timezone_name", lambda: "UTC")
 
     assert (
-        identitymgr.parse_timestamp_filter("01/02/2030")
+        authmgr_timestamps.parse_timestamp_filter("01/02/2030")
         == datetime(
             2030,
             2,
@@ -3129,7 +3184,7 @@ def test_identitymgr_timezone_name_uses_available_tzinfo_name(
     tzinfo: object,
     expected: str,
 ) -> None:
-    assert identitymgr._timezone_name_from_tzinfo(tzinfo) == expected
+    assert authmgr_timestamps._timezone_name_from_tzinfo(tzinfo) == expected
 
 
 def test_auth_database_url_parser_handles_relative_and_absolute_sqlite_paths(
@@ -3169,24 +3224,27 @@ def test_auth_database_url_rejects_unsupported_scheme(tmp_path: Path) -> None:
 
 def test_identitymgr_human_output_formats_only_known_timestamp_fields() -> None:
     assert (
-        identitymgr._format_human_value("created_at", 4102444800.0)
+        authmgr_output._format_human_value("created_at", 4102444800.0)
         == "2100-01-01T00:00:00+00:00"
     )
     assert (
-        identitymgr._format_human_value("created_at", 4102444800)
+        authmgr_output._format_human_value("created_at", 4102444800)
         == "2100-01-01T00:00:00+00:00"
     )
-    assert identitymgr._format_human_value("quota", 1.5) == 1.5
+    assert authmgr_output._format_human_value("quota", 1.5) == 1.5
 
 
 def test_identitymgr_timestamp_fields_are_centralised() -> None:
-    assert identitymgr.USER_RECORD_FIELDS is identity_management.USER_RECORD_FIELDS
+    assert authmgr_output.USER_RECORD_FIELDS is identity_management.USER_RECORD_FIELDS
     assert (
-        identitymgr.USER_TIMESTAMP_FIELDS is identity_management.USER_TIMESTAMP_FIELDS
+        authmgr_output.USER_TIMESTAMP_FIELDS
+        is identity_management.USER_TIMESTAMP_FIELDS
     )
-    assert identitymgr.TIMESTAMP_FIELDS == frozenset(identitymgr.USER_TIMESTAMP_FIELDS)
-    assert set(identitymgr.USER_TIMESTAMP_FIELDS).issubset(
-        identitymgr.USER_RECORD_FIELDS
+    assert authmgr_output.TIMESTAMP_FIELDS == frozenset(
+        authmgr_output.USER_TIMESTAMP_FIELDS
+    )
+    assert set(authmgr_output.USER_TIMESTAMP_FIELDS).issubset(
+        authmgr_output.USER_RECORD_FIELDS
     )
 
 
@@ -3223,7 +3281,7 @@ def test_identitymgr_sql_wildcard_pattern_examples(
 def test_identitymgr_human_output_handles_missing_record_fields(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    identitymgr._print_user_records(
+    authmgr_output._print_user_records(
         [{"email": "partial@example.com", "id": "user-1"}],
         json_output=False,
         csv_output=False,
@@ -3258,4 +3316,4 @@ def test_identitymgr_csv_output_uses_iso_timestamp_strings(
 
 
 def test_identitymgr_csv_fieldnames_are_stable() -> None:
-    assert identitymgr._csv_fieldnames() == list(identitymgr.USER_RECORD_FIELDS)
+    assert authmgr_output._csv_fieldnames() == list(authmgr_output.USER_RECORD_FIELDS)

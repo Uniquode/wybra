@@ -180,6 +180,9 @@ def _parse_cli_tokens(
     index = 0
     while index < len(tokens):
         token = tokens[index]
+        if token == "--":
+            positionals.extend(tokens[index + 1 :])
+            break
         if token in value_options:
             if index + 1 >= len(tokens):
                 raise click.UsageError(f"Option {token} requires a value.")

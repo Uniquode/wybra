@@ -113,6 +113,10 @@ def register_user_commands(root_command: click.Group) -> None:
                 "Do not use --group with update; use --set-group for replacement "
                 "or --add-group/--rm-group for incremental changes."
             )
+        if set_groups and (add_groups or remove_groups):
+            raise click.UsageError(
+                "--set-group cannot be used with --add-group or --rm-group."
+            )
         _ensure_mutually_exclusive(
             (display_name, "--display-name"), (clear_display_name, "--no-display-name")
         )
