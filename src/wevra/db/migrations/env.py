@@ -105,6 +105,10 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
+def run_migrations_with_connection(connection: Connection) -> None:
+    do_run_migrations(connection)
+
+
 async def run_async_migrations() -> None:
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = _database_url()
@@ -123,4 +127,8 @@ async def run_async_migrations() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_async_migrations())
+    existing_connection = config.attributes.get("connection")
+    if existing_connection is not None:
+        run_migrations_with_connection(existing_connection)
+    else:
+        asyncio.run(run_async_migrations())

@@ -63,6 +63,44 @@ application or environment-specific tooling:
 Host applications may add their own short aliases when appropriate, but the
 portable package-owned command names are the `wevra-*` commands.
 
+## Migration Workflow
+
+Provision a first-time managed database and initialise Alembic state
+explicitly:
+
+```sh
+uv run wevra-migrate init
+```
+
+`init` stops after infrastructure and migration-state setup. After migration
+state exists, apply schema revisions with:
+
+```sh
+uv run wevra-migrate upgrade
+```
+
+For PostgreSQL, `init` provisions the database, user, role, and privileges.
+Provide administrative connection details with `--admin-database-url` or the
+dbscripts-compatible `SA_DATABASE_URL` environment variable.
+
+Inspect migration state without mutating the database:
+
+```sh
+uv run wevra-migrate current
+```
+
+Create module-owned Alembic revisions through the project command:
+
+```sh
+uv run wevra-migrate revision --module wevra.auth --autogenerate -m "add identity field"
+```
+
+Revision files are placed in the selected configured module's conventional
+`migrations/versions/` directory. The normal roll-forward order is to upgrade
+the working database to the current head, update the owning module's models,
+generate the revision, review generated operations plus `down_revision` and
+`depends_on`, run `wevra-migrate upgrade`, then validate.
+
 ## Route Inspection
 
 Inspect the installed route tree:

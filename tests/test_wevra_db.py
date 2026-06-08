@@ -23,6 +23,7 @@ from wevra.db.surfaces import (
 from wevra.db.urls import (
     parse_sqlite_database_url,
     redact_database_url,
+    redact_database_urls,
     resolve_database_url,
 )
 
@@ -110,6 +111,16 @@ def test_redact_database_url_masks_sensitive_query_parameters() -> None:
     assert redact_database_url(
         "postgresql+asyncpg://host.example/app?api_key=secret&sslmode=require"
     ) == ("postgresql+asyncpg://host.example/app?api_key=%2A%2A%2A&sslmode=require")
+
+
+def test_redact_database_urls_masks_bare_postgresql_urls_in_messages() -> None:
+    assert redact_database_urls(
+        "failed for postgresql://user:secret@host.example/app and "
+        "postgresql+asyncpg://admin:admin-secret@host.example/postgres"
+    ) == (
+        "failed for postgresql://***:***@host.example/app and "
+        "postgresql+asyncpg://***:***@host.example/postgres"
+    )
 
 
 def test_migration_version_locations_are_discovered_from_configured_modules(
