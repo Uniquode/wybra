@@ -1,8 +1,11 @@
 import asyncio
 import csv
+import importlib
+import importlib.metadata
 import io
 import json
 import logging
+import pkgutil
 import sqlite3
 import sys
 import tempfile
@@ -23,9 +26,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 import wevra.auth.admin.management as identity_management
-import wevra.auth.cli.identitymgr as identitymgr
+import wevra.auth.cli.authmgr as identitymgr
+import wevra.auth.cli.authmgr.groups as authmgr_groups
+import wevra.auth.cli.authmgr.output as authmgr_output
+import wevra.auth.cli.authmgr.passwords as authmgr_passwords
+import wevra.auth.cli.authmgr.runtime as authmgr_runtime
+import wevra.auth.cli.authmgr.schema as authmgr_schema
+import wevra.auth.cli.authmgr.scopes as authmgr_scopes
+import wevra.auth.cli.authmgr.timestamps as authmgr_timestamps
+import wevra.auth.cli.authmgr.users as authmgr_users
 import wevra.auth.sessions as identity_sessions
 import wevra.db.migrate as migrate_module
+import wevra.db.persistence as db_persistence
 from wevra.auth import ERROR_INACTIVE_USER
 from wevra.auth.accounts.manager import create_user_manager
 from wevra.auth.accounts.schemas import UserCreate
@@ -481,17 +493,38 @@ def update_user_fields(database_url: str, email: str, **values: object) -> None:
 def test_identitymgr_project_script_is_defined() -> None:
     data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert (
-        data["project"]["scripts"]["wevra-authmgr"] == "wevra.auth.cli.identitymgr:main"
-    )
+    assert data["project"]["scripts"]["wevra-authmgr"] == "wevra.auth.cli.authmgr:main"
     assert "wevra-identitymgr" not in data["project"]["scripts"]
     assert "identitymgr" not in data["project"]["scripts"]
     assert "usermgr" not in data["project"]["scripts"]
 
 
+def test_identitymgr_uses_shared_database_runtime_helpers() -> None:
+    assert authmgr_runtime.create_database is db_persistence.create_database
+    assert authmgr_runtime.session_scope is db_persistence.session_scope
+    assert authmgr_runtime.close_database is db_persistence.close_database
+
+
+def test_identitymgr_command_registration_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_discovery(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("auth manager command registration used discovery")
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", fail_discovery)
+    monkeypatch.setattr(pkgutil, "iter_modules", fail_discovery)
+
+    import wevra.auth.cli.authmgr.cli as authmgr_cli
+
+    reloaded_cli = importlib.reload(authmgr_cli)
+    importlib.reload(identitymgr)
+
+    assert {"user", "scope", "group"} <= set(reloaded_cli.authmgr_command.commands)
+
+
 def test_identitymgr_create_positional_is_email() -> None:
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "create", "--help"],
     )
 
@@ -502,7 +535,7 @@ def test_identitymgr_create_positional_is_email() -> None:
 
 def test_identitymgr_update_positional_is_target() -> None:
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "update", "--help"],
     )
 
@@ -766,7 +799,7 @@ def test_app_auth_rejects_unknown_password_policy_options(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("command", ["group", "scope", "user"])
 def test_identitymgr_root_help_exposes_resource_command_groups(command: str) -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, ["--help"])
+    result = CliRunner().invoke(identitymgr.authmgr_command, ["--help"])
 
     assert result.exit_code == 0
     assert command in result.output
@@ -777,7 +810,7 @@ def test_identitymgr_root_help_exposes_resource_command_groups(command: str) -> 
     ["create", "update", "delete", "deactivate", "list", "password"],
 )
 def test_identitymgr_user_help_exposes_user_commands(command: str) -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, ["user", "--help"])
+    result = CliRunner().invoke(identitymgr.authmgr_command, ["user", "--help"])
 
     assert result.exit_code == 0
     assert command in result.output
@@ -821,8 +854,8 @@ def test_identitymgr_help_suffix_matches_help_option(
 ) -> None:
     runner = CliRunner()
 
-    suffix_result = runner.invoke(identitymgr.identitymgr_command, help_suffix_args)
-    option_result = runner.invoke(identitymgr.identitymgr_command, help_option_args)
+    suffix_result = runner.invoke(identitymgr.authmgr_command, help_suffix_args)
+    option_result = runner.invoke(identitymgr.authmgr_command, help_option_args)
 
     assert suffix_result.exit_code == option_result.exit_code == 0
     assert suffix_result.output == option_result.output
@@ -852,7 +885,7 @@ def test_identitymgr_help_path_shows_raw_group_operation_usage(
     argv: list[str],
     usage: str,
 ) -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, argv)
+    result = CliRunner().invoke(identitymgr.authmgr_command, argv)
 
     assert result.exit_code == 0
     assert usage in result.output
@@ -861,15 +894,15 @@ def test_identitymgr_help_path_shows_raw_group_operation_usage(
 def test_identitymgr_preserves_help_as_option_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured_args: list[identitymgr.IdentitymgrArgs] = []
+    captured_args: list[identitymgr.AuthmgrArgs] = []
 
-    def capture_args(_ctx: click.Context, args: identitymgr.IdentitymgrArgs) -> None:
+    def capture_args(_ctx: click.Context, args: identitymgr.AuthmgrArgs) -> None:
         captured_args.append(args)
 
-    monkeypatch.setattr(identitymgr, "_run_identitymgr", capture_args)
+    monkeypatch.setattr(authmgr_users, "_run_authmgr", capture_args)
 
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "update", "alice@example.com", "--display-name", "help"],
     )
 
@@ -900,17 +933,38 @@ def test_identitymgr_preserves_help_as_command_value(
     expected_field: str,
     expected_value: str,
 ) -> None:
-    captured_args: list[identitymgr.IdentitymgrArgs] = []
+    captured_args: list[identitymgr.AuthmgrArgs] = []
 
-    def capture_args(_ctx: click.Context, args: identitymgr.IdentitymgrArgs) -> None:
+    def capture_args(_ctx: click.Context, args: identitymgr.AuthmgrArgs) -> None:
         captured_args.append(args)
 
-    monkeypatch.setattr(identitymgr, "_run_identitymgr", capture_args)
+    target_module = authmgr_scopes if argv[0] == "scope" else authmgr_groups
+    monkeypatch.setattr(target_module, "_run_authmgr", capture_args)
 
-    result = CliRunner().invoke(identitymgr.identitymgr_command, argv)
+    result = CliRunner().invoke(identitymgr.authmgr_command, argv)
 
     assert result.exit_code == 0
     assert getattr(captured_args[0], expected_field) == expected_value
+
+
+def test_identitymgr_group_create_accepts_dash_prefixed_abbrev_after_terminator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_args: list[identitymgr.AuthmgrArgs] = []
+
+    def capture_args(_ctx: click.Context, args: identitymgr.AuthmgrArgs) -> None:
+        captured_args.append(args)
+
+    monkeypatch.setattr(authmgr_groups, "_run_authmgr", capture_args)
+
+    result = CliRunner().invoke(
+        identitymgr.authmgr_command,
+        ["group", "create", "--", "-admins"],
+    )
+
+    assert result.exit_code == 0
+    assert captured_args[0].command == "group-create"
+    assert captured_args[0].group_target == "-admins"
 
 
 @pytest.mark.parametrize(
@@ -918,14 +972,14 @@ def test_identitymgr_preserves_help_as_command_value(
     ["create", "update", "delete", "deactivate", "list", "password"],
 )
 def test_identitymgr_rejects_top_level_user_action_commands(command: str) -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, [command])
+    result = CliRunner().invoke(identitymgr.authmgr_command, [command])
 
     assert result.exit_code == 2
     assert f"No such command '{command}'" in result.output
 
 
 def test_identitymgr_rejects_unknown_command() -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, ["unknown"])
+    result = CliRunner().invoke(identitymgr.authmgr_command, ["unknown"])
 
     assert result.exit_code == 2
     assert "No such command 'unknown'" in result.output
@@ -941,7 +995,7 @@ def test_identitymgr_main_treats_falsy_click_exception_as_failure(
     def raise_click_exception(*_args, **_kwargs) -> None:
         raise FalsyExitClickException("invalid usage")
 
-    monkeypatch.setattr(identitymgr.identitymgr_command, "main", raise_click_exception)
+    monkeypatch.setattr(identitymgr.authmgr_command, "main", raise_click_exception)
 
     assert identitymgr.main([]) == 1
 
@@ -959,7 +1013,7 @@ def test_identitymgr_main_treats_falsy_click_exception_as_failure(
 )
 def test_identitymgr_rejects_plain_command_line_password(argv: list[str]) -> None:
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         argv,
     )
 
@@ -971,7 +1025,7 @@ def test_identitymgr_rejects_plain_command_line_password(argv: list[str]) -> Non
 @pytest.mark.parametrize("expires_at", ["4102444800", "0"])
 def test_identitymgr_rejects_conflicting_expiry_update_options(expires_at: str) -> None:
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         [
             "user",
             "update",
@@ -988,7 +1042,7 @@ def test_identitymgr_rejects_conflicting_expiry_update_options(expires_at: str) 
 
 def test_identitymgr_rejects_conflicting_display_name_update_with_empty_value() -> None:
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         [
             "user",
             "update",
@@ -1004,14 +1058,17 @@ def test_identitymgr_rejects_conflicting_display_name_update_with_empty_value() 
 
 
 def test_identitymgr_accepts_flexible_expiry_timestamp_values() -> None:
-    assert identitymgr.parse_timestamp_filter("2100-01-01T00:00:00Z") == 4102444800.0
-    assert identitymgr.parse_timestamp_filter("4102444800") == 4102444800.0
-    assert identitymgr.parse_timestamp_filter("20250101") == 20250101.0
+    assert (
+        authmgr_timestamps.parse_timestamp_filter("2100-01-01T00:00:00Z")
+        == 4102444800.0
+    )
+    assert authmgr_timestamps.parse_timestamp_filter("4102444800") == 4102444800.0
+    assert authmgr_timestamps.parse_timestamp_filter("20250101") == 20250101.0
 
 
 def test_identitymgr_timestamp_parse_error_identifies_option() -> None:
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "list", "--since-created-at", "not-a-date"],
     )
 
@@ -1021,7 +1078,7 @@ def test_identitymgr_timestamp_parse_error_identifies_option() -> None:
 
 
 def test_identitymgr_help_documents_numeric_timestamp_precedence() -> None:
-    result = CliRunner().invoke(identitymgr.identitymgr_command, ["--help"])
+    result = CliRunner().invoke(identitymgr.authmgr_command, ["--help"])
 
     assert result.exit_code == 0
     assert "numeric input as Unix seconds before date parsing" in result.output
@@ -1297,7 +1354,7 @@ def test_identitymgr_identity_schema_error_uses_qualified_table_name(
 ) -> None:
     class MissingTableSession:
         async def run_sync(self, _function):
-            return identitymgr.IdentitySchemaStatus(
+            return authmgr_schema.IdentitySchemaStatus(
                 primary_table_name="identity_user",
                 table_exists=False,
                 missing_columns=(),
@@ -1306,7 +1363,7 @@ def test_identitymgr_identity_schema_error_uses_qualified_table_name(
     monkeypatch.setattr(User.__table__, "schema", "auth")
 
     with pytest.raises(ConfigurationError) as exc_info:
-        asyncio.run(identitymgr._verify_identity_schema(MissingTableSession()))  # type: ignore[arg-type]
+        asyncio.run(authmgr_schema._verify_identity_schema(MissingTableSession()))  # type: ignore[arg-type]
 
     assert "Missing auth.identity_user table" in str(exc_info.value)
 
@@ -1316,14 +1373,14 @@ def test_identitymgr_identity_schema_missing_columns_are_table_aware(
 ) -> None:
     class MissingColumnSession:
         async def run_sync(self, _function):
-            return identitymgr.IdentitySchemaStatus(
+            return authmgr_schema.IdentitySchemaStatus(
                 primary_table_name="identity_user",
                 table_exists=True,
                 missing_columns=("identity_group.description",),
             )
 
     with pytest.raises(ConfigurationError) as exc_info:
-        asyncio.run(identitymgr._verify_identity_schema(MissingColumnSession()))  # type: ignore[arg-type]
+        asyncio.run(authmgr_schema._verify_identity_schema(MissingColumnSession()))  # type: ignore[arg-type]
 
     message = str(exc_info.value)
     assert "Missing identity schema columns: identity_group.description" in message
@@ -1369,10 +1426,10 @@ def test_identitymgr_identity_schema_status_normalises_column_name_case(
             return object()
 
     monkeypatch.setattr(
-        identitymgr, "sqlalchemy_inspect", lambda _bind: FakeInspector()
+        authmgr_schema, "sqlalchemy_inspect", lambda _bind: FakeInspector()
     )
 
-    status = identitymgr._identity_schema_status(FakeSession())  # type: ignore[arg-type]
+    status = authmgr_schema._identity_schema_status(FakeSession())  # type: ignore[arg-type]
 
     assert status.table_exists is True
     assert status.missing_columns == ()
@@ -1385,9 +1442,9 @@ def test_identitymgr_reports_schema_inspection_error_without_leaking_context(
         async def run_sync(self, _function):
             raise SQLAlchemyError("database is locked")
 
-    with caplog.at_level(logging.DEBUG, logger="wevra.auth.cli.identitymgr"):
+    with caplog.at_level(logging.DEBUG, logger="wevra.auth.cli.authmgr"):
         with pytest.raises(ConfigurationError) as exc_info:
-            asyncio.run(identitymgr._verify_identity_schema(FailingSession()))  # type: ignore[arg-type]
+            asyncio.run(authmgr_schema._verify_identity_schema(FailingSession()))  # type: ignore[arg-type]
 
     message = str(exc_info.value)
     assert "Auth database schema could not be inspected" in message
@@ -1890,13 +1947,15 @@ def test_identitymgr_group_membership_commands_manage_users_and_child_groups(
 
 
 def test_identitymgr_group_parser_disambiguates_user_and_group_targets() -> None:
-    ctx = click.Context(identitymgr.identitymgr_command, obj={})
+    ctx = click.Context(identitymgr.authmgr_command, obj={})
 
-    user_args = identitymgr._target_group_args(
+    user_args = authmgr_groups._target_group_args(
         ctx,
         ("parent", "add-user", "member@example.com"),
     )
-    group_args = identitymgr._target_group_args(ctx, ("parent", "add-group", "child"))
+    group_args = authmgr_groups._target_group_args(
+        ctx, ("parent", "add-group", "child")
+    )
 
     assert user_args.user_target == "member@example.com"
     assert user_args.child_group_target == ""
@@ -2058,12 +2117,33 @@ def test_identitymgr_set_group_validates_targets_before_replacing_memberships(
 
 def test_identitymgr_update_rejects_group_replacement_shortcut() -> None:
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "update", "user@example.com", "--group", "admins"],
     )
 
     assert result.exit_code == 2
     assert "use --set-group for replacement" in result.output
+
+
+@pytest.mark.parametrize("incremental_option", ["--add-group", "--rm-group"])
+def test_identitymgr_update_rejects_group_replacement_with_incremental_edits(
+    incremental_option: str,
+) -> None:
+    result = CliRunner().invoke(
+        identitymgr.authmgr_command,
+        [
+            "user",
+            "update",
+            "user@example.com",
+            "--set-group",
+            "admins",
+            incremental_option,
+            "editors",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--set-group cannot be used with --add-group or --rm-group." in result.output
 
 
 def test_identitymgr_record_formatting_json_encodes_nested_values(
@@ -2074,11 +2154,11 @@ def test_identitymgr_record_formatting_json_encodes_nested_values(
         "groups": [{"abbrev": "admins", "scopes": ["read", "write"]}],
     }
 
-    assert identitymgr._format_record_value(record["groups"]) == (
+    assert authmgr_output._format_record_value(record["groups"]) == (
         '[{"abbrev": "admins", "scopes": ["read", "write"]}]'
     )
 
-    identitymgr._print_records(
+    authmgr_output._print_records(
         [record],
         field_names=("email", "groups"),
         json_output=False,
@@ -2198,7 +2278,7 @@ def test_identitymgr_password_from_stdin_trims_crlf(
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("correct horse\r\n"))
 
-    assert identitymgr._read_password("-") == "correct horse"
+    assert authmgr_passwords._read_password("-") == "correct horse"
 
 
 def test_identitymgr_password_from_stdin_rejects_extra_data(
@@ -2206,8 +2286,8 @@ def test_identitymgr_password_from_stdin_rejects_extra_data(
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("correct horse\nextra\n"))
 
-    with pytest.raises(identitymgr.PasswordSourceError, match="exactly one line"):
-        identitymgr._read_password("-")
+    with pytest.raises(authmgr_passwords.PasswordSourceError, match="exactly one line"):
+        authmgr_passwords._read_password("-")
 
 
 def test_identitymgr_password_from_stdin_preserves_whitespace_and_strips_newline(
@@ -2215,7 +2295,7 @@ def test_identitymgr_password_from_stdin_preserves_whitespace_and_strips_newline
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("  spacey  \n"))
 
-    assert identitymgr._read_password("-") == "  spacey  "
+    assert authmgr_passwords._read_password("-") == "  spacey  "
 
 
 def test_identitymgr_password_from_stdin_rejects_empty_input(
@@ -2223,8 +2303,10 @@ def test_identitymgr_password_from_stdin_rejects_empty_input(
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
 
-    with pytest.raises(identitymgr.PasswordSourceError, match="No password received"):
-        identitymgr._read_password("-")
+    with pytest.raises(
+        authmgr_passwords.PasswordSourceError, match="No password received"
+    ):
+        authmgr_passwords._read_password("-")
 
 
 def test_identitymgr_password_from_stdin_rejects_tty(
@@ -2234,15 +2316,17 @@ def test_identitymgr_password_from_stdin_rejects_tty(
     stdin.isatty = lambda: True  # type: ignore[method-assign]
     monkeypatch.setattr(sys, "stdin", stdin)
 
-    with pytest.raises(identitymgr.PasswordSourceError, match="interactive stdin"):
-        identitymgr._read_password("-")
+    with pytest.raises(
+        authmgr_passwords.PasswordSourceError, match="interactive stdin"
+    ):
+        authmgr_passwords._read_password("-")
 
 
 def test_identitymgr_read_password_rejects_invalid_source() -> None:
     with pytest.raises(
-        identitymgr.PasswordSourceError, match="Unsupported password source"
+        authmgr_passwords.PasswordSourceError, match="Unsupported password source"
     ):
-        identitymgr._read_password("invalid")
+        authmgr_passwords._read_password("invalid")
 
 
 def test_identitymgr_create_rejects_duplicate_email(
@@ -2707,7 +2791,7 @@ def test_identitymgr_interactive_password_mismatch_aborts_when_input_ends(
     set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "create", "mismatch@example.com"],
         input="first password\nsecond password\n",
     )
@@ -2728,7 +2812,7 @@ def test_identitymgr_interactive_password_prompt_retries_after_mismatch(
     set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "create", "retry@example.com"],
         input=(
             "first password\n"
@@ -2759,7 +2843,7 @@ def test_identitymgr_create_with_stdin_password_does_not_prompt(
     set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "create", email, "--password", password_source],
         input=f"{STRONG_TEST_PASSWORD}\n",
     )
@@ -2780,7 +2864,7 @@ def test_identitymgr_create_with_empty_stdin_password_reports_password_option(
     set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "create", "empty-stdin@example.com", "--password", "-"],
         input="",
     )
@@ -2807,7 +2891,7 @@ def test_identitymgr_password_command_prompts_by_default(
     )
 
     result = CliRunner().invoke(
-        identitymgr.identitymgr_command,
+        identitymgr.authmgr_command,
         ["user", "password", "default-prompt@example.com"],
         input=f"{UPDATED_STRONG_TEST_PASSWORD}\n{UPDATED_STRONG_TEST_PASSWORD}\n",
     )
@@ -3056,24 +3140,27 @@ def test_identitymgr_list_filters_by_login_presence(
 
 
 def test_identitymgr_timestamp_parser_handles_numeric_iso_and_natural_values() -> None:
-    assert identitymgr.parse_timestamp_filter("4102444800") == 4102444800.0
-    assert identitymgr.parse_timestamp_filter("20250101") == 20250101.0
-    assert identitymgr.parse_timestamp_filter("2100-01-01T00:00:00Z") == 4102444800.0
-    assert isinstance(identitymgr.parse_timestamp_filter("1 June 2030"), float)
+    assert authmgr_timestamps.parse_timestamp_filter("4102444800") == 4102444800.0
+    assert authmgr_timestamps.parse_timestamp_filter("20250101") == 20250101.0
+    assert (
+        authmgr_timestamps.parse_timestamp_filter("2100-01-01T00:00:00Z")
+        == 4102444800.0
+    )
+    assert isinstance(authmgr_timestamps.parse_timestamp_filter("1 June 2030"), float)
 
 
 def test_identitymgr_timestamp_parser_rejects_invalid_values() -> None:
     with pytest.raises(ValueError, match="Invalid timestamp value"):
-        identitymgr.parse_timestamp_filter("not-a-date")
+        authmgr_timestamps.parse_timestamp_filter("not-a-date")
 
 
 def test_identitymgr_timestamp_parser_uses_day_month_year_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(identitymgr, "_local_timezone_name", lambda: "UTC")
+    monkeypatch.setattr(authmgr_timestamps, "_local_timezone_name", lambda: "UTC")
 
     assert (
-        identitymgr.parse_timestamp_filter("01/02/2030")
+        authmgr_timestamps.parse_timestamp_filter("01/02/2030")
         == datetime(
             2030,
             2,
@@ -3097,7 +3184,7 @@ def test_identitymgr_timezone_name_uses_available_tzinfo_name(
     tzinfo: object,
     expected: str,
 ) -> None:
-    assert identitymgr._timezone_name_from_tzinfo(tzinfo) == expected
+    assert authmgr_timestamps._timezone_name_from_tzinfo(tzinfo) == expected
 
 
 def test_auth_database_url_parser_handles_relative_and_absolute_sqlite_paths(
@@ -3137,24 +3224,27 @@ def test_auth_database_url_rejects_unsupported_scheme(tmp_path: Path) -> None:
 
 def test_identitymgr_human_output_formats_only_known_timestamp_fields() -> None:
     assert (
-        identitymgr._format_human_value("created_at", 4102444800.0)
+        authmgr_output._format_human_value("created_at", 4102444800.0)
         == "2100-01-01T00:00:00+00:00"
     )
     assert (
-        identitymgr._format_human_value("created_at", 4102444800)
+        authmgr_output._format_human_value("created_at", 4102444800)
         == "2100-01-01T00:00:00+00:00"
     )
-    assert identitymgr._format_human_value("quota", 1.5) == 1.5
+    assert authmgr_output._format_human_value("quota", 1.5) == 1.5
 
 
 def test_identitymgr_timestamp_fields_are_centralised() -> None:
-    assert identitymgr.USER_RECORD_FIELDS is identity_management.USER_RECORD_FIELDS
+    assert authmgr_output.USER_RECORD_FIELDS is identity_management.USER_RECORD_FIELDS
     assert (
-        identitymgr.USER_TIMESTAMP_FIELDS is identity_management.USER_TIMESTAMP_FIELDS
+        authmgr_output.USER_TIMESTAMP_FIELDS
+        is identity_management.USER_TIMESTAMP_FIELDS
     )
-    assert identitymgr.TIMESTAMP_FIELDS == frozenset(identitymgr.USER_TIMESTAMP_FIELDS)
-    assert set(identitymgr.USER_TIMESTAMP_FIELDS).issubset(
-        identitymgr.USER_RECORD_FIELDS
+    assert authmgr_output.TIMESTAMP_FIELDS == frozenset(
+        authmgr_output.USER_TIMESTAMP_FIELDS
+    )
+    assert set(authmgr_output.USER_TIMESTAMP_FIELDS).issubset(
+        authmgr_output.USER_RECORD_FIELDS
     )
 
 
@@ -3191,7 +3281,7 @@ def test_identitymgr_sql_wildcard_pattern_examples(
 def test_identitymgr_human_output_handles_missing_record_fields(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    identitymgr._print_user_records(
+    authmgr_output._print_user_records(
         [{"email": "partial@example.com", "id": "user-1"}],
         json_output=False,
         csv_output=False,
@@ -3226,4 +3316,4 @@ def test_identitymgr_csv_output_uses_iso_timestamp_strings(
 
 
 def test_identitymgr_csv_fieldnames_are_stable() -> None:
-    assert identitymgr._csv_fieldnames() == list(identitymgr.USER_RECORD_FIELDS)
+    assert authmgr_output._csv_fieldnames() == list(authmgr_output.USER_RECORD_FIELDS)

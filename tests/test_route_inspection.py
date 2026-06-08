@@ -35,7 +35,7 @@ def test_wevra_package_command_scripts_are_prefixed() -> None:
         data = tomllib.load(handle)
 
     assert data["project"]["scripts"] == {
-        "wevra-authmgr": "wevra.auth.cli.identitymgr:main",
+        "wevra-authmgr": "wevra.auth.cli.authmgr:main",
         "wevra-migrate": "wevra.tools.migrate:main",
         "wevra-routes": "wevra.tools.routes:main",
         "wevra-runserver": "wevra.tools.runserver:main",
