@@ -14,14 +14,37 @@ Alembic migration graph.
 ## Local Development
 
 Host projects supply the concrete database URL and configured module list.
-Initialise or update a host schema with:
+Provision a first-time host database and initialise Alembic migration state
+with:
+
+```sh
+uv run wevra-migrate init
+```
+
+`init` does not apply application schema revisions. Update an already
+initialised host schema with:
 
 ```sh
 uv run wevra-migrate upgrade
 ```
 
-Use direct Alembic commands only when you need Alembic-specific flags that the
-project migration command does not expose.
+Inspect migration state without mutating the database:
+
+```sh
+uv run wevra-migrate current
+```
+
+Create module-owned revisions through the project command:
+
+```sh
+uv run wevra-migrate revision --module <module> --autogenerate -m "change summary"
+```
+
+Revision files are placed in the selected configured module's conventional
+`migrations/versions/` directory. The normal roll-forward order is to upgrade
+the working database to the current head, update the owning module's models,
+generate the revision, review generated operations plus `down_revision` and
+`depends_on`, run `wevra-migrate upgrade`, then validate.
 
 Use explicit in-memory SQLite only for tests or deliberately ephemeral runs:
 
@@ -31,10 +54,11 @@ sqlite+aiosqlite:///:memory:
 
 ## PostgreSQL
 
-PostgreSQL database, user, role, and privilege provisioning happens outside
-application startup. Staging and production environments must provide an
-already-created database and login role with the required privileges before the
-application or migrations connect.
+PostgreSQL database, user, role, and privilege provisioning happens during
+explicit `wevra-migrate init`, not during application startup or routine
+`wevra-migrate upgrade`. Provide an administrative database URL with
+`--admin-database-url` or through the dbscripts-compatible `SA_DATABASE_URL`
+environment variable.
 
 Configured model modules own table/index/constraint migrations through Alembic.
 The application does not create or destroy PostgreSQL databases, users, roles,

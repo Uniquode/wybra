@@ -71,6 +71,40 @@ def migration_version_locations_from_modules(
     return tuple(version_locations)
 
 
+def migration_version_location_for_configured_module(
+    module_name: str,
+    configured_modules: tuple[str, ...],
+) -> Path:
+    if module_name not in configured_modules:
+        raise DataCompositionError(
+            configured_module_message(
+                module_name,
+                "is not present in the active module configuration.",
+            )
+        )
+
+    return migration_version_location_for_module(module_name)
+
+
+def migration_version_location_for_module(module_name: str) -> Path:
+    _require_configured_module(module_name)
+    module = import_module(module_name)
+    package_file = getattr(module, "__file__", None)
+    if not isinstance(package_file, str) or not package_file:
+        raise DataCompositionError(
+            configured_module_message(
+                module_name,
+                "does not have a filesystem package location.",
+            )
+        )
+
+    return (
+        Path(package_file).resolve().parent
+        / MIGRATION_RESOURCE_DIRECTORY
+        / MIGRATION_VERSIONS_DIRECTORY
+    )
+
+
 def discover_migration_version_locations(module_name: str) -> tuple[Path, ...]:
     _require_configured_module(module_name)
     module = import_module(module_name)

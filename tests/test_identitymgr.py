@@ -1162,6 +1162,7 @@ def test_migrate_upgrade_creates_user_management_metadata_columns(
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{(tmp_path / 'metadata.sqlite3').as_posix()}"
 
+    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
     exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
 
     assert exit_code == 0
@@ -1202,6 +1203,7 @@ def test_migrate_upgrade_creates_authorisation_group_tables(
 ) -> None:
     database_url = f"sqlite+aiosqlite:///{(tmp_path / 'groups.sqlite3').as_posix()}"
 
+    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
     exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
 
     assert exit_code == 0
@@ -1295,6 +1297,7 @@ def test_identitymgr_reports_outdated_identity_schema_before_reading_password(
     assert stdin.tell() == 0
     captured = capsys.readouterr()
     assert "Auth database schema is not up to date" in captured.err
+    assert "uv run wevra-migrate init" in captured.err
     assert "uv run wevra-migrate upgrade" in captured.err
     assert "APP_CONFIG" in captured.err
     assert "explicit auth database" not in captured.err
@@ -1308,6 +1311,7 @@ def test_identitymgr_reports_missing_group_tables_before_reading_password(
 ) -> None:
     database_path = tmp_path / "users-only.sqlite3"
     database_url = sqlite_file_url(database_path)
+    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
     assert (
         run_auth_migration(["--database-url", database_url, "upgrade", "b7f8c3b4b2a1"])
         == 0
