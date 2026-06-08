@@ -250,6 +250,11 @@ def _optional_route_prefixes(
             raise CompositionError(
                 f"App config {name} must contain only non-blank module names."
             )
+        if any(character.isspace() for character in configured_module_name):
+            raise CompositionError(
+                f"App config {name} module name {configured_module_name!r} "
+                "must not contain whitespace."
+            )
         module_name = _normalise_route_module_key(configured_module_name)
         if module_name in prefixes:
             raise CompositionError(

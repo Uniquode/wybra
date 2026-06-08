@@ -1352,6 +1352,43 @@ def test_load_app_config_rejects_duplicate_route_module_aliases(
         load_app_config(config_path=config_path)
 
 
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        " wevra-auth",
+        "wevra-auth ",
+        "wevra auth",
+    ],
+    ids=("leading", "trailing", "embedded"),
+)
+def test_load_app_config_rejects_route_module_aliases_with_whitespace(
+    tmp_path: Path,
+    module_name: str,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        f'''
+        [app]
+        modules = ["wevra.auth"]
+
+        [app.routes]
+        "{module_name}" = {{ account = "/account" }}
+
+        [app.templates]
+        auto_reload = true
+        cache_size = 0
+
+        [app.static]
+        url_path = "/static/"
+        export_root = "static"
+        ''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CompositionError, match="must not contain whitespace"):
+        load_app_config(config_path=config_path)
+
+
 def test_load_app_config_rejects_malformed_toml(tmp_path: Path) -> None:
     config_path = tmp_path / "app.toml"
     config_path.write_text("[app", encoding="utf-8")
