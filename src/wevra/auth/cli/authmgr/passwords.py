@@ -5,10 +5,12 @@ from typing import Literal
 
 import click
 
+# Raw CLI input may include aliases; runtime code uses the normalised values.
+PasswordSourceInput = Literal["-", "stdin", "prompt"]
 PasswordSource = Literal["-", "prompt"]
 PASSWORD_SOURCE_STDIN: PasswordSource = "-"
 PASSWORD_SOURCE_PROMPT: PasswordSource = "prompt"
-PASSWORD_SOURCE_STDIN_ALIAS = "stdin"
+PASSWORD_SOURCE_STDIN_ALIAS: PasswordSourceInput = "stdin"
 
 
 class PasswordSourceError(Exception):

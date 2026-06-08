@@ -10,6 +10,7 @@ from .passwords import (
     PASSWORD_SOURCE_STDIN,
     PASSWORD_SOURCE_STDIN_ALIAS,
     PasswordSource,
+    PasswordSourceInput,
 )
 from .timestamps import parse_timestamp_filter
 
@@ -73,12 +74,13 @@ def _password_source_option(default: PasswordSource | None):
 def _password_source_callback(
     _ctx: click.Context,
     param: click.Parameter,
-    value: str | None,
+    value: PasswordSourceInput | str | None,
 ) -> PasswordSource | None:
-    """Accept only the supported password-source sentinels.
+    """Normalise supported password-source inputs for runtime handling.
 
     ``None`` is preserved for optional password-update flows where omitting the
-    option means "leave the password unchanged".
+    option means "leave the password unchanged". The ``stdin`` CLI alias is
+    converted to ``-`` before any value reaches password reading.
     """
 
     if value is None:
