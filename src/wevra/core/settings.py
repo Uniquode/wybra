@@ -41,6 +41,7 @@ class EnvironmentLoader(Protocol):
 
 
 SettingsValueLoader = Callable[[Env], Mapping[str, Any] | None]
+AppConfigValueLoader = Callable[[AppConfig, Env], Mapping[str, Any] | None]
 SettingsT = TypeVar("SettingsT")
 
 
@@ -49,12 +50,14 @@ def load_composed_settings(  # noqa: UP047
     *,
     environment_loader: EnvironmentLoader,
     env_settings: Iterable[EnvironmentSetting],
+    app_config_value_loaders: Iterable[AppConfigValueLoader] = (),
     extra_value_loaders: Iterable[SettingsValueLoader] = (),
     environ: Mapping[str, str] | None = None,
     project_root: Path | None = None,
     read_dotenv: bool = True,
     app_config_env: str = APP_CONFIG_ENV,
     default_app_config: Path = DEFAULT_APP_CONFIG,
+    require_app_config: bool = False,
 ) -> SettingsT:
     """Build application settings from envex values and optional app.toml.
 
@@ -76,6 +79,7 @@ def load_composed_settings(  # noqa: UP047
         project_root=project_root,
         app_config_env=app_config_env,
         default_app_config=default_app_config,
+        require_app_config=require_app_config,
     )
     if app_config is not None:
         settings_kwargs.setdefault("project_root", app_config.project_root)
@@ -83,6 +87,10 @@ def load_composed_settings(  # noqa: UP047
         settings_kwargs["static_url_path"] = app_config.static.url_path
         settings_kwargs["template_auto_reload"] = app_config.templates.auto_reload
         settings_kwargs["template_cache_size"] = app_config.templates.cache_size
+        for value_loader in app_config_value_loaders:
+            extra_values = value_loader(app_config, env)
+            if extra_values:
+                settings_kwargs.update(extra_values)
 
     settings_kwargs.update(values_from_env_settings(env, env_settings))
     for value_loader in extra_value_loaders:
@@ -99,6 +107,7 @@ def load_composition_config_from_environment(
     project_root: Path | None = None,
     app_config_env: str = APP_CONFIG_ENV,
     default_app_config: Path = DEFAULT_APP_CONFIG,
+    require_app_config: bool = False,
 ) -> AppConfig | None:
     resolved_project_root = (project_root or Path.cwd()).resolve()
     if env.is_set(app_config_env):
@@ -113,6 +122,11 @@ def load_composition_config_from_environment(
 
     default_config_path = resolved_project_root / default_app_config
     if not default_config_path.is_file():
+        if require_app_config:
+            raise SettingsLoadError(
+                "Application config file could not be resolved; run from the "
+                f"app project or set {app_config_env}."
+            )
         return None
 
     try:

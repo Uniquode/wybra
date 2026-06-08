@@ -1,5 +1,16 @@
 # Wevra
 
+[![Build Status](https://img.shields.io/github/actions/workflow/status/Uniquode/wevra/tests.yml?branch=main&label=tests&logo=github)](https://github.com/Uniquode/wevra/actions/workflows/tests.yml)
+[![Security](https://img.shields.io/github/actions/workflow/status/Uniquode/wevra/codeql.yml?branch=main&label=security&logo=github)](https://github.com/Uniquode/wevra/security/code-scanning)
+[![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen.svg)](https://github.com/Uniquode/wevra)
+[![PyPI version](https://img.shields.io/pypi/v/wevra.svg?logo=pypi&logoColor=white)](https://pypi.org/project/wevra/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/wevra.svg?logo=pypi&logoColor=white)](https://pypi.org/project/wevra/)
+[![Python versions](https://img.shields.io/pypi/pyversions/wevra.svg?logo=python&logoColor=white)](https://pypi.org/project/wevra/)
+
+<p align="center">
+  <img src="logo.svg" alt="wevra" width="160"/>
+</p>
+
 `wevra` is a reusable async FastAPI framework layer. It provides web
 composition, database and migration helpers, project command adapters, and
 reusable local authentication building blocks.
@@ -19,7 +30,7 @@ Repository: <https://github.com/Uniquode/wevra>
   own `[tool.wevra]` metadata.
 - `wevra.auth`: local identity models, FastAPI Users integration, browser auth
   routes, auth templates, password policy, group/scope administration, and the
-  `wevra-identitymgr` operator CLI.
+  `wevra-authmgr` operator CLI.
 
 ## Local Development
 
@@ -47,7 +58,7 @@ application or environment-specific tooling:
 - `wevra-migrate`: run Alembic migrations for the configured application.
 - `wevra-routes`: inspect the configured application's installed route tree.
 - `wevra-validate`: run configured project validation targets.
-- `wevra-identitymgr`: manage local identity users, scopes, and groups.
+- `wevra-authmgr`: manage local identity users, scopes, and groups.
 
 Host applications may add their own short aliases when appropriate, but the
 portable package-owned command names are the `wevra-*` commands.
@@ -73,13 +84,24 @@ project-structure validation command.
 
 ## Auth Configuration
 
-The standalone `wevra-identitymgr` CLI loads generic auth configuration from
-`--config`, `AUTH_CONFIG`, or `./auth.toml` when present. The file uses an
-`[auth]` table:
+Wevra-hosted applications configure auth through the host application's
+`app.toml`. `wevra-authmgr` resolves the same host application config as the
+other package-owned project commands, then reads `[auth]` from that file:
 
 ```toml
-[auth]
+[app]
 database_url = "sqlite+aiosqlite:///app.sqlite3"
+modules = ["wevra.web", "wevra.auth"]
+
+[app.templates]
+auto_reload = true
+cache_size = 0
+
+[app.static]
+url_path = "/static/"
+export_root = "static"
+
+[auth]
 session_cookie_force_secure = false
 
 [auth.password.policy]
@@ -101,5 +123,5 @@ common_fragments = [
 ]
 ```
 
-Database selection precedence for auth configuration is `AUTH_DATABASE_URL`,
-then `DATABASE_URL`, then `[auth].database_url`.
+Database selection precedence for auth configuration is `DATABASE_URL`, then
+`[app].database_url`.
