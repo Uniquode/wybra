@@ -1,21 +1,16 @@
 from __future__ import annotations
 
 import os
-import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from wevra.auth.configuration import ConfigurationError
 from wevra.auth.options import IdentityOptions
 from wevra.auth.persistence.database import resolve_database_url
+from wevra.core.composition import AppConfig
 
-AUTH_CONFIG_ENV = "AUTH_CONFIG"
-AUTH_DATABASE_URL_ENV = "AUTH_DATABASE_URL"
 DATABASE_URL_ENV = "DATABASE_URL"
-DEFAULT_AUTH_CONFIG = Path("auth.toml")
-DATABASE_URL_FIELD = "database_url"
 PASSWORD_SECTION_FIELD = "password"
 PASSWORD_POLICY_SECTION_FIELD = "policy"
 IDENTITY_OPTION_FIELDS = frozenset(
@@ -37,8 +32,7 @@ PASSWORD_POLICY_OPTION_MAP = {
     "common_fragments": "password_common_fragments",
 }
 PASSWORD_OPTION_FIELDS = frozenset({PASSWORD_POLICY_SECTION_FIELD})
-AUTH_CONFIG_FIELDS = IDENTITY_OPTION_FIELDS | {
-    DATABASE_URL_FIELD,
+AUTH_OPTION_FIELDS = IDENTITY_OPTION_FIELDS | {
     PASSWORD_SECTION_FIELD,
 }
 
@@ -51,63 +45,31 @@ class AuthSettings:
 
 def load_auth_settings(
     *,
-    config_path: str | Path | None = None,
+    app_config: AppConfig,
     environ: Mapping[str, str] | None = None,
 ) -> AuthSettings:
     env = os.environ if environ is None else environ
-    resolved_config_path = _configured_path(config_path, env)
-    auth_config, base_path = _load_auth_toml(resolved_config_path)
-    database_url = _configured_database_url(auth_config, env)
+    auth_config = app_config.auth
+    _reject_unknown_auth_options(auth_config)
+    database_url = _configured_database_url(app_config, env)
     identity_options = _identity_options_from_auth_config(auth_config)
 
     return AuthSettings(
-        database_url=resolve_database_url(database_url, base_path),
+        database_url=resolve_database_url(
+            database_url,
+            app_config.config_path.resolve().parent,
+        ),
         identity_options=identity_options,
     )
 
 
-def _configured_path(
-    config_path: str | Path | None,
-    env: Mapping[str, str],
-) -> Path | None:
-    if config_path is not None:
-        return Path(config_path)
-
-    env_path = env.get(AUTH_CONFIG_ENV)
-    if env_path:
-        return Path(env_path)
-
-    default_path = DEFAULT_AUTH_CONFIG
-    return default_path if default_path.exists() else None
-
-
-def _load_auth_toml(config_path: Path | None) -> tuple[dict[str, Any], Path]:
-    if config_path is None:
-        return {}, Path.cwd()
-
-    if not config_path.exists():
-        raise ConfigurationError(f"Auth config file does not exist: {config_path}")
-
-    try:
-        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigurationError(f"Auth config file is invalid: {exc}") from exc
-
-    auth_config = data.get("auth", {})
-    if not isinstance(auth_config, dict):
-        raise ConfigurationError("Auth config must contain an [auth] table.")
-
-    _reject_unknown_auth_options(auth_config)
-    return auth_config, config_path.resolve().parent
-
-
 def _reject_unknown_auth_options(auth_config: Mapping[str, Any]) -> None:
-    unknown_fields = sorted(set(auth_config) - AUTH_CONFIG_FIELDS)
+    unknown_fields = sorted(set(auth_config) - AUTH_OPTION_FIELDS)
     if not unknown_fields:
         _reject_unknown_password_options(auth_config)
         return
 
-    allowed_fields = ", ".join(sorted(AUTH_CONFIG_FIELDS))
+    allowed_fields = ", ".join(sorted(AUTH_OPTION_FIELDS))
     unknown_list = ", ".join(unknown_fields)
     raise ConfigurationError(
         f"Unknown option(s) in [auth] configuration: {unknown_list}. "
@@ -151,19 +113,17 @@ def _reject_unknown_password_options(auth_config: Mapping[str, Any]) -> None:
 
 
 def _configured_database_url(
-    auth_config: Mapping[str, Any],
+    app_config: AppConfig,
     env: Mapping[str, str],
 ) -> str:
     database_url = (
-        _configured_env_value(env, AUTH_DATABASE_URL_ENV)
-        or _configured_env_value(env, DATABASE_URL_ENV)
-        or auth_config.get(DATABASE_URL_FIELD)
+        _configured_env_value(env, DATABASE_URL_ENV) or app_config.database_url
     )
 
     if not isinstance(database_url, str) or not database_url.strip():
         raise ConfigurationError(
-            "Auth database_url must be configured as [auth].database_url, "
-            "AUTH_DATABASE_URL, or DATABASE_URL."
+            "Application database_url must be configured as [app].database_url "
+            "or DATABASE_URL."
         )
 
     return database_url

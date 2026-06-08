@@ -8,7 +8,6 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
 
@@ -73,9 +72,12 @@ from wevra.auth.result import (
     ERROR_INVALID_PASSWORD,
     Result,
 )
-from wevra.auth.settings import load_auth_settings
+from wevra.auth.settings import AuthSettings, load_auth_settings
+from wevra.core.composition import CompositionError, load_app_config
+from wevra.tools.project import ProjectToolConfigurationError, runtime_project_root
 
 TIMESTAMP_FIELDS: frozenset[str] = frozenset(USER_TIMESTAMP_FIELDS)
+PROGRAM_NAME = "wevra-authmgr"
 PasswordSource = Literal["-", "prompt"]
 PASSWORD_SOURCE_STDIN: PasswordSource = "-"
 PASSWORD_SOURCE_PROMPT: PasswordSource = "prompt"
@@ -86,8 +88,9 @@ TIMESTAMP_HELP = (
 )
 SCHEMA_MIGRATION_MESSAGE = (
     "Auth database schema is not up to date; run `uv run wevra-migrate "
-    "upgrade` for the configured database. If using an explicit auth database, "
-    "run `uv run wevra-migrate --database-url <auth-database-url> upgrade`."
+    "upgrade` from the host app project, or set APP_CONFIG to the same "
+    "app.toml used by wevra-authmgr. If deliberately overriding the application "
+    "database, run `uv run wevra-migrate --database-url <database-url> upgrade`."
 )
 SCHEMA_INSPECTION_MESSAGE = (
     "Auth database schema could not be inspected; verify database connectivity, "
@@ -99,7 +102,6 @@ logger = logging.getLogger(__name__)
 @dataclass(slots=True)
 class IdentitymgrArgs:
     command: str
-    config: Path | None = None
     email: str = ""
     target: str = ""
     group_target: str = ""
@@ -291,25 +293,6 @@ def _option_was_provided(value: object) -> bool:
     return value is not None and value is not False
 
 
-def _config_path(ctx: click.Context) -> Path | None:
-    """Return the auth config path from Click context without hiding bad state.
-
-    Unexpected context state is treated as a usage error so operators see a
-    normal CLI failure instead of an internal exception.
-    """
-
-    config = ctx.obj.get("config") if ctx.obj else None
-    if config is None:
-        return None
-    if isinstance(config, Path):
-        return config
-    if isinstance(config, str):
-        return Path(config)
-    raise click.UsageError(
-        f"Invalid type for --config: expected path or string, got {type(config)!r}."
-    )
-
-
 def _run_identitymgr(ctx: click.Context, args: IdentitymgrArgs) -> None:
     try:
         exit_code = asyncio.run(_main_async(args))
@@ -336,12 +319,9 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
                 flag_options=set(),
             )
             if len(parsed.positionals) != 1:
-                raise click.UsageError(
-                    "Usage: wevra-identitymgr group create <abbrev>."
-                )
+                raise click.UsageError("Usage: wevra-authmgr group create <abbrev>.")
             return IdentitymgrArgs(
                 command="group-create",
-                config=_config_path(ctx),
                 group_target=parsed.positionals[0],
                 description=parsed.single_option("--description"),
                 add_scopes=tuple(parsed.option_values("--scope")),
@@ -354,7 +334,7 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
             )
             if parsed.positionals:
                 raise click.UsageError(
-                    "Usage: wevra-identitymgr group list [--json|--csv]."
+                    "Usage: wevra-authmgr group list [--json|--csv]."
                 )
             _ensure_mutually_exclusive(
                 (parsed.has_flag("--json"), "--json"),
@@ -362,7 +342,6 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
             )
             return IdentitymgrArgs(
                 command="group-list",
-                config=_config_path(ctx),
                 json_output=parsed.has_flag("--json"),
                 csv_output=parsed.has_flag("--csv"),
             )
@@ -374,11 +353,10 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> IdentitymgrArgs:
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    "Usage: wevra-identitymgr group effective-scopes <user-target>."
+                    "Usage: wevra-authmgr group effective-scopes <user-target>."
                 )
             return IdentitymgrArgs(
                 command="group-effective-scopes",
-                config=_config_path(ctx),
                 user_target=parsed.positionals[0],
                 json_output=parsed.has_flag("--json"),
             )
@@ -400,11 +378,10 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if parsed.positionals:
                 raise click.UsageError(
-                    "Usage: wevra-identitymgr group <group> show [--json]."
+                    "Usage: wevra-authmgr group <group> show [--json]."
                 )
             return IdentitymgrArgs(
                 command="group-show",
-                config=_config_path(ctx),
                 group_target=target,
                 json_output=parsed.has_flag("--json"),
             )
@@ -416,12 +393,11 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if parsed.positionals:
                 raise click.UsageError(
-                    "Usage: wevra-identitymgr group <group> update "
+                    "Usage: wevra-authmgr group <group> update "
                     "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
                 )
             return IdentitymgrArgs(
                 command="group-update",
-                config=_config_path(ctx),
                 group_target=target,
                 description=parsed.single_option("--description"),
                 add_scopes=tuple(parsed.option_values("--scope")),
@@ -435,11 +411,10 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if parsed.positionals:
                 raise click.UsageError(
-                    "Usage: wevra-identitymgr group <group> delete [--force]."
+                    "Usage: wevra-authmgr group <group> delete [--force]."
                 )
             return IdentitymgrArgs(
                 command="group-delete",
-                config=_config_path(ctx),
                 group_target=target,
                 force=parsed.has_flag("--force"),
             )
@@ -451,11 +426,10 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    f"Usage: wevra-identitymgr group <group> {operation} <user>."
+                    f"Usage: wevra-authmgr group <group> {operation} <user>."
                 )
             return IdentitymgrArgs(
                 command=f"group-{operation}",
-                config=_config_path(ctx),
                 group_target=target,
                 user_target=parsed.positionals[0],
             )
@@ -467,11 +441,10 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
             )
             if len(parsed.positionals) != 1:
                 raise click.UsageError(
-                    f"Usage: wevra-identitymgr group <group> {operation} <group>."
+                    f"Usage: wevra-authmgr group <group> {operation} <group>."
                 )
             return IdentitymgrArgs(
                 command=f"group-{operation}",
-                config=_config_path(ctx),
                 group_target=target,
                 child_group_target=parsed.positionals[0],
             )
@@ -481,26 +454,26 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> Identitym
 
 _GROUP_ROOT_OPERATION_HELP = {
     "create": (
-        "Usage: wevra-identitymgr group create <abbrev> "
+        "Usage: wevra-authmgr group create <abbrev> "
         "[--description <text>] [--scope <scope>]."
     ),
-    "list": "Usage: wevra-identitymgr group list [--json|--csv].",
+    "list": "Usage: wevra-authmgr group list [--json|--csv].",
     "effective-scopes": (
-        "Usage: wevra-identitymgr group effective-scopes <user-target> [--json]."
+        "Usage: wevra-authmgr group effective-scopes <user-target> [--json]."
     ),
 }
 
 _GROUP_TARGET_OPERATION_HELP = {
-    "show": "Usage: wevra-identitymgr group <group> show [--json].",
+    "show": "Usage: wevra-authmgr group <group> show [--json].",
     "update": (
-        "Usage: wevra-identitymgr group <group> update "
+        "Usage: wevra-authmgr group <group> update "
         "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
     ),
-    "delete": "Usage: wevra-identitymgr group <group> delete [--force].",
-    "add-user": "Usage: wevra-identitymgr group <group> add-user <user>.",
-    "remove-user": "Usage: wevra-identitymgr group <group> remove-user <user>.",
-    "add-group": "Usage: wevra-identitymgr group <group> add-group <group>.",
-    "remove-group": "Usage: wevra-identitymgr group <group> remove-group <group>.",
+    "delete": "Usage: wevra-authmgr group <group> delete [--force].",
+    "add-user": "Usage: wevra-authmgr group <group> add-user <user>.",
+    "remove-user": "Usage: wevra-authmgr group <group> remove-user <user>.",
+    "add-group": "Usage: wevra-authmgr group <group> add-group <group>.",
+    "remove-group": "Usage: wevra-authmgr group <group> remove-group <group>.",
 }
 
 
@@ -515,7 +488,7 @@ def _group_operation_help(tokens: tuple[str, ...]) -> str:
     if help_text is None:
         raise click.UsageError(
             f"Unknown group help topic: {' '.join(tokens)}. "
-            "Try 'wevra-identitymgr group --help'."
+            "Try 'wevra-authmgr group --help'."
         )
     return help_text
 
@@ -570,20 +543,15 @@ def _parse_cli_tokens(
 
 
 @click.group(
-    name="wevra-identitymgr",
+    name=PROGRAM_NAME,
     cls=HelpSuffixGroup,
     context_settings=CONTEXT_SETTINGS,
     epilog=TIMESTAMP_HELP,
     help="Manage local identity resources through configured services.",
 )
-@click.option(
-    "--config",
-    type=click.Path(path_type=Path),
-    help="Path to auth.toml. Defaults to AUTH_CONFIG or ./auth.toml when present.",
-)
 @click.pass_context
-def identitymgr_command(ctx: click.Context, config: Path | None) -> None:
-    ctx.obj = {"config": config}
+def identitymgr_command(ctx: click.Context) -> None:
+    ctx.obj = {}
 
 
 @identitymgr_command.group("user", cls=HelpSuffixGroup, help="Manage local users.")
@@ -620,7 +588,6 @@ def create_command(
         ctx,
         IdentitymgrArgs(
             command="create",
-            config=_config_path(ctx),
             email=email,
             password=password,
             admin=admin,
@@ -704,7 +671,6 @@ def update_command(
         ctx,
         IdentitymgrArgs(
             command="update",
-            config=_config_path(ctx),
             target=target,
             is_admin=_optional_boolean(
                 admin,
@@ -750,7 +716,6 @@ def delete_command(ctx: click.Context, target: str, force: bool) -> None:
         ctx,
         IdentitymgrArgs(
             command="delete",
-            config=_config_path(ctx),
             target=target,
             force=force,
         ),
@@ -766,7 +731,6 @@ def deactivate_command(ctx: click.Context, target: str, force: bool) -> None:
         ctx,
         IdentitymgrArgs(
             command="deactivate",
-            config=_config_path(ctx),
             target=target,
             force=force,
         ),
@@ -845,7 +809,6 @@ def list_command(
         ctx,
         IdentitymgrArgs(
             command="list",
-            config=_config_path(ctx),
             json_output=json_output,
             csv_output=csv_output,
             email_pattern=email_pattern,
@@ -907,7 +870,6 @@ def password_command(
         ctx,
         IdentitymgrArgs(
             command="password",
-            config=_config_path(ctx),
             target=target,
             password=password,
             no_revoke=no_revoke,
@@ -937,7 +899,6 @@ def scope_create_command(
         ctx,
         IdentitymgrArgs(
             command="scope-create",
-            config=_config_path(ctx),
             scope=scope,
             description=description,
         ),
@@ -957,7 +918,6 @@ def scope_update_command(
         ctx,
         IdentitymgrArgs(
             command="scope-update",
-            config=_config_path(ctx),
             scope=scope,
             description=description,
         ),
@@ -972,7 +932,6 @@ def scope_delete_command(ctx: click.Context, scope: str) -> None:
         ctx,
         IdentitymgrArgs(
             command="scope-delete",
-            config=_config_path(ctx),
             scope=scope,
         ),
     )
@@ -992,7 +951,6 @@ def scope_list_command(
         ctx,
         IdentitymgrArgs(
             command="scope-list",
-            config=_config_path(ctx),
             json_output=json_output,
             csv_output=csv_output,
         ),
@@ -1020,7 +978,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = identitymgr_command.main(
             args=None if argv is None else list(argv),
-            prog_name="wevra-identitymgr",
+            prog_name=PROGRAM_NAME,
             standalone_mode=False,
         )
     except click.exceptions.Exit as exc:
@@ -1035,7 +993,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 async def _main_async(args: IdentitymgrArgs) -> int:
-    settings = load_auth_settings(config_path=args.config)
+    settings = _load_auth_settings_for_command()
     database = create_database(settings.database_url)
     try:
         async with session_scope(database.session_factory) as session:
@@ -1425,6 +1383,20 @@ async def _main_async(args: IdentitymgrArgs) -> int:
                     return 1
     finally:
         await close_database(database)
+
+
+def _load_auth_settings_for_command() -> AuthSettings:
+    try:
+        project_root = runtime_project_root()
+        app_config = load_app_config(project_root=project_root)
+    except ProjectToolConfigurationError as exc:
+        raise ConfigurationError(str(exc)) from exc
+    except CompositionError as exc:
+        raise ConfigurationError(
+            f"{exc}. Run from a Wevra host application project or set APP_CONFIG."
+        ) from exc
+
+    return load_auth_settings(app_config=app_config)
 
 
 async def _verify_identity_schema(session: AsyncSession) -> None:

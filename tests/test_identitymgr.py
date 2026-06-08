@@ -47,6 +47,13 @@ from wevra.auth.persistence.database import (
     resolve_database_url,
 )
 from wevra.auth.settings import load_auth_settings
+from wevra.core.composition import (
+    AppConfig,
+    RouteOptions,
+    StaticOptions,
+    TemplateOptions,
+    load_app_config,
+)
 from wevra.db.persistence import (
     close_database,
     create_database,
@@ -198,17 +205,68 @@ def run_auth_migration(argv: list[str]) -> int:
         alembic_config_path.unlink(missing_ok=True)
 
 
-def write_auth_toml(
-    tmp_path: Path,
+def write_auth_app_toml(
+    config_path: Path,
     *auth_lines: str,
     database_url: str = "sqlite+aiosqlite:///auth.sqlite3",
 ) -> Path:
-    config_path = tmp_path / "auth.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
-        "\n".join(["[auth]", f'database_url = "{database_url}"', *auth_lines]),
+        "\n".join(
+            [
+                "[app]",
+                f'database_url = "{database_url}"',
+                'modules = ["wevra.auth"]',
+                "",
+                "[app.templates]",
+                "auto_reload = true",
+                "cache_size = 0",
+                "",
+                "[app.static]",
+                'url_path = "/static/"',
+                'export_root = "static"',
+                "",
+                "[auth]",
+                *auth_lines,
+            ]
+        ),
         encoding="utf-8",
     )
     return config_path
+
+
+def load_auth_test_app_config(
+    config_path: Path,
+    *auth_lines: str,
+    database_url: str = "sqlite+aiosqlite:///auth.sqlite3",
+) -> AppConfig:
+    return load_app_config(
+        project_root=config_path.parent,
+        config_path=write_auth_app_toml(
+            config_path,
+            *auth_lines,
+            database_url=database_url,
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _identitymgr_app_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = write_auth_app_toml(tmp_path / "app.toml")
+    monkeypatch.setenv("APP_CONFIG", str(config_path))
+    monkeypatch.delenv("AUTH_CONFIG", raising=False)
+
+
+def set_identitymgr_database_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    database_url: str,
+) -> None:
+    config_path = write_auth_app_toml(tmp_path / "app.toml", database_url=database_url)
+    monkeypatch.setenv("APP_CONFIG", str(config_path))
 
 
 def initialise_identity_database(database_url: str) -> None:
@@ -424,9 +482,9 @@ def test_identitymgr_project_script_is_defined() -> None:
     data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert (
-        data["project"]["scripts"]["wevra-identitymgr"]
-        == "wevra.auth.cli.identitymgr:main"
+        data["project"]["scripts"]["wevra-authmgr"] == "wevra.auth.cli.identitymgr:main"
     )
+    assert "wevra-identitymgr" not in data["project"]["scripts"]
     assert "identitymgr" not in data["project"]["scripts"]
     assert "usermgr" not in data["project"]["scripts"]
 
@@ -462,23 +520,25 @@ def test_dateparser_runtime_dependency_is_defined() -> None:
     )
 
 
-def test_identitymgr_loads_auth_toml_configuration(
+def test_identitymgr_loads_app_auth_configuration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_path = tmp_path / "auth.sqlite3"
     database_url = sqlite_file_url(database_path)
     initialise_identity_database(database_url)
-    config_path = write_auth_toml(tmp_path, 'session_cookie_name = "auth_session"')
-    monkeypatch.delenv("AUTH_CONFIG", raising=False)
-    monkeypatch.delenv("AUTH_DATABASE_URL", raising=False)
+    config_path = write_auth_app_toml(
+        tmp_path / "configured" / "app.toml",
+        'session_cookie_name = "auth_session"',
+        database_url=database_url,
+    )
+    monkeypatch.setenv("APP_CONFIG", str(config_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
     assert (
         identitymgr.main(
             [
-                "--config",
-                str(config_path),
                 "user",
                 "create",
                 "configured@example.com",
@@ -493,28 +553,76 @@ def test_identitymgr_loads_auth_toml_configuration(
     assert user.email == "configured@example.com"
 
 
+def test_identitymgr_loads_project_app_toml_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "project-auth.sqlite3"
+    database_url = sqlite_file_url(database_path)
+    initialise_identity_database(database_url)
+    write_auth_app_toml(tmp_path / "app.toml", database_url=database_url)
+    (tmp_path / "pyproject.toml").write_text("[tool.wevra]\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APP_CONFIG", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+
+    assert (
+        identitymgr.main(
+            ["user", "create", "project-config@example.com", "--password", "-"]
+        )
+        == 0
+    )
+
+    [user] = identity_users_from_database(database_url)
+    assert user.email == "project-config@example.com"
+
+
+def test_identitymgr_rejects_missing_app_config_even_when_auth_toml_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    case_root = tmp_path / "auth-only"
+    case_root.mkdir()
+    (case_root / "auth.toml").write_text(
+        "\n".join(
+            [
+                "[auth]",
+                'database_url = "sqlite+aiosqlite:///auth.sqlite3"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(case_root)
+    monkeypatch.delenv("APP_CONFIG", raising=False)
+    monkeypatch.setenv("AUTH_CONFIG", str(case_root / "auth.toml"))
+    stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
+    monkeypatch.setattr(sys, "stdin", stdin)
+
+    exit_code = identitymgr.main(
+        ["user", "create", "missing-config@example.com", "--password", "-"]
+    )
+
+    assert exit_code == 1
+    assert stdin.tell() == 0
+    captured = capsys.readouterr()
+    assert "App config file does not exist" in captured.err
+    assert "set APP_CONFIG" in captured.err
+
+
 @pytest.mark.parametrize(
     ("environ_template", "expected_url"),
     [
         pytest.param(
-            {"AUTH_DATABASE_URL": "   "},
-            "config",
-            id="blank-auth-env-falls-back-to-config",
-        ),
-        pytest.param(
             {"DATABASE_URL": "database_env"},
             "database_env",
-            id="database-env-used-when-auth-env-unset",
+            id="database-env-used",
         ),
         pytest.param(
-            {"AUTH_DATABASE_URL": "   ", "DATABASE_URL": "database_env"},
-            "database_env",
-            id="blank-auth-env-falls-through-to-database-env",
-        ),
-        pytest.param(
-            {"AUTH_DATABASE_URL": "auth_env", "DATABASE_URL": "database_env"},
-            "auth_env",
-            id="auth-env-wins-over-database-env",
+            {"AUTH_DATABASE_URL": "auth_env"},
+            "config",
+            id="auth-env-ignored",
         ),
         pytest.param(
             {"DATABASE_URL": "   "},
@@ -523,67 +631,96 @@ def test_identitymgr_loads_auth_toml_configuration(
         ),
     ],
 )
-def test_auth_toml_database_url_precedence(
+def test_app_database_url_precedence(
     tmp_path: Path,
     environ_template: dict[str, str],
     expected_url: str,
 ) -> None:
-    config_path = write_auth_toml(tmp_path)
     urls = {
         "auth_env": sqlite_file_url(tmp_path / "auth-env.sqlite3"),
         "config": sqlite_file_url(tmp_path / "auth.sqlite3"),
         "database_env": sqlite_file_url(tmp_path / "database-env.sqlite3"),
     }
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        database_url=urls["config"],
+    )
     environ = {
         key: urls[value] if value in urls else value
         for key, value in environ_template.items()
     }
 
     settings = load_auth_settings(
-        config_path=config_path,
+        app_config=app_config,
         environ=environ,
     )
 
     assert settings.database_url == urls[expected_url]
 
 
-def test_auth_toml_rejects_unknown_auth_options(tmp_path: Path) -> None:
-    config_path = tmp_path / "auth.toml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "[auth]",
-                'database_url = "sqlite+aiosqlite:///auth.sqlite3"',
-                "session_lifetme_seconds = 3600",
-            ]
-        ),
-        encoding="utf-8",
+def test_app_database_url_resolves_relative_sqlite_path_from_config_directory(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config" / "app.toml"
+    app_config = load_auth_test_app_config(
+        config_path,
+        database_url="sqlite+aiosqlite:///relative-auth.sqlite3",
+    )
+
+    settings = load_auth_settings(app_config=app_config, environ={})
+
+    assert settings.database_url == sqlite_file_url(
+        config_path.parent / "relative-auth.sqlite3"
+    )
+
+
+def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None:
+    app_config = AppConfig(
+        config_path=tmp_path / "app.toml",
+        project_root=tmp_path,
+        modules=("wevra.auth",),
+        routes=RouteOptions(),
+        templates=TemplateOptions(auto_reload=True, cache_size=0),
+        static=StaticOptions(url_path="/static/", export_root=Path("static")),
+    )
+
+    with pytest.raises(ConfigurationError, match=r"\[app\]\.database_url"):
+        load_auth_settings(app_config=app_config, environ={})
+
+
+def test_app_auth_config_rejects_unknown_auth_options(tmp_path: Path) -> None:
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        "session_lifetme_seconds = 3600",
     )
 
     with pytest.raises(ConfigurationError, match="session_lifetme_seconds"):
-        load_auth_settings(config_path=config_path, environ={})
+        load_auth_settings(app_config=app_config, environ={})
 
 
-def test_auth_toml_configures_default_password_policy(tmp_path: Path) -> None:
-    config_path = tmp_path / "auth.toml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "[auth]",
-                'database_url = "sqlite+aiosqlite:///auth.sqlite3"',
-                "session_cookie_force_secure = true",
-                "",
-                "[auth.password.policy]",
-                "minimum_length = 8",
-                "minimum_strength = 0.25",
-                "minimum_character_categories = 1",
-                'common_fragments = ["example"]',
-            ]
-        ),
-        encoding="utf-8",
+def test_app_auth_config_rejects_stale_auth_database_url(tmp_path: Path) -> None:
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        'database_url = "sqlite+aiosqlite:///stale-auth.sqlite3"',
     )
 
-    settings = load_auth_settings(config_path=config_path, environ={})
+    with pytest.raises(ConfigurationError, match="database_url"):
+        load_auth_settings(app_config=app_config, environ={})
+
+
+def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        "session_cookie_force_secure = true",
+        "",
+        "[auth.password.policy]",
+        "minimum_length = 8",
+        "minimum_strength = 0.25",
+        "minimum_character_categories = 1",
+        'common_fragments = ["example"]',
+    )
+
+    settings = load_auth_settings(app_config=app_config, environ={})
 
     assert settings.identity_options.session_cookie_force_secure is True
     policy = settings.identity_options.resolved_password_policy()
@@ -600,45 +737,31 @@ def test_auth_toml_configures_default_password_policy(tmp_path: Path) -> None:
         'common_fragments = ["example", 123]',
     ],
 )
-def test_auth_toml_rejects_invalid_password_common_fragments(
+def test_app_auth_rejects_invalid_password_common_fragments(
     tmp_path: Path,
     common_fragments_config: str,
 ) -> None:
-    config_path = tmp_path / "auth.toml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "[auth]",
-                'database_url = "sqlite+aiosqlite:///auth.sqlite3"',
-                "",
-                "[auth.password.policy]",
-                common_fragments_config,
-            ]
-        ),
-        encoding="utf-8",
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        "",
+        "[auth.password.policy]",
+        common_fragments_config,
     )
 
     with pytest.raises(ConfigurationError, match="common fragments"):
-        load_auth_settings(config_path=config_path, environ={})
+        load_auth_settings(app_config=app_config, environ={})
 
 
-def test_auth_toml_rejects_unknown_password_policy_options(tmp_path: Path) -> None:
-    config_path = tmp_path / "auth.toml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "[auth]",
-                'database_url = "sqlite+aiosqlite:///auth.sqlite3"',
-                "",
-                "[auth.password.policy]",
-                "minimum_strenth = 0.25",
-            ]
-        ),
-        encoding="utf-8",
+def test_app_auth_rejects_unknown_password_policy_options(tmp_path: Path) -> None:
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        "",
+        "[auth.password.policy]",
+        "minimum_strenth = 0.25",
     )
 
     with pytest.raises(ConfigurationError, match="minimum_strenth"):
-        load_auth_settings(config_path=config_path, environ={})
+        load_auth_settings(app_config=app_config, environ={})
 
 
 @pytest.mark.parametrize("command", ["group", "scope", "user"])
@@ -710,17 +833,17 @@ def test_identitymgr_help_suffix_matches_help_option(
     [
         pytest.param(
             ["help", "group", "create"],
-            "Usage: wevra-identitymgr group create <abbrev>",
+            "Usage: wevra-authmgr group create <abbrev>",
             id="root-group-create",
         ),
         pytest.param(
             ["group", "help", "create"],
-            "Usage: wevra-identitymgr group create <abbrev>",
+            "Usage: wevra-authmgr group create <abbrev>",
             id="group-create",
         ),
         pytest.param(
             ["group", "help", "project", "update"],
-            "Usage: wevra-identitymgr group <group> update",
+            "Usage: wevra-authmgr group <group> update",
             id="group-target-update",
         ),
     ],
@@ -1103,7 +1226,7 @@ def test_identitymgr_reports_outdated_identity_schema_before_reading_password(
 ) -> None:
     database_path = tmp_path / "legacy-identity.sqlite3"
     initialise_legacy_identity_database(database_path)
-    monkeypatch.setenv("AUTH_DATABASE_URL", sqlite_file_url(database_path))
+    set_identitymgr_database_url(monkeypatch, tmp_path, sqlite_file_url(database_path))
     stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
     monkeypatch.setattr(sys, "stdin", stdin)
 
@@ -1116,6 +1239,8 @@ def test_identitymgr_reports_outdated_identity_schema_before_reading_password(
     captured = capsys.readouterr()
     assert "Auth database schema is not up to date" in captured.err
     assert "uv run wevra-migrate upgrade" in captured.err
+    assert "APP_CONFIG" in captured.err
+    assert "explicit auth database" not in captured.err
     assert "is_admin" in captured.err
 
 
@@ -1130,7 +1255,7 @@ def test_identitymgr_reports_missing_group_tables_before_reading_password(
         run_auth_migration(["--database-url", database_url, "upgrade", "b7f8c3b4b2a1"])
         == 0
     )
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
     monkeypatch.setattr(sys, "stdin", stdin)
 
@@ -1151,7 +1276,7 @@ def test_identitymgr_reports_missing_identity_table_before_reading_password(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     database_path = tmp_path / "missing-identity.sqlite3"
-    monkeypatch.setenv("AUTH_DATABASE_URL", sqlite_file_url(database_path))
+    set_identitymgr_database_url(monkeypatch, tmp_path, sqlite_file_url(database_path))
     stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
     monkeypatch.setattr(sys, "stdin", stdin)
 
@@ -1575,7 +1700,7 @@ def test_identitymgr_create_user_with_metadata_from_stdin_password(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "users.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
     exit_code = identitymgr.main(
@@ -1620,7 +1745,7 @@ def test_identitymgr_scope_commands_manage_scope_records(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "scope-cli.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     assert (
         identitymgr.main(
@@ -1668,7 +1793,7 @@ def test_identitymgr_scope_delete_rejects_used_scope(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "used-scope-cli.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     assert identitymgr.main(["scope", "create", "admin:read"]) == 0
     assert identitymgr.main(["group", "create", "admins", "--scope", "admin:read"]) == 0
@@ -1688,7 +1813,7 @@ def test_identitymgr_group_target_first_commands_manage_group(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "group-cli.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     assert identitymgr.main(["scope", "create", "project:read"]) == 0
     assert identitymgr.main(["scope", "create", "project:write"]) == 0
@@ -1740,7 +1865,7 @@ def test_identitymgr_group_membership_commands_manage_users_and_child_groups(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "group-membership-cli.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
     assert (
@@ -1765,7 +1890,7 @@ def test_identitymgr_group_membership_commands_manage_users_and_child_groups(
 
 
 def test_identitymgr_group_parser_disambiguates_user_and_group_targets() -> None:
-    ctx = click.Context(identitymgr.identitymgr_command, obj={"config": None})
+    ctx = click.Context(identitymgr.identitymgr_command, obj={})
 
     user_args = identitymgr._target_group_args(
         ctx,
@@ -1786,7 +1911,7 @@ def test_identitymgr_create_and_update_user_group_memberships(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "user-groups-cli.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(
         sys,
         "stdin",
@@ -1859,7 +1984,7 @@ def test_identitymgr_create_with_missing_group_does_not_create_user(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "missing-create-group-cli.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
     monkeypatch.setattr(sys, "stdin", stdin)
 
@@ -1891,7 +2016,7 @@ def test_identitymgr_set_group_validates_targets_before_replacing_memberships(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "user-groups-invalid-cli.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
     assert identitymgr.main(["group", "create", "alpha"]) == 0
@@ -1976,7 +2101,7 @@ def test_identitymgr_group_effective_scopes_reports_folded_scopes(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "effective-scopes-cli.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
     assert identitymgr.main(["scope", "create", "project:read"]) == 0
@@ -2007,7 +2132,7 @@ def test_identitymgr_create_rejects_invalid_timezone_without_creating_user(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "invalid-create-timezone.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
     exit_code = identitymgr.main(
@@ -2034,7 +2159,7 @@ def test_identitymgr_update_rejects_invalid_timezone_without_updating_user(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "invalid-update-timezone.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(
@@ -2127,7 +2252,7 @@ def test_identitymgr_create_rejects_duplicate_email(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "duplicate.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
@@ -2152,7 +2277,7 @@ def test_identitymgr_list_json_omits_null_fields(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "list-json.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(
@@ -2187,7 +2312,7 @@ def test_identitymgr_update_resolves_id_and_updates_user_fields(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "update.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "update@example.com", "--password", "-"])
@@ -2232,7 +2357,7 @@ def test_identitymgr_update_no_expires_at_without_existing_expiry_is_noop(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "no-expiry-noop.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "no-expiry@example.com", "--password", "-"])
@@ -2258,7 +2383,7 @@ def test_identitymgr_update_can_clear_optional_string_fields(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "clear-optional-fields.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "clear@example.com", "--password", "-"])
@@ -2315,7 +2440,7 @@ def test_identitymgr_update_reports_malformed_targets(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "malformed-target.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     exit_code = identitymgr.main(["user", "update", target, "--admin"])
 
@@ -2330,7 +2455,7 @@ def test_identitymgr_update_rejects_final_superuser_demotion(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "final-superuser.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(
@@ -2356,7 +2481,7 @@ def test_identitymgr_delete_and_deactivate_protect_superusers(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "protect-superuser.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(
@@ -2391,7 +2516,7 @@ def test_identitymgr_delete_protects_non_final_superuser(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "protect-non-final-superuser.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     for email in ("first-root@example.com", "second-root@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
         assert (
@@ -2419,7 +2544,7 @@ def test_identitymgr_delete_and_deactivate_normal_users_with_force(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "delete-deactivate.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "delete@example.com", "--password", "-"])
@@ -2462,7 +2587,7 @@ def test_identitymgr_deactivate_only_revokes_target_user_sessions(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "deactivate-target-sessions.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     for email in ("alice@example.com", "bob@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
         assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
@@ -2483,7 +2608,7 @@ def test_identitymgr_delete_confirmation_identifies_resolved_user(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "delete-confirm.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "confirm@example.com", "--password", "-"])
@@ -2506,7 +2631,7 @@ def test_identitymgr_password_revokes_sessions_by_default(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "password-revoke.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "password@example.com", "--password", "-"])
@@ -2530,7 +2655,7 @@ def test_identitymgr_update_password_revokes_sessions_by_default(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "update-password-revoke.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(
@@ -2556,7 +2681,7 @@ def test_identitymgr_password_can_preserve_sessions(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "password-preserve.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "preserve@example.com", "--password", "-"])
@@ -2579,7 +2704,7 @@ def test_identitymgr_interactive_password_mismatch_aborts_when_input_ends(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "password-mismatch.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
@@ -2600,7 +2725,7 @@ def test_identitymgr_interactive_password_prompt_retries_after_mismatch(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "password-retry.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
@@ -2631,7 +2756,7 @@ def test_identitymgr_create_with_stdin_password_does_not_prompt(
     email = f"{source_name}@example.com"
     database_url = sqlite_file_url(tmp_path / f"stdin-password-{source_name}.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
@@ -2652,7 +2777,7 @@ def test_identitymgr_create_with_empty_stdin_password_reports_password_option(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "stdin-password-empty.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
 
     result = CliRunner().invoke(
         identitymgr.identitymgr_command,
@@ -2672,7 +2797,7 @@ def test_identitymgr_password_command_prompts_by_default(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "password-default-prompt.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(
@@ -2699,7 +2824,7 @@ def test_identitymgr_list_filters_by_email_domain_flags_and_effective_activity(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "list-filters.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     for email in ("alpha@example.com", "beta@example.org", "gamma@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
         assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
@@ -2731,7 +2856,7 @@ def test_identitymgr_list_uses_shared_effective_active_timestamp(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "list-now.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "boundary@example.com", "--password", "-"])
@@ -2760,7 +2885,7 @@ def test_identitymgr_active_filter_uses_exclusive_expiry_boundary(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "active-expiry-boundary.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "boundary@example.com", "--password", "-"])
@@ -2791,7 +2916,7 @@ def test_identitymgr_list_timestamp_filters_and_ordering(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "list-timestamps.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     for email in ("first@z.example", "second@y.example", "third@y.example"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
         assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
@@ -2854,7 +2979,7 @@ def test_identitymgr_last_login_order_keeps_nulls_last(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "last-login-order.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     for email in ("never@example.com", "recent@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
         assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
@@ -2913,7 +3038,7 @@ def test_identitymgr_list_filters_by_login_presence(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "login-presence.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     for email in ("never@example.com", "recent@example.com"):
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
         assert identitymgr.main(["user", "create", email, "--password", "-"]) == 0
@@ -3085,7 +3210,7 @@ def test_identitymgr_csv_output_uses_iso_timestamp_strings(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "list-csv.sqlite3")
     initialise_identity_database(database_url)
-    monkeypatch.setenv("AUTH_DATABASE_URL", database_url)
+    set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
     assert (
         identitymgr.main(["user", "create", "csv@example.com", "--password", "-"]) == 0

@@ -45,6 +45,8 @@ class AppConfig:
     routes: RouteOptions
     templates: TemplateOptions
     static: StaticOptions
+    database_url: str | None = None
+    auth: dict[str, Any] = field(default_factory=dict)
 
 
 def load_app_config(
@@ -71,21 +73,25 @@ def load_app_config(
             app_config_message(resolved_config_path, f"is invalid: {error}")
         ) from error
 
+    app_data = _required_table(data, "app")
+
     return AppConfig(
         config_path=resolved_config_path,
         project_root=resolved_project_root,
         modules=_required_str_tuple(
-            data,
-            "modules",
+            app_data,
+            "app.modules",
         ),
         routes=RouteOptions(
             prefixes=_optional_route_prefixes(
-                _optional_table(data, "routes"),
-                "routes",
+                _optional_table(app_data, "app.routes"),
+                "app.routes",
             ),
         ),
-        templates=_load_template_options(data),
-        static=_load_static_options(data),
+        templates=_load_template_options(app_data),
+        static=_load_static_options(app_data),
+        database_url=_optional_str_or_none(app_data, "app.database_url"),
+        auth=_optional_table(data, "auth"),
     )
 
 
@@ -149,7 +155,8 @@ def _resolve_config_path(
 
 
 def _required_table(data: dict[str, Any], name: str) -> dict[str, Any]:
-    value = data.get(name)
+    key = name.rsplit(".", maxsplit=1)[-1]
+    value = data.get(key)
     if isinstance(value, dict):
         return value
 
@@ -157,7 +164,8 @@ def _required_table(data: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def _optional_table(data: dict[str, Any], name: str) -> dict[str, Any]:
-    value = data.get(name)
+    key = name.rsplit(".", maxsplit=1)[-1]
+    value = data.get(key)
     if value is None:
         return {}
     if isinstance(value, dict):
@@ -200,6 +208,17 @@ def _optional_str(data: dict[str, Any], name: str, default: str) -> str:
     raise CompositionError(f"App config {name} must be a non-blank string.")
 
 
+def _optional_str_or_none(data: dict[str, Any], name: str) -> str | None:
+    key = name.rsplit(".", maxsplit=1)[-1]
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip():
+        return value
+
+    raise CompositionError(f"App config {name} must be a non-blank string.")
+
+
 def _required_bool(data: dict[str, Any], name: str) -> bool:
     key = name.rsplit(".", maxsplit=1)[-1]
     value = data.get(key)
@@ -223,22 +242,36 @@ def _optional_route_prefixes(
     name: str,
 ) -> dict[str, dict[str, str]]:
     prefixes: dict[str, dict[str, str]] = {}
-    for module_name, module_routes in data.items():
-        if not isinstance(module_name, str) or not module_name.strip():
+    for configured_module_name, module_routes in data.items():
+        if (
+            not isinstance(configured_module_name, str)
+            or not configured_module_name.strip()
+        ):
             raise CompositionError(
                 f"App config {name} must contain only non-blank module names."
             )
+        module_name = _normalise_route_module_key(configured_module_name)
+        if module_name in prefixes:
+            raise CompositionError(
+                f"App config {name} contains duplicate route entries for "
+                f"module {module_name!r}."
+            )
         if not isinstance(module_routes, dict):
             raise CompositionError(
-                f"App config {name}.{module_name} must be a table of router labels."
+                f"App config {name}.{configured_module_name} must be a table "
+                "of router labels."
             )
 
         prefixes[module_name] = _route_label_prefixes(
             module_routes,
-            f"{name}.{module_name}",
+            f"{name}.{configured_module_name}",
         )
 
     return prefixes
+
+
+def _normalise_route_module_key(module_name: str) -> str:
+    return module_name.replace("-", ".")
 
 
 def _route_label_prefixes(
@@ -262,27 +295,27 @@ def _route_label_prefixes(
 
 
 def _load_template_options(data: dict[str, Any]) -> TemplateOptions:
-    template_data = _required_table(data, "templates")
+    template_data = _required_table(data, "app.templates")
     return TemplateOptions(
         auto_reload=_required_bool(
             template_data,
-            "templates.auto_reload",
+            "app.templates.auto_reload",
         ),
         cache_size=_required_non_negative_int(
             template_data,
-            "templates.cache_size",
+            "app.templates.cache_size",
         ),
     )
 
 
 def _load_static_options(data: dict[str, Any]) -> StaticOptions:
-    static_data = _required_table(data, "static")
+    static_data = _required_table(data, "app.static")
     return StaticOptions(
-        url_path=_required_str(static_data, "static.url_path"),
+        url_path=_required_str(static_data, "app.static.url_path"),
         export_root=Path(
             _optional_str(
                 static_data,
-                "static.export_root",
+                "app.static.export_root",
                 DEFAULT_STATIC_EXPORT_ROOT.as_posix(),
             )
         ),

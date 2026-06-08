@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="512" height="512">
+  <title>wevra</title>
+
+  <!-- Deep red-ochre background -->
+  <rect width="200" height="200" rx="28" fill="#1C0803"/>
+
+  <!-- Outer decorative boundary dots -->
+  <circle cx="100" cy="100" r="91"
+    fill="none" stroke="#5A2010" stroke-width="3.5"
+    stroke-linecap="round" stroke-dasharray="0.1 6.8"/>
+
+  <!-- Ring 3 (r=72) — outer web ring, dark ochre -->
+  <g fill="none" stroke="#A05818" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="0.1 4.5">
+    <path d="M 100 28   A 72 72 0 0 1 162.35 64"/>
+    <path d="M 162.35 64  A 72 72 0 0 1 162.35 136"/>
+    <path d="M 162.35 136 A 72 72 0 0 1 100 172"/>
+    <path d="M 100 172  A 72 72 0 0 1 37.65 136"/>
+    <path d="M 37.65 136 A 72 72 0 0 1 37.65 64"/>
+    <path d="M 37.65 64  A 72 72 0 0 1 100 28"/>
+  </g>
+
+  <!-- Ring 2 (r=52) — middle web ring, warm ochre -->
+  <g fill="none" stroke="#C87828" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="0.1 4.2">
+    <path d="M 100 48    A 52 52 0 0 1 145.03 74"/>
+    <path d="M 145.03 74  A 52 52 0 0 1 145.03 126"/>
+    <path d="M 145.03 126 A 52 52 0 0 1 100 152"/>
+    <path d="M 100 152   A 52 52 0 0 1 54.97 126"/>
+    <path d="M 54.97 126  A 52 52 0 0 1 54.97 74"/>
+    <path d="M 54.97 74   A 52 52 0 0 1 100 48"/>
+  </g>
+
+  <!-- Ring 1 (r=32) — inner web ring, golden ochre -->
+  <g fill="none" stroke="#E8A840" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="0.1 4.0">
+    <path d="M 100 68    A 32 32 0 0 1 127.71 84"/>
+    <path d="M 127.71 84  A 32 32 0 0 1 127.71 116"/>
+    <path d="M 127.71 116 A 32 32 0 0 1 100 132"/>
+    <path d="M 100 132   A 32 32 0 0 1 72.29 116"/>
+    <path d="M 72.29 116  A 32 32 0 0 1 72.29 84"/>
+    <path d="M 72.29 84   A 32 32 0 0 1 100 68"/>
+  </g>
+
+  <!-- 6 Spokes (r=18 inner to r=80 outer) — dotted -->
+  <g fill="none" stroke="#D09030" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="0.1 4.0">
+    <line x1="100"    y1="82"  x2="100"    y2="20"/>
+    <line x1="115.59" y1="91"  x2="169.28" y2="60"/>
+    <line x1="115.59" y1="109" x2="169.28" y2="140"/>
+    <line x1="100"    y1="118" x2="100"    y2="180"/>
+    <line x1="84.41"  y1="109" x2="30.72"  y2="140"/>
+    <line x1="84.41"  y1="91"  x2="30.72"  y2="60"/>
+  </g>
+
+  <!-- Spoke tip dots (r=80) — bright cream -->
+  <circle cx="100"    cy="20"  r="5.5" fill="#F5E0A0"/>
+  <circle cx="169.28" cy="60"  r="5.5" fill="#F5E0A0"/>
+  <circle cx="169.28" cy="140" r="5.5" fill="#F5E0A0"/>
+  <circle cx="100"    cy="180" r="5.5" fill="#F5E0A0"/>
+  <circle cx="30.72"  cy="140" r="5.5" fill="#F5E0A0"/>
+  <circle cx="30.72"  cy="60"  r="5.5" fill="#F5E0A0"/>
+
+  <!-- Junction dots — ring 3 / spoke intersections (r=72) -->
+  <circle cx="100"    cy="28"  r="5"   fill="#A05818"/>
+  <circle cx="162.35" cy="64"  r="5"   fill="#A05818"/>
+  <circle cx="162.35" cy="136" r="5"   fill="#A05818"/>
+  <circle cx="100"    cy="172" r="5"   fill="#A05818"/>
+  <circle cx="37.65"  cy="136" r="5"   fill="#A05818"/>
+  <circle cx="37.65"  cy="64"  r="5"   fill="#A05818"/>
+
+  <!-- Junction dots — ring 2 / spoke intersections (r=52) -->
+  <circle cx="100"    cy="48"  r="4.5" fill="#C87828"/>
+  <circle cx="145.03" cy="74"  r="4.5" fill="#C87828"/>
+  <circle cx="145.03" cy="126" r="4.5" fill="#C87828"/>
+  <circle cx="100"    cy="152" r="4.5" fill="#C87828"/>
+  <circle cx="54.97"  cy="126" r="4.5" fill="#C87828"/>
+  <circle cx="54.97"  cy="74"  r="4.5" fill="#C87828"/>
+
+  <!-- Junction dots — ring 1 / spoke intersections (r=32) -->
+  <circle cx="100"    cy="68"  r="4"   fill="#F0C870"/>
+  <circle cx="127.71" cy="84"  r="4"   fill="#F0C870"/>
+  <circle cx="127.71" cy="116" r="4"   fill="#F0C870"/>
+  <circle cx="100"    cy="132" r="4"   fill="#F0C870"/>
+  <circle cx="72.29"  cy="116" r="4"   fill="#F0C870"/>
+  <circle cx="72.29"  cy="84"  r="4"   fill="#F0C870"/>
+
+  <!-- Filler dots at mid-angles between rings 2 and 3 (r=62) -->
+  <circle cx="131"  cy="46.3"  r="3"   fill="#8B3A10"/>
+  <circle cx="162"  cy="100"   r="3"   fill="#8B3A10"/>
+  <circle cx="131"  cy="153.7" r="3"   fill="#8B3A10"/>
+  <circle cx="69"   cy="153.7" r="3"   fill="#8B3A10"/>
+  <circle cx="38"   cy="100"   r="3"   fill="#8B3A10"/>
+  <circle cx="69"   cy="46.3"  r="3"   fill="#8B3A10"/>
+
+  <!-- Filler dots at mid-angles between rings 1 and 2 (r=42) -->
+  <circle cx="121"  cy="63.6"  r="2.5" fill="#7A3010"/>
+  <circle cx="142"  cy="100"   r="2.5" fill="#7A3010"/>
+  <circle cx="121"  cy="136.4" r="2.5" fill="#7A3010"/>
+  <circle cx="79"   cy="136.4" r="2.5" fill="#7A3010"/>
+  <circle cx="58"   cy="100"   r="2.5" fill="#7A3010"/>
+  <circle cx="79"   cy="63.6"  r="2.5" fill="#7A3010"/>
+
+  <!-- Small satellite dots around central circle (r=22) -->
+  <circle cx="100"   cy="78"  r="2" fill="#E8A840" opacity="0.7"/>
+  <circle cx="119.05" cy="89" r="2" fill="#E8A840" opacity="0.7"/>
+  <circle cx="119.05" cy="111" r="2" fill="#E8A840" opacity="0.7"/>
+  <circle cx="100"   cy="122" r="2" fill="#E8A840" opacity="0.7"/>
+  <circle cx="80.95" cy="111" r="2" fill="#E8A840" opacity="0.7"/>
+  <circle cx="80.95" cy="89"  r="2" fill="#E8A840" opacity="0.7"/>
+
+  <!-- Central waterhole symbol — three concentric rings -->
+  <circle cx="100" cy="100" r="17" fill="none" stroke="#F0C870" stroke-width="2.2"/>
+  <circle cx="100" cy="100" r="11" fill="none" stroke="#E8A840" stroke-width="2"/>
+  <circle cx="100" cy="100" r="7"  fill="#C87828"/>
+  <circle cx="100" cy="100" r="3.5" fill="#F5E0A0"/>
+</svg>
