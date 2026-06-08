@@ -25,6 +25,7 @@ from wevra.db.urls import (
     redact_database_url,
     redact_database_urls,
     resolve_database_url,
+    safe_database_error_message,
 )
 
 
@@ -120,6 +121,15 @@ def test_redact_database_urls_masks_bare_postgresql_urls_in_messages() -> None:
     ) == (
         "failed for postgresql://***:***@host.example/app and "
         "postgresql+asyncpg://***:***@host.example/postgres"
+    )
+
+
+def test_safe_database_error_message_redacts_database_urls() -> None:
+    error = RuntimeError("failed for postgresql+asyncpg://user:secret@host.example/app")
+
+    assert (
+        safe_database_error_message(error)
+        == "failed for postgresql+asyncpg://***:***@host.example/app"
     )
 
 
