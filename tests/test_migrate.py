@@ -243,7 +243,7 @@ def test_migrate_disposes_engine_on_same_event_loop(monkeypatch) -> None:
     monkeypatch.setattr(migrate_module, "close_database", close_on_current_loop)
     monkeypatch.setattr(
         migrate_module,
-        "_inspect_migration_state",
+        "_migration_state_from_connection",
         lambda _connection: migrate_module.MigrationState(initialised=False),
     )
 
@@ -370,7 +370,7 @@ def test_migrate_init_provisions_postgresql_before_stamping_base(
     )
     monkeypatch.setattr(
         migrate_module,
-        "_inspect_migration_state",
+        "_migration_state_from_connection",
         lambda _connection: migrate_module.MigrationState(initialised=False),
     )
     monkeypatch.setattr(migrate_module, "provision_postgresql_database", provision)
@@ -584,12 +584,20 @@ def test_migrate_revision_passes_module_version_path_and_graph_options(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    base_module_path = create_importable_module(tmp_path, "base_app")
+    base_version_path = base_module_path / "migrations" / "versions"
+    base_version_path.mkdir(parents=True)
     create_importable_module(tmp_path, "revision_app")
     monkeypatch.syspath_prepend(str(tmp_path))
     observed: dict[str, object] = {}
 
     def record_revision(config, **kwargs) -> None:
+        observed["path_separator"] = config.get_main_option("path_separator")
+        observed["version_path_separator"] = config.get_main_option(
+            "version_path_separator"
+        )
         observed["version_locations"] = config.get_main_option("version_locations")
+        observed["version_locations_list"] = config.get_version_locations_list()
         observed.update(kwargs)
 
     monkeypatch.setattr(migrate_module.command, "revision", record_revision)
@@ -614,7 +622,7 @@ def test_migrate_revision_passes_module_version_path_and_graph_options(
             "--rev-id",
             "999999999999",
         ],
-        modules=("revision_app",),
+        modules=("base_app", "revision_app"),
     )
 
     version_path = tmp_path / "revision_app" / "migrations" / "versions"
@@ -627,7 +635,13 @@ def test_migrate_revision_passes_module_version_path_and_graph_options(
     assert observed["depends_on"] == "def456"
     assert observed["rev_id"] == "999999999999"
     assert observed["version_path"] == version_path
+    assert observed["path_separator"] == "os"
+    assert observed["version_path_separator"] is None
     assert version_path.as_posix() in str(observed["version_locations"])
+    assert set(observed["version_locations_list"] or []) == {
+        base_version_path.resolve().as_posix(),
+        version_path.resolve().as_posix(),
+    }
     assert version_path.is_dir()
 
 

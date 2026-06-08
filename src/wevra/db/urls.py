@@ -150,6 +150,10 @@ def redact_database_urls(value: str) -> str:
     )
 
 
+def safe_database_error_message(exc: BaseException) -> str:
+    return redact_database_urls(str(exc))
+
+
 def _redact_query(query: str) -> str:
     if not query:
         return query

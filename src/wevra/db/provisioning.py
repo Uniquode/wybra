@@ -7,7 +7,7 @@ from importlib import import_module
 from typing import Any
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
-from wevra.db.urls import redact_database_urls
+from wevra.db.urls import safe_database_error_message
 
 ADMIN_DATABASE_URL_ENV = "SA_DATABASE_URL"
 POSTGRESQL_ASYNC_SCHEME = "postgresql+asyncpg"
@@ -48,7 +48,7 @@ def provision_postgresql_database(
     except DatabaseProvisioningError:
         raise
     except Exception as exc:
-        raise DatabaseProvisioningError(_safe_error_message(exc)) from exc
+        raise DatabaseProvisioningError(safe_database_error_message(exc)) from exc
 
 
 def _postgresql_sync_url(database_url: str) -> str:
@@ -85,7 +85,3 @@ def _temporary_env(name: str, value: str) -> Iterator[None]:
             os.environ.pop(name, None)
         else:
             os.environ[name] = previous
-
-
-def _safe_error_message(exc: BaseException) -> str:
-    return redact_database_urls(str(exc))

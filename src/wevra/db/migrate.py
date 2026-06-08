@@ -32,7 +32,7 @@ from wevra.db.surfaces import (
     migration_version_location_for_configured_module,
     migration_version_locations_from_modules,
 )
-from wevra.db.urls import redact_database_urls, sqlite_database_path
+from wevra.db.urls import safe_database_error_message, sqlite_database_path
 
 DEFAULT_DATABASE_URL_CONFIG_KEY = "default_database_url"
 DEFAULT_MODULES_CONFIG_KEY = "default_modules"
@@ -274,7 +274,7 @@ def _run_migration(
         return 1
     except (AlembicError, SQLAlchemyError) as exc:
         print("migration: failed", file=sys.stderr)
-        print(f"- {_safe_error_message(exc)}", file=sys.stderr)
+        print(f"- {safe_database_error_message(exc)}", file=sys.stderr)
         return 1
     return 0
 
@@ -326,7 +326,7 @@ def _run_revision(
         return 1
     except (AlembicError, SQLAlchemyError) as exc:
         print("migration: failed", file=sys.stderr)
-        print(f"- {_safe_error_message(exc)}", file=sys.stderr)
+        print(f"- {safe_database_error_message(exc)}", file=sys.stderr)
         return 1
     return 0
 
@@ -406,7 +406,7 @@ def _initialise_database(config: Config, admin_database_url: str | None) -> None
 
 def _initialise_database_state(config: Config, database_url: str) -> None:
     def initialise(connection: Any) -> None:
-        state = _inspect_migration_state(connection)
+        state = _migration_state_from_connection(connection)
         if state.initialised and state.current_revisions:
             click.echo("database: already initialised")
             return
@@ -431,7 +431,7 @@ def _upgrade_initialised_database(config: Config, revision: str) -> None:
         )
 
     def upgrade(connection: Any) -> None:
-        state = _inspect_migration_state(connection)
+        state = _migration_state_from_connection(connection)
         if not state.initialised:
             raise MigrationStateError(
                 "Database is not initialised; run `uv run wevra-migrate init` "
@@ -506,6 +506,8 @@ def _show_current_revision(config: Config) -> None:
 
 
 def inspect_migration_state(database_url: str) -> MigrationState:
+    """Inspect migration state using a database URL and managed connection."""
+
     database_path = sqlite_database_path(database_url)
     if database_path is not None and not database_path.exists():
         return MigrationState(
@@ -513,10 +515,10 @@ def inspect_migration_state(database_url: str) -> MigrationState:
             detail="SQLite database file does not exist.",
         )
 
-    return _run_with_database_connection(database_url, _inspect_migration_state)
+    return _run_with_database_connection(database_url, _migration_state_from_connection)
 
 
-def _inspect_migration_state(connection: Any) -> MigrationState:
+def _migration_state_from_connection(connection: Any) -> MigrationState:
     inspector = sqlalchemy_inspect(connection)
     if not inspector.has_table(ALEMBIC_VERSION_TABLE):
         return MigrationState(initialised=False)
@@ -557,10 +559,6 @@ def _alembic_config_value(value: str) -> str:
 
 def _module_config_value(modules: Sequence[str]) -> str:
     return ",".join(modules)
-
-
-def _safe_error_message(exc: BaseException) -> str:
-    return redact_database_urls(str(exc))
 
 
 def _missing_settings_loader(_database_url: str | None) -> MigrationSettings:
