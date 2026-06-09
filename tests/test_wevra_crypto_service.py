@@ -1,0 +1,163 @@
+import base64
+import zlib
+
+import pytest
+from cryptography.fernet import Fernet
+
+from wevra.services.crypto import (
+    ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT,
+    ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY,
+    ENVELOPE_PREFIX,
+    SecretDataError,
+    SecretEnvelopeService,
+    SecretKeyRing,
+    SecretMaterialMissingError,
+    SecretVersionError,
+    parse_secret_key_bundle,
+    parse_secret_key_entry,
+    parse_secret_key_ring_from_env,
+)
+
+
+def _key_entry(version: str, key: bytes) -> str:
+    encoded_key = key.decode("ascii")
+    checksum = f"{(zlib.crc32(base64.urlsafe_b64decode(encoded_key)) & 0xFFFFFFFF):08x}"
+    return f"{version}:{encoded_key}:{checksum}"
+
+
+def _key_bundle_key() -> bytes:
+    return Fernet.generate_key()
+
+
+def _service_with_keys(
+    *,
+    current: bytes,
+    legacy: bytes | None = None,
+) -> SecretEnvelopeService:
+    current_entry = _key_entry("current", current)
+    legacy_entry = _key_entry("legacy", legacy) if legacy is not None else None
+    return SecretEnvelopeService.from_key_bundle(current_entry, legacy=legacy_entry)
+
+
+def test_parse_secret_key_entry_parses_checksummed_keys() -> None:
+    key = _key_bundle_key()
+    entry = _key_entry("v1", key)
+
+    version, parsed_key = parse_secret_key_entry(entry)
+
+    assert version == "v1"
+    assert parsed_key == base64.urlsafe_b64decode(key.decode("ascii"))
+
+
+def test_parse_secret_key_entry_rejects_invalid_checksum() -> None:
+    key = _key_bundle_key()
+
+    with pytest.raises(SecretDataError, match="checksum"):
+        parse_secret_key_entry(f"v1:{key.decode('ascii')}:00000000")
+
+
+def test_parse_secret_key_bundle_accepts_current_and_legacy_keys() -> None:
+    current = _key_bundle_key()
+    legacy = _key_bundle_key()
+
+    key_ring = parse_secret_key_bundle(
+        current=_key_entry("v2", current),
+        legacy=_key_entry("v1", legacy),
+    )
+
+    assert key_ring.current.version == "v2"
+    assert {key.version for key in key_ring.keys} == {"v2", "v1"}
+
+
+def test_parse_secret_key_bundle_rejects_duplicate_versions() -> None:
+    key = _key_bundle_key()
+
+    with pytest.raises(SecretDataError, match="unique"):
+        parse_secret_key_bundle(
+            current=_key_entry("v1", key),
+            legacy=_key_entry("v1", _key_bundle_key()),
+        )
+
+
+def test_parse_secret_key_ring_from_env_returns_none_if_unset() -> None:
+    assert parse_secret_key_ring_from_env({}) is None
+
+
+def test_parse_secret_key_ring_from_env_ignores_blank_values() -> None:
+    assert (
+        parse_secret_key_ring_from_env(
+            {
+                ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT: "   ",
+            }
+        )
+        is None
+    )
+
+
+def test_parse_secret_key_ring_from_env_rejects_legacy_without_current() -> None:
+    with pytest.raises(SecretMaterialMissingError):
+        parse_secret_key_ring_from_env(
+            {
+                ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY: _key_entry(
+                    "legacy",
+                    _key_bundle_key(),
+                ),
+            }
+        )
+
+
+def test_encrypt_and_decrypt_current_and_legacy_versions() -> None:
+    current = _key_bundle_key()
+    legacy = _key_bundle_key()
+
+    legacy_service = SecretEnvelopeService.from_key_bundle(_key_entry("legacy", legacy))
+    legacy_blob = legacy_service.encrypt("legacy-token")
+
+    service = _service_with_keys(current=current, legacy=legacy)
+    current_blob = service.encrypt("current-token")
+    legacy_plaintext, legacy_version = service.decrypt(legacy_blob)
+    current_plaintext, current_version = service.decrypt(current_blob)
+
+    assert current_version == "current"
+    assert current_plaintext == "current-token"
+    assert current_blob.startswith(f"{ENVELOPE_PREFIX}|current|")
+    assert legacy_version == "legacy"
+    assert legacy_plaintext == "legacy-token"
+
+
+def test_encrypt_without_required_keys_returns_plaintext() -> None:
+    service = SecretEnvelopeService.from_env({})
+
+    assert service.encrypt("secret") == "secret"
+    assert service.decrypt("secret") == ("secret", "plaintext")
+
+
+def test_encrypt_rejects_required_missing_keys() -> None:
+    service = SecretEnvelopeService.from_env({})
+
+    with pytest.raises(SecretMaterialMissingError, match="no keys"):
+        service.encrypt("secret", required=True)
+
+
+def test_decrypt_rejects_missing_keys_when_required() -> None:
+    service = SecretEnvelopeService.from_key_bundle(_key_entry("v1", _key_bundle_key()))
+    plaintext = "value"
+    encrypted = service.encrypt(plaintext)
+
+    optional_service = SecretEnvelopeService.from_env({})
+    with pytest.raises(SecretMaterialMissingError, match="no keys"):
+        optional_service.decrypt(encrypted, required=True)
+
+
+def test_secret_version_unknown_is_reported() -> None:
+    service = SecretEnvelopeService.from_key_bundle(_key_entry("v1", _key_bundle_key()))
+    encrypted = f"{ENVELOPE_PREFIX}|v-unknown|abc"
+
+    with pytest.raises(SecretVersionError, match="Unknown secret version"):
+        service.decrypt(encrypted)
+
+
+def test_ring_from_secret_bundle_type_is_frozen_tuple() -> None:
+    ring = parse_secret_key_bundle(current=_key_entry("v1", _key_bundle_key()))
+    assert isinstance(ring, SecretKeyRing)
+    assert len(ring.keys) == 1

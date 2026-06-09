@@ -36,6 +36,14 @@ repos:
         pass_filenames: false
         types: [python]
 
+      - id: verify-signature
+        name: Verify Commit Signature
+        entry: bash -c 'git log -1 --show-signature'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [post-commit]
+
   - repo: https://github.com/deeprave/osvcheck
     rev: v1.2.2
     hooks:

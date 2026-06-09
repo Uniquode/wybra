@@ -55,7 +55,16 @@ from wevra.auth.admin.management import (
     update_group_for_management,
     update_scope_for_management,
 )
-from wevra.auth.models import Base, GroupGroup, GroupScope, GroupUser
+from wevra.auth.models import (
+    AccessToken,
+    Base,
+    ExternalIdentityLink,
+    GroupGroup,
+    GroupScope,
+    GroupUser,
+    IdentityProvider,
+    User,
+)
 from wevra.auth.models import metadata as wevra_auth_metadata
 from wevra.auth.options import VALID_IDENTITY_INTEGRATIONS
 from wevra.auth.persistence.database import (
@@ -949,6 +958,44 @@ def test_wevra_auth_no_challenge_policy_allows_direct_login() -> None:
         assert decision.challenge is None
 
     asyncio.run(assert_policy())
+
+
+def test_wevra_auth_identity_provider_and_link_models_are_well_formed() -> None:
+    provider_columns = set(IdentityProvider.__table__.columns.keys())
+    external_identity_link_columns = set(ExternalIdentityLink.__table__.columns.keys())
+    access_token_columns = set(AccessToken.__table__.columns.keys())
+
+    assert {
+        "provider_name",
+        "provider_subject",
+        "crypt_access_token",
+        "crypt_refresh_token",
+        "account_email",
+    }.issubset(provider_columns)
+    assert {"user_id", "provider_id"}.issubset(external_identity_link_columns)
+    assert {"token", "created_at", "user_id"}.issubset(access_token_columns)
+
+    assert IdentityProvider.__tablename__ == "identity_provider"
+    assert AccessToken.__tablename__ == "identity_access_token"
+    assert ExternalIdentityLink.__tablename__ == "identity_external_identity_link"
+
+    assert {
+        str(foreign_key.column)
+        for foreign_key in ExternalIdentityLink.__table__.columns[
+            "user_id"
+        ].foreign_keys
+    } == {"identity_user.id"}
+    assert {
+        str(foreign_key.column)
+        for foreign_key in ExternalIdentityLink.__table__.columns[
+            "provider_id"
+        ].foreign_keys
+    } == {"identity_provider.id"}
+    assert {
+        str(foreign_key.column)
+        for foreign_key in AccessToken.__table__.columns["user_id"].foreign_keys
+    } == {"identity_user.id"}
+    assert User.external_identity_links.property.mapper.class_ is ExternalIdentityLink
 
 
 def test_wevra_auth_challenge_completion_consumes_existing_challenge() -> None:
