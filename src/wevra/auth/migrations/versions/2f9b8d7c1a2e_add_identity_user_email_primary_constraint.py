@@ -1,7 +1,7 @@
 """add identity user email primary constraint
 
 Revision ID: 2f9b8d7c1a2e
-Revises: f4d2b8a1e9c3
+Revises: b9c4f2a8d0a1
 Create Date: 2026-06-10 00:00:00.000000
 """
 

@@ -13,17 +13,21 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 from fastapi_users_db_sqlalchemy import generics
-
-from wevra.auth.email_normalisation import normalise_email_target
+from pydantic import EmailStr, TypeAdapter, ValidationError
 
 revision: str = "b9c4f2a8d0a1"
 down_revision: str | Sequence[str] | None = "a8c2d1f7b9e0"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+_EMAIL_ADAPTER = TypeAdapter(EmailStr)
+
 
 def _normalise_email_for_migration(email: str) -> str:
-    return normalise_email_target(email) or email.casefold()
+    try:
+        return str(_EMAIL_ADAPTER.validate_python(email)).casefold()
+    except ValidationError:
+        return email.casefold()
 
 
 def upgrade() -> None:

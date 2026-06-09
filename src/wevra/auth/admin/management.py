@@ -23,7 +23,10 @@ from wevra.auth.authorisation import (
     is_user_effectively_active,
 )
 from wevra.auth.delivery import IdentityDelivery
-from wevra.auth.emails import normalise_email_target, resolve_user_by_email
+from wevra.auth.emails import (
+    normalise_email_target,
+    resolve_user_by_normalised_email,
+)
 from wevra.auth.models import (
     AccessToken,
     Group,
@@ -791,7 +794,7 @@ async def resolve_user_target(
         if normalised_target is None:
             return None, ERROR_INVALID_EMAIL
 
-        return await resolve_user_by_email(session, normalised_target), None
+        return await resolve_user_by_normalised_email(session, normalised_target), None
 
     try:
         user_id = UUID(target)

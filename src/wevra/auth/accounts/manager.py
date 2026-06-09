@@ -18,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from wevra.auth.accounts.schemas import UserCreate
 from wevra.auth.delivery import IdentityDelivery, NullIdentityDelivery
-from wevra.auth.emails import normalise_email_target, resolve_user_by_email
+from wevra.auth.emails import (
+    normalise_email_target,
+    resolve_user_by_email,
+    resolve_user_by_normalised_email,
+)
 from wevra.auth.models import IdentityUserEmail, User
 from wevra.auth.options import IdentityOptions
 from wevra.auth.persistence import create_user_database
@@ -111,11 +115,9 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         if normalised_email is None:
             raise UserAlreadyExists()
 
-        try:
-            await self.get_by_email(normalised_email)
+        database = cast(SQLAlchemyUserDatabase[User, uuid.UUID], self.user_db)
+        if await resolve_user_by_normalised_email(database.session, normalised_email):
             raise UserAlreadyExists()
-        except UserNotExists:
-            pass
 
         user_create_update = user_create.model_copy(update={"email": normalised_email})
         user_dict = (
@@ -126,7 +128,6 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         password = user_dict.pop("password")
         user_dict["hashed_password"] = self.password_helper.hash(password)
 
-        database = cast(SQLAlchemyUserDatabase[User, uuid.UUID], self.user_db)
         created_user = database.user_table(**user_dict)
 
         async def _create_and_persist_user() -> None:
