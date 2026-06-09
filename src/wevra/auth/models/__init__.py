@@ -55,9 +55,12 @@ class IdentityProvider(Base):
         String(length=320),
         nullable=False,
     )
-    access_token: Mapped[str] = mapped_column(String(length=1024), nullable=False)
+    crypt_access_token: Mapped[str] = mapped_column(
+        String(length=1024),
+        nullable=False,
+    )
     expires_at: Mapped[float | None] = mapped_column(Float, nullable=True)
-    refresh_token: Mapped[str | None] = mapped_column(
+    crypt_refresh_token: Mapped[str | None] = mapped_column(
         String(length=1024),
         nullable=True,
     )

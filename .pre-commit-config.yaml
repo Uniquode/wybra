@@ -14,7 +14,7 @@ repos:
       - id: check-toml
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.14
+    rev: v0.15.16
     hooks:
       - id: ruff-check
         args: ["--fix"]
@@ -36,8 +36,22 @@ repos:
         pass_filenames: false
         types: [python]
 
+      - id: verify-signature
+        name: Verify Commit Signature
+        entry: >-
+          bash -c 'status="$(git log -1 --format=%G?)";
+          if [ "$status" = "G" ] || [ "$status" = "U" ]; then
+            exit 0;
+          fi;
+          echo "Last commit signature is missing or invalid (status: $status)." >&2;
+          exit 1;'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [post-commit]
+
   - repo: https://github.com/deeprave/osvcheck
-    rev: v1.2.2
+    rev: v1.3.0
     hooks:
       - id: osvcheck
 
