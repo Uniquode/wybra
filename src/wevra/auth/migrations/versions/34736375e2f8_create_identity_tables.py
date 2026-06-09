@@ -51,28 +51,72 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "identity_oauth_account",
-        sa.Column("user_id", generics.GUID(), nullable=False),
+        "identity_provider",
         sa.Column("id", generics.GUID(), nullable=False),
-        sa.Column("oauth_name", sa.String(length=100), nullable=False),
+        sa.Column("provider_name", sa.String(length=100), nullable=False),
+        sa.Column("provider_subject", sa.String(length=320), nullable=False),
         sa.Column("access_token", sa.String(length=1024), nullable=False),
-        sa.Column("expires_at", sa.Integer(), nullable=True),
+        sa.Column("expires_at", sa.Float(), nullable=True),
         sa.Column("refresh_token", sa.String(length=1024), nullable=True),
-        sa.Column("account_id", sa.String(length=320), nullable=False),
         sa.Column("account_email", sa.String(length=320), nullable=False),
-        sa.ForeignKeyConstraint(["user_id"], ["identity_user.id"], ondelete="cascade"),
+        sa.Column("provider_enabled", sa.Boolean(), nullable=False),
+        sa.Column("provider_metadata", sa.JSON(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "provider_name",
+            "provider_subject",
+            name="uq_identity_provider_name_subject",
+        ),
     )
     op.create_index(
-        op.f("ix_identity_oauth_account_account_id"),
-        "identity_oauth_account",
-        ["account_id"],
+        op.f("ix_identity_provider_name"),
+        "identity_provider",
+        ["provider_name"],
         unique=False,
     )
     op.create_index(
-        op.f("ix_identity_oauth_account_oauth_name"),
-        "identity_oauth_account",
-        ["oauth_name"],
+        op.f("ix_identity_provider_subject"),
+        "identity_provider",
+        ["provider_subject"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_identity_provider_enabled"),
+        "identity_provider",
+        ["provider_enabled"],
+        unique=False,
+    )
+    op.create_table(
+        "identity_external_identity_link",
+        sa.Column("user_id", generics.GUID(), nullable=False),
+        sa.Column("provider_id", generics.GUID(), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["identity_user.id"], ondelete="cascade"),
+        sa.ForeignKeyConstraint(
+            ["provider_id"],
+            ["identity_provider.id"],
+            ondelete="RESTRICT",
+        ),
+        sa.PrimaryKeyConstraint("user_id", "provider_id"),
+        sa.UniqueConstraint(
+            "provider_id",
+            name="uq_identity_external_identity_link_provider_id",
+        ),
+        sa.UniqueConstraint(
+            "user_id",
+            "provider_id",
+            name="uq_identity_external_identity_link_user_provider",
+        ),
+    )
+    op.create_index(
+        op.f("ix_identity_external_identity_link_user_id"),
+        "identity_external_identity_link",
+        ["user_id"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_identity_external_identity_link_provider_id"),
+        "identity_external_identity_link",
+        ["provider_id"],
         unique=False,
     )
 
@@ -80,14 +124,21 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("identity_initial_admin_bootstrap")
     op.drop_index(
-        op.f("ix_identity_oauth_account_oauth_name"),
-        table_name="identity_oauth_account",
+        op.f("ix_identity_external_identity_link_user_id"),
+        table_name="identity_external_identity_link",
     )
     op.drop_index(
-        op.f("ix_identity_oauth_account_account_id"),
-        table_name="identity_oauth_account",
+        op.f("ix_identity_external_identity_link_provider_id"),
+        table_name="identity_external_identity_link",
     )
-    op.drop_table("identity_oauth_account")
+    op.drop_table("identity_external_identity_link")
+    op.drop_index(
+        op.f("ix_identity_provider_enabled"),
+        table_name="identity_provider",
+    )
+    op.drop_index(op.f("ix_identity_provider_subject"), table_name="identity_provider")
+    op.drop_index(op.f("ix_identity_provider_name"), table_name="identity_provider")
+    op.drop_table("identity_provider")
     op.drop_index(
         op.f("ix_identity_access_token_created_at"),
         table_name="identity_access_token",

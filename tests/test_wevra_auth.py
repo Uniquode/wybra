@@ -3,6 +3,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -14,7 +15,9 @@ from wevra.auth import (
     ChallengeDecision,
     ChallengeKind,
     ChallengeRecord,
+    ConfigurationError,
     DefaultPasswordPolicy,
+    IdentityIntegration,
     IdentityOptions,
     NoChallengePolicy,
     PasswordStrength,
@@ -54,6 +57,7 @@ from wevra.auth.admin.management import (
 )
 from wevra.auth.models import Base, GroupGroup, GroupScope, GroupUser
 from wevra.auth.models import metadata as wevra_auth_metadata
+from wevra.auth.options import VALID_IDENTITY_INTEGRATIONS
 from wevra.auth.persistence.database import (
     close_database,
     create_database,
@@ -894,6 +898,28 @@ def test_wevra_auth_identity_options_accept_custom_password_policy() -> None:
     assert validation.is_failure() is True
     assert validation.error_type == ERROR_PASSWORD_TOO_WEAK
     assert validation.message == "Rejected by custom policy."
+
+
+def test_wevra_auth_integration_options_enabled() -> None:
+    options = IdentityOptions(
+        **{
+            f"{integration}_enabled": True
+            for integration in VALID_IDENTITY_INTEGRATIONS
+        },
+    )
+
+    for integration in VALID_IDENTITY_INTEGRATIONS:
+        assert options.integration_enabled(integration) is True
+
+
+def test_wevra_auth_identity_options_integration_enabled_rejects_unknown() -> None:
+    options = IdentityOptions()
+    unknown_integration: str = "sso"
+
+    with pytest.raises(ConfigurationError):
+        options.integration_enabled(
+            cast(IdentityIntegration, unknown_integration),
+        )
 
 
 def test_wevra_auth_password_failure_message_filters_unrecognised_reasons() -> None:
