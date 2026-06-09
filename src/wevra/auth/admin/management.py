@@ -9,7 +9,7 @@ from fastapi_users.exceptions import (
     InvalidPasswordException,
     UserAlreadyExists,
 )
-from pydantic import EmailStr, TypeAdapter, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import Select, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,10 @@ from wevra.auth.authorisation import (
     is_user_effectively_active,
 )
 from wevra.auth.delivery import IdentityDelivery
+from wevra.auth.emails import (
+    normalise_email_target,
+    resolve_user_by_normalised_email,
+)
 from wevra.auth.models import (
     AccessToken,
     Group,
@@ -54,7 +58,6 @@ ERROR_GROUP_HAS_MEMBERSHIPS = "group_has_memberships"
 ERROR_CYCLIC_GROUP_MEMBERSHIP = "cyclic_group_membership"
 ERROR_SCOPE_IN_USE = "scope_in_use"
 EMAIL_DOMAIN_ORDER_DIALECTS = frozenset({"postgresql", "sqlite"})
-EMAIL_TARGET_ADAPTER = TypeAdapter(EmailStr)
 USER_TIMESTAMP_FIELDS: tuple[str, ...] = (
     "created_at",
     "modified_at",
@@ -787,18 +790,11 @@ async def resolve_user_target(
     target: str,
 ) -> tuple[User | None, ResultErrorType | None]:
     if "@" in target:
-        email = _normalise_email_target(target)
-        if email is None:
+        normalised_target = normalise_email_target(target)
+        if normalised_target is None:
             return None, ERROR_INVALID_EMAIL
 
-        return (
-            (
-                await session.execute(
-                    select(User).where(User.__table__.c.email == email)
-                )
-            ).scalar_one_or_none(),
-            None,
-        )
+        return await resolve_user_by_normalised_email(session, normalised_target), None
 
     try:
         user_id = UUID(target)
@@ -806,13 +802,6 @@ async def resolve_user_target(
         return None, ERROR_INVALID_USER_ID
 
     return await session.get(User, user_id), None
-
-
-def _normalise_email_target(target: str) -> str | None:
-    try:
-        return str(EMAIL_TARGET_ADAPTER.validate_python(target))
-    except ValidationError:
-        return None
 
 
 def target_error_message(error_type: ResultErrorType) -> str:

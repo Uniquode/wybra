@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -63,6 +64,7 @@ from wevra.auth.models import (
     GroupScope,
     GroupUser,
     IdentityProvider,
+    IdentityUserEmail,
     User,
 )
 from wevra.auth.models import metadata as wevra_auth_metadata
@@ -146,6 +148,7 @@ def test_wevra_auth_metadata_exposes_authorisation_group_tables() -> None:
         "identity_group_scope",
         "identity_group_user",
         "identity_group_group",
+        "identity_user_email",
     }.issubset(wevra_auth_metadata.tables)
     assert any(
         constraint.name == "ck_identity_group_group_no_self_membership"
@@ -964,6 +967,7 @@ def test_wevra_auth_identity_provider_and_link_models_are_well_formed() -> None:
     provider_columns = set(IdentityProvider.__table__.columns.keys())
     external_identity_link_columns = set(ExternalIdentityLink.__table__.columns.keys())
     access_token_columns = set(AccessToken.__table__.columns.keys())
+    user_email_columns = set(IdentityUserEmail.__table__.columns.keys())
 
     assert {
         "provider_name",
@@ -974,6 +978,12 @@ def test_wevra_auth_identity_provider_and_link_models_are_well_formed() -> None:
     }.issubset(provider_columns)
     assert {"user_id", "provider_id"}.issubset(external_identity_link_columns)
     assert {"token", "created_at", "user_id"}.issubset(access_token_columns)
+    assert {
+        "user_id",
+        "email",
+        "is_primary",
+        "is_verified",
+    }.issubset(user_email_columns)
 
     assert IdentityProvider.__tablename__ == "identity_provider"
     assert AccessToken.__tablename__ == "identity_access_token"
@@ -995,7 +1005,22 @@ def test_wevra_auth_identity_provider_and_link_models_are_well_formed() -> None:
         str(foreign_key.column)
         for foreign_key in AccessToken.__table__.columns["user_id"].foreign_keys
     } == {"identity_user.id"}
+    assert {
+        str(foreign_key.column)
+        for foreign_key in IdentityUserEmail.__table__.columns["user_id"].foreign_keys
+    } == {"identity_user.id"}
     assert User.external_identity_links.property.mapper.class_ is ExternalIdentityLink
+    assert User.emails.property.mapper.class_ is IdentityUserEmail
+
+
+def test_identity_user_email_stores_normalised_email() -> None:
+    identity_email = IdentityUserEmail(
+        user_id=uuid.uuid4(),
+        email="Alias@Example.COM",
+        is_primary=True,
+        is_verified=True,
+    )
+    assert identity_email.email == "alias@example.com"
 
 
 def test_wevra_auth_challenge_completion_consumes_existing_challenge() -> None:

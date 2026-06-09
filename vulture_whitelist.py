@@ -85,10 +85,12 @@ _.account_email
 _.provider_enabled
 _.provider_metadata
 _.links
+_.emails
 _.provider_id
 _.user_id
 _.external_identity_links
 _.provider_name
+_.is_primary
 _.encrypt_required
 _.decrypt_required
 _.refresh_key_ring
