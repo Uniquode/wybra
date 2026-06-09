@@ -21,6 +21,7 @@ import click
 import pytest
 from click.testing import CliRunner
 from fastapi import FastAPI, Request
+from fastapi_users.exceptions import UserAlreadyExists, UserNotExists
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -39,7 +40,7 @@ import wevra.auth.sessions as identity_sessions
 import wevra.db.migrate as migrate_module
 import wevra.db.persistence as db_persistence
 from wevra.auth import ERROR_INACTIVE_USER
-from wevra.auth.accounts.manager import create_user_manager
+from wevra.auth.accounts.manager import UserManager, create_user_manager
 from wevra.auth.accounts.schemas import UserCreate
 from wevra.auth.configuration import ConfigurationError
 from wevra.auth.models import (
@@ -48,11 +49,12 @@ from wevra.auth.models import (
     GroupGroup,
     GroupScope,
     GroupUser,
+    IdentityUserEmail,
     Scope,
     User,
 )
 from wevra.auth.options import IdentityOptions
-from wevra.auth.persistence import create_database_strategy
+from wevra.auth.persistence import create_database_strategy, create_user_database
 from wevra.auth.persistence.database import (
     SQLITE_MEMORY_DATABASE_URL,
     parse_sqlite_database_url,
@@ -339,6 +341,23 @@ def identity_user_from_database(database_url: str, email: str) -> User | None:
 
     try:
         return asyncio.run(load_user())
+    finally:
+        asyncio.run(close_database(engine))
+
+
+def identity_user_emails_from_database(database_url: str) -> list[IdentityUserEmail]:
+    settings = AuthTestSettings(database_url=database_url)
+    engine = create_database_engine(settings)
+    session_factory = create_session_factory(engine)
+
+    async def load_user_emails() -> list[IdentityUserEmail]:
+        async with session_scope(session_factory) as session:
+            return list(
+                (await session.execute(select(IdentityUserEmail))).scalars().all()
+            )
+
+    try:
+        return asyncio.run(load_user_emails())
     finally:
         asyncio.run(close_database(engine))
 
@@ -1179,6 +1198,204 @@ def test_user_management_metadata_defaults() -> None:
         asyncio.run(close_database(engine))
 
 
+def test_user_manager_get_by_email_resolves_secondary_emails(tmp_path: Path) -> None:
+    database_url = sqlite_file_url(tmp_path / "secondary-email.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    async def assert_secondary_email_lookup() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="primary@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(
+                IdentityUserEmail(
+                    user_id=user.id,
+                    email="alias@example.com",
+                    is_primary=False,
+                    is_verified=True,
+                )
+            )
+            await session.commit()
+
+            primary_user = await manager.get_by_email("Primary@Example.com")
+            alias_user = await manager.get_by_email("Alias@Example.com")
+
+            assert primary_user is not None
+            assert alias_user is not None
+            assert primary_user.id == user.id
+            assert alias_user.id == user.id
+
+    try:
+        asyncio.run(assert_secondary_email_lookup())
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
+def test_resolve_user_target_uses_secondary_email_addresses(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "secondary-target.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    async def assert_secondary_target_resolution() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="target@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(
+                IdentityUserEmail(
+                    user_id=user.id,
+                    email="linked@example.com",
+                    is_primary=False,
+                    is_verified=True,
+                )
+            )
+            await session.commit()
+
+            resolved_user, target_error = await identity_management.resolve_user_target(
+                session,
+                "linked@example.com",
+            )
+            assert target_error is None
+            assert resolved_user is not None
+            assert resolved_user.id == user.id
+
+    try:
+        asyncio.run(assert_secondary_target_resolution())
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
+def test_user_manager_create_rollback_when_after_register_fails(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "create-after-register-fail.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    class _FailingPostRegisterManager(UserManager):
+        async def on_after_register(
+            self,
+            user: User,
+            request: Request | None = None,
+        ) -> None:
+            raise RuntimeError("post-register hook failed")
+
+    async def assert_rollback_when_hook_fails() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = _FailingPostRegisterManager(
+                create_user_database(session),
+                web_app.state.settings.identity_options,
+            )
+            with pytest.raises(RuntimeError, match="post-register hook failed"):
+                await manager.create(
+                    UserCreate(
+                        email="rollback-hook@example.com",
+                        password=STRONG_TEST_PASSWORD,
+                    ),
+                    safe=True,
+                )
+
+    try:
+        asyncio.run(assert_rollback_when_hook_fails())
+        assert identity_users_from_database(database_url) == []
+        assert identity_user_emails_from_database(database_url) == []
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
+def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(
+        tmp_path / "create-duplicate-secondary-email.sqlite3"
+    )
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    class _NoLookupManager(UserManager):
+        async def get_by_email(self, user_email: str) -> User:
+            del user_email
+            raise UserNotExists()
+
+    async def assert_duplicate_secondary_email_returns_user_already_exists() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            primary_user = await manager.create(
+                UserCreate(
+                    email="primary@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(
+                IdentityUserEmail(
+                    user=primary_user,
+                    email="Alias@example.com",
+                    is_primary=False,
+                    is_verified=True,
+                )
+            )
+            await session.commit()
+
+            racing_manager = _NoLookupManager(
+                create_user_database(session),
+                web_app.state.settings.identity_options,
+            )
+            with pytest.raises(UserAlreadyExists):
+                await racing_manager.create(
+                    UserCreate(
+                        email="ALIAS@example.com",
+                        password=STRONG_TEST_PASSWORD,
+                    ),
+                    safe=True,
+                )
+
+            users = list((await session.execute(select(User))).scalars())
+            emails = list((await session.execute(select(IdentityUserEmail))).scalars())
+            assert len(users) == 1
+            assert users[0].email == "primary@example.com"
+            assert len(emails) == 2
+
+    try:
+        asyncio.run(assert_duplicate_secondary_email_returns_user_already_exists())
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
 def test_migrate_upgrade_creates_user_management_metadata_columns(
     tmp_path: Path,
 ) -> None:
@@ -1295,6 +1512,55 @@ def test_migrate_upgrade_creates_authorisation_group_tables(
         assert group_group_foreign_keys == {
             ("parent_group_id",): "RESTRICT",
             ("child_group_id",): "RESTRICT",
+        }
+    finally:
+        engine.dispose()
+
+
+def test_migrate_upgrade_creates_identity_user_email_table(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{(tmp_path / 'user-email.sqlite3').as_posix()}"
+
+    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
+    exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
+
+    assert exit_code == 0
+
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'user-email.sqlite3'}")
+    try:
+        inspector = sqlalchemy_inspect(engine)
+        assert "identity_user_email" in set(inspector.get_table_names())
+
+        user_email_columns = {
+            column["name"] for column in inspector.get_columns("identity_user_email")
+        }
+        assert {"id", "user_id", "email", "is_primary", "is_verified"}.issubset(
+            user_email_columns
+        )
+
+        user_email_indexes = {
+            index["name"] for index in inspector.get_indexes("identity_user_email")
+        }
+        assert "ix_identity_user_email_user_id" in user_email_indexes
+        assert "uq_identity_user_email_primary_per_user" in user_email_indexes
+
+        user_email_uniques = {
+            unique["name"]: set(unique["column_names"])
+            for unique in inspector.get_unique_constraints("identity_user_email")
+        }
+        assert user_email_uniques["uq_identity_user_email_email"] == {"email"}
+
+        user_email_foreign_keys = {
+            tuple(foreign_key["constrained_columns"]): foreign_key["options"].get(
+                "ondelete"
+            )
+            for foreign_key in inspector.get_foreign_keys("identity_user_email")
+        }
+        assert user_email_foreign_keys == {
+            ("user_id",): "CASCADE",
         }
     finally:
         engine.dispose()
@@ -1425,6 +1691,7 @@ def test_identitymgr_identity_schema_status_normalises_column_name_case(
             GroupScope.__table__,
             GroupUser.__table__,
             GroupGroup.__table__,
+            IdentityUserEmail.__table__,
         )
     }
 
@@ -2378,6 +2645,56 @@ def test_identitymgr_create_rejects_duplicate_email(
     assert exit_code == 1
     assert "already exists" in capsys.readouterr().err
     assert len(identity_users_from_database(database_url)) == 1
+
+
+def test_identitymgr_create_rejects_duplicate_secondary_email(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "duplicate-secondary.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    async def seed_secondary_email_user() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="primary@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(
+                IdentityUserEmail(
+                    user_id=user.id,
+                    email="linked@example.com",
+                    is_primary=False,
+                    is_verified=True,
+                )
+            )
+            await session.commit()
+
+    try:
+        asyncio.run(seed_secondary_email_user())
+        set_identitymgr_database_url(monkeypatch, tmp_path, database_url)
+        monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+
+        exit_code = identitymgr.main(
+            ["user", "create", "linked@example.com", "--password", "-"]
+        )
+
+        assert exit_code == 1
+        assert "already exists" in capsys.readouterr().err
+    finally:
+        asyncio.run(close_database(web_app.state.database))
 
 
 def test_identitymgr_list_json_omits_null_fields(

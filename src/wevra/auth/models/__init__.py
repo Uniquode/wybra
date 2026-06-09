@@ -5,6 +5,7 @@ import uuid
 from fastapi_users_db_sqlalchemy import SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.access_token import SQLAlchemyBaseAccessTokenTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
+from pydantic import EmailStr, TypeAdapter
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -15,11 +16,18 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from wevra.auth.timestamps import current_timestamp
 from wevra.db.models import Base
+
+_EMAIL_ADAPTER = TypeAdapter(EmailStr)
+
+
+def _normalise_email(value: str) -> str:
+    return str(_EMAIL_ADAPTER.validate_python(value)).casefold()
 
 
 class InitialAdminBootstrap(Base):
@@ -119,6 +127,44 @@ class ExternalIdentityLink(Base):
     )
 
 
+class IdentityUserEmail(Base):
+    """Additional email addresses for local user accounts."""
+
+    __tablename__ = "identity_user_email"
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_identity_user_email_email"),
+        Index("ix_identity_user_email_user_id", "user_id"),
+        Index(
+            "uq_identity_user_email_primary_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
+            sqlite_where=text("is_primary"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(String(length=320), nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    user: Mapped[User] = relationship("User", back_populates="emails")
+
+    @validates("email")
+    def _normalise_identity_email(self, key: str, value: str) -> str:
+        del key
+        return _normalise_email(value)
+
+
 class User(SQLAlchemyBaseUserTableUUID, Base):
     """Canonical local user account."""
 
@@ -159,6 +205,12 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     preferred_timezone: Mapped[str | None] = mapped_column(
         String(length=64),
         nullable=True,
+    )
+    emails: Mapped[list[IdentityUserEmail]] = relationship(
+        "IdentityUserEmail",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
     )
 
     external_identity_links: Mapped[list[ExternalIdentityLink]] = relationship(
@@ -287,6 +339,7 @@ __all__ = (
     "AccessToken",
     "Base",
     "ExternalIdentityLink",
+    "IdentityUserEmail",
     "IdentityProvider",
     "Group",
     "GroupGroup",
