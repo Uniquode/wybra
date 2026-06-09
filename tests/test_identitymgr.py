@@ -132,6 +132,20 @@ class TimestampVisibleVerificationDelivery:
         self.verification_tokens.append((user.email, token))
 
 
+@dataclass(slots=True)
+class ResetPasswordDelivery:
+    reset_tokens: list[tuple[str, str]]
+
+    async def send_reset_password_token(
+        self,
+        user: User,
+        token: str,
+        request: Request | None = None,
+    ) -> None:
+        del request
+        self.reset_tokens.append((user.email, token))
+
+
 def sqlite_file_url(path: Path) -> str:
     return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
 
@@ -1296,6 +1310,261 @@ def test_resolve_user_target_uses_secondary_email_addresses(
 
     try:
         asyncio.run(assert_secondary_target_resolution())
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
+def test_identity_session_authenticate_user_accepts_secondary_email_alias(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "authenticate-secondary.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    async def assert_secondary_alias_authentication() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="person@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(
+                IdentityUserEmail(
+                    user_id=user.id,
+                    email="Alias@Example.com",
+                    is_primary=False,
+                    is_verified=True,
+                )
+            )
+            await session.commit()
+
+        user = await identity_sessions.authenticate_user(
+            Request({"type": "http", "app": web_app}),
+            "alias@example.com",
+            STRONG_TEST_PASSWORD,
+        )
+
+        assert user is not None
+        assert user.email == "person@example.com"
+
+    try:
+        asyncio.run(assert_secondary_alias_authentication())
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
+def test_identity_session_authenticate_user_secondary_email_stays_with_owner_account(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(
+        tmp_path / "authenticate-secondary-owner.sqlite3"
+    )
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    async def assert_secondary_alias_stays_with_owner() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            primary_user = await manager.create(
+                UserCreate(
+                    email="person-a@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            await manager.create(
+                UserCreate(
+                    email="person-b@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(
+                IdentityUserEmail(
+                    user_id=primary_user.id,
+                    email="sharedalias@example.com",
+                    is_primary=False,
+                    is_verified=True,
+                )
+            )
+            await session.commit()
+
+        user = await identity_sessions.authenticate_user(
+            Request({"type": "http", "app": web_app}),
+            "sharedalias@example.com",
+            STRONG_TEST_PASSWORD,
+        )
+
+        assert user is not None
+        assert user.id == primary_user.id
+
+    try:
+        asyncio.run(assert_secondary_alias_stays_with_owner())
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
+def test_identity_session_request_password_reset_uses_secondary_email_alias(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(
+        tmp_path / "request-password-reset-secondary.sqlite3"
+    )
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+    web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
+
+    async def assert_password_reset_alias_resolution() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="owner@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(
+                IdentityUserEmail(
+                    user_id=user.id,
+                    email="Alias@Example.com",
+                    is_primary=False,
+                    is_verified=True,
+                )
+            )
+            await session.commit()
+
+        await identity_sessions.request_password_reset(
+            Request({"type": "http", "app": web_app}),
+            "alias@example.com",
+        )
+
+        assert web_app.state.identity_delivery.reset_tokens == [
+            ("owner@example.com", web_app.state.identity_delivery.reset_tokens[0][1]),
+        ]
+
+    try:
+        asyncio.run(assert_password_reset_alias_resolution())
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
+def test_identity_session_request_password_reset_ignores_unknown_email_alias(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(
+        tmp_path / "request-password-reset-unknown.sqlite3"
+    )
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+    web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
+
+    async def assert_missing_alias_is_ignored() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            await manager.create(
+                UserCreate(
+                    email="owner@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            await session.commit()
+
+        await identity_sessions.request_password_reset(
+            Request({"type": "http", "app": web_app}),
+            "missing-alias@example.com",
+        )
+
+        assert web_app.state.identity_delivery.reset_tokens == []
+
+    try:
+        asyncio.run(assert_missing_alias_is_ignored())
+    finally:
+        asyncio.run(close_database(web_app.state.database))
+
+
+def test_request_verification_uses_secondary_email_alias_for_lookup(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(
+        tmp_path / "request-verification-secondary.sqlite3"
+    )
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+    web_app.state.identity_delivery = TimestampVisibleVerificationDelivery(
+        session_factory=web_app.state.database.session_factory,
+        verification_tokens=[],
+    )
+
+    async def assert_verification_alias_resolution() -> None:
+        async with web_app.state.database.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(web_app.state.database.session_factory) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="owner@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(
+                IdentityUserEmail(
+                    user_id=user.id,
+                    email="Alias@Example.com",
+                    is_primary=False,
+                    is_verified=True,
+                )
+            )
+            await session.commit()
+
+        await identity_sessions.request_verification(
+            Request({"type": "http", "app": web_app}),
+            "alias@example.com",
+        )
+
+        assert web_app.state.identity_delivery.verification_tokens == [
+            (
+                "owner@example.com",
+                web_app.state.identity_delivery.verification_tokens[0][1],
+            ),
+        ]
+        assert web_app.state.identity_delivery.visible_timestamp is not None
+
+    try:
+        asyncio.run(assert_verification_alias_resolution())
     finally:
         asyncio.run(close_database(web_app.state.database))
 
