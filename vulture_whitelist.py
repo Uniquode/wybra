@@ -91,6 +91,7 @@ _.external_identity_links
 _.provider_name
 _.encrypt_required
 _.decrypt_required
+_.refresh_key_ring
 _.from_env
 _.from_key_bundle
 _.SCOPE_RECORD_FIELDS
@@ -98,7 +99,6 @@ _.primary_table_name
 _.list_candidate_child_groups_for_management
 _.RESERVED_TEMPLATE_CONTEXT_KEYS
 _.shadowed
-_.provider_enabled
 _.totp_enabled
 _.passkey_enabled
 _.include_prefix

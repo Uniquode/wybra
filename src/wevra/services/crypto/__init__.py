@@ -14,6 +14,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from wevra.auth.configuration import ConfigurationError
 
 ENVELOPE_PREFIX: Final = "WEVRA:SECRET"
+PLAIN_TEXT_VERSION: Final = "__wevra_plaintext__"
 SECRET_KEY_LENGTH: Final = 32
 ENVELOPE_SEPARATOR: Final = "|"
 ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT: Final = "IDENTITY_PROVIDER_SECRET_KEY_CURRENT"
@@ -75,6 +76,10 @@ def parse_secret_key_entry(raw_entry: str) -> tuple[str, bytes]:
         )
 
     version, encoded_key, encoded_checksum = parts
+    if version == PLAIN_TEXT_VERSION:
+        raise SecretDataError(
+            "Secret key version must not use reserved plaintext marker."
+        )
     if not version:
         raise SecretDataError("Secret key version must not be empty.")
 
@@ -266,7 +271,7 @@ class SecretEnvelopeService:
     def decrypt(self, value: str, *, required: bool = False) -> tuple[str, str]:
         envelope = _decode_envelope(value)
         if envelope is None:
-            return value, "plaintext"
+            return value, PLAIN_TEXT_VERSION
 
         key_ring = self._get_key_ring(required=required)
         if key_ring is None:
@@ -282,9 +287,16 @@ class SecretEnvelopeService:
                 "Encrypted secret value is invalid or corrupt."
             ) from exc
 
+    def refresh_key_ring(self) -> None:
+        """Drop cached key-ring state so key material reloads on the next operation."""
+
+        self._key_ring = None
+        self._key_ring_loaded = False
+
 
 __all__ = [
     "ENVELOPE_PREFIX",
+    "PLAIN_TEXT_VERSION",
     "ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT",
     "ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY",
     "SecretDataError",

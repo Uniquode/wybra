@@ -8,6 +8,7 @@ from wevra.services.crypto import (
     ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT,
     ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY,
     ENVELOPE_PREFIX,
+    PLAIN_TEXT_VERSION,
     SecretDataError,
     SecretEnvelopeService,
     SecretKeyRing,
@@ -142,7 +143,7 @@ def test_encrypt_without_required_keys_returns_plaintext() -> None:
     service = SecretEnvelopeService.from_env({})
 
     assert service.encrypt("secret") == "secret"
-    assert service.decrypt("secret") == ("secret", "plaintext")
+    assert service.decrypt("secret") == ("secret", PLAIN_TEXT_VERSION)
 
 
 def test_encrypt_required_helper_rejects_missing_keys() -> None:
@@ -155,17 +156,20 @@ def test_encrypt_required_helper_rejects_missing_keys() -> None:
 def test_from_key_bundle_allows_no_configuration() -> None:
     service = SecretEnvelopeService.from_key_bundle(None)
 
-    assert service.decrypt("secret") == ("secret", "plaintext")
-    assert service.decrypt("plaintext") == ("plaintext", "plaintext")
+    assert service.decrypt("secret") == ("secret", PLAIN_TEXT_VERSION)
+    assert service.decrypt("plaintext") == ("plaintext", PLAIN_TEXT_VERSION)
 
 
 def test_decrypt_treats_malformed_envelope_as_plaintext() -> None:
     service = SecretEnvelopeService.from_key_bundle(_key_entry("v1", _key_bundle_key()))
 
-    assert service.decrypt(f"{ENVELOPE_PREFIX}|v1") == ("WEVRA:SECRET|v1", "plaintext")
+    assert service.decrypt(f"{ENVELOPE_PREFIX}|v1") == (
+        "WEVRA:SECRET|v1",
+        PLAIN_TEXT_VERSION,
+    )
     assert service.decrypt(f"{ENVELOPE_PREFIX}") == (
         "WEVRA:SECRET",
-        "plaintext",
+        PLAIN_TEXT_VERSION,
     )
 
 
@@ -200,6 +204,36 @@ def test_secret_version_unknown_is_reported() -> None:
 
     with pytest.raises(SecretVersionError, match="Unknown secret version"):
         service.decrypt(encrypted)
+
+
+def test_parse_secret_key_entry_rejects_reserved_plain_text_version() -> None:
+    key = _key_bundle_key()
+    with pytest.raises(SecretDataError, match="reserved plaintext"):
+        parse_secret_key_entry(
+            f"{PLAIN_TEXT_VERSION}:{key.decode('ascii')}:"
+            f"{(zlib.crc32(base64.urlsafe_b64decode(key)) & 0xFFFFFFFF):08x}"
+        )
+
+
+def test_service_refreshes_cached_key_ring() -> None:
+    key_v1 = _key_bundle_key()
+    key_v2 = _key_bundle_key()
+    env = {ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT: _key_entry("v1", key_v1)}
+
+    service = SecretEnvelopeService.from_env(env)
+
+    encrypted_v1 = service.encrypt("token")
+    envelope_prefix_v1 = f"{ENVELOPE_PREFIX}|v1|"
+    assert encrypted_v1.startswith(envelope_prefix_v1)
+
+    env[ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT] = _key_entry("v2", key_v2)
+
+    encrypted_stale = service.encrypt("token")
+    assert encrypted_stale.startswith(envelope_prefix_v1)
+
+    service.refresh_key_ring()
+    encrypted_refreshed = service.encrypt("token")
+    assert encrypted_refreshed.startswith(f"{ENVELOPE_PREFIX}|v2|")
 
 
 def test_ring_from_secret_bundle_type_is_frozen_tuple() -> None:
