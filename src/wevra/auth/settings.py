@@ -226,7 +226,7 @@ def _reject_unknown_password_options(auth_config: Mapping[str, Any]) -> None:
 
 def _configured_database_url(
     app_config: AppConfig,
-    env: Mapping[str, str],
+    env: Mapping[str, str | None] | Env,
 ) -> str:
     database_url = (
         _configured_env_value(env, DATABASE_URL_ENV) or app_config.database_url
@@ -241,7 +241,9 @@ def _configured_database_url(
     return database_url
 
 
-def _configured_env_value(env: Mapping[str, str], field_name: str) -> str | None:
+def _configured_env_value(
+    env: Mapping[str, str | None] | Env, field_name: str
+) -> str | None:
     value = env.get(field_name)
     return value if value and value.strip() else None
 
