@@ -1280,9 +1280,19 @@ def test_resolve_user_target_uses_secondary_email_addresses(
                 session,
                 "linked@example.com",
             )
+            (
+                resolved_user_mixed_case,
+                target_error_mixed_case,
+            ) = await identity_management.resolve_user_target(
+                session,
+                "Linked@Example.com",
+            )
             assert target_error is None
+            assert target_error_mixed_case is None
             assert resolved_user is not None
+            assert resolved_user_mixed_case is not None
             assert resolved_user.id == user.id
+            assert resolved_user_mixed_case.id == user.id
 
     try:
         asyncio.run(assert_secondary_target_resolution())

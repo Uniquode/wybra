@@ -1,20 +1,10 @@
 from __future__ import annotations
 
-from pydantic import EmailStr, TypeAdapter, ValidationError
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from wevra.auth.email_normalisation import normalise_email_target
 from wevra.auth.models import IdentityUserEmail, User
-
-_EMAIL_ADAPTER = TypeAdapter(EmailStr)
-
-
-def normalise_email_target(target: str) -> str | None:
-    """Return a canonical lowercase email key for identity lookup."""
-    try:
-        return str(_EMAIL_ADAPTER.validate_python(target)).casefold()
-    except ValidationError:
-        return None
 
 
 def email_lookup_statement(email: str) -> Select[tuple[User]]:
@@ -25,7 +15,7 @@ def email_lookup_statement(email: str) -> Select[tuple[User]]:
     return (
         select(User)
         .join(IdentityUserEmail)
-        .where(func.lower(IdentityUserEmail.email) == normalized_email)
+        .where(IdentityUserEmail.email == normalized_email)
     )
 
 

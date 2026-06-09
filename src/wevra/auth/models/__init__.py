@@ -5,7 +5,6 @@ import uuid
 from fastapi_users_db_sqlalchemy import SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.access_token import SQLAlchemyBaseAccessTokenTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
-from pydantic import EmailStr, TypeAdapter
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -20,14 +19,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
+from wevra.auth.email_normalisation import normalise_email
 from wevra.auth.timestamps import current_timestamp
 from wevra.db.models import Base
-
-_EMAIL_ADAPTER = TypeAdapter(EmailStr)
-
-
-def _normalise_email(value: str) -> str:
-    return str(_EMAIL_ADAPTER.validate_python(value)).casefold()
 
 
 class InitialAdminBootstrap(Base):
@@ -162,7 +156,7 @@ class IdentityUserEmail(Base):
     @validates("email")
     def _normalise_identity_email(self, key: str, value: str) -> str:
         del key
-        return _normalise_email(value)
+        return normalise_email(value)
 
 
 class User(SQLAlchemyBaseUserTableUUID, Base):

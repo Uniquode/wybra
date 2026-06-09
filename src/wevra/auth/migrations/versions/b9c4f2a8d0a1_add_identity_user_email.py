@@ -14,10 +14,16 @@ import sqlalchemy as sa
 from alembic import op
 from fastapi_users_db_sqlalchemy import generics
 
+from wevra.auth.email_normalisation import normalise_email_target
+
 revision: str = "b9c4f2a8d0a1"
 down_revision: str | Sequence[str] | None = "a8c2d1f7b9e0"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+
+def _normalise_email_for_migration(email: str) -> str:
+    return normalise_email_target(email) or email.casefold()
 
 
 def upgrade() -> None:
@@ -73,7 +79,7 @@ def upgrade() -> None:
                 {
                     "id": uuid.uuid4(),
                     "user_id": user_id,
-                    "email": email,
+                    "email": _normalise_email_for_migration(str(email)),
                     "is_primary": True,
                     "is_verified": is_verified,
                 }
