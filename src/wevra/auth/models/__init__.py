@@ -89,18 +89,9 @@ class ExternalIdentityLink(Base):
             "provider_id",
             name="uq_identity_external_identity_link_provider_id",
         ),
-        UniqueConstraint(
-            "user_id",
-            "provider_id",
-            name="uq_identity_external_identity_link_user_provider",
-        ),
         Index(
             "ix_identity_external_identity_link_user_id",
             "user_id",
-        ),
-        Index(
-            "ix_identity_external_identity_link_provider_id",
-            "provider_id",
         ),
     )
 

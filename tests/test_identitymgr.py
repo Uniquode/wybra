@@ -741,6 +741,28 @@ def test_app_auth_config_rejects_stale_auth_database_url(tmp_path: Path) -> None
         load_auth_settings(app_config=app_config, environ={})
 
 
+def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        "provider_enabled = true",
+        "totp_enabled = false",
+        "passkey_enabled = true",
+    )
+
+    settings = load_auth_settings(
+        app_config=app_config,
+        environ={
+            "PROVIDER_ENABLED": "false",
+            "TOTP_ENABLED": "true",
+            "PASSKEY_ENABLED": "false",
+        },
+    )
+
+    assert settings.identity_options.provider_enabled is False
+    assert settings.identity_options.totp_enabled is True
+    assert settings.identity_options.passkey_enabled is False
+
+
 def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:
     app_config = load_auth_test_app_config(
         tmp_path / "app.toml",

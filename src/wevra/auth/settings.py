@@ -89,11 +89,19 @@ def load_auth_settings(
     app_config: AppConfig,
     environ: Mapping[str, str] | None = None,
 ) -> AuthSettings:
-    env = os.environ if environ is None else environ
+    env = Env(
+        environ=dict(environ or os.environ),
+        readenv=False,
+        update=False,
+    )
     auth_config = app_config.auth
     _reject_unknown_auth_options(auth_config)
     database_url = _configured_database_url(app_config, env)
-    identity_options = _identity_options_from_auth_config(auth_config)
+    identity_options = merge_identity_options_with_environment(
+        _identity_options_from_auth_config(auth_config),
+        auth_config,
+        env,
+    )
 
     return AuthSettings(
         database_url=resolve_database_url(

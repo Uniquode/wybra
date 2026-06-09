@@ -14,11 +14,11 @@ from wevra.auth.accounts.passwords import (
 )
 from wevra.auth.configuration import ConfigurationError
 
-PROVIDER: Final = "provider"
-TOTP: Final = "totp"
-PASSKEY: Final = "passkey"
+PROVIDER: Final[str] = "provider"
+TOTP: Final[str] = "totp"
+PASSKEY: Final[str] = "passkey"
 
-IdentityIntegration = Literal[PROVIDER, TOTP, PASSKEY]
+IdentityIntegration = Literal["provider", "totp", "passkey"]
 VALID_IDENTITY_INTEGRATIONS: Final[tuple[IdentityIntegration, ...]] = (
     PROVIDER,
     TOTP,
@@ -116,6 +116,12 @@ class IdentityOptions:
         )
 
     def integration_enabled(self, integration: IdentityIntegration) -> bool:
+        if integration not in VALID_IDENTITY_INTEGRATIONS:
+            raise ConfigurationError(
+                f"Unknown identity integration: {integration}. Valid values are: "
+                f"{', '.join(VALID_IDENTITY_INTEGRATIONS)}"
+            )
+
         return cast(bool, getattr(self, f"{integration}_enabled"))
 
     def resolved_password_policy(self) -> PasswordPolicy:

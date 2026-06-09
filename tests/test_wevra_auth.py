@@ -17,6 +17,7 @@ from wevra.auth import (
     ChallengeRecord,
     DefaultPasswordPolicy,
     IdentityIntegration,
+    ConfigurationError,
     IdentityOptions,
     NoChallengePolicy,
     PasswordStrength,
@@ -915,7 +916,7 @@ def test_wevra_auth_identity_options_integration_enabled_rejects_unknown() -> No
     options = IdentityOptions()
     unknown_integration: str = "sso"
 
-    with pytest.raises(AttributeError, match="has no attribute"):
+    with pytest.raises(ConfigurationError):
         options.integration_enabled(
             cast(IdentityIntegration, unknown_integration),
         )

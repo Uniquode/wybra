@@ -124,11 +124,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("identity_initial_admin_bootstrap")
     op.drop_index(
-        op.f("ix_identity_external_identity_link_provider_id"),
+        op.f("ix_identity_external_identity_link_user_id"),
         table_name="identity_external_identity_link",
     )
     op.drop_index(
-        op.f("ix_identity_external_identity_link_user_id"),
+        op.f("ix_identity_external_identity_link_provider_id"),
         table_name="identity_external_identity_link",
     )
     op.drop_table("identity_external_identity_link")
