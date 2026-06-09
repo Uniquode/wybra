@@ -51,9 +51,22 @@ def test_parse_secret_key_entry_parses_checksummed_keys() -> None:
 
 def test_parse_secret_key_entry_rejects_invalid_checksum() -> None:
     key = _key_bundle_key()
+    actual_checksum = f"{
+        (zlib.crc32(base64.urlsafe_b64decode(key.decode('ascii'))) & 0xFFFFFFFF):08x}"
 
     with pytest.raises(SecretDataError, match="checksum"):
         parse_secret_key_entry(f"v1:{key.decode('ascii')}:00000000")
+
+    with pytest.raises(
+        SecretDataError,
+        match=f"expected {actual_checksum}, got 00000000",
+    ):
+        parse_secret_key_entry(f"v1:{key.decode('ascii')}:00000000")
+
+
+def test_parse_secret_key_bundle_rejects_missing_current() -> None:
+    with pytest.raises(SecretMaterialMissingError):
+        parse_secret_key_bundle(current=None)
 
 
 def test_parse_secret_key_bundle_accepts_current_and_legacy_keys() -> None:
@@ -130,6 +143,38 @@ def test_encrypt_without_required_keys_returns_plaintext() -> None:
 
     assert service.encrypt("secret") == "secret"
     assert service.decrypt("secret") == ("secret", "plaintext")
+
+
+def test_encrypt_required_helper_rejects_missing_keys() -> None:
+    service = SecretEnvelopeService.from_env({})
+
+    with pytest.raises(SecretMaterialMissingError, match="no keys"):
+        service.encrypt_required("secret")
+
+
+def test_from_key_bundle_allows_no_configuration() -> None:
+    service = SecretEnvelopeService.from_key_bundle(None)
+
+    assert service.decrypt("secret") == ("secret", "plaintext")
+    assert service.decrypt("plaintext") == ("plaintext", "plaintext")
+
+
+def test_decrypt_treats_malformed_envelope_as_plaintext() -> None:
+    service = SecretEnvelopeService.from_key_bundle(_key_entry("v1", _key_bundle_key()))
+
+    assert service.decrypt(f"{ENVELOPE_PREFIX}|v1") == ("WEVRA:SECRET|v1", "plaintext")
+    assert service.decrypt(f"{ENVELOPE_PREFIX}") == (
+        "WEVRA:SECRET",
+        "plaintext",
+    )
+
+
+def test_decrypt_rejects_non_ascii_encrypted_payload() -> None:
+    key = _key_bundle_key()
+    service = SecretEnvelopeService.from_key_bundle(_key_entry("v1", key))
+
+    with pytest.raises(SecretDataError, match="invalid or corrupt"):
+        service.decrypt(f"{ENVELOPE_PREFIX}|v1|not-base64-🍑")
 
 
 def test_encrypt_rejects_required_missing_keys() -> None:

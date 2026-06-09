@@ -1,4 +1,9 @@
-"""Rename identity provider token columns"""
+"""Rename identity provider token columns
+
+Revision ID: a8c2d1f7b9e0
+Revises: f4d2b8a1e9c3
+Create Date: 2026-06-09 00:00:00.000000
+"""
 
 from collections.abc import Sequence
 

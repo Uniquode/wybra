@@ -89,6 +89,8 @@ _.provider_id
 _.user_id
 _.external_identity_links
 _.provider_name
+_.encrypt_required
+_.decrypt_required
 _.from_env
 _.from_key_bundle
 _.SCOPE_RECORD_FIELDS

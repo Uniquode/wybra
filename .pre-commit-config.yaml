@@ -38,7 +38,13 @@ repos:
 
       - id: verify-signature
         name: Verify Commit Signature
-        entry: bash -c 'git log -1 --show-signature'
+        entry: >-
+          bash -c 'status="$(git log -1 --format=%G?)";
+          if [ "$status" = "G" ] || [ "$status" = "U" ]; then
+            exit 0;
+          fi;
+          echo "Last commit signature is missing or invalid (status: $status)." >&2;
+          exit 1;'
         language: system
         always_run: true
         pass_filenames: false

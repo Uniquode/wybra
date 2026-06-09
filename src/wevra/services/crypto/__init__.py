@@ -96,7 +96,7 @@ def parse_secret_key_entry(raw_entry: str) -> tuple[str, bytes]:
     if encoded_checksum.lower() != actual_checksum:
         raise SecretDataError(
             f"Secret key checksum mismatch for version {version}: "
-            f"{encoded_checksum.lower()} expected {actual_checksum}."
+            f"expected {actual_checksum}, got {encoded_checksum.lower()}."
         )
 
     return version, key
@@ -200,8 +200,15 @@ def _decode_envelope(value: str) -> tuple[str, str] | None:
     if not value.startswith(ENVELOPE_PREFIX + ENVELOPE_SEPARATOR):
         return None
 
-    prefix, version, encrypted = value.split(ENVELOPE_SEPARATOR, 2)
+    parts = value.split(ENVELOPE_SEPARATOR, 2)
+    if len(parts) != 3:
+        return None
+
+    prefix, version, encrypted = parts
     if prefix != ENVELOPE_PREFIX:
+        return None
+
+    if not version or not encrypted:
         return None
 
     return version, encrypted
@@ -225,7 +232,16 @@ class SecretEnvelopeService:
         current: str | None,
         legacy: str | None = None,
     ) -> SecretEnvelopeService:
+        if current is None and legacy is None:
+            return cls(lambda: None)
+
         return cls(lambda: parse_secret_key_bundle(current=current, legacy=legacy))
+
+    def encrypt_required(self, value: str) -> str:
+        return self.encrypt(value, required=True)
+
+    def decrypt_required(self, value: str) -> tuple[str, str]:
+        return self.decrypt(value, required=True)
 
     def _get_key_ring(self, *, required: bool) -> SecretKeyRing | None:
         if not self._key_ring_loaded:
@@ -259,8 +275,9 @@ class SecretEnvelopeService:
         version, token = envelope
         fernet = key_ring.fernet_for(version)
         try:
-            return fernet.decrypt(token.encode("ascii")).decode("utf-8"), version
-        except InvalidToken as exc:
+            encrypted = token.encode("ascii")
+            return fernet.decrypt(encrypted).decode("utf-8"), version
+        except (InvalidToken, UnicodeDecodeError, UnicodeEncodeError) as exc:
             raise SecretDataError(
                 "Encrypted secret value is invalid or corrupt."
             ) from exc
