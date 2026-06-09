@@ -96,6 +96,7 @@ _.decrypt_required
 _.refresh_key_ring
 _.from_env
 _.from_key_bundle
+_._normalise_identity_email
 _.SCOPE_RECORD_FIELDS
 _.primary_table_name
 _.list_candidate_child_groups_for_management
