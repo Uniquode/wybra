@@ -2,13 +2,25 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass, field, replace
+from typing import Any, Final, cast
+
+from envex import Env
 
 from wevra.auth.configuration import ConfigurationError
-from wevra.auth.options import IdentityOptions
+from wevra.auth.options import (
+    VALID_IDENTITY_INTEGRATIONS,
+    IdentityOptions,
+    identity_env_setting_name,
+    is_generate_local_identity_secret,
+)
 from wevra.auth.persistence.database import resolve_database_url
 from wevra.core.composition import AppConfig
+from wevra.core.settings import (
+    EnvironmentSetting,
+    env_setting_is_set,
+    values_from_env_settings,
+)
 
 DATABASE_URL_ENV = "DATABASE_URL"
 PASSWORD_SECTION_FIELD = "password"
@@ -21,8 +33,9 @@ IDENTITY_OPTION_FIELDS = frozenset(
         "session_cookie_force_secure",
         "reset_password_token_secret",
         "verification_token_secret",
-        "oauth_account_linking_enabled",
-        "advanced_authentication_enabled",
+        "provider_enabled",
+        "totp_enabled",
+        "passkey_enabled",
     }
 )
 PASSWORD_POLICY_OPTION_MAP = {
@@ -35,6 +48,34 @@ PASSWORD_OPTION_FIELDS = frozenset({PASSWORD_POLICY_SECTION_FIELD})
 AUTH_OPTION_FIELDS = IDENTITY_OPTION_FIELDS | {
     PASSWORD_SECTION_FIELD,
 }
+ENV_ACCOUNT_CREATION_POLICY: Final = "ACCOUNT_CREATION_POLICY"
+ENV_RESET_SECRET: Final = "RESET_SECRET"
+ENV_SESSION_COOKIE: Final = "SESSION_COOKIE"
+ENV_SESSION_FORCE_SECURE: Final = "SESSION_FORCE_SECURE"
+ENV_SESSION_LIFETIME: Final = "SESSION_LIFETIME"
+ENV_VERIFICATION_SECRET: Final = "VERIFICATION_SECRET"
+
+
+def _identity_env_settings() -> tuple[EnvironmentSetting, ...]:
+    return tuple(
+        EnvironmentSetting(
+            identity_env_setting_name(integration),
+            f"{integration}_enabled",
+            "bool",
+        )
+        for integration in VALID_IDENTITY_INTEGRATIONS
+    )
+
+
+IDENTITY_ENV_SETTINGS: Final[tuple[EnvironmentSetting, ...]] = (
+    EnvironmentSetting(ENV_ACCOUNT_CREATION_POLICY, "account_creation_policy"),
+    *_identity_env_settings(),
+    EnvironmentSetting(ENV_RESET_SECRET, "reset_password_token_secret"),
+    EnvironmentSetting(ENV_SESSION_COOKIE, "session_cookie_name"),
+    EnvironmentSetting(ENV_SESSION_FORCE_SECURE, "session_cookie_force_secure", "bool"),
+    EnvironmentSetting(ENV_SESSION_LIFETIME, "session_lifetime_seconds", "int"),
+    EnvironmentSetting(ENV_VERIFICATION_SECRET, "verification_token_secret"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +101,69 @@ def load_auth_settings(
             app_config.config_path.resolve().parent,
         ),
         identity_options=identity_options,
+    )
+
+
+def merge_identity_options_with_environment(
+    identity_options: IdentityOptions,
+    auth_config: Mapping[str, Any],
+    env: Env,
+) -> IdentityOptions:
+    """Apply identity-related environment overrides to a base identity options model."""
+    if not env_setting_is_set(env, IDENTITY_ENV_SETTINGS):
+        return identity_options
+
+    identity_values = values_from_env_settings(env, IDENTITY_ENV_SETTINGS)
+    merged_options = replace(identity_options, **cast(Any, identity_values))
+    object.__setattr__(
+        merged_options,
+        "token_secrets_configured",
+        _identity_token_secrets_configured(
+            identity_options,
+            auth_config,
+            identity_values,
+        ),
+    )
+    return merged_options
+
+
+def _identity_token_secrets_configured(
+    identity_options: IdentityOptions,
+    auth_config: Mapping[str, Any],
+    identity_values: Mapping[str, Any],
+) -> bool:
+    return _identity_token_secret_configured(
+        "reset_password_token_secret",
+        identity_options,
+        auth_config,
+        identity_values,
+    ) and _identity_token_secret_configured(
+        "verification_token_secret",
+        identity_options,
+        auth_config,
+        identity_values,
+    )
+
+
+def _identity_token_secret_configured(
+    field_name: str,
+    identity_options: IdentityOptions,
+    auth_config: Mapping[str, Any],
+    identity_values: Mapping[str, Any],
+) -> bool:
+    if field_name in identity_values:
+        return _identity_token_secret_value_configured(identity_values[field_name])
+    if field_name in auth_config:
+        return _identity_token_secret_value_configured(auth_config[field_name])
+
+    return identity_options.token_secrets_configured
+
+
+def _identity_token_secret_value_configured(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and not is_generate_local_identity_secret(value)
     )
 
 

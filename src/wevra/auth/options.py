@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from secrets import token_urlsafe
 from typing import Final, Literal, cast
@@ -12,12 +14,23 @@ from wevra.auth.accounts.passwords import (
 )
 from wevra.auth.configuration import ConfigurationError
 
-AccountCreationPolicy = Literal["admin-created", "public-signup"]
-IdentityIntegration = Literal["oauth-account-linking", "advanced-authentication"]
-VALID_ACCOUNT_CREATION_POLICIES: Final[tuple[AccountCreationPolicy, ...]] = (
+PROVIDER: Final = "provider"
+TOTP: Final = "totp"
+PASSKEY: Final = "passkey"
+
+IdentityIntegration = Literal[PROVIDER, TOTP, PASSKEY]
+VALID_IDENTITY_INTEGRATIONS: Final[tuple[IdentityIntegration, ...]] = (
+    PROVIDER,
+    TOTP,
+    PASSKEY,
+)
+VALID_ACCOUNT_CREATION_POLICIES: Final[
+    tuple[Literal["admin-created", "public-signup"], ...]
+] = (
     "admin-created",
     "public-signup",
 )
+AccountCreationPolicy = Literal["admin-created", "public-signup"]
 ACCOUNT_CREATION_POLICY_ERROR: Final = (
     "Account creation policy must be one of: "
     + ", ".join(VALID_ACCOUNT_CREATION_POLICIES)
@@ -26,6 +39,10 @@ ACCOUNT_CREATION_POLICY_ERROR: Final = (
 
 _GENERATE_LOCAL_SECRET = "__generate-local-identity-secret__"
 DEFAULT_SESSION_COOKIE_NAME: Final = "wevra_session"
+
+
+def identity_env_setting_name(integration: IdentityIntegration) -> str:
+    return f"{integration.upper()}_ENABLED"
 
 
 def is_generate_local_identity_secret(value: str) -> bool:
@@ -43,8 +60,9 @@ class IdentityOptions:
     session_lifetime_seconds: int = 2_592_000
     reset_password_token_secret: str = _GENERATE_LOCAL_SECRET
     verification_token_secret: str = _GENERATE_LOCAL_SECRET
-    oauth_account_linking_enabled: bool = False
-    advanced_authentication_enabled: bool = False
+    provider_enabled: bool = False
+    totp_enabled: bool = False
+    passkey_enabled: bool = False
     password_minimum_length: int = DEFAULT_MINIMUM_LENGTH
     password_minimum_strength: float = DEFAULT_MINIMUM_SCORE
     password_minimum_character_categories: int = DEFAULT_MINIMUM_CHARACTER_CATEGORIES
@@ -70,11 +88,12 @@ class IdentityOptions:
             "Verification token secret",
             self.verification_token_secret,
         )
+
         reset_secret_configured = not is_generate_local_identity_secret(
-            self.reset_password_token_secret
+            self.reset_password_token_secret,
         )
         verification_secret_configured = not is_generate_local_identity_secret(
-            self.verification_token_secret
+            self.verification_token_secret,
         )
 
         if not reset_secret_configured:
@@ -97,10 +116,7 @@ class IdentityOptions:
         )
 
     def integration_enabled(self, integration: IdentityIntegration) -> bool:
-        if integration == "oauth-account-linking":
-            return self.oauth_account_linking_enabled
-
-        return self.advanced_authentication_enabled
+        return cast(bool, getattr(self, f"{integration}_enabled"))
 
     def resolved_password_policy(self) -> PasswordPolicy:
         return cast(PasswordPolicy, self.password_policy)

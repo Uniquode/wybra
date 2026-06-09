@@ -5,7 +5,7 @@ from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from fastapi_users_db_sqlalchemy.access_token import SQLAlchemyAccessTokenDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wevra.auth.models import AccessToken, OAuthAccount, User
+from wevra.auth.models import AccessToken, User
 from wevra.auth.options import IdentityOptions
 
 
@@ -35,4 +35,4 @@ async def delete_session_token_by_value(session: AsyncSession, token: str) -> No
 def create_user_database(
     session: AsyncSession,
 ) -> SQLAlchemyUserDatabase[User, uuid.UUID]:
-    return SQLAlchemyUserDatabase(session, User, OAuthAccount)
+    return SQLAlchemyUserDatabase(session, User)
