@@ -1365,9 +1365,7 @@ def test_identity_session_authenticate_user_accepts_secondary_email_alias(
 def test_identity_session_authenticate_user_secondary_email_stays_with_owner_account(
     tmp_path: Path,
 ) -> None:
-    database_url = sqlite_file_url(
-        tmp_path / "authenticate-secondary-owner.sqlite3"
-    )
+    database_url = sqlite_file_url(tmp_path / "authenticate-secondary-owner.sqlite3")
     initialise_identity_database(database_url)
     web_app = create_auth_test_app(database_url=database_url)
 
@@ -1473,9 +1471,7 @@ def test_identity_session_request_password_reset_uses_secondary_email_alias(
 def test_identity_session_request_password_reset_ignores_unknown_email_alias(
     tmp_path: Path,
 ) -> None:
-    database_url = sqlite_file_url(
-        tmp_path / "request-password-reset-unknown.sqlite3"
-    )
+    database_url = sqlite_file_url(tmp_path / "request-password-reset-unknown.sqlite3")
     initialise_identity_database(database_url)
     web_app = create_auth_test_app(database_url=database_url)
     web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
@@ -1514,9 +1510,7 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
 def test_request_verification_uses_secondary_email_alias_for_lookup(
     tmp_path: Path,
 ) -> None:
-    database_url = sqlite_file_url(
-        tmp_path / "request-verification-secondary.sqlite3"
-    )
+    database_url = sqlite_file_url(tmp_path / "request-verification-secondary.sqlite3")
     initialise_identity_database(database_url)
     web_app = create_auth_test_app(database_url=database_url)
     web_app.state.identity_delivery = TimestampVisibleVerificationDelivery(

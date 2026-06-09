@@ -51,7 +51,7 @@ repos:
         stages: [post-commit]
 
   - repo: https://github.com/deeprave/osvcheck
-    rev: v1.3.0
+    rev: v1.4.0
     hooks:
       - id: osvcheck
 
