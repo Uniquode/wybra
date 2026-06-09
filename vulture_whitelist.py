@@ -29,6 +29,8 @@ _.delete_command
 _.deactivate_command
 _.list_command
 _.password_command
+_.init_command
+_.revision_command
 _.upgrade_command
 _.downgrade_command
 _.current_command
@@ -76,11 +78,32 @@ _.code
 _.oauth_accounts
 _.token_secrets_configured
 _.integration_enabled
+_.provider_subject
+_.crypt_access_token
+_.crypt_refresh_token
+_.account_email
+_.provider_enabled
+_.provider_metadata
+_.links
+_.provider_id
+_.user_id
+_.external_identity_links
+_.provider_name
+_.from_env
+_.from_key_bundle
 _.SCOPE_RECORD_FIELDS
 _.primary_table_name
 _.list_candidate_child_groups_for_management
 _.RESERVED_TEMPLATE_CONTEXT_KEYS
 _.shadowed
+_.provider_enabled
+_.totp_enabled
+_.passkey_enabled
+_.include_prefix
+_.accepts_body
+_.accepts_form
+_.path_parameters
+_.template
 
 # Alembic revision module metadata.
 _.down_revision

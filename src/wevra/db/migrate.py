@@ -15,8 +15,8 @@ import click
 from alembic import command
 from alembic.config import Config
 from alembic.util.exc import CommandError as AlembicError
-from sqlalchemy import inspect as sqlalchemy_inspect
-from sqlalchemy import text
+from sqlalchemy import MetaData, Table, inspect as sqlalchemy_inspect
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from wevra.core.composition import AppConfig
@@ -523,10 +523,16 @@ def _migration_state_from_connection(connection: Any) -> MigrationState:
     if not inspector.has_table(ALEMBIC_VERSION_TABLE):
         return MigrationState(initialised=False)
 
+    version_table = Table(
+        ALEMBIC_VERSION_TABLE,
+        MetaData(),
+        autoload_with=connection,
+    )
+
     revisions = tuple(
         str(row[0])
         for row in connection.execute(
-            text(f"SELECT version_num FROM {ALEMBIC_VERSION_TABLE}")
+            select(version_table.c.version_num)
         )
     )
     return MigrationState(initialised=True, current_revisions=revisions)
