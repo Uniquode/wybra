@@ -1,6 +1,7 @@
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
+from wevra.auth.ids import log_safe_uuid
 from wevra.auth.mfa.recovery import generate_recovery_codes
 from wevra.auth.mfa.storage import (
     TOTP_PENDING_STATUS,
@@ -108,9 +109,9 @@ async def totp_setup(request: Request) -> Response:
                 logger.warning(
                     "TOTP setup challenge user mismatch: "
                     "authenticated_user_id=%s challenge_user_id=%s challenge_id=%s",
-                    str(authenticated_user.id),
-                    str(challenge_user.id),
-                    setup_challenge_id,
+                    log_safe_uuid(authenticated_user.id),
+                    log_safe_uuid(challenge_user.id),
+                    log_safe_uuid(setup_challenge_id),
                 )
                 setup_challenge = None
                 challenge_user = None
