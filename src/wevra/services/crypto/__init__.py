@@ -196,6 +196,34 @@ class SecretKeyRing:
         raise SecretVersionError(f"Unknown secret version: {version}.")
 
 
+@dataclass(frozen=True, slots=True)
+class SecretEnvelope:
+    """Encrypted secret envelope value passed across service boundaries."""
+
+    value: str
+
+    @classmethod
+    def from_plaintext(
+        cls,
+        value: str,
+        *,
+        service: SecretEnvelopeService,
+        required: bool = True,
+    ) -> SecretEnvelope:
+        return cls(service.encrypt(value, required=required))
+
+    def decrypt(
+        self,
+        *,
+        service: SecretEnvelopeService,
+        required: bool = True,
+    ) -> tuple[str, str]:
+        return service.decrypt(self.value, required=required)
+
+    def __str__(self) -> str:
+        return self.value
+
+
 def _encode_envelope(version: str, token: str) -> str:
     return ENVELOPE_SEPARATOR.join((ENVELOPE_PREFIX, version, token))
 
@@ -361,6 +389,12 @@ class SecretEnvelopeService:
     def decrypt(self, value: str, *, required: bool = False) -> tuple[str, str]:
         envelope = _decode_envelope(value)
         if envelope is None:
+            if value == ENVELOPE_PREFIX or value.startswith(
+                ENVELOPE_PREFIX + ENVELOPE_SEPARATOR
+            ):
+                raise SecretDataError(
+                    "Encrypted secret envelope is invalid or malformed."
+                )
             return value, PLAIN_TEXT_VERSION
 
         key_ring = self._get_key_ring(required=required)
@@ -391,6 +425,7 @@ __all__ = [
     "ENV_WEVRA_SECRET_KEY_CURRENT",
     "ENV_WEVRA_SECRET_KEY_LEGACY",
     "SecretDataError",
+    "SecretEnvelope",
     "SecretMaterialMissingError",
     "SecretVersionError",
     "SecretEnvelopeService",

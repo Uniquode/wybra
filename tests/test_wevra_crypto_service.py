@@ -11,6 +11,7 @@ from wevra.services.crypto import (
     PLAIN_TEXT_VERSION,
     VERIFIER_PREFIX,
     SecretDataError,
+    SecretEnvelope,
     SecretEnvelopeService,
     SecretKeyRing,
     SecretMaterialMissingError,
@@ -140,6 +141,28 @@ def test_encrypt_and_decrypt_current_and_legacy_versions() -> None:
     assert legacy_plaintext == "legacy-token"
 
 
+def test_secret_envelope_wraps_encrypted_values_without_hiding_service() -> None:
+    service = SecretEnvelopeService.for_testing(version="v1")
+
+    envelope = SecretEnvelope.from_plaintext("provider-token", service=service)
+    plaintext, version = envelope.decrypt(service=service)
+
+    assert envelope.value.startswith(f"{ENVELOPE_PREFIX}|v1|")
+    assert str(envelope) == envelope.value
+    assert plaintext == "provider-token"
+    assert version == "v1"
+
+
+def test_secret_envelope_required_operations_reject_missing_keys() -> None:
+    service = SecretEnvelopeService.from_env({})
+
+    with pytest.raises(SecretMaterialMissingError, match="no keys"):
+        SecretEnvelope.from_plaintext("provider-token", service=service)
+
+    with pytest.raises(SecretMaterialMissingError, match="no keys"):
+        SecretEnvelope(f"{ENVELOPE_PREFIX}|v1|token").decrypt(service=service)
+
+
 def test_create_and_verify_current_and_legacy_verifiers() -> None:
     current = _key_bundle_key()
     legacy = _key_bundle_key()
@@ -204,17 +227,14 @@ def test_from_key_bundle_allows_no_configuration() -> None:
     assert service.decrypt("plaintext") == ("plaintext", PLAIN_TEXT_VERSION)
 
 
-def test_decrypt_treats_malformed_envelope_as_plaintext() -> None:
+def test_decrypt_rejects_malformed_envelope_values() -> None:
     service = SecretEnvelopeService.from_key_bundle(_key_entry("v1", _key_bundle_key()))
 
-    assert service.decrypt(f"{ENVELOPE_PREFIX}|v1") == (
-        "WEVRA:SECRET|v1",
-        PLAIN_TEXT_VERSION,
-    )
-    assert service.decrypt(f"{ENVELOPE_PREFIX}") == (
-        "WEVRA:SECRET",
-        PLAIN_TEXT_VERSION,
-    )
+    with pytest.raises(SecretDataError, match="invalid or malformed"):
+        service.decrypt(f"{ENVELOPE_PREFIX}|v1")
+
+    with pytest.raises(SecretDataError, match="invalid or malformed"):
+        service.decrypt(f"{ENVELOPE_PREFIX}")
 
 
 def test_decrypt_rejects_non_ascii_encrypted_payload() -> None:

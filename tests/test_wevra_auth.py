@@ -89,11 +89,16 @@ from wevra.auth.persistence.database import (
     create_database,
     session_scope,
 )
+from wevra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
 from wevra.auth.routes import normalise_return_to
 from wevra.services.crypto import (
     ENVELOPE_PREFIX,
+    PLAIN_TEXT_VERSION,
     VERIFIER_PREFIX,
+    SecretDataError,
+    SecretEnvelope,
     SecretEnvelopeService,
+    SecretMaterialMissingError,
 )
 
 
@@ -1104,6 +1109,156 @@ def test_wevra_auth_identity_provider_and_link_models_are_well_formed() -> None:
     } == {"identity_user.id"}
     assert User.external_identity_links.property.mapper.class_ is ExternalIdentityLink
     assert User.emails.property.mapper.class_ is IdentityUserEmail
+
+
+def test_wevra_auth_provider_credential_store_encrypts_tokens(
+    tmp_path: Path,
+) -> None:
+    async def assert_encrypted_storage() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "provider-encrypted.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                store = SqlAlchemyProviderCredentialStore(
+                    session,
+                    make_test_only_secret_service(),
+                )
+                provider_id = await store.create_provider_credential(
+                    provider_name="github",
+                    provider_subject="subject-1",
+                    access_token="access-token",
+                    refresh_token="refresh-token",
+                    account_email="person@example.com",
+                )
+                provider = await store.get_provider_credential(provider_id)
+
+                assert provider is not None
+                assert provider.crypt_access_token.startswith(
+                    f"{ENVELOPE_PREFIX}|test|"
+                )
+                assert provider.crypt_refresh_token is not None
+                assert provider.crypt_refresh_token.startswith(
+                    f"{ENVELOPE_PREFIX}|test|"
+                )
+                assert provider.crypt_access_token != "access-token"
+                assert provider.crypt_refresh_token != "refresh-token"
+                assert isinstance(
+                    store.secret_envelopes(provider).access_token,
+                    SecretEnvelope,
+                )
+                assert store.decrypt_access_token(provider) == "access-token"
+                assert store.decrypt_refresh_token(provider) == "refresh-token"
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_encrypted_storage())
+
+
+def test_wevra_auth_provider_credential_store_handles_legacy_plaintext(
+    tmp_path: Path,
+) -> None:
+    async def assert_legacy_plaintext() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "provider-legacy.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                provider = IdentityProvider(
+                    provider_name="github",
+                    provider_subject="subject-1",
+                    crypt_access_token="legacy-access-token",
+                    crypt_refresh_token="legacy-refresh-token",
+                    account_email="person@example.com",
+                    provider_enabled=True,
+                )
+                session.add(provider)
+                await session.flush()
+
+                store = SqlAlchemyProviderCredentialStore(
+                    session,
+                    make_test_only_secret_service(),
+                )
+
+                assert store.decrypt_access_token(provider) == "legacy-access-token"
+                assert store.decrypt_refresh_token(provider) == "legacy-refresh-token"
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_legacy_plaintext())
+
+
+def test_wevra_auth_provider_credential_store_rejects_malformed_envelope(
+    tmp_path: Path,
+) -> None:
+    async def assert_malformed_envelope_rejected() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "provider-malformed.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                provider = IdentityProvider(
+                    provider_name="github",
+                    provider_subject="subject-1",
+                    crypt_access_token=f"{ENVELOPE_PREFIX}|test",
+                    crypt_refresh_token=None,
+                    account_email="person@example.com",
+                    provider_enabled=True,
+                )
+                session.add(provider)
+                await session.flush()
+
+                store = SqlAlchemyProviderCredentialStore(
+                    session,
+                    make_test_only_secret_service(),
+                )
+
+                with pytest.raises(SecretDataError, match="invalid or malformed"):
+                    store.decrypt_access_token(provider)
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_malformed_envelope_rejected())
+
+
+def test_wevra_auth_provider_credential_store_requires_keys_for_secret_operations(
+    tmp_path: Path,
+) -> None:
+    async def assert_required_keys() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "provider-required-keys.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                store = SqlAlchemyProviderCredentialStore(
+                    session,
+                    SecretEnvelopeService.from_env({}),
+                )
+
+                with pytest.raises(SecretMaterialMissingError, match="no keys"):
+                    await store.create_provider_credential(
+                        provider_name="github",
+                        provider_subject="subject-1",
+                        access_token="access-token",
+                        account_email="person@example.com",
+                    )
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_required_keys())
+
+
+def test_wevra_auth_provider_disabled_identity_options_do_not_require_secret_keys() -> (
+    None
+):
+    options = IdentityOptions(provider_enabled=False)
+    secret_service = SecretEnvelopeService.from_env({})
+
+    assert options.integration_enabled("provider") is False
+    assert secret_service.decrypt("legacy-plaintext") == (
+        "legacy-plaintext",
+        PLAIN_TEXT_VERSION,
+    )
 
 
 def test_wevra_auth_recovery_code_replacement_rejects_user_mismatch(
