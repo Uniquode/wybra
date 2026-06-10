@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from sqlalchemy import select
 
 from wevra.auth import (
     ERROR_ALREADY_EXISTS,
@@ -56,6 +57,18 @@ from wevra.auth.admin.management import (
     update_group_for_management,
     update_scope_for_management,
 )
+from wevra.auth.mfa.storage import (
+    SqlAlchemyRecoveryCodeStore,
+    SqlAlchemyTOTPCredentialStore,
+)
+from wevra.auth.mfa.totp import (
+    MAX_TOTP_ALLOWED_DRIFT,
+    MAX_TOTP_PERIOD_SECONDS,
+    MAX_TOTP_RECOVERY_WINDOW_SECONDS,
+    generate_totp,
+    totp_auth_uri,
+    verify_totp,
+)
 from wevra.auth.models import (
     AccessToken,
     Base,
@@ -64,6 +77,8 @@ from wevra.auth.models import (
     GroupScope,
     GroupUser,
     IdentityProvider,
+    IdentityTotpCredential,
+    IdentityTotpRecoveryCode,
     IdentityUserEmail,
     User,
 )
@@ -75,6 +90,11 @@ from wevra.auth.persistence.database import (
     session_scope,
 )
 from wevra.auth.routes import normalise_return_to
+from wevra.services.crypto import (
+    ENVELOPE_PREFIX,
+    VERIFIER_PREFIX,
+    SecretEnvelopeService,
+)
 
 
 def sqlite_file_url(path: Path) -> str:
@@ -86,6 +106,10 @@ async def initialise_auth_database(database_url: str):
     async with database.engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     return database
+
+
+def make_test_only_secret_service() -> SecretEnvelopeService:
+    return SecretEnvelopeService.for_testing()
 
 
 class MemoryChallengeStore:
@@ -149,6 +173,9 @@ def test_wevra_auth_metadata_exposes_authorisation_group_tables() -> None:
         "identity_group_user",
         "identity_group_group",
         "identity_user_email",
+        "identity_authentication_challenge",
+        "identity_totp_credential",
+        "identity_totp_recovery_code",
     }.issubset(wevra_auth_metadata.tables)
     assert any(
         constraint.name == "ck_identity_group_group_no_self_membership"
@@ -178,6 +205,10 @@ def test_wevra_auth_metadata_exposes_authorisation_group_tables() -> None:
         "identity_user.id": "CASCADE",
     }
     assert group_group_foreign_keys == {"identity_group.id": "RESTRICT"}
+
+
+def test_wevra_auth_totp_seed_model_uses_encrypted_field() -> None:
+    assert IdentityTotpCredential.__table__.columns["crypt_secret"].nullable is False
 
 
 def test_authorisation_scope_management_lifecycle(tmp_path: Path) -> None:
@@ -914,14 +945,76 @@ def test_wevra_auth_identity_options_accept_custom_password_policy() -> None:
 
 def test_wevra_auth_integration_options_enabled() -> None:
     options = IdentityOptions(
-        **{
-            f"{integration}_enabled": True
-            for integration in VALID_IDENTITY_INTEGRATIONS
-        },
+        provider_enabled=True,
+        passkey_enabled=True,
+        totp_mode="required",
     )
 
     for integration in VALID_IDENTITY_INTEGRATIONS:
         assert options.integration_enabled(integration) is True
+
+
+def test_wevra_auth_totp_auth_uri_rejects_unknown_algorithm() -> None:
+    with pytest.raises(ValueError, match="Unsupported TOTP algorithm"):
+        totp_auth_uri(
+            account_name="person@example.com",
+            secret="JBSWY3DPEHPK3PXP",
+            issuer="wevra",
+            algorithm="md5",
+        )
+
+
+def test_wevra_auth_totp_verification_limits_allowed_drift() -> None:
+    secret = "JBSWY3DPEHPK3PXP"
+    timestamp = 1_800_000_000.0
+    submitted_code = generate_totp(secret, timestamp=timestamp)
+
+    accepted, counter = verify_totp(
+        secret,
+        submitted_code,
+        timestamp=timestamp,
+        allowed_drift=MAX_TOTP_ALLOWED_DRIFT,
+    )
+    assert accepted is True
+    assert counter is not None
+
+    with pytest.raises(ValueError, match="non-negative"):
+        verify_totp(secret, submitted_code, allowed_drift=-1)
+
+    with pytest.raises(ValueError, match="maximum"):
+        verify_totp(
+            secret,
+            submitted_code,
+            allowed_drift=MAX_TOTP_ALLOWED_DRIFT + 1,
+        )
+
+
+def test_wevra_auth_identity_options_reject_invalid_totp_settings() -> None:
+    with pytest.raises(ConfigurationError, match="TOTP mode"):
+        IdentityOptions(totp_mode="turbo")  # type: ignore[arg-type]
+
+    with pytest.raises(ConfigurationError, match="non-negative"):
+        IdentityOptions(totp_allowed_drift=-1)
+
+    with pytest.raises(ConfigurationError, match="must not exceed"):
+        IdentityOptions(totp_allowed_drift=MAX_TOTP_ALLOWED_DRIFT + 1)
+
+    with pytest.raises(ConfigurationError, match="positive"):
+        IdentityOptions(totp_period_seconds=0)
+
+    with pytest.raises(ConfigurationError, match="must not exceed"):
+        IdentityOptions(totp_period_seconds=MAX_TOTP_PERIOD_SECONDS + 1)
+
+    with pytest.raises(ConfigurationError, match="positive"):
+        IdentityOptions(totp_challenge_expiry_seconds=0)
+
+    with pytest.raises(ConfigurationError, match="positive"):
+        IdentityOptions(totp_recovery_window_seconds=0)
+
+    with pytest.raises(ConfigurationError, match="must not exceed"):
+        IdentityOptions(
+            totp_recovery_window_seconds=MAX_TOTP_RECOVERY_WINDOW_SECONDS + 1,
+        )
 
 
 def test_wevra_auth_identity_options_integration_enabled_rejects_unknown() -> None:
@@ -1011,6 +1104,150 @@ def test_wevra_auth_identity_provider_and_link_models_are_well_formed() -> None:
     } == {"identity_user.id"}
     assert User.external_identity_links.property.mapper.class_ is ExternalIdentityLink
     assert User.emails.property.mapper.class_ is IdentityUserEmail
+
+
+def test_wevra_auth_recovery_code_replacement_rejects_user_mismatch(
+    tmp_path: Path,
+) -> None:
+    async def assert_mismatch_rejected() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "recovery-mismatch.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                owner = User(
+                    email="owner@example.com",
+                    hashed_password="hash",
+                    is_active=True,
+                    is_superuser=False,
+                    is_verified=True,
+                )
+                other_user = User(
+                    email="other@example.com",
+                    hashed_password="hash",
+                    is_active=True,
+                    is_superuser=False,
+                    is_verified=True,
+                )
+                session.add_all((owner, other_user))
+                await session.flush()
+
+                credential_store = SqlAlchemyTOTPCredentialStore(
+                    session,
+                    make_test_only_secret_service(),
+                )
+                credential_id = await credential_store.create_pending_totp_credential(
+                    str(owner.id),
+                    "JBSWY3DPEHPK3PXP",
+                )
+                recovery_store = SqlAlchemyRecoveryCodeStore(
+                    session,
+                    make_test_only_secret_service(),
+                )
+
+                with pytest.raises(ValueError, match="does not belong"):
+                    await recovery_store.replace_recovery_codes(
+                        str(other_user.id),
+                        credential_id,
+                        ("R3C0V3RY",),
+                    )
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_mismatch_rejected())
+
+
+def test_wevra_auth_totp_seed_storage_uses_encrypted_envelope(
+    tmp_path: Path,
+) -> None:
+    async def assert_encrypted_storage() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "totp-encrypted.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                user = User(
+                    email="totp@example.com",
+                    hashed_password="hash",
+                    is_active=True,
+                    is_superuser=False,
+                    is_verified=True,
+                )
+                session.add(user)
+                await session.flush()
+
+                store = SqlAlchemyTOTPCredentialStore(
+                    session,
+                    make_test_only_secret_service(),
+                )
+                credential_id = await store.create_pending_totp_credential(
+                    str(user.id),
+                    "JBSWY3DPEHPK3PXP",
+                )
+                credential = await store.get_totp_credential(credential_id)
+                assert credential is not None
+                assert credential.crypt_secret.startswith(f"{ENVELOPE_PREFIX}|test|")
+                assert store.decrypt_totp_secret(credential) == "JBSWY3DPEHPK3PXP"
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_encrypted_storage())
+
+
+def test_wevra_auth_recovery_codes_use_keyed_verifiers(
+    tmp_path: Path,
+) -> None:
+    async def assert_recovery_verifier_storage() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "recovery-verifier.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                user = User(
+                    email="recovery@example.com",
+                    hashed_password="hash",
+                    is_active=True,
+                    is_superuser=False,
+                    is_verified=True,
+                )
+                session.add(user)
+                await session.flush()
+
+                secret_service = make_test_only_secret_service()
+                credential_store = SqlAlchemyTOTPCredentialStore(
+                    session,
+                    secret_service,
+                )
+                credential_id = await credential_store.create_pending_totp_credential(
+                    str(user.id),
+                    "JBSWY3DPEHPK3PXP",
+                )
+                await credential_store.activate_totp_credential(credential_id)
+                recovery_store = SqlAlchemyRecoveryCodeStore(session, secret_service)
+                await recovery_store.replace_recovery_codes(
+                    str(user.id),
+                    credential_id,
+                    ("R3C0V3RY",),
+                )
+                recovery_record = (
+                    await session.execute(select(IdentityTotpRecoveryCode))
+                ).scalar_one()
+
+                assert recovery_record.code_verifier.startswith(
+                    f"{VERIFIER_PREFIX}|test|"
+                )
+                assert await recovery_store.consume_recovery_code(
+                    str(user.id),
+                    "R3C0V3RY",
+                )
+                assert not await recovery_store.consume_recovery_code(
+                    str(user.id),
+                    "R3C0V3RY",
+                )
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_recovery_verifier_storage())
 
 
 def test_identity_user_email_stores_normalised_email() -> None:

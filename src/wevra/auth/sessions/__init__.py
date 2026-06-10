@@ -33,6 +33,11 @@ from wevra.auth.accounts.manager import (
 from wevra.auth.accounts.schemas import UserCreate
 from wevra.auth.authorisation import is_user_effectively_active
 from wevra.auth.delivery import IdentityDelivery, NullIdentityDelivery
+from wevra.auth.mfa.challenges import (
+    AuthenticationAssertion,
+    AuthenticationMethod,
+    assertions_satisfy_required_methods,
+)
 from wevra.auth.models import AccessToken, User
 from wevra.auth.options import IdentityOptions
 from wevra.auth.persistence import (
@@ -42,6 +47,7 @@ from wevra.auth.persistence import (
 from wevra.auth.result import (
     ERROR_ALREADY_EXISTS,
     ERROR_ALREADY_VERIFIED,
+    ERROR_AUTHENTICATION_METHOD_REQUIRED,
     ERROR_IDENTITY_CHANGED,
     ERROR_INACTIVE_USER,
     ERROR_INVALID_EMAIL,
@@ -413,6 +419,10 @@ async def create_local_user_from_signup(
 async def complete_authentication_ceremony(
     request: Request,
     user: User,
+    *,
+    ceremony_id: str | None = None,
+    required_methods: tuple[AuthenticationMethod, ...] = (),
+    assertions: tuple[AuthenticationAssertion, ...] = (),
 ) -> Result[str]:
     options = _identity_options_from_request(request)
     session_factory = _session_factory_from_request(request)
@@ -425,6 +435,16 @@ async def complete_authentication_ceremony(
             now=now,
         ):
             return Result.failure(ERROR_INACTIVE_USER)
+        if required_methods and ceremony_id is None:
+            return Result.failure(ERROR_AUTHENTICATION_METHOD_REQUIRED)
+        if not assertions_satisfy_required_methods(
+            user_id=str(current_user.id),
+            ceremony_id=ceremony_id or "",
+            required_methods=required_methods,
+            assertions=assertions,
+            now=now,
+        ):
+            return Result.failure(ERROR_AUTHENTICATION_METHOD_REQUIRED)
 
         current_user.last_login_at = now
         strategy = create_database_strategy(session, options)

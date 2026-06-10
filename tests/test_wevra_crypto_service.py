@@ -5,10 +5,11 @@ import pytest
 from cryptography.fernet import Fernet
 
 from wevra.services.crypto import (
-    ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT,
-    ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY,
+    ENV_WEVRA_SECRET_KEY_CURRENT,
+    ENV_WEVRA_SECRET_KEY_LEGACY,
     ENVELOPE_PREFIX,
     PLAIN_TEXT_VERSION,
+    VERIFIER_PREFIX,
     SecretDataError,
     SecretEnvelopeService,
     SecretKeyRing,
@@ -101,7 +102,7 @@ def test_parse_secret_key_ring_from_env_ignores_blank_values() -> None:
     assert (
         parse_secret_key_ring_from_env(
             {
-                ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT: "   ",
+                ENV_WEVRA_SECRET_KEY_CURRENT: "   ",
             }
         )
         is None
@@ -112,7 +113,7 @@ def test_parse_secret_key_ring_from_env_rejects_legacy_without_current() -> None
     with pytest.raises(SecretMaterialMissingError):
         parse_secret_key_ring_from_env(
             {
-                ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY: _key_entry(
+                ENV_WEVRA_SECRET_KEY_LEGACY: _key_entry(
                     "legacy",
                     _key_bundle_key(),
                 ),
@@ -137,6 +138,49 @@ def test_encrypt_and_decrypt_current_and_legacy_versions() -> None:
     assert current_blob.startswith(f"{ENVELOPE_PREFIX}|current|")
     assert legacy_version == "legacy"
     assert legacy_plaintext == "legacy-token"
+
+
+def test_create_and_verify_current_and_legacy_verifiers() -> None:
+    current = _key_bundle_key()
+    legacy = _key_bundle_key()
+
+    legacy_service = SecretEnvelopeService.from_key_bundle(_key_entry("legacy", legacy))
+    legacy_verifier = legacy_service.create_verifier_required(
+        "recovery-code",
+        context="test",
+    )
+
+    service = _service_with_keys(current=current, legacy=legacy)
+    current_verifier = service.create_verifier_required(
+        "recovery-code",
+        context="test",
+    )
+
+    assert current_verifier.startswith(f"{VERIFIER_PREFIX}|current|")
+    assert service.verify_verifier_required(
+        "recovery-code",
+        current_verifier,
+        context="test",
+    )
+    assert service.verify_verifier_required(
+        "recovery-code",
+        legacy_verifier,
+        context="test",
+    )
+    assert not service.verify_verifier_required(
+        "wrong-code",
+        current_verifier,
+        context="test",
+    )
+
+
+def test_for_testing_creates_required_secret_service() -> None:
+    service = SecretEnvelopeService.for_testing()
+
+    encrypted = service.encrypt_required("secret")
+
+    assert encrypted.startswith(f"{ENVELOPE_PREFIX}|test|")
+    assert service.decrypt_required(encrypted) == ("secret", "test")
 
 
 def test_encrypt_without_required_keys_returns_plaintext() -> None:
@@ -218,7 +262,7 @@ def test_parse_secret_key_entry_rejects_reserved_plain_text_version() -> None:
 def test_service_refreshes_cached_key_ring() -> None:
     key_v1 = _key_bundle_key()
     key_v2 = _key_bundle_key()
-    env = {ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT: _key_entry("v1", key_v1)}
+    env = {ENV_WEVRA_SECRET_KEY_CURRENT: _key_entry("v1", key_v1)}
 
     service = SecretEnvelopeService.from_env(env)
 
@@ -226,7 +270,7 @@ def test_service_refreshes_cached_key_ring() -> None:
     envelope_prefix_v1 = f"{ENVELOPE_PREFIX}|v1|"
     assert encrypted_v1.startswith(envelope_prefix_v1)
 
-    env[ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT] = _key_entry("v2", key_v2)
+    env[ENV_WEVRA_SECRET_KEY_CURRENT] = _key_entry("v2", key_v2)
 
     encrypted_stale = service.encrypt("token")
     assert encrypted_stale.startswith(envelope_prefix_v1)

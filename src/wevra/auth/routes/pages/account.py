@@ -1,164 +1,30 @@
-from typing import Any
-from urllib.parse import unquote, urlsplit, urlunsplit
-
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
-from starlette.datastructures import FormData
 
-from wevra.auth.options import IdentityOptions
+from wevra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
 from wevra.auth.sessions import (
-    authenticate_user,
     clear_session_cookie,
-    complete_authentication_ceremony,
     create_local_user_from_signup,
     destroy_session_token,
     request_password_reset,
     request_verification,
     reset_password,
     resolve_current_user,
-    set_session_cookie,
     verify_user,
 )
-from wevra.web.forms.csrf import request_form_data, validate_csrf
+from wevra.web.forms.csrf import request_form_data
 from wevra.web.rendering import render_page
-from wevra.web.routes.contracts import API_PATH_PREFIX
 
-account_router = APIRouter(dependencies=[Depends(validate_csrf)])
-api_router = APIRouter(prefix=f"{API_PATH_PREFIX.rstrip('/')}/identity")
-
-
-async def current_user_state(request: Request) -> dict[str, object]:
-    user = await resolve_current_user(request)
-    if user is None:
-        return {"authenticated": False}
-
-    return {
-        "authenticated": True,
-        "email": user.email,
-        # Keep this optional state endpoint out of authorisation decisions.
-        "is_verified": user.is_verified,
-    }
-
-
-def _identity_context(request: Request, **extra: Any) -> dict[str, Any]:
-    del request
-    return dict(extra)
-
-
-def _form_value(form_data: FormData, name: str, default: str = "") -> str:
-    value = form_data.get(name, default)
-    return value if isinstance(value, str) else default
-
-
-def _identity_options(request: Request) -> IdentityOptions:
-    options = getattr(request.app.state, "identity_options", None)
-    if not isinstance(options, IdentityOptions):
-        raise RuntimeError("Identity options are not configured on the application.")
-
-    return options
-
-
-def _public_signup_enabled(request: Request) -> bool:
-    return _identity_options(request).account_creation_policy == "public-signup"
-
-
-def normalise_return_to(value: str | None, default: str = "/account") -> str:
-    candidate = (value or "").strip()
-    if (
-        not candidate.startswith("/")
-        or candidate.startswith("//")
-        or "\\" in candidate
-        or "\r" in candidate
-        or "\n" in candidate
-    ):
-        return default
-
-    decoded_candidate = unquote(candidate)
-    if (
-        decoded_candidate.startswith("//")
-        or "\\" in decoded_candidate
-        or any(
-            ord(character) < 32 or ord(character) == 127
-            for character in decoded_candidate
-        )
-    ):
-        return default
-
-    parsed = urlsplit(candidate)
-    if parsed.scheme or parsed.netloc:
-        return default
-
-    return urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
-
-
-@api_router.get(
-    "/current-user",
-    include_in_schema=False,
-    name="auth:api:current-user",
+from .shared import (
+    _form_value,
+    _identity_context,
+    _identity_options,
+    _load_active_totp_credential_id,
+    _load_totp_credential_ids,
+    _public_signup_enabled,
+    _session_factory_from_request,
+    account_router,
 )
-async def current_user_api(request: Request) -> dict[str, object]:
-    return await current_user_state(request)
-
-
-@account_router.api_route(
-    "/login",
-    methods=["GET", "POST"],
-    include_in_schema=False,
-    name="auth:login",
-)
-async def login(request: Request) -> Response:
-    if request.method == "GET":
-        context = _identity_context(
-            request,
-            page_title="Sign in",
-            public_signup_enabled=_public_signup_enabled(request),
-            return_to=normalise_return_to(request.query_params.get("return_to")),
-        )
-        return render_page(request, "identity/pages/login.html", context)
-
-    form_data = await request_form_data(request)
-    email = _form_value(form_data, "email").strip()
-    password = _form_value(form_data, "password")
-    return_to = normalise_return_to(_form_value(form_data, "return_to"))
-
-    user = await authenticate_user(request, email, password)
-    if user is None:
-        return _login_error_response(request, email=email, return_to=return_to)
-
-    ceremony_result = await complete_authentication_ceremony(request, user)
-    if ceremony_result.is_failure() or ceremony_result.value is None:
-        return _login_error_response(request, email=email, return_to=return_to)
-
-    response = RedirectResponse(url=return_to, status_code=303)
-    set_session_cookie(
-        response,
-        request,
-        ceremony_result.value,
-        _identity_options(request),
-    )
-    return response
-
-
-def _login_error_response(
-    request: Request,
-    *,
-    email: str,
-    return_to: str,
-) -> Response:
-    context = _identity_context(
-        request,
-        page_title="Sign in",
-        public_signup_enabled=_public_signup_enabled(request),
-        email=email,
-        return_to=return_to,
-        form_error="Email or password is incorrect.",
-    )
-    return render_page(
-        request,
-        "identity/pages/login.html",
-        context,
-        status_code=401,
-    )
 
 
 @account_router.api_route(
@@ -224,6 +90,27 @@ async def account(request: Request) -> Response:
         request,
         page_title="Account",
     )
+    user = await resolve_current_user(request)
+    if user is None:
+        return render_page(request, "identity/pages/account.html", context)
+
+    options = _identity_options(request)
+    session_factory = _session_factory_from_request(request)
+    async with session_factory() as session:
+        active_totp_id, pending_totp_id = await _load_totp_credential_ids(
+            session,
+            str(user.id),
+        )
+
+    context |= {
+        "totp_mode": options.totp_mode,
+        "totp_enabled": options.totp_mode != TOTP_DISABLED,
+        "totp_has_active_credential": active_totp_id is not None,
+        "totp_has_pending_credential": pending_totp_id is not None,
+        "totp_setup_path": request.url_for("auth:totp-setup"),
+        "totp_disable_path": request.url_for("auth:totp-disable"),
+        "totp_reset_path": request.url_for("auth:totp-reset"),
+    }
     return render_page(request, "identity/pages/account.html", context)
 
 
@@ -309,6 +196,17 @@ async def verify_confirm(request: Request) -> Response:
     token = _form_value(form_data, "token")
     verification_result = await verify_user(request, token)
     did_verify = verification_result.is_ok()
+    options = _identity_options(request)
+    totp_setup_required = False
+    if did_verify and options.totp_mode == TOTP_REQUIRED and verification_result.value:
+        session_factory = _session_factory_from_request(request)
+        async with session_factory() as session:
+            totp_setup_required = (
+                await _load_active_totp_credential_id(
+                    session, verification_result.value
+                )
+            ) is None
+
     context = _identity_context(
         request,
         page_title="Verify email",
@@ -316,6 +214,8 @@ async def verify_confirm(request: Request) -> Response:
         form_error=(
             None if did_verify else "The verification token is invalid or expired."
         ),
+        totp_setup_required=totp_setup_required,
+        totp_login_path=request.url_for("auth:login"),
     )
     return render_page(
         request,
@@ -323,26 +223,3 @@ async def verify_confirm(request: Request) -> Response:
         context,
         status_code=200 if did_verify else 400,
     )
-
-
-module_routers = {
-    "account": account_router,
-    "api": api_router,
-}
-
-__all__ = [
-    "account",
-    "account_router",
-    "api_router",
-    "current_user_api",
-    "current_user_state",
-    "login",
-    "logout",
-    "module_routers",
-    "normalise_return_to",
-    "password_reset",
-    "password_reset_confirm",
-    "signup",
-    "verify",
-    "verify_confirm",
-]

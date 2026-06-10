@@ -1,0 +1,59 @@
+{% extends "layouts/page.html" %}
+
+{% set has_setup_error = setup_error is defined and setup_error %}
+
+{% block content %}
+<section class="surface-panel">
+  <p class="eyebrow">Identity</p>
+  <h1>Set up authenticator</h1>
+  {% if has_setup_error %}
+  <p id="setup-form-error" role="alert">{{ setup_error }}</p>
+  {% endif %}
+  {% if setup_complete %}
+  <p role="status">{{ setup_messages.complete }}</p>
+  {% if setup_recovery_codes is defined and setup_recovery_codes %}
+  <p>{{ setup_messages.store_recovery_codes }}</p>
+  <ul>
+    {% for recovery_code in setup_recovery_codes %}
+    <li><code>{{ recovery_code }}</code></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p>
+    <a href="{{ request.url_for('auth:account') }}">{{ setup_messages.return_to_account }}</a>
+  </p>
+  {% else %}
+  <p>{{ setup_messages.instructions }}</p>
+  {% if setup_totp_uri %}
+  <details>
+    <summary>{{ setup_messages.show_setup_uri }}</summary>
+    <p><strong>{{ setup_messages.setup_uri }}</strong> <code>{{ setup_totp_uri }}</code></p>
+  </details>
+  {% endif %}
+  {% if setup_totp_secret %}
+  <details>
+    <summary>{{ setup_messages.show_secret }}</summary>
+    <p><strong>{{ setup_messages.secret }}</strong> <code>{{ setup_totp_secret }}</code></p>
+  </details>
+  {% endif %}
+  <form action="{{ request.url_for('auth:totp-setup') }}" method="post">
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    <input name="return_to" type="hidden" value="{{ return_to or '/account' }}">
+    <input name="setup_challenge_id" type="hidden" value="{{ setup_challenge_id }}">
+    <label>
+      {{ setup_messages.verification_code }}
+      <input
+        autocomplete="one-time-code"
+        inputmode="numeric"
+        minlength="{{ totp_code_length }}"
+        maxlength="{{ totp_code_length }}"
+        name="setup_totp_code"
+        required
+        type="text"
+      >
+    </label>
+    <button type="submit">{{ setup_messages.confirm_setup }}</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

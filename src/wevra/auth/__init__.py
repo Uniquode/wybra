@@ -6,6 +6,8 @@ from typing import Any
 _EXPORTS = {
     "AccountCreationPolicy": "wevra.auth.options",
     "AdvancedAuthenticationPolicy": "wevra.auth.mfa.challenges",
+    "AuthenticationAssertion": "wevra.auth.mfa.challenges",
+    "AuthenticationMethod": "wevra.auth.mfa.challenges",
     "ChallengeDecision": "wevra.auth.mfa.challenges",
     "ChallengeKind": "wevra.auth.mfa.challenges",
     "ChallengeRecord": "wevra.auth.mfa.challenges",
@@ -14,6 +16,7 @@ _EXPORTS = {
     "DefaultPasswordPolicy": "wevra.auth.accounts.passwords",
     "ERROR_ALREADY_EXISTS": "wevra.auth.result",
     "ERROR_ALREADY_VERIFIED": "wevra.auth.result",
+    "ERROR_AUTHENTICATION_METHOD_REQUIRED": "wevra.auth.result",
     "ERROR_IDENTITY_CHANGED": "wevra.auth.result",
     "ERROR_INACTIVE_USER": "wevra.auth.result",
     "ERROR_INVALID_EMAIL": "wevra.auth.result",
@@ -22,6 +25,10 @@ _EXPORTS = {
     "ERROR_PASSWORD_TOO_SHORT": "wevra.auth.result",
     "ERROR_PASSWORD_TOO_WEAK": "wevra.auth.result",
     "ERROR_POLICY_DISABLED": "wevra.auth.result",
+    "ERROR_TOTP_CODE_REQUIRED": "wevra.auth.result",
+    "ERROR_TOTP_INVALID": "wevra.auth.result",
+    "ERROR_TOTP_RECOVERY_INVALID": "wevra.auth.result",
+    "ERROR_TOTP_SETUP_REQUIRED": "wevra.auth.result",
     "ERROR_TOKEN_REJECTED": "wevra.auth.result",
     "IdentityDelivery": "wevra.auth.delivery",
     "IdentityIntegration": "wevra.auth.options",
@@ -32,6 +39,7 @@ _EXPORTS = {
     "PasswordStrength": "wevra.auth.accounts.passwords",
     "PasswordStrengthLabel": "wevra.auth.accounts.passwords",
     "PrimaryAuthenticationContext": "wevra.auth.mfa.challenges",
+    "TOTP_ASSERTION_METHOD": "wevra.auth.mfa.challenges",
     "RecoveryCodeStore": "wevra.auth.mfa.storage",
     "Result": "wevra.auth.result",
     "ResultErrorType": "wevra.auth.result",
@@ -45,6 +53,7 @@ _EXPORTS = {
     "WebAuthnCredentialStore": "wevra.auth.mfa.storage",
     "complete_challenge": "wevra.auth.mfa.challenges",
     "is_generate_local_identity_secret": "wevra.auth.options",
+    "required_authentication_methods_for_totp_policy": "wevra.auth.mfa.challenges",
 }
 
 __all__ = sorted(_EXPORTS)
