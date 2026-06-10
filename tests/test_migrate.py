@@ -336,9 +336,29 @@ def test_migrate_upgrade_after_init_creates_sqlite_schema(tmp_path: Path) -> Non
                 "select name from sqlite_master where type = 'table'"
             )
         }
+        totp_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(identity_totp_credential)")
+        }
+        recovery_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(identity_totp_recovery_code)"
+            )
+        }
 
     assert "alembic_version" in table_names
-    assert "identity_user" in table_names
+    assert {
+        "identity_user",
+        "identity_provider",
+        "identity_external_identity_link",
+        "identity_access_token",
+        "identity_authentication_challenge",
+        "identity_totp_credential",
+        "identity_totp_recovery_code",
+    }.issubset(table_names)
+    assert "crypt_secret" in totp_columns
+    assert "code_verifier" in recovery_columns
 
 
 def test_migrate_init_provisions_postgresql_before_stamping_base(
@@ -544,7 +564,7 @@ def test_migrate_upgrade_preserves_subcommand_database_url_override(
     )
 
     assert exit_code == 0
-    assert observed == [("head", database_url)]
+    assert observed == [("heads", database_url)]
 
 
 @pytest.mark.parametrize(

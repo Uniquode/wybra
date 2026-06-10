@@ -49,6 +49,8 @@ _.on_after_forgot_password
 _.on_after_request_verify
 _.AdvancedAuthenticationPolicy
 _.NoChallengePolicy
+_.PRIMARY_ASSERTION_METHOD
+_.WEBAUTHN_ASSERTION_METHOD
 _.after_primary_authentication
 _.available_methods
 _.requires_challenge
@@ -64,6 +66,7 @@ _.TOTPCredentialStore
 _.create_pending_totp_credential
 _.activate_totp_credential
 _.disable_totp_credential
+_.get_user_totp_credentials
 _.WebAuthnCredentialStore
 _.store_webauthn_credential
 _.credential_id
@@ -81,6 +84,12 @@ _.integration_enabled
 _.provider_subject
 _.crypt_access_token
 _.crypt_refresh_token
+_.crypt_secret
+_.last_used_counter
+_.status
+_.activated_at
+_.disabled_at
+_.totp_credentials
 _.account_email
 _.provider_enabled
 _.provider_metadata
@@ -95,7 +104,10 @@ _.encrypt_required
 _.decrypt_required
 _.refresh_key_ring
 _.from_env
+_.for_testing
 _.from_key_bundle
+_.generate_totp
+_.totp_recovery_window_expiry_timestamp
 _._normalise_identity_email
 _.SCOPE_RECORD_FIELDS
 _.primary_table_name

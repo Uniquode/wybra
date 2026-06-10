@@ -12,6 +12,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -207,11 +208,107 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
         lazy="selectin",
     )
 
+    totp_credentials: Mapped[list[IdentityTotpCredential]] = relationship(
+        "IdentityTotpCredential",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
     external_identity_links: Mapped[list[ExternalIdentityLink]] = relationship(
         "ExternalIdentityLink",
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="selectin",
+    )
+
+
+class IdentityTotpCredential(Base):
+    """A TOTP secret and its current lifecycle state."""
+
+    __tablename__ = "identity_totp_credential"
+    __table_args__ = (
+        Index("ix_identity_totp_credential_user_id", "user_id"),
+        Index("ix_identity_totp_credential_status", "status"),
+        Index("ix_identity_totp_credential_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    crypt_secret: Mapped[str] = mapped_column(String(length=1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(length=16), nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    activated_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    disabled_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_used_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    user: Mapped[User] = relationship("User", back_populates="totp_credentials")
+
+
+class IdentityAuthenticationChallenge(Base):
+    """Transient authentication challenge metadata."""
+
+    __tablename__ = "identity_authentication_challenge"
+    __table_args__ = (
+        Index("ix_identity_authentication_challenge_user_id", "user_id"),
+        Index("ix_identity_authentication_challenge_expires_at", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(length=32), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(length=16), nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    metadata_payload: Mapped[dict[str, object] | None] = mapped_column(
+        "metadata",
+        JSON,
+        nullable=True,
+    )
+
+    user: Mapped[User] = relationship("User")
+
+
+class IdentityTotpRecoveryCode(Base):
+    """Single-use TOTP recovery codes linked to a TOTP credential."""
+
+    __tablename__ = "identity_totp_recovery_code"
+    __table_args__ = (
+        UniqueConstraint(
+            "credential_id",
+            "code_verifier",
+            name="uq_identity_totp_recovery_code_verifier",
+        ),
+        Index("ix_identity_totp_recovery_code_credential_id", "credential_id"),
+        Index("ix_identity_totp_recovery_code_consumed_at", "consumed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    credential_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_totp_credential.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code_verifier: Mapped[str] = mapped_column(String(length=256), nullable=False)
+    consumed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    credential: Mapped[IdentityTotpCredential] = relationship(
+        "IdentityTotpCredential",
     )
 
 
@@ -333,6 +430,9 @@ __all__ = (
     "AccessToken",
     "Base",
     "ExternalIdentityLink",
+    "IdentityAuthenticationChallenge",
+    "IdentityTotpCredential",
+    "IdentityTotpRecoveryCode",
     "IdentityUserEmail",
     "IdentityProvider",
     "Group",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -14,11 +16,12 @@ from cryptography.fernet import Fernet, InvalidToken
 from wevra.auth.configuration import ConfigurationError
 
 ENVELOPE_PREFIX: Final = "WEVRA:SECRET"
+VERIFIER_PREFIX: Final = "WEVRA:VERIFIER"
 PLAIN_TEXT_VERSION: Final = "__wevra_plaintext__"
 SECRET_KEY_LENGTH: Final = 32
 ENVELOPE_SEPARATOR: Final = "|"
-ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT: Final = "IDENTITY_PROVIDER_SECRET_KEY_CURRENT"
-ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY: Final = "IDENTITY_PROVIDER_SECRET_KEY_LEGACY"
+ENV_WEVRA_SECRET_KEY_CURRENT: Final = "WEVRA_SECRET_KEY_CURRENT"
+ENV_WEVRA_SECRET_KEY_LEGACY: Final = "WEVRA_SECRET_KEY_LEGACY"
 
 
 class SecretDataError(ConfigurationError):
@@ -151,12 +154,8 @@ def parse_secret_key_ring_from_env(
     if env is None:
         return None
 
-    current = _normalise_environment_value(
-        env.get(ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT)
-    )
-    legacy = _normalise_environment_value(
-        env.get(ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY)
-    )
+    current = _normalise_environment_value(env.get(ENV_WEVRA_SECRET_KEY_CURRENT))
+    legacy = _normalise_environment_value(env.get(ENV_WEVRA_SECRET_KEY_LEGACY))
 
     if current is None and legacy is None:
         return None
@@ -219,6 +218,30 @@ def _decode_envelope(value: str) -> tuple[str, str] | None:
     return version, encrypted
 
 
+def _encode_verifier(version: str, digest: str) -> str:
+    return ENVELOPE_SEPARATOR.join((VERIFIER_PREFIX, version, digest))
+
+
+def _decode_verifier(value: str) -> tuple[str, str] | None:
+    if not value.startswith(VERIFIER_PREFIX + ENVELOPE_SEPARATOR):
+        return None
+
+    parts = value.split(ENVELOPE_SEPARATOR, 2)
+    if len(parts) != 3:
+        return None
+
+    prefix, version, digest = parts
+    if prefix != VERIFIER_PREFIX or not version or not digest:
+        return None
+
+    return version, digest
+
+
+def _verifier_digest(*, key: bytes, context: str, value: str) -> str:
+    payload = f"{context}\0{value}".encode()
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+
 class SecretEnvelopeService:
     """Encrypt and decrypt secret values with versioned key material."""
 
@@ -229,6 +252,7 @@ class SecretEnvelopeService:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None) -> SecretEnvelopeService:
+        """Create the production runtime service from environment-style key settings."""
         return cls(lambda: parse_secret_key_ring_from_env(env))
 
     @classmethod
@@ -237,16 +261,82 @@ class SecretEnvelopeService:
         current: str | None,
         legacy: str | None = None,
     ) -> SecretEnvelopeService:
+        """Create a service from explicit key entries.
+
+        Runtime storage paths should prefer :meth:`from_env` so deployment key
+        material comes from configured Wevra secret environment values. This
+        constructor is for already-resolved configuration and test injection,
+        where callers deliberately provide concrete key entries.
+        """
         if current is None and legacy is None:
             return cls(lambda: None)
 
         return cls(lambda: parse_secret_key_bundle(current=current, legacy=legacy))
+
+    @classmethod
+    def for_testing(cls, *, version: str = "test") -> SecretEnvelopeService:
+        """Create a test-only service with generated key material.
+
+        This keeps the ``version:base64-key:checksum`` wire format owned by the
+        crypto module instead of scattering manual test bundle construction
+        across consuming repositories.
+        """
+        key = Fernet.generate_key()
+        encoded_key = key.decode("ascii")
+        raw_key = base64.urlsafe_b64decode(encoded_key)
+        return cls.from_key_bundle(f"{version}:{encoded_key}:{_checksum(raw_key)}")
 
     def encrypt_required(self, value: str) -> str:
         return self.encrypt(value, required=True)
 
     def decrypt_required(self, value: str) -> tuple[str, str]:
         return self.decrypt(value, required=True)
+
+    def create_verifier_required(self, value: str, *, context: str) -> str:
+        key_ring = self._get_key_ring(required=True)
+        if key_ring is None:  # pragma: no cover - required branch raises first
+            raise SecretMaterialMissingError(
+                "Secret material is required but no keys are configured."
+            )
+
+        digest = _verifier_digest(
+            key=key_ring.current.key,
+            context=context,
+            value=value,
+        )
+        return _encode_verifier(key_ring.current.version, digest)
+
+    def verify_verifier_required(
+        self,
+        value: str,
+        verifier: str,
+        *,
+        context: str,
+    ) -> bool:
+        envelope = _decode_verifier(verifier)
+        if envelope is None:
+            raise SecretDataError("Secret verifier value is invalid or malformed.")
+
+        key_ring = self._get_key_ring(required=True)
+        if key_ring is None:  # pragma: no cover - required branch raises first
+            raise SecretMaterialMissingError(
+                "Secret material is required but no keys are configured."
+            )
+
+        version, expected_digest = envelope
+        key = next(
+            (
+                candidate.key
+                for candidate in key_ring.keys
+                if candidate.version == version
+            ),
+            None,
+        )
+        if key is None:
+            raise SecretVersionError(f"Unknown secret version: {version}.")
+
+        actual_digest = _verifier_digest(key=key, context=context, value=value)
+        return hmac.compare_digest(actual_digest, expected_digest)
 
     def _get_key_ring(self, *, required: bool) -> SecretKeyRing | None:
         if not self._key_ring_loaded:
@@ -296,9 +386,10 @@ class SecretEnvelopeService:
 
 __all__ = [
     "ENVELOPE_PREFIX",
+    "VERIFIER_PREFIX",
     "PLAIN_TEXT_VERSION",
-    "ENV_IDENTITY_PROVIDER_SECRET_KEY_CURRENT",
-    "ENV_IDENTITY_PROVIDER_SECRET_KEY_LEGACY",
+    "ENV_WEVRA_SECRET_KEY_CURRENT",
+    "ENV_WEVRA_SECRET_KEY_LEGACY",
     "SecretDataError",
     "SecretMaterialMissingError",
     "SecretVersionError",

@@ -1,16 +1,53 @@
 {% extends "layouts/page.html" %}
 
 {% block content %}
+
+{% set challenge_step = challenge_step if challenge_step is defined else "" %}
+{% set is_setup_step = challenge_step == "setup" %}
+{% set is_totp_step = challenge_step == "totp" %}
+
 {% set has_form_error = form_error is defined and form_error %}
 <section class="surface-panel">
   <p class="eyebrow">Identity</p>
-  <h1>Sign in</h1>
+  <div aria-live="assertive" aria-atomic="true">
+    {% if is_totp_step %}
+    <h1 id="login-heading">Two-factor authentication</h1>
+    {% elif is_setup_step %}
+    <h1 id="login-heading">Set up two-factor authentication</h1>
+    {% else %}
+    <h1 id="login-heading">Sign in</h1>
+    {% endif %}
+  </div>
   {% if has_form_error %}
   <p id="login-form-error" role="alert">{{ form_error }}</p>
   {% endif %}
+  {% if is_setup_step %}
+  <p role="status">{{ setup_bypass_error or "Set up TOTP before continuing, or continue for now." }}</p>
+  <p>
+    <a href="{{ request.url_for('auth:totp-setup') }}?setup_challenge_id={{ setup_challenge_id or '' }}&amp;return_to={{ return_to }}">
+      Continue to TOTP setup
+    </a>
+  </p>
+  <form action="{{ request.url_for('auth:login') }}" method="post">
+  <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    <input name="return_to" type="hidden" value="{{ return_to or '/account' }}">
+    <input name="challenge_id" type="hidden" value="{{ setup_challenge_id }}">
+    <input name="setup_challenge_id" type="hidden" value="{{ setup_challenge_id }}">
+    <input
+      name="{{ totp_setup_bypass_token }}"
+      type="hidden"
+      value="1"
+    >
+    <button type="submit">Continue without TOTP</button>
+  </form>
+  {% else %}
   <form action="{{ request.url_for('auth:login') }}" method="post">
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
     <input name="return_to" type="hidden" value="{{ return_to or '/account' }}">
+    {% if challenge_id %}
+    <input name="challenge_id" type="hidden" value="{{ challenge_id }}">
+    {% endif %}
+    {% if requires_email_password %}
     <label>
       Email
       <input
@@ -32,8 +69,38 @@
         type="password"
       >
     </label>
-    <button type="submit">Sign in</button>
+    {% endif %}
+    {% if is_totp_step %}
+    <label>
+      TOTP code
+      <input
+        autocomplete="one-time-code"
+        inputmode="numeric"
+        minlength="6"
+        maxlength="9"
+        name="totp_code"
+        type="text"
+      >
+    </label>
+    <label>
+      Recovery code
+      <input
+        autocomplete="one-time-code"
+        minlength="{{ recovery_code_length }}"
+        maxlength="{{ recovery_code_length }}"
+        name="recovery_code"
+        type="text"
+      >
+    </label>
+    {% endif %}
+    <button type="submit">
+      {% if is_totp_step %}Complete verification{% else %}Sign in{% endif %}
+    </button>
   </form>
+  {% if challenge_error %}
+  <p class="muted-copy">{{ challenge_error }}</p>
+  {% endif %}
+  {% endif %}
   <p class="muted-copy">
     <a href="{{ request.url_for('auth:password-reset') }}">Reset password</a>
     {% if public_signup_enabled is defined and public_signup_enabled %}

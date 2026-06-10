@@ -9,7 +9,10 @@ from envex import Env
 
 from wevra.auth.configuration import ConfigurationError
 from wevra.auth.options import (
-    VALID_IDENTITY_INTEGRATIONS,
+    PASSKEY,
+    PROVIDER,
+    TOTP_MODE,
+    IdentityIntegration,
     IdentityOptions,
     identity_env_setting_name,
     is_generate_local_identity_secret,
@@ -33,9 +36,13 @@ IDENTITY_OPTION_FIELDS = frozenset(
         "session_cookie_force_secure",
         "reset_password_token_secret",
         "verification_token_secret",
+        TOTP_MODE,
         "provider_enabled",
-        "totp_enabled",
         "passkey_enabled",
+        "totp_allowed_drift",
+        "totp_period_seconds",
+        "totp_challenge_expiry_seconds",
+        "totp_recovery_window_seconds",
     }
 )
 PASSWORD_POLICY_OPTION_MAP = {
@@ -53,17 +60,26 @@ ENV_RESET_SECRET: Final = "RESET_SECRET"
 ENV_SESSION_COOKIE: Final = "SESSION_COOKIE"
 ENV_SESSION_FORCE_SECURE: Final = "SESSION_FORCE_SECURE"
 ENV_SESSION_LIFETIME: Final = "SESSION_LIFETIME"
+ENV_TOTP_MODE: Final = "TOTP_MODE"
+ENV_TOTP_ALLOWED_DRIFT: Final = "TOTP_ALLOWED_DRIFT"
+ENV_TOTP_PERIOD_SECONDS: Final = "TOTP_PERIOD_SECONDS"
+ENV_TOTP_CHALLENGE_EXPIRY_SECONDS: Final = "TOTP_CHALLENGE_EXPIRY_SECONDS"
+ENV_TOTP_RECOVERY_WINDOW_SECONDS: Final = "TOTP_RECOVERY_WINDOW_SECONDS"
 ENV_VERIFICATION_SECRET: Final = "VERIFICATION_SECRET"
 
 
 def _identity_env_settings() -> tuple[EnvironmentSetting, ...]:
-    return tuple(
+    return (
         EnvironmentSetting(
-            identity_env_setting_name(integration),
-            f"{integration}_enabled",
+            identity_env_setting_name(cast(IdentityIntegration, PROVIDER)),
+            "provider_enabled",
             "bool",
-        )
-        for integration in VALID_IDENTITY_INTEGRATIONS
+        ),
+        EnvironmentSetting(
+            identity_env_setting_name(cast(IdentityIntegration, PASSKEY)),
+            "passkey_enabled",
+            "bool",
+        ),
     )
 
 
@@ -74,6 +90,19 @@ IDENTITY_ENV_SETTINGS: Final[tuple[EnvironmentSetting, ...]] = (
     EnvironmentSetting(ENV_SESSION_COOKIE, "session_cookie_name"),
     EnvironmentSetting(ENV_SESSION_FORCE_SECURE, "session_cookie_force_secure", "bool"),
     EnvironmentSetting(ENV_SESSION_LIFETIME, "session_lifetime_seconds", "int"),
+    EnvironmentSetting(ENV_TOTP_MODE, TOTP_MODE),
+    EnvironmentSetting(ENV_TOTP_ALLOWED_DRIFT, "totp_allowed_drift", "int"),
+    EnvironmentSetting(ENV_TOTP_PERIOD_SECONDS, "totp_period_seconds", "int"),
+    EnvironmentSetting(
+        ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
+        "totp_challenge_expiry_seconds",
+        "int",
+    ),
+    EnvironmentSetting(
+        ENV_TOTP_RECOVERY_WINDOW_SECONDS,
+        "totp_recovery_window_seconds",
+        "int",
+    ),
     EnvironmentSetting(ENV_VERIFICATION_SECRET, "verification_token_secret"),
 )
 

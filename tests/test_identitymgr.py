@@ -60,7 +60,13 @@ from wevra.auth.persistence.database import (
     parse_sqlite_database_url,
     resolve_database_url,
 )
-from wevra.auth.settings import load_auth_settings
+from wevra.auth.settings import (
+    ENV_TOTP_ALLOWED_DRIFT,
+    ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
+    ENV_TOTP_PERIOD_SECONDS,
+    ENV_TOTP_RECOVERY_WINDOW_SECONDS,
+    load_auth_settings,
+)
 from wevra.core.composition import (
     AppConfig,
     RouteOptions,
@@ -778,7 +784,7 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
     app_config = load_auth_test_app_config(
         tmp_path / "app.toml",
         "provider_enabled = true",
-        "totp_enabled = false",
+        'totp_mode = "disabled"',
         "passkey_enabled = true",
     )
 
@@ -786,14 +792,22 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
         app_config=app_config,
         environ={
             "PROVIDER_ENABLED": "false",
-            "TOTP_ENABLED": "true",
+            "TOTP_MODE": "opt_in",
             "PASSKEY_ENABLED": "false",
+            ENV_TOTP_ALLOWED_DRIFT: "2",
+            ENV_TOTP_PERIOD_SECONDS: "60",
+            ENV_TOTP_CHALLENGE_EXPIRY_SECONDS: "450",
+            ENV_TOTP_RECOVERY_WINDOW_SECONDS: "900",
         },
     )
 
     assert settings.identity_options.provider_enabled is False
-    assert settings.identity_options.totp_enabled is True
+    assert settings.identity_options.totp_mode == "opt_in"
     assert settings.identity_options.passkey_enabled is False
+    assert settings.identity_options.totp_allowed_drift == 2
+    assert settings.identity_options.totp_period_seconds == 60
+    assert settings.identity_options.totp_challenge_expiry_seconds == 450
+    assert settings.identity_options.totp_recovery_window_seconds == 900
 
 
 def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:

@@ -132,7 +132,7 @@ def create_migrate_command(
 
     @migrate_command.command("upgrade", help="Upgrade schema revisions.")
     @_database_url_option
-    @click.argument("revision", default="head", required=False)
+    @click.argument("revision", default="heads", required=False)
     @click.pass_context
     def upgrade_command(
         ctx: click.Context, revision: str, database_url: str | None

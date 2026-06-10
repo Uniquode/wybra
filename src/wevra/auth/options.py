@@ -13,10 +13,28 @@ from wevra.auth.accounts.passwords import (
     PasswordPolicy,
 )
 from wevra.auth.configuration import ConfigurationError
+from wevra.auth.mfa.totp import (
+    DEFAULT_TOTP_ALLOWED_DRIFT,
+    DEFAULT_TOTP_PERIOD_SECONDS,
+    DEFAULT_TOTP_RECOVERY_WINDOW_SECONDS,
+    MAX_TOTP_ALLOWED_DRIFT,
+    MAX_TOTP_PERIOD_SECONDS,
+    MAX_TOTP_RECOVERY_WINDOW_SECONDS,
+)
 
 PROVIDER: Final[str] = "provider"
 TOTP: Final[str] = "totp"
 PASSKEY: Final[str] = "passkey"
+TOTP_DISABLED: Final[str] = "disabled"
+TOTP_OPT_IN: Final[str] = "opt_in"
+TOTP_REQUIRED: Final[str] = "required"
+DEFAULT_TOTP_CHALLENGE_EXPIRY_SECONDS: Final[float] = 300.0
+TOTP_MODE: Final[str] = "totp_mode"
+VALID_TOTP_MODES: Final[tuple[str, ...]] = (
+    TOTP_DISABLED,
+    TOTP_OPT_IN,
+    TOTP_REQUIRED,
+)
 
 IdentityIntegration = Literal["provider", "totp", "passkey"]
 VALID_IDENTITY_INTEGRATIONS: Final[tuple[IdentityIntegration, ...]] = (
@@ -61,8 +79,12 @@ class IdentityOptions:
     reset_password_token_secret: str = _GENERATE_LOCAL_SECRET
     verification_token_secret: str = _GENERATE_LOCAL_SECRET
     provider_enabled: bool = False
-    totp_enabled: bool = False
+    totp_mode: Literal["disabled", "opt_in", "required"] = TOTP_DISABLED
     passkey_enabled: bool = False
+    totp_allowed_drift: int = DEFAULT_TOTP_ALLOWED_DRIFT
+    totp_period_seconds: int = DEFAULT_TOTP_PERIOD_SECONDS
+    totp_challenge_expiry_seconds: float = DEFAULT_TOTP_CHALLENGE_EXPIRY_SECONDS
+    totp_recovery_window_seconds: int = DEFAULT_TOTP_RECOVERY_WINDOW_SECONDS
     password_minimum_length: int = DEFAULT_MINIMUM_LENGTH
     password_minimum_strength: float = DEFAULT_MINIMUM_SCORE
     password_minimum_character_categories: int = DEFAULT_MINIMUM_CHARACTER_CATEGORIES
@@ -71,6 +93,9 @@ class IdentityOptions:
     token_secrets_configured: bool = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self._validate_totp_mode()
+        self._validate_totp_settings()
+
         if self.account_creation_policy not in VALID_ACCOUNT_CREATION_POLICIES:
             raise ConfigurationError(ACCOUNT_CREATION_POLICY_ERROR)
 
@@ -121,6 +146,9 @@ class IdentityOptions:
                 f"Unknown identity integration: {integration}. Valid values are: "
                 f"{', '.join(VALID_IDENTITY_INTEGRATIONS)}"
             )
+
+        if integration == TOTP:
+            return self.totp_mode != TOTP_DISABLED
 
         return cast(bool, getattr(self, f"{integration}_enabled"))
 
@@ -173,7 +201,45 @@ class IdentityOptions:
 
         return common_fragments
 
+    def _validate_totp_mode(self) -> None:
+        if self.totp_mode not in VALID_TOTP_MODES:
+            raise ConfigurationError(
+                "TOTP mode must be one of: disabled, opt_in, required."
+            )
+
     @staticmethod
     def _reject_blank_secret(label: str, value: str) -> None:
         if not is_generate_local_identity_secret(value) and not value.strip():
             raise ConfigurationError(f"{label} must not be blank.")
+
+    def _validate_totp_settings(self) -> None:
+        if self.totp_allowed_drift < 0:
+            raise ConfigurationError(
+                "TOTP allowed drift must be a non-negative integer."
+            )
+        if self.totp_allowed_drift > MAX_TOTP_ALLOWED_DRIFT:
+            raise ConfigurationError(
+                f"TOTP allowed drift must not exceed {MAX_TOTP_ALLOWED_DRIFT}."
+            )
+
+        if self.totp_period_seconds <= 0:
+            raise ConfigurationError("TOTP period must be a positive integer.")
+        if self.totp_period_seconds > MAX_TOTP_PERIOD_SECONDS:
+            raise ConfigurationError(
+                f"TOTP period must not exceed {MAX_TOTP_PERIOD_SECONDS} seconds."
+            )
+
+        if self.totp_challenge_expiry_seconds <= 0:
+            raise ConfigurationError(
+                "TOTP challenge expiry must be a positive number of seconds."
+            )
+
+        if self.totp_recovery_window_seconds <= 0:
+            raise ConfigurationError(
+                "TOTP recovery window must be a positive number of seconds."
+            )
+        if self.totp_recovery_window_seconds > MAX_TOTP_RECOVERY_WINDOW_SECONDS:
+            raise ConfigurationError(
+                "TOTP recovery window must not exceed "
+                f"{MAX_TOTP_RECOVERY_WINDOW_SECONDS} seconds."
+            )
