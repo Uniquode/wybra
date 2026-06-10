@@ -163,6 +163,17 @@ def test_secret_envelope_required_operations_reject_missing_keys() -> None:
         SecretEnvelope(f"{ENVELOPE_PREFIX}|v1|token").decrypt(service=service)
 
 
+def test_secret_envelope_rejects_optional_plaintext_fallback() -> None:
+    service = SecretEnvelopeService.from_env({})
+
+    with pytest.raises(SecretDataError, match="requires an encrypted"):
+        SecretEnvelope.from_plaintext(
+            "provider-token",
+            service=service,
+            required=False,
+        )
+
+
 def test_create_and_verify_current_and_legacy_verifiers() -> None:
     current = _key_bundle_key()
     legacy = _key_bundle_key()

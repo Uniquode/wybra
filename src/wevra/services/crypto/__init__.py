@@ -210,7 +210,13 @@ class SecretEnvelope:
         service: SecretEnvelopeService,
         required: bool = True,
     ) -> SecretEnvelope:
-        return cls(service.encrypt(value, required=required))
+        encrypted = service.encrypt(value, required=required)
+        if _decode_envelope(encrypted) is None:
+            raise SecretDataError(
+                "SecretEnvelope requires an encrypted secret envelope value."
+            )
+
+        return cls(encrypted)
 
     def decrypt(
         self,
