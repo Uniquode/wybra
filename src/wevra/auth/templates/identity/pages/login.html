@@ -24,7 +24,7 @@
   {% if is_setup_step %}
   <p role="status">{{ setup_bypass_error or "Set up TOTP before continuing, or continue for now." }}</p>
   <p>
-    <a href="{{ request.url_for('auth:totp-setup') }}?setup_challenge_id={{ setup_challenge_id or '' }}&amp;return_to={{ return_to }}">
+    <a href="{{ setup_totp_path }}">
       Continue to TOTP setup
     </a>
   </p>
@@ -76,8 +76,8 @@
       <input
         autocomplete="one-time-code"
         inputmode="numeric"
-        minlength="6"
-        maxlength="9"
+        minlength="{{ totp_code_length }}"
+        maxlength="{{ totp_code_length }}"
         name="totp_code"
         type="text"
       >

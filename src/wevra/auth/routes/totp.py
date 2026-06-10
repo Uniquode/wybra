@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from secrets import token_urlsafe
 from typing import Any, Final
+from urllib.parse import urlencode
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
@@ -24,7 +25,7 @@ from wevra.auth.mfa.storage import (
     SqlAlchemyRecoveryCodeStore,
     SqlAlchemyTOTPCredentialStore,
 )
-from wevra.auth.mfa.totp import is_valid_totp_code, verify_totp
+from wevra.auth.mfa.totp import DEFAULT_TOTP_DIGITS, is_valid_totp_code, verify_totp
 from wevra.auth.models import IdentityTotpCredential
 from wevra.auth.options import TOTP_DISABLED, IdentityOptions
 from wevra.auth.result import (
@@ -177,6 +178,12 @@ def login_context(
     success_message: str | None = None,
     requires_email_password: bool = True,
 ) -> dict[str, Any]:
+    setup_path_query = urlencode(
+        {
+            "setup_challenge_id": setup_challenge_id,
+            "return_to": return_to,
+        }
+    )
     return _identity_context(
         request,
         page_title="Sign in",
@@ -189,11 +196,13 @@ def login_context(
         challenge_error=challenge_error,
         setup_prompt=setup_prompt,
         setup_challenge_id=setup_challenge_id,
+        setup_totp_path=(f"{request.url_for('auth:totp-setup')}?{setup_path_query}"),
         totp_setup_bypass_token=totp_setup_bypass_token,
         setup_bypass_error=setup_bypass_error,
         form_message=success_message,
         challenge_required=(challenge_step is not None),
         requires_email_password=requires_email_password,
+        totp_code_length=DEFAULT_TOTP_DIGITS,
         recovery_code_length=RECOVERY_CODE_LENGTH,
     )
 
@@ -443,6 +452,7 @@ def render_totp_setup_page(
             setup_error=setup_error,
             setup_complete=setup_complete,
             setup_recovery_codes=recovery_codes,
+            totp_code_length=DEFAULT_TOTP_DIGITS,
             setup_messages=TOTP_SETUP_PAGE_MESSAGES,
         ),
         status_code=200,
