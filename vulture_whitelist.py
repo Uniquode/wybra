@@ -78,6 +78,11 @@ _.replace_recovery_codes
 _.code_hashes
 _.consume_recovery_code
 _.code
+_.SqlAlchemyProviderCredentialStore
+_.create_provider_credential
+_.get_provider_credential
+_.decrypt_access_token
+_.decrypt_refresh_token
 _.oauth_accounts
 _.token_secrets_configured
 _.integration_enabled
