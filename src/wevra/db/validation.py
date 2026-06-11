@@ -86,6 +86,16 @@ def _record_sqlite_persistence_check(
     checks: list[ValidationCheck],
     errors: list[str],
 ) -> None:
+    if is_memory_database_url(settings.database_url):
+        record_check(
+            checks,
+            errors,
+            passed=False,
+            description="SQLite database URL uses persistent file storage",
+            error="SQLite database URL must not force in-memory storage.",
+        )
+        return
+
     sqlite_url = parse_sqlite_database_url(settings.database_url)
     if sqlite_url is None:
         return
@@ -158,14 +168,18 @@ def _record_migration_root_checks(
     if not has_migrations_root:
         return False
 
+    migration_root_valid = True
     for required_file in ("env.py", "script.py.mako"):
         required_path = migrations_root.joinpath(required_file)
-        record_check(
-            checks,
-            errors,
-            passed=required_path.is_file(),
-            description=f"Alembic migration file exists: {required_file}",
-            error=f"Missing Alembic migration file: {required_path}",
+        migration_root_valid = (
+            record_check(
+                checks,
+                errors,
+                passed=required_path.is_file(),
+                description=f"Alembic migration file exists: {required_file}",
+                error=f"Missing Alembic migration file: {required_path}",
+            )
+            and migration_root_valid
         )
 
     try:
@@ -179,17 +193,22 @@ def _record_migration_root_checks(
             description="module migration version locations load",
             error=f"Module migration version location discovery failed: {exc}",
         )
-        return True
+        return False
 
-    record_check(
-        checks,
-        errors,
-        passed=not model_packages or bool(version_locations),
-        description=(
-            "module migration version locations exist: "
-            + ", ".join(str(path) for path in version_locations)
-        ),
-        error="At least one configured module migration version location is required.",
+    migration_root_valid = (
+        record_check(
+            checks,
+            errors,
+            passed=not model_packages or bool(version_locations),
+            description=(
+                "module migration version locations exist: "
+                + ", ".join(str(path) for path in version_locations)
+            ),
+            error=(
+                "At least one configured module migration version location is required."
+            ),
+        )
+        and migration_root_valid
     )
 
     if model_packages:
@@ -201,12 +220,15 @@ def _record_migration_root_checks(
                 if path.name != "__init__.py"
             )
         )
-        record_check(
-            checks,
-            errors,
-            passed=bool(revision_files),
-            description="Alembic migration revision exists",
-            error="At least one Alembic migration revision is required.",
+        migration_root_valid = (
+            record_check(
+                checks,
+                errors,
+                passed=bool(revision_files),
+                description="Alembic migration revision exists",
+                error="At least one Alembic migration revision is required.",
+            )
+            and migration_root_valid
         )
     else:
         record_check(
@@ -220,7 +242,7 @@ def _record_migration_root_checks(
             ),
         )
 
-    return True
+    return migration_root_valid
 
 
 validation_targets = {"persistence": validate_persistence}

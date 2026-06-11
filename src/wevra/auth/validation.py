@@ -63,27 +63,21 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
     duplicate_auth_environment_names = sorted(
         name for name, count in counts.items() if count > 1
     )
-    duplicate_description = ", ".join(duplicate_auth_environment_names)
+    uniqueness_description = "auth environment variable names are unique"
+    uniqueness_error = "Auth environment variable names must be unique."
+    if duplicate_auth_environment_names:
+        duplicate_description = ", ".join(duplicate_auth_environment_names)
+        uniqueness_description = (
+            f"{uniqueness_description} (duplicates: {duplicate_description})"
+        )
+        uniqueness_error = f"{uniqueness_error} Duplicates: {duplicate_description}"
+
     record_check(
         checks,
         errors,
         passed=not duplicate_auth_environment_names,
-        description=(
-            "auth environment variable names are unique"
-            if not duplicate_auth_environment_names
-            else (
-                "auth environment variable names are unique "
-                f"(duplicates: {duplicate_description})"
-            )
-        ),
-        error=(
-            "Auth environment variable names must be unique."
-            if not duplicate_auth_environment_names
-            else (
-                "Auth environment variable names must be unique. "
-                f"Duplicates: {duplicate_description}"
-            )
-        ),
+        description=uniqueness_description,
+        error=uniqueness_error,
     )
     return ValidationResult(name="auth", errors=tuple(errors), checks=tuple(checks))
 

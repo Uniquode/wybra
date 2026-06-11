@@ -262,7 +262,12 @@ def load_runtime_auth_settings(
 
 
 def supported_auth_environment_names() -> tuple[str, ...]:
-    """Return auth-owned environment variable names understood by auth settings."""
+    """Return auth-owned identity environment variable names.
+
+    ``DATABASE_URL`` is intentionally excluded. Database connection policy is a
+    persistence concern validated by ``wevra.db`` and may be supplied by app
+    config, CLI override, or runtime composition rather than auth settings.
+    """
 
     return tuple(setting.name for setting in IDENTITY_ENV_SETTINGS)
 
