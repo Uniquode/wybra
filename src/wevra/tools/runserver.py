@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 import uvicorn
 
+from wevra.config import ConfigService, MappingConfigSource
 from wevra.tools.project import (
     ProjectToolConfigurationError,
     import_wevra_tool_callable,
@@ -103,6 +104,26 @@ def load_environment(**kwargs: object):
     return loader(**kwargs)
 
 
+def load_runserver_config(
+    *,
+    project_root: Path,
+    reload_env_var: str,
+) -> ConfigService:
+    env = load_environment(project_root=project_root)
+    reload_env_value = env.get(reload_env_var)
+    if not isinstance(reload_env_value, str):
+        reload_env_value = None
+    return ConfigService(
+        [
+            MappingConfigSource(
+                {"runserver": {"reload_env_value": reload_env_value}},
+                source="runserver",
+            )
+        ],
+        discover_module_config=False,
+    )
+
+
 @click.command(
     name="wevra-runserver",
     context_settings=CONTEXT_SETTINGS,
@@ -130,11 +151,17 @@ def runserver_command(
             RELOAD_ENV_VAR_OPTION,
             project_root=project_root,
         )
-        env = load_environment(project_root=project_root)
+        config = load_runserver_config(
+            project_root=project_root,
+            reload_env_var=reload_env_var,
+        )
     except ProjectToolConfigurationError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    reload_env_value = env.get(reload_env_var, None) or None
+    runserver_config = config.get_config("runserver") or {}
+    reload_env_value = runserver_config.get("reload_env_value")
+    if not isinstance(reload_env_value, str):
+        reload_env_value = None
     reload_enabled = (
         env_requests_reload(reload_env_value)
         if reload_requested is None
