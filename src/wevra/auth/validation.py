@@ -11,17 +11,18 @@ from wevra.auth.settings import (
 )
 from wevra.config import AppConfigSource, ConfigService
 from wevra.core.composition import AppConfig
-from wevra.tools.validation.core import ValidationResult, record_check
+from wevra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 
 
 class AuthValidationSettings(Protocol):
     database_url: str
     app_config: AppConfig | None
+    deployment_environment: str
 
 
 def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
     errors: list[str] = []
-    checks = []
+    checks: list[ValidationCheck] = []
 
     try:
         auth_settings = _load_auth_settings(settings)
@@ -67,7 +68,7 @@ def _auth_settings_environ(settings: AuthValidationSettings) -> dict[str, str]:
 
 
 def _allow_local_auth_secrets(settings: AuthValidationSettings) -> bool:
-    return getattr(settings, "deployment_environment", "local") == "local"
+    return settings.deployment_environment == "local"
 
 
 validation_targets = {"auth": validate_auth}
