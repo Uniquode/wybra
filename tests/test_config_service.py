@@ -1,0 +1,553 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+
+from wevra.config import (
+    AppConfigSource,
+    ConfigDef,
+    ConfigDefinitionError,
+    ConfigDiagnostic,
+    ConfigSection,
+    ConfigService,
+    ConfigSourceError,
+    ConfigSourceMetadata,
+    ConfigSourceResult,
+    EnvironmentConfigSource,
+    FileConfigSource,
+    MappingConfigSource,
+)
+from wevra.core.composition import (
+    AppConfig,
+    RouteOptions,
+    StaticOptions,
+    TemplateOptions,
+)
+from wevra.core.settings import EnvironmentSetting, EnvironmentValueType
+
+
+class FailingSource:
+    def __init__(self, *, source: str = "failing", required: bool = True) -> None:
+        self._metadata = ConfigSourceMetadata(source=source, required=required)
+
+    @property
+    def metadata(self) -> ConfigSourceMetadata:
+        return self._metadata
+
+    def load(self) -> ConfigSourceResult:
+        return ConfigSourceResult(
+            diagnostics=(
+                ConfigDiagnostic(
+                    source=self.metadata,
+                    message="source failed",
+                    code="source_failed",
+                ),
+            )
+        )
+
+
+class RaisingSource:
+    def __init__(self, *, source: str = "raising", required: bool = False) -> None:
+        self._metadata = ConfigSourceMetadata(source=source, required=required)
+
+    @property
+    def metadata(self) -> ConfigSourceMetadata:
+        return self._metadata
+
+    def load(self) -> ConfigSourceResult:
+        raise ConfigSourceError("boom")
+
+
+def test_config_service_loads_required_sources() -> None:
+    service = ConfigService(
+        [MappingConfigSource({"identity": {"totp_mode": "required"}})]
+    )
+
+    config = service.get_config("identity")
+
+    assert config is not None
+    assert config["totp_mode"] == "required"
+
+
+def test_required_source_failure_fails_loading() -> None:
+    with pytest.raises(ConfigSourceError, match="source failed"):
+        ConfigService([FailingSource()])
+
+
+def test_optional_source_failure_records_diagnostic() -> None:
+    service = ConfigService(
+        [
+            MappingConfigSource({"app": {"name": "uniquode"}}),
+            FailingSource(source="optional", required=False),
+        ]
+    )
+
+    assert service.get_config("app") == {"name": "uniquode"}
+    assert len(service.diagnostics) == 1
+    assert service.diagnostics[0].code == "source_failed"
+
+
+def test_optional_source_load_error_records_diagnostic() -> None:
+    service = ConfigService(
+        [
+            MappingConfigSource({"app": {"name": "uniquode"}}),
+            RaisingSource(source="raising", required=False),
+        ]
+    )
+
+    assert service.get_config("app") == {"name": "uniquode"}
+    assert len(service.diagnostics) == 1
+    diagnostic = service.diagnostics[0]
+    assert diagnostic.code == "source_load_error"
+    assert diagnostic.message == "raising: boom"
+
+
+def test_config_lookup_returns_none_for_missing_section() -> None:
+    service = ConfigService([MappingConfigSource({"app": {"name": "uniquode"}})])
+
+    assert service.get_config("missing") is None
+
+
+def test_loaded_config_is_immutable() -> None:
+    service = ConfigService([MappingConfigSource({"app": {"name": "uniquode"}})])
+    config = service.get_config("app")
+
+    assert config is not None
+    mutable_config = cast(Any, config)
+    with pytest.raises(TypeError):
+        mutable_config["name"] = "changed"
+
+
+def test_later_source_overrides_earlier_source_and_tracks_origin() -> None:
+    service = ConfigService(
+        [
+            MappingConfigSource(
+                {"app": {"name": "first", "debug": False}},
+                source="first",
+            ),
+            MappingConfigSource({"app": {"name": "second"}}, source="second"),
+        ]
+    )
+
+    config = service.get_config("app")
+
+    assert config == {"name": "second", "debug": False}
+    assert service.config.sources["app.name"] == "second"
+    assert service.config.sources["app.debug"] == "first"
+
+
+def test_environment_source_parses_explicit_environment_mapping() -> None:
+    service = ConfigService(
+        [
+            EnvironmentConfigSource(
+                {"APP_RELOAD": "true", "APP_PORT": "8000"},
+                env_settings=(
+                    EnvironmentSetting("APP_RELOAD", "reload", "bool"),
+                    EnvironmentSetting("APP_PORT", "port", "int"),
+                ),
+                section="app",
+            )
+        ]
+    )
+
+    assert service.get_config("app") == {"reload": True, "port": 8000}
+
+
+def test_environment_source_default_behaviour_without_env_settings() -> None:
+    service = ConfigService(
+        [
+            EnvironmentConfigSource(
+                {"APP_RELOAD": "true", "APP_PORT": "8000"},
+                section="app",
+            )
+        ]
+    )
+
+    assert service.get_config("app") == {
+        "APP_RELOAD": "true",
+        "APP_PORT": "8000",
+    }
+
+
+@pytest.mark.parametrize(
+    ("value_type", "env_name", "field_name", "message"),
+    [
+        (
+            "bool",
+            "APP_DEBUG",
+            "debug",
+            "APP_DEBUG for debug: APP_DEBUG must not be blank.",
+        ),
+        (
+            "int",
+            "APP_PORT",
+            "port",
+            "APP_PORT for port: APP_PORT must not be blank.",
+        ),
+        (
+            "path",
+            "APP_DATA_DIR",
+            "data_dir",
+            "APP_DATA_DIR for data_dir: APP_DATA_DIR must not be blank.",
+        ),
+    ],
+)
+@pytest.mark.parametrize("value", ["", "   "])
+def test_environment_source_blank_values_record_diagnostic(
+    value_type: EnvironmentValueType,
+    env_name: str,
+    field_name: str,
+    message: str,
+    value: str,
+) -> None:
+    service = ConfigService(
+        [
+            MappingConfigSource({"app": {"name": "uniquode"}}),
+            EnvironmentConfigSource(
+                {env_name: value},
+                env_settings=(EnvironmentSetting(env_name, field_name, value_type),),
+                section="app",
+                required=False,
+            ),
+        ]
+    )
+
+    assert service.get_config("app") == {"name": "uniquode"}
+    assert len(service.diagnostics) == 1
+    diagnostic = service.diagnostics[0]
+    assert diagnostic.code == "environment_config_error"
+    assert diagnostic.message == message
+
+
+def test_environment_source_invalid_bool_records_diagnostic() -> None:
+    service = ConfigService(
+        [
+            MappingConfigSource({"app": {"name": "uniquode"}}),
+            EnvironmentConfigSource(
+                {"APP_DEBUG": "maybe"},
+                env_settings=(EnvironmentSetting("APP_DEBUG", "debug", "bool"),),
+                section="app",
+                required=False,
+            ),
+        ]
+    )
+
+    assert service.get_config("app") == {"name": "uniquode"}
+    assert len(service.diagnostics) == 1
+    diagnostic = service.diagnostics[0]
+    assert diagnostic.code == "environment_config_error"
+    assert diagnostic.message == (
+        "APP_DEBUG for debug: APP_DEBUG must be a boolean value."
+    )
+
+
+def test_required_environment_source_error_fails_loading() -> None:
+    with pytest.raises(ConfigSourceError, match="APP_RELOAD must be a boolean value"):
+        ConfigService(
+            [
+                EnvironmentConfigSource(
+                    {"APP_RELOAD": "not-bool"},
+                    env_settings=(EnvironmentSetting("APP_RELOAD", "reload", "bool"),),
+                    section="app",
+                )
+            ]
+        )
+
+
+def test_file_source_reads_resolved_app_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+[app]
+modules = ["wevra"]
+database_url = "sqlite+aiosqlite:///app.sqlite3"
+
+[app.templates]
+auto_reload = true
+cache_size = 0
+
+[app.static]
+url_path = "/static"
+export_root = "static"
+
+[auth]
+account_creation_policy = "closed"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    service = ConfigService([FileConfigSource(config_path, project_root=tmp_path)])
+
+    app_section = service.get_config("app")
+    assert app_section is not None
+    assert app_section["database_url"] == "sqlite+aiosqlite:///app.sqlite3"
+    assert service.get_config("app.static") == {
+        "url_path": "/static",
+        "export_root": Path("static"),
+    }
+    assert service.get_config("app.templates") == {"auto_reload": True, "cache_size": 0}
+    assert service.get_config("auth") == {"account_creation_policy": "closed"}
+
+
+def test_file_source_reports_parse_diagnostic(tmp_path: Path) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text("[app\n", encoding="utf-8")
+
+    with pytest.raises(ConfigSourceError, match="is invalid"):
+        ConfigService([FileConfigSource(config_path, project_root=tmp_path)])
+
+
+def test_optional_file_source_diagnostic_includes_source_location(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text("[app\n", encoding="utf-8")
+
+    service = ConfigService(
+        [FileConfigSource(config_path, project_root=tmp_path, required=False)]
+    )
+
+    assert len(service.diagnostics) == 1
+    diagnostic = service.diagnostics[0]
+    assert diagnostic.location is not None
+    assert diagnostic.location.file == config_path
+    assert diagnostic.code == "file_config_error"
+
+
+def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
+    config_def = ConfigDef(
+        {
+            "app.static": ConfigSection(
+                fields={"url_path", "export_root"},
+                defaults={"url_path": "/static/", "export_root": "static"},
+                env={"export_root": "APP_STATIC_EXPORT"},
+            )
+        }
+    )
+
+    service = ConfigService(
+        config_defs=(config_def,),
+        environ={"APP_STATIC_EXPORT": "public-static"},
+    )
+
+    assert service.get_config("app.static") == {
+        "url_path": "/static/",
+        "export_root": "public-static",
+    }
+    assert service.config.sources["app.static.url_path"] == "default"
+    assert service.config.sources["app.static.export_root"] == "environment"
+
+
+def test_config_section_rejects_undeclared_default_key() -> None:
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="Config defaults contain keys not declared in fields: missing",
+    ):
+        ConfigSection(fields={"known"}, defaults={"missing": "value"})
+
+
+def test_config_section_rejects_undeclared_env_key() -> None:
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="Config env overrides contain keys not declared in fields: missing",
+    ):
+        ConfigSection(fields={"known"}, env={"missing": "MISSING"})
+
+
+def test_config_def_supports_multiple_sections_and_source_overrides() -> None:
+    config_def = ConfigDef(
+        {
+            "app": ConfigSection(
+                fields={"database_url"},
+                defaults={"database_url": "sqlite:///default.db"},
+            ),
+            "auth": ConfigSection(
+                fields={"session_cookie_name"},
+                defaults={"session_cookie_name": "default"},
+            ),
+        }
+    )
+
+    service = ConfigService(
+        [MappingConfigSource({"app": {"database_url": "sqlite:///configured.db"}})],
+        config_defs=(config_def,),
+    )
+
+    assert service.get_config("app") == {"database_url": "sqlite:///configured.db"}
+    assert service.get_config("auth") == {"session_cookie_name": "default"}
+
+
+def test_config_def_rejects_conflicting_default_definitions() -> None:
+    first = ConfigDef(
+        {
+            "app": ConfigSection(
+                fields={"database_url"},
+                defaults={"database_url": "sqlite:///first.db"},
+            )
+        }
+    )
+    second = ConfigDef(
+        {
+            "app": ConfigSection(
+                fields={"database_url"},
+                defaults={"database_url": "sqlite:///second.db"},
+            )
+        }
+    )
+
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="Conflicting default for field app.database_url.",
+    ):
+        ConfigService(config_defs=(first, second))
+
+
+def test_config_def_rejects_conflicting_env_definitions() -> None:
+    first = ConfigDef(
+        {
+            "app": ConfigSection(
+                fields={"database_url"},
+                env={"database_url": "DATABASE_URL"},
+            )
+        }
+    )
+    second = ConfigDef(
+        {
+            "app": ConfigSection(
+                fields={"database_url"},
+                env={"database_url": "SA_DATABASE_URL"},
+            )
+        }
+    )
+
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="Conflicting env override for field app.database_url.",
+    ):
+        ConfigService(config_defs=(first, second))
+
+
+def test_module_config_def_is_discovered_from_module_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module_root = tmp_path / "example_module"
+    module_root.mkdir()
+    module_root.joinpath("__init__.py").write_text(
+        "from wevra.config import ConfigDef, ConfigSection\n"
+        "module_config = ConfigDef({\n"
+        "    'example': ConfigSection(\n"
+        "        fields={'enabled'}, defaults={'enabled': True}\n"
+        "    )\n"
+        "})\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    service = ConfigService(
+        [MappingConfigSource({"app": {"modules": ("example_module",)}})]
+    )
+
+    assert service.get_config("example") == {"enabled": True}
+
+
+@pytest.mark.parametrize(
+    "modules",
+    [
+        "example_module",
+        ("example_module", 123),
+    ],
+)
+def test_module_config_discovery_rejects_malformed_modules(modules: object) -> None:
+    with pytest.raises(
+        ConfigDefinitionError,
+        match=r"\[app\]\.modules must be a list or tuple of module names.",
+    ):
+        ConfigService([MappingConfigSource({"app": {"modules": modules}})])
+
+
+def test_invalid_module_config_def_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    module_root = tmp_path / "bad_module"
+    module_root.mkdir()
+    module_root.joinpath("__init__.py").write_text(
+        "module_config = object()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(ConfigDefinitionError, match="bad_module.module_config"):
+        ConfigService([MappingConfigSource({"app": {"modules": ("bad_module",)}})])
+
+
+def test_config_def_env_override_uses_first_present_environment_name() -> None:
+    config_def = ConfigDef(
+        {
+            "app": ConfigSection(
+                fields={"database_url"},
+                defaults={"database_url": "sqlite:///default.db"},
+                env={"database_url": ("DATABASE_URL", "SA_DATABASE_URL")},
+            )
+        }
+    )
+
+    service = ConfigService(
+        config_defs=(config_def,),
+        environ={"SA_DATABASE_URL": "sqlite:///fallback.db"},
+    )
+
+    assert service.get_config("app") == {"database_url": "sqlite:///fallback.db"}
+
+
+def test_config_def_env_override_prefers_first_environment_name() -> None:
+    config_def = ConfigDef(
+        {
+            "app": ConfigSection(
+                fields={"database_url"},
+                defaults={"database_url": "sqlite:///default.db"},
+                env={"database_url": ("DATABASE_URL", "SA_DATABASE_URL")},
+            )
+        }
+    )
+
+    service = ConfigService(
+        config_defs=(config_def,),
+        environ={
+            "DATABASE_URL": "sqlite:///primary.db",
+            "SA_DATABASE_URL": "sqlite:///fallback.db",
+        },
+    )
+
+    assert service.get_config("app") == {"database_url": "sqlite:///primary.db"}
+
+
+def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
+    app_config = AppConfig(
+        config_path=tmp_path / "app.toml",
+        project_root=tmp_path,
+        modules=("app",),
+        routes=RouteOptions(prefixes={"app": {"default": ""}}),
+        templates=TemplateOptions(auto_reload=True, cache_size=12),
+        static=StaticOptions(url_path="/assets/", export_root=Path("static")),
+        database_url="sqlite+aiosqlite:///app.sqlite3",
+        auth={"account_creation_policy": "closed"},
+    )
+
+    service = ConfigService([AppConfigSource(app_config)], discover_module_config=False)
+
+    assert service.get_config("app") == {
+        "config_path": tmp_path / "app.toml",
+        "project_root": tmp_path,
+        "modules": ("app",),
+        "database_url": "sqlite+aiosqlite:///app.sqlite3",
+    }
+    assert service.get_config("app.routes") == {"prefixes": {"app": {"default": ""}}}
+    assert service.get_config("app.static") == {
+        "url_path": "/assets/",
+        "export_root": Path("static"),
+    }
+    assert service.get_config("app.templates") == {
+        "auto_reload": True,
+        "cache_size": 12,
+    }
+    assert service.get_config("auth") == {"account_creation_policy": "closed"}
