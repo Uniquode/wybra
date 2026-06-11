@@ -107,7 +107,13 @@ class ConfigService:
 def discover_module_config_defs(module_names: Iterable[str]) -> tuple[ConfigDef, ...]:
     definitions: list[ConfigDef] = []
     for module_name in module_names:
-        module = import_module(module_name)
+        try:
+            module = import_module(module_name)
+        except ImportError as exc:
+            raise ConfigDefinitionError(
+                f"Failed to import module {module_name!r} while discovering "
+                f"{MODULE_CONFIG_ATTRIBUTE}."
+            ) from exc
         module_config = getattr(module, MODULE_CONFIG_ATTRIBUTE, None)
         if module_config is None:
             continue
