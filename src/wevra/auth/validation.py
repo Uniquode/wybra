@@ -13,6 +13,11 @@ from wevra.config import AppConfigSource, ConfigService
 from wevra.core.composition import AppConfig
 from wevra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 
+AUTH_SETTINGS_VALIDATION_DESCRIPTION = (
+    "auth settings are valid for the current environment"
+)
+LOCAL_DEPLOYMENT_ENVIRONMENT = "local"
+
 
 class AuthValidationSettings(Protocol):
     database_url: str
@@ -35,7 +40,7 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
             checks,
             errors,
             passed=False,
-            description="auth settings are valid for the current environment",
+            description=AUTH_SETTINGS_VALIDATION_DESCRIPTION,
             error=str(exc),
         )
         return ValidationResult(name="auth", errors=tuple(errors), checks=tuple(checks))
@@ -44,7 +49,7 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
         checks,
         errors,
         passed=True,
-        description="auth settings are valid for the current environment",
+        description=AUTH_SETTINGS_VALIDATION_DESCRIPTION,
     )
     return ValidationResult(name="auth", errors=tuple(errors), checks=tuple(checks))
 
@@ -68,7 +73,11 @@ def _auth_settings_environ(settings: AuthValidationSettings) -> dict[str, str]:
 
 
 def _allow_local_auth_secrets(settings: AuthValidationSettings) -> bool:
-    return settings.deployment_environment == "local"
+    return _is_local_deployment_environment(settings.deployment_environment)
+
+
+def _is_local_deployment_environment(value: str) -> bool:
+    return value == LOCAL_DEPLOYMENT_ENVIRONMENT
 
 
 validation_targets = {"auth": validate_auth}
