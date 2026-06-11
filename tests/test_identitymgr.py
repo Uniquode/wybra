@@ -72,6 +72,7 @@ from wevra.auth.settings import (
     AuthSettings,
     load_auth_settings,
     load_auth_settings_from_config,
+    validate_auth_settings,
 )
 from wevra.config import ConfigService, MappingConfigSource
 from wevra.core.composition import (
@@ -867,6 +868,52 @@ def test_auth_settings_public_values_are_immutable() -> None:
         settings.identity_options.password_common_fragments = ("mutated",)  # type: ignore[misc]
 
     assert settings.identity_options.password_common_fragments == ("example",)
+
+
+def test_auth_settings_validation_allows_local_secret_sentinels() -> None:
+    settings = AuthSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
+
+    validate_auth_settings(settings, allow_local_secrets=True)
+
+
+def test_auth_settings_validation_requires_non_local_token_secrets() -> None:
+    settings = AuthSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Non-local deployments must configure identity reset",
+    ):
+        validate_auth_settings(settings)
+
+
+def test_auth_settings_validation_requires_non_local_secure_session_cookie() -> None:
+    settings = AuthSettings(
+        database_url=SQLITE_MEMORY_DATABASE_URL,
+        identity_options=IdentityOptions(
+            reset_password_token_secret="configured-reset-secret",
+            verification_token_secret="configured-verification-secret",
+            session_cookie_force_secure=False,
+        ),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Non-local deployments must force secure session cookies",
+    ):
+        validate_auth_settings(settings)
+
+
+def test_auth_settings_validation_accepts_non_local_auth_policy() -> None:
+    settings = AuthSettings(
+        database_url=SQLITE_MEMORY_DATABASE_URL,
+        identity_options=IdentityOptions(
+            reset_password_token_secret="configured-reset-secret",
+            verification_token_secret="configured-verification-secret",
+            session_cookie_force_secure=True,
+        ),
+    )
+
+    validate_auth_settings(settings)
 
 
 def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:
