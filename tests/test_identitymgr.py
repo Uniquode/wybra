@@ -62,6 +62,8 @@ from wevra.auth.persistence.database import (
     resolve_database_url,
 )
 from wevra.auth.settings import (
+    APP_CONFIG_SECTION,
+    AUTH_CONFIG_SECTION,
     AUTH_SETTINGS_OWNER,
     ENV_TOTP_ALLOWED_DRIFT,
     ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
@@ -825,10 +827,10 @@ def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None
         [
             MappingConfigSource(
                 {
-                    "app": {
+                    APP_CONFIG_SECTION: {
                         "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
                     },
-                    "auth": {
+                    AUTH_CONFIG_SECTION: {
                         "provider_enabled": True,
                         "totp_mode": "required",
                     },

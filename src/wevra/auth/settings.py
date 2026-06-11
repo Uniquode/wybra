@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Final, Protocol, cast
 
 from envex import Env
+from starlette.datastructures import State
 
 from wevra.auth.configuration import ConfigurationError
 from wevra.auth.options import (
@@ -131,7 +132,7 @@ class AuthSettings:
         return self.integration_enabled(cast(IdentityIntegration, TOTP))
 
 
-def auth_settings_from_state(state: object) -> AuthSettings:
+def auth_settings_from_state(state: State) -> AuthSettings:
     settings = getattr(state, "auth_settings", None)
     if not isinstance(settings, AuthSettings):
         raise RuntimeError("Auth settings are not configured on the application.")
@@ -139,7 +140,7 @@ def auth_settings_from_state(state: object) -> AuthSettings:
     return settings
 
 
-def identity_options_from_state(state: object) -> IdentityOptions:
+def identity_options_from_state(state: State) -> IdentityOptions:
     return auth_settings_from_state(state).identity_options
 
 
