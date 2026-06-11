@@ -36,6 +36,7 @@ from wevra.auth.result import (
     ERROR_VERIFICATION_CODE_INVALID,
 )
 from wevra.auth.sessions import session_cookie_secure_for_request
+from wevra.auth.settings import auth_settings_from_state, identity_options_from_state
 from wevra.auth.timestamps import current_timestamp
 from wevra.web.rendering import render_page
 
@@ -85,11 +86,7 @@ TOTP_SETUP_PAGE_MESSAGES: Final[dict[str, str]] = {
 
 
 def _identity_options(request: Request) -> IdentityOptions:
-    options = getattr(request.app.state, "identity_options", None)
-    if not isinstance(options, IdentityOptions):
-        raise RuntimeError("Identity options are not configured on the application.")
-
-    return options
+    return identity_options_from_state(request.app.state)
 
 
 def _identity_context(request: Request, **extra: Any) -> dict[str, Any]:
@@ -99,10 +96,6 @@ def _identity_context(request: Request, **extra: Any) -> dict[str, Any]:
 
 def _public_signup_enabled(request: Request) -> bool:
     return _identity_options(request).account_creation_policy == "public-signup"
-
-
-def totp_setup_enabled(options: IdentityOptions) -> bool:
-    return options.totp_mode != TOTP_DISABLED
 
 
 def totp_required_methods(
@@ -131,8 +124,8 @@ def totp_assertion(
 
 
 def ensure_totp_setup_supported(request: Request) -> None:
-    options = _identity_options(request)
-    if not totp_setup_enabled(options):
+    settings = auth_settings_from_state(request.app.state)
+    if not settings.is_totp_enabled():
         raise HTTPException(status_code=404)
 
 

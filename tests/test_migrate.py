@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
@@ -286,7 +287,7 @@ def test_migrate_init_creates_sqlite_migration_state_without_schema(
     assert exit_code == 0
     assert database_path.is_file()
 
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection:
         table_names = {
             row[0]
             for row in connection.execute(
@@ -306,7 +307,7 @@ def test_migrate_init_stamps_empty_alembic_version_table(
     database_url = sqlite_file_url(database_path)
     observed: dict[str, object] = {}
 
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
 
     def record_stamp(config, revision: str) -> None:
@@ -329,7 +330,7 @@ def test_migrate_upgrade_after_init_creates_sqlite_schema(tmp_path: Path) -> Non
     assert run_migrate(["--database-url", database_url, "init"]) == 0
     assert run_migrate(["--database-url", database_url, "upgrade"]) == 0
 
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection:
         table_names = {
             row[0]
             for row in connection.execute(
@@ -546,7 +547,10 @@ def test_migrate_upgrade_preserves_subcommand_database_url_override(
     observed: list[tuple[str, str]] = []
     database_url = sqlite_file_url(tmp_path / "override.sqlite3")
 
-    with sqlite3.connect(tmp_path / "override.sqlite3") as connection:
+    with (
+        closing(sqlite3.connect(tmp_path / "override.sqlite3")) as connection,
+        connection,
+    ):
         connection.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
 
     def record_upgrade(config, revision: str) -> None:

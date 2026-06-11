@@ -8,6 +8,8 @@ _EXPORTS = {
     "AdvancedAuthenticationPolicy": "wevra.auth.mfa.challenges",
     "AuthenticationAssertion": "wevra.auth.mfa.challenges",
     "AuthenticationMethod": "wevra.auth.mfa.challenges",
+    "AUTH_SETTINGS_OWNER": "wevra.auth.settings",
+    "AuthSettings": "wevra.auth.settings",
     "ChallengeDecision": "wevra.auth.mfa.challenges",
     "ChallengeKind": "wevra.auth.mfa.challenges",
     "ChallengeRecord": "wevra.auth.mfa.challenges",
@@ -55,6 +57,10 @@ _EXPORTS = {
     "WebAuthnCredentialStore": "wevra.auth.mfa.storage",
     "complete_challenge": "wevra.auth.mfa.challenges",
     "is_generate_local_identity_secret": "wevra.auth.options",
+    "auth_settings_from_state": "wevra.auth.settings",
+    "identity_options_from_state": "wevra.auth.settings",
+    "load_auth_settings": "wevra.auth.settings",
+    "load_auth_settings_from_config": "wevra.auth.settings",
     "required_authentication_methods_for_totp_policy": "wevra.auth.mfa.challenges",
 }
 
