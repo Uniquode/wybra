@@ -17,7 +17,6 @@ from wevra.auth import (
     ChallengeDecision,
     ChallengeKind,
     ChallengeRecord,
-    ConfigurationError,
     DefaultPasswordPolicy,
     IdentityIntegration,
     IdentityOptions,
@@ -91,6 +90,7 @@ from wevra.auth.persistence.database import (
 )
 from wevra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
 from wevra.auth.routes import normalise_return_to
+from wevra.core.exceptions import ConfigurationError
 from wevra.services.crypto import (
     ENVELOPE_PREFIX,
     PLAIN_TEXT_VERSION,

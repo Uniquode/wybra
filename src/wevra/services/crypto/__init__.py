@@ -13,7 +13,7 @@ from typing import Final
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from wevra.auth.configuration import ConfigurationError
+from wevra.core.exceptions import ConfigurationError
 
 ENVELOPE_PREFIX: Final = "WEVRA:SECRET"
 VERIFIER_PREFIX: Final = "WEVRA:VERIFIER"

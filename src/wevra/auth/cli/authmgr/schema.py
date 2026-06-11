@@ -10,7 +10,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from wevra.auth.configuration import ConfigurationError
 from wevra.auth.models import (
     Group,
     GroupGroup,
@@ -20,6 +19,7 @@ from wevra.auth.models import (
     Scope,
     User,
 )
+from wevra.core.exceptions import ConfigurationError
 
 SCHEMA_MIGRATION_MESSAGE = (
     "Auth database schema is not up to date; run `uv run wevra-migrate init` "

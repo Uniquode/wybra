@@ -1,6 +1,7 @@
 import ast
 import importlib
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,20 @@ from wevra.db.urls import (
     resolve_database_url,
     safe_database_error_message,
 )
+from wevra.db.validation import validate_persistence
+from wevra.tools.validation.core import ValidationResult
+
+
+@dataclass(frozen=True, slots=True)
+class _PersistenceSettings:
+    database_url: str
+    alembic_config: Path
+    migrations_root: Path | None
+    configured_modules: tuple[str, ...] = ()
+
+    @property
+    def modules(self) -> tuple[str, ...]:
+        return self.configured_modules
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -43,6 +58,48 @@ def _imported_modules(path: Path) -> set[str]:
         for alias in node.names
     )
     return imported_modules
+
+
+def _write_alembic_config(path: Path, content: str | None = None) -> Path:
+    path.write_text(
+        content
+        if content is not None
+        else "[alembic]\nscript_location = wevra.db:migrations\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _create_migration_root(root: Path) -> Path:
+    versions_root = root / "versions"
+    versions_root.mkdir(parents=True)
+    (root / "env.py").write_text("", encoding="utf-8")
+    (root / "script.py.mako").write_text("", encoding="utf-8")
+
+    return root
+
+
+def _persistence_settings(
+    tmp_path: Path,
+    *,
+    database_url: str = "sqlite+aiosqlite:///local.sqlite3",
+    alembic_config: Path | None = None,
+    migrations_root: Path | None = None,
+    modules: tuple[str, ...] = (),
+) -> _PersistenceSettings:
+    return _PersistenceSettings(
+        database_url=database_url,
+        alembic_config=alembic_config
+        or _write_alembic_config(tmp_path / "alembic.ini"),
+        migrations_root=migrations_root
+        if migrations_root is not None
+        else _create_migration_root(tmp_path / "migrations"),
+        configured_modules=modules,
+    )
+
+
+def _failed_check_descriptions(result_errors: tuple[str, ...]) -> str:
+    return "\n".join(result_errors)
 
 
 def test_wevra_db_package_imports() -> None:
@@ -98,6 +155,115 @@ def test_wevra_db_owns_default_migration_script_location() -> None:
     assert script_root.is_dir()
     assert script_root.joinpath("env.py").is_file()
     assert script_root.joinpath("script.py.mako").is_file()
+
+
+@pytest.mark.parametrize(
+    ("database_url", "expected_error"),
+    (
+        ("", "Database URL must not be empty."),
+        (
+            "ftp://example.com/database",
+            "Database URL must use sqlite+aiosqlite:// or postgresql+asyncpg://.",
+        ),
+        (
+            "sqlite+aiosqlite:///:memory:",
+            "SQLite database URL must not force in-memory storage.",
+        ),
+    ),
+)
+def test_validate_persistence_reports_database_url_failures(
+    tmp_path: Path,
+    database_url: str,
+    expected_error: str,
+) -> None:
+    result = validate_persistence(
+        _persistence_settings(tmp_path, database_url=database_url)
+    )
+
+    assert expected_error in result.errors
+    assert not result.is_ok
+
+
+@pytest.mark.parametrize(
+    ("config_content", "expected_error"),
+    (
+        (None, "Missing Alembic config:"),
+        (
+            "[alembic]\nsqlalchemy.url = sqlite+aiosqlite:///local.sqlite3\n",
+            "Alembic config does not define script_location:",
+        ),
+        (
+            "[alembic]\nscript_location = wevra.db:migrations\n"
+            "sqlalchemy.url = sqlite+aiosqlite:///:memory:\n",
+            "Alembic config must not force in-memory SQLite.",
+        ),
+    ),
+)
+def test_validate_persistence_reports_alembic_config_failures(
+    tmp_path: Path,
+    config_content: str | None,
+    expected_error: str,
+) -> None:
+    alembic_config = tmp_path / "alembic.ini"
+    if config_content is not None:
+        _write_alembic_config(alembic_config, config_content)
+
+    result = validate_persistence(
+        _persistence_settings(tmp_path, alembic_config=alembic_config)
+    )
+
+    assert expected_error in _failed_check_descriptions(result.errors)
+    assert not result.is_ok
+
+
+def test_validate_persistence_fails_initialisation_when_migration_files_missing(
+    tmp_path: Path,
+) -> None:
+    migrations_root = tmp_path / "migrations"
+    migrations_root.mkdir()
+
+    result = validate_persistence(
+        _persistence_settings(tmp_path, migrations_root=migrations_root)
+    )
+
+    assert "Missing Alembic migration file:" in _failed_check_descriptions(
+        result.errors
+    )
+    assert (
+        "Development database initialisation requires Alembic config and migrations."
+        in result.errors
+    )
+    assert not _check_passed(
+        result,
+        "development database initialisation command is available",
+    )
+
+
+def test_validate_persistence_fails_initialisation_when_module_discovery_fails(
+    tmp_path: Path,
+) -> None:
+    result = validate_persistence(
+        _persistence_settings(tmp_path, modules=("missing_data_module",))
+    )
+
+    assert "Module migration version location discovery failed:" in (
+        _failed_check_descriptions(result.errors)
+    )
+    assert (
+        "Development database initialisation requires Alembic config and migrations."
+        in result.errors
+    )
+    assert not _check_passed(
+        result,
+        "development database initialisation command is available",
+    )
+
+
+def _check_passed(result: ValidationResult, description_prefix: str) -> bool:
+    return any(
+        check.description.startswith(description_prefix) and check.passed
+        for check in result.checks
+    )
 
 
 def test_redact_database_url_masks_sensitive_query_parameters() -> None:

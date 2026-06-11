@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from wevra.auth.configuration import ConfigurationError
+from wevra.core.exceptions import ConfigurationError
 
 SQLITE_ASYNC_DATABASE_URL_PREFIX = "sqlite+aiosqlite:///"
 SQLITE_MEMORY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"

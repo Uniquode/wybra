@@ -43,7 +43,6 @@ import wevra.db.persistence as db_persistence
 from wevra.auth import ERROR_INACTIVE_USER
 from wevra.auth.accounts.manager import UserManager, create_user_manager
 from wevra.auth.accounts.schemas import UserCreate
-from wevra.auth.configuration import ConfigurationError
 from wevra.auth.models import (
     Base,
     Group,
@@ -82,6 +81,7 @@ from wevra.core.composition import (
     TemplateOptions,
     load_app_config,
 )
+from wevra.core.exceptions import ConfigurationError
 from wevra.db.persistence import (
     close_database,
     create_database,
@@ -873,11 +873,25 @@ def test_auth_settings_public_values_are_immutable() -> None:
 def test_auth_settings_validation_allows_local_secret_sentinels() -> None:
     settings = AuthSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
 
-    validate_auth_settings(settings, allow_local_secrets=True)
+    validate_auth_settings(settings)
+
+
+def test_auth_settings_rejects_unknown_deployment_environment() -> None:
+    with pytest.raises(
+        ConfigurationError,
+        match="Invalid deployment environment 'prod'",
+    ):
+        AuthSettings(
+            database_url=SQLITE_MEMORY_DATABASE_URL,
+            deployment_environment="prod",
+        )
 
 
 def test_auth_settings_validation_requires_non_local_token_secrets() -> None:
-    settings = AuthSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
+    settings = AuthSettings(
+        database_url=SQLITE_MEMORY_DATABASE_URL,
+        deployment_environment="production",
+    )
 
     with pytest.raises(
         ConfigurationError,
@@ -889,6 +903,7 @@ def test_auth_settings_validation_requires_non_local_token_secrets() -> None:
 def test_auth_settings_validation_requires_non_local_secure_session_cookie() -> None:
     settings = AuthSettings(
         database_url=SQLITE_MEMORY_DATABASE_URL,
+        deployment_environment="production",
         identity_options=IdentityOptions(
             reset_password_token_secret="configured-reset-secret",
             verification_token_secret="configured-verification-secret",
@@ -906,6 +921,7 @@ def test_auth_settings_validation_requires_non_local_secure_session_cookie() -> 
 def test_auth_settings_validation_accepts_non_local_auth_policy() -> None:
     settings = AuthSettings(
         database_url=SQLITE_MEMORY_DATABASE_URL,
+        deployment_environment="production",
         identity_options=IdentityOptions(
             reset_password_token_secret="configured-reset-secret",
             verification_token_secret="configured-verification-secret",
