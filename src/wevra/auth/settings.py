@@ -162,8 +162,9 @@ def load_auth_settings_from_config(
     app_config: AppConfig,
     environ: Mapping[str, str] | None = None,
 ) -> AuthSettings:
+    env_values = os.environ if environ is None else environ
     env = Env(
-        environ=dict(environ or os.environ),
+        environ=dict(env_values),
         readenv=False,
         update=False,
     )
