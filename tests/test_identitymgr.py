@@ -10,6 +10,7 @@ import sqlite3
 import sys
 import tempfile
 import tomllib
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,7 +54,7 @@ from wevra.auth.models import (
     Scope,
     User,
 )
-from wevra.auth.options import IdentityOptions
+from wevra.auth.options import PROVIDER, IdentityOptions
 from wevra.auth.persistence import create_database_strategy, create_user_database
 from wevra.auth.persistence.database import (
     SQLITE_MEMORY_DATABASE_URL,
@@ -61,12 +62,16 @@ from wevra.auth.persistence.database import (
     resolve_database_url,
 )
 from wevra.auth.settings import (
+    AUTH_SETTINGS_OWNER,
     ENV_TOTP_ALLOWED_DRIFT,
     ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
     ENV_TOTP_PERIOD_SECONDS,
     ENV_TOTP_RECOVERY_WINDOW_SECONDS,
+    AuthSettings,
     load_auth_settings,
+    load_auth_settings_from_config,
 )
+from wevra.config import ConfigService, MappingConfigSource
 from wevra.core.composition import (
     AppConfig,
     RouteOptions,
@@ -165,7 +170,10 @@ def create_auth_test_app(
     settings = AuthTestSettings(database_url=database_url, identity_options=options)
     app = FastAPI()
     app.state.settings = settings
-    app.state.identity_options = options
+    app.state.auth_settings = AuthSettings(
+        database_url=database_url,
+        identity_options=options,
+    )
     app.state.database = create_database(settings)
     return app
 
@@ -318,7 +326,7 @@ def initialise_identity_database(database_url: str) -> None:
 
 
 def initialise_legacy_identity_database(database_path: Path) -> None:
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.execute(
             """
             CREATE TABLE identity_user (
@@ -810,6 +818,55 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
     assert settings.identity_options.totp_recovery_window_seconds == 900
 
 
+def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(config_path)
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    "auth": {
+                        "provider_enabled": True,
+                        "totp_mode": "required",
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    settings = load_auth_settings_from_config(
+        config,
+        app_config=app_config,
+        environ={},
+    )
+
+    assert settings.database_url == sqlite_file_url(
+        config_path.parent / "from-config.sqlite3"
+    )
+    assert settings.owner == AUTH_SETTINGS_OWNER
+    assert settings.integration_enabled(PROVIDER) is True
+    assert settings.is_totp_enabled() is True
+
+
+def test_auth_settings_public_values_are_immutable() -> None:
+    settings = AuthSettings(
+        database_url=SQLITE_MEMORY_DATABASE_URL,
+        identity_options=IdentityOptions(password_common_fragments=["example"]),
+    )
+
+    with pytest.raises(AttributeError):
+        settings.database_url = "sqlite+aiosqlite:///mutated.sqlite3"  # type: ignore[misc]
+
+    with pytest.raises(AttributeError):
+        settings.identity_options.password_common_fragments = ("mutated",)  # type: ignore[misc]
+
+    assert settings.identity_options.password_common_fragments == ("example",)
+
+
 def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:
     app_config = load_auth_test_app_config(
         tmp_path / "app.toml",
@@ -1238,7 +1295,7 @@ def test_user_manager_get_by_email_resolves_secondary_emails(tmp_path: Path) -> 
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -1285,7 +1342,7 @@ def test_resolve_user_target_uses_secondary_email_addresses(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -1342,7 +1399,7 @@ def test_identity_session_authenticate_user_accepts_secondary_email_alias(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -1390,7 +1447,7 @@ def test_identity_session_authenticate_user_secondary_email_stays_with_owner_acc
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             primary_user = await manager.create(
                 UserCreate(
@@ -1448,7 +1505,7 @@ def test_identity_session_request_password_reset_uses_secondary_email_alias(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -1497,7 +1554,7 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             await manager.create(
                 UserCreate(
@@ -1539,7 +1596,7 @@ def test_request_verification_uses_secondary_email_alias_for_lookup(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -1599,7 +1656,7 @@ def test_user_manager_create_rollback_when_after_register_fails(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = _FailingPostRegisterManager(
                 create_user_database(session),
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             with pytest.raises(RuntimeError, match="post-register hook failed"):
                 await manager.create(
@@ -1639,7 +1696,7 @@ def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             primary_user = await manager.create(
                 UserCreate(
@@ -1660,7 +1717,7 @@ def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
 
             racing_manager = _NoLookupManager(
                 create_user_database(session),
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             with pytest.raises(UserAlreadyExists):
                 await racing_manager.create(
@@ -2044,7 +2101,7 @@ def test_authentication_finalisation_updates_last_login_timestamp() -> None:
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -2084,7 +2141,7 @@ def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -2125,7 +2182,7 @@ def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -2179,7 +2236,7 @@ def test_request_verification_records_email_verification_sent_timestamp() -> Non
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             await manager.create(
                 UserCreate(
@@ -2226,7 +2283,7 @@ def test_request_verification_commits_timestamp_before_delivery() -> None:
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             await manager.create(
                 UserCreate(
@@ -2299,7 +2356,7 @@ def test_request_verification_does_not_overwrite_ineligible_user_timestamp(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(
@@ -2950,7 +3007,7 @@ def test_identitymgr_create_rejects_duplicate_secondary_email(
         async with session_scope(web_app.state.database.session_factory) as session:
             manager = create_user_manager(
                 session,
-                web_app.state.settings.identity_options,
+                web_app.state.auth_settings.identity_options,
             )
             user = await manager.create(
                 UserCreate(

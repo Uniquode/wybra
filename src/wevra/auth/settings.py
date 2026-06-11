@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any, Final, cast
+from typing import Any, Final, Protocol, cast
 
 from envex import Env
 
@@ -11,6 +11,7 @@ from wevra.auth.configuration import ConfigurationError
 from wevra.auth.options import (
     PASSKEY,
     PROVIDER,
+    TOTP,
     TOTP_MODE,
     IdentityIntegration,
     IdentityOptions,
@@ -26,6 +27,9 @@ from wevra.core.settings import (
 )
 
 DATABASE_URL_ENV = "DATABASE_URL"
+AUTH_SETTINGS_OWNER: Final = "wevra.auth"
+APP_CONFIG_SECTION: Final = "app"
+AUTH_CONFIG_SECTION: Final = "auth"
 PASSWORD_SECTION_FIELD = "password"
 PASSWORD_POLICY_SECTION_FIELD = "policy"
 IDENTITY_OPTION_FIELDS = frozenset(
@@ -107,13 +111,52 @@ IDENTITY_ENV_SETTINGS: Final[tuple[EnvironmentSetting, ...]] = (
 )
 
 
+class RawConfigProvider(Protocol):
+    def get_config(self, section: str) -> Mapping[str, Any] | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AuthSettings:
     database_url: str
     identity_options: IdentityOptions = field(default_factory=IdentityOptions)
 
+    @property
+    def owner(self) -> str:
+        return AUTH_SETTINGS_OWNER
+
+    def integration_enabled(self, integration: IdentityIntegration) -> bool:
+        return self.identity_options.integration_enabled(integration)
+
+    def is_totp_enabled(self) -> bool:
+        return self.integration_enabled(cast(IdentityIntegration, TOTP))
+
+
+def auth_settings_from_state(state: object) -> AuthSettings:
+    settings = getattr(state, "auth_settings", None)
+    if not isinstance(settings, AuthSettings):
+        raise RuntimeError("Auth settings are not configured on the application.")
+
+    return settings
+
+
+def identity_options_from_state(state: object) -> IdentityOptions:
+    return auth_settings_from_state(state).identity_options
+
 
 def load_auth_settings(
+    *,
+    app_config: AppConfig,
+    environ: Mapping[str, str] | None = None,
+) -> AuthSettings:
+    return load_auth_settings_from_config(
+        _AppConfigProvider(app_config),
+        app_config=app_config,
+        environ=environ,
+    )
+
+
+def load_auth_settings_from_config(
+    config: RawConfigProvider,
     *,
     app_config: AppConfig,
     environ: Mapping[str, str] | None = None,
@@ -123,9 +166,9 @@ def load_auth_settings(
         readenv=False,
         update=False,
     )
-    auth_config = app_config.auth
+    auth_config = dict(config.get_config(AUTH_CONFIG_SECTION) or {})
     _reject_unknown_auth_options(auth_config)
-    database_url = _configured_database_url(app_config, env)
+    database_url = _configured_database_url(config, app_config, env)
     identity_options = merge_identity_options_with_environment(
         _identity_options_from_auth_config(auth_config),
         auth_config,
@@ -139,6 +182,18 @@ def load_auth_settings(
         ),
         identity_options=identity_options,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _AppConfigProvider:
+    app_config: AppConfig
+
+    def get_config(self, section: str) -> Mapping[str, Any] | None:
+        if section == APP_CONFIG_SECTION:
+            return {"database_url": self.app_config.database_url}
+        if section == AUTH_CONFIG_SECTION:
+            return self.app_config.auth
+        return None
 
 
 def merge_identity_options_with_environment(
@@ -254,11 +309,15 @@ def _reject_unknown_password_options(auth_config: Mapping[str, Any]) -> None:
 
 
 def _configured_database_url(
+    config: RawConfigProvider,
     app_config: AppConfig,
     env: Mapping[str, str | None] | Env,
 ) -> str:
+    app_values = config.get_config(APP_CONFIG_SECTION) or {}
     database_url = (
-        _configured_env_value(env, DATABASE_URL_ENV) or app_config.database_url
+        _configured_env_value(env, DATABASE_URL_ENV)
+        or app_values.get("database_url")
+        or app_config.database_url
     )
 
     if not isinstance(database_url, str) or not database_url.strip():

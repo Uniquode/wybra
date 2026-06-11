@@ -32,6 +32,7 @@ from wevra.auth.sessions import (
     resolve_current_user,
     set_session_cookie,
 )
+from wevra.auth.settings import identity_options_from_state
 from wevra.auth.timestamps import current_timestamp
 from wevra.web.forms.csrf import request_form_data, validate_csrf
 from wevra.web.rendering import render_page
@@ -53,11 +54,7 @@ def _form_value(form_data: FormData, name: str, default: str = "") -> str:
 
 
 def _identity_options(request: Request) -> IdentityOptions:
-    options = getattr(request.app.state, "identity_options", None)
-    if not isinstance(options, IdentityOptions):
-        raise RuntimeError("Identity options are not configured on the application.")
-
-    return options
+    return identity_options_from_state(request.app.state)
 
 
 def _public_signup_enabled(request: Request) -> bool:

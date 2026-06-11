@@ -56,6 +56,7 @@ from wevra.auth.result import (
     ERROR_TOKEN_REJECTED,
     Result,
 )
+from wevra.auth.settings import identity_options_from_state
 from wevra.auth.timestamps import current_timestamp
 
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"
@@ -106,11 +107,7 @@ def _session_factory_from_request(
 
 
 def _identity_options_from_request(request: Request) -> IdentityOptions:
-    options = getattr(request.app.state, "identity_options", None)
-    if not isinstance(options, IdentityOptions):
-        raise RuntimeError("Identity options are not configured on the application.")
-
-    return options
+    return identity_options_from_state(request.app.state)
 
 
 def _delivery_from_request(request: Request) -> IdentityDelivery:
