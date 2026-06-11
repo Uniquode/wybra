@@ -14,7 +14,6 @@ _EXPORTS = {
     "ChallengeKind": "wevra.auth.mfa.challenges",
     "ChallengeRecord": "wevra.auth.mfa.challenges",
     "ChallengeStore": "wevra.auth.mfa.storage",
-    "ConfigurationError": "wevra.auth.configuration",
     "DefaultPasswordPolicy": "wevra.auth.accounts.passwords",
     "ERROR_ALREADY_EXISTS": "wevra.auth.result",
     "ERROR_ALREADY_VERIFIED": "wevra.auth.result",
@@ -61,8 +60,10 @@ _EXPORTS = {
     "identity_options_from_state": "wevra.auth.settings",
     "load_auth_settings": "wevra.auth.settings",
     "load_auth_settings_from_config": "wevra.auth.settings",
+    "load_runtime_auth_settings": "wevra.auth.settings",
     "required_authentication_methods_for_totp_policy": "wevra.auth.mfa.challenges",
     "validate_auth_settings": "wevra.auth.settings",
+    "supported_auth_environment_names": "wevra.auth.settings",
 }
 
 __all__ = sorted(_EXPORTS)

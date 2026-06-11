@@ -40,11 +40,11 @@ from wevra.auth.admin.management import (
     update_scope_for_management,
     user_record,
 )
-from wevra.auth.configuration import ConfigurationError
 from wevra.auth.models import Group, GroupUser
 from wevra.auth.result import Result
 from wevra.auth.settings import AuthSettings, load_auth_settings
 from wevra.core.composition import CompositionError, load_app_config
+from wevra.core.exceptions import ConfigurationError
 from wevra.db.persistence import close_database, create_database, session_scope
 from wevra.tools.project import ProjectToolConfigurationError, runtime_project_root
 

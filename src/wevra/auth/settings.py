@@ -3,12 +3,11 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any, Final, Protocol, cast
+from typing import Any, Final, Literal, Protocol, cast, get_args
 
 from envex import Env
 from starlette.datastructures import State
 
-from wevra.auth.configuration import ConfigurationError
 from wevra.auth.options import (
     PASSKEY,
     PROVIDER,
@@ -21,6 +20,7 @@ from wevra.auth.options import (
 )
 from wevra.auth.persistence.database import resolve_database_url
 from wevra.core.composition import AppConfig
+from wevra.core.exceptions import ConfigurationError
 from wevra.core.settings import (
     EnvironmentSetting,
     env_setting_is_set,
@@ -29,6 +29,10 @@ from wevra.core.settings import (
 
 DATABASE_URL_ENV = "DATABASE_URL"
 AUTH_SETTINGS_OWNER: Final = "wevra.auth"
+
+
+DeploymentEnvironment = Literal["local", "staging", "production"]
+LOCAL_ENVIRONMENT: Final[DeploymentEnvironment] = "local"
 APP_CONFIG_SECTION: Final = "app"
 AUTH_CONFIG_SECTION: Final = "auth"
 PASSWORD_SECTION_FIELD = "password"
@@ -120,6 +124,14 @@ class RawConfigProvider(Protocol):
 class AuthSettings:
     database_url: str
     identity_options: IdentityOptions = field(default_factory=IdentityOptions)
+    deployment_environment: DeploymentEnvironment = LOCAL_ENVIRONMENT
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "deployment_environment",
+            _normalise_deployment_environment(self.deployment_environment),
+        )
 
     @property
     def owner(self) -> str:
@@ -130,6 +142,9 @@ class AuthSettings:
 
     def is_totp_enabled(self) -> bool:
         return self.integration_enabled(cast(IdentityIntegration, TOTP))
+
+    def is_local(self) -> bool:
+        return self.deployment_environment == LOCAL_ENVIRONMENT
 
 
 def auth_settings_from_state(state: State) -> AuthSettings:
@@ -146,10 +161,8 @@ def identity_options_from_state(state: State) -> IdentityOptions:
 
 def validate_auth_settings(
     settings: AuthSettings,
-    *,
-    allow_local_secrets: bool = False,
 ) -> None:
-    if allow_local_secrets:
+    if settings.is_local():
         return
 
     identity_options = settings.identity_options
@@ -173,11 +186,13 @@ def load_auth_settings(
     *,
     app_config: AppConfig,
     environ: Mapping[str, str] | None = None,
+    deployment_environment: DeploymentEnvironment | str = LOCAL_ENVIRONMENT,
 ) -> AuthSettings:
     return load_auth_settings_from_config(
         _AppConfigProvider(app_config),
         app_config=app_config,
         environ=environ,
+        deployment_environment=deployment_environment,
     )
 
 
@@ -186,6 +201,7 @@ def load_auth_settings_from_config(
     *,
     app_config: AppConfig,
     environ: Mapping[str, str] | None = None,
+    deployment_environment: DeploymentEnvironment | str = LOCAL_ENVIRONMENT,
 ) -> AuthSettings:
     env_values = os.environ if environ is None else environ
     env = Env(
@@ -208,6 +224,59 @@ def load_auth_settings_from_config(
             app_config.config_path.resolve().parent,
         ),
         identity_options=identity_options,
+        deployment_environment=_normalise_deployment_environment(
+            deployment_environment
+        ),
+    )
+
+
+def load_runtime_auth_settings(
+    *,
+    app_config: AppConfig | None,
+    deployment_environment: DeploymentEnvironment | str,
+    database_url: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> AuthSettings:
+    """Load and validate auth settings for application runtime composition."""
+
+    if app_config is not None:
+        settings = load_auth_settings(
+            app_config=app_config,
+            environ=environ,
+            deployment_environment=deployment_environment,
+        )
+    else:
+        if database_url is None or not database_url.strip():
+            raise ConfigurationError(
+                "Database URL is required when app config is not available."
+            )
+        settings = AuthSettings(
+            database_url=database_url,
+            deployment_environment=_normalise_deployment_environment(
+                deployment_environment
+            ),
+        )
+
+    validate_auth_settings(settings)
+    return settings
+
+
+def supported_auth_environment_names() -> tuple[str, ...]:
+    """Return auth-owned environment variable names understood by auth settings."""
+
+    return tuple(setting.name for setting in IDENTITY_ENV_SETTINGS)
+
+
+def _normalise_deployment_environment(
+    deployment_environment: DeploymentEnvironment | str,
+) -> DeploymentEnvironment:
+    valid_environments = get_args(DeploymentEnvironment)
+    if deployment_environment in valid_environments:
+        return cast(DeploymentEnvironment, deployment_environment)
+
+    raise ConfigurationError(
+        f"Invalid deployment environment {deployment_environment!r}. "
+        f"Must be one of: {', '.join(valid_environments)}."
     )
 
 

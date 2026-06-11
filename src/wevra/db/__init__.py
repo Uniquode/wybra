@@ -3,3 +3,13 @@
 `wevra.db` may depend on SQLAlchemy, Alembic, and shared composition contracts,
 but it must not import host application settings, route modules, or startup code.
 """
+
+from wevra.db.validation import (
+    PersistenceValidationSettings,
+    validate_persistence,
+)
+
+__all__ = (
+    "PersistenceValidationSettings",
+    "validate_persistence",
+)

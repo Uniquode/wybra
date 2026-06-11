@@ -1,28 +1,27 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Protocol
 
-from wevra.auth.configuration import ConfigurationError
 from wevra.auth.settings import (
     DATABASE_URL_ENV,
-    AuthSettings,
-    load_auth_settings_from_config,
-    validate_auth_settings,
+    DeploymentEnvironment,
+    load_runtime_auth_settings,
+    supported_auth_environment_names,
 )
-from wevra.config import AppConfigSource, ConfigService
 from wevra.core.composition import AppConfig
+from wevra.core.exceptions import ConfigurationError
 from wevra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 
 AUTH_SETTINGS_VALIDATION_DESCRIPTION = (
     "auth settings are valid for the current environment"
 )
-LOCAL_DEPLOYMENT_ENVIRONMENT = "local"
 
 
 class AuthValidationSettings(Protocol):
     database_url: str
     app_config: AppConfig | None
-    deployment_environment: str
+    deployment_environment: DeploymentEnvironment | str
 
 
 def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
@@ -30,11 +29,19 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
     checks: list[ValidationCheck] = []
 
     try:
-        auth_settings = _load_auth_settings(settings)
-        validate_auth_settings(
-            auth_settings,
-            allow_local_secrets=_allow_local_auth_secrets(settings),
-        )
+        if settings.app_config is None:
+            load_runtime_auth_settings(
+                app_config=None,
+                database_url=settings.database_url,
+                deployment_environment=settings.deployment_environment,
+                environ=_auth_settings_environ(settings),
+            )
+        else:
+            load_runtime_auth_settings(
+                app_config=settings.app_config,
+                deployment_environment=settings.deployment_environment,
+                environ=_auth_settings_environ(settings),
+            )
     except ConfigurationError as exc:
         record_check(
             checks,
@@ -51,18 +58,34 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
         passed=True,
         description=AUTH_SETTINGS_VALIDATION_DESCRIPTION,
     )
-    return ValidationResult(name="auth", errors=tuple(errors), checks=tuple(checks))
-
-
-def _load_auth_settings(settings: AuthValidationSettings) -> AuthSettings:
-    if settings.app_config is None:
-        return AuthSettings(database_url=settings.database_url)
-
-    return load_auth_settings_from_config(
-        ConfigService([AppConfigSource(settings.app_config)]),
-        app_config=settings.app_config,
-        environ=_auth_settings_environ(settings),
+    auth_environment_names = supported_auth_environment_names()
+    counts = Counter(auth_environment_names)
+    duplicate_auth_environment_names = sorted(
+        name for name, count in counts.items() if count > 1
     )
+    duplicate_description = ", ".join(duplicate_auth_environment_names)
+    record_check(
+        checks,
+        errors,
+        passed=not duplicate_auth_environment_names,
+        description=(
+            "auth environment variable names are unique"
+            if not duplicate_auth_environment_names
+            else (
+                "auth environment variable names are unique "
+                f"(duplicates: {duplicate_description})"
+            )
+        ),
+        error=(
+            "Auth environment variable names must be unique."
+            if not duplicate_auth_environment_names
+            else (
+                "Auth environment variable names must be unique. "
+                f"Duplicates: {duplicate_description}"
+            )
+        ),
+    )
+    return ValidationResult(name="auth", errors=tuple(errors), checks=tuple(checks))
 
 
 def _auth_settings_environ(settings: AuthValidationSettings) -> dict[str, str]:
@@ -70,14 +93,6 @@ def _auth_settings_environ(settings: AuthValidationSettings) -> dict[str, str]:
         return {}
 
     return {DATABASE_URL_ENV: settings.database_url}
-
-
-def _allow_local_auth_secrets(settings: AuthValidationSettings) -> bool:
-    return _is_local_deployment_environment(settings.deployment_environment)
-
-
-def _is_local_deployment_environment(value: str) -> bool:
-    return value == LOCAL_DEPLOYMENT_ENVIRONMENT
 
 
 validation_targets = {"auth": validate_auth}

@@ -12,7 +12,6 @@ from wevra.auth.accounts.passwords import (
     DefaultPasswordPolicy,
     PasswordPolicy,
 )
-from wevra.auth.configuration import ConfigurationError
 from wevra.auth.mfa.totp import (
     DEFAULT_TOTP_ALLOWED_DRIFT,
     DEFAULT_TOTP_PERIOD_SECONDS,
@@ -21,6 +20,7 @@ from wevra.auth.mfa.totp import (
     MAX_TOTP_PERIOD_SECONDS,
     MAX_TOTP_RECOVERY_WINDOW_SECONDS,
 )
+from wevra.core.exceptions import ConfigurationError
 
 PROVIDER: Final[str] = "provider"
 TOTP: Final[str] = "totp"
