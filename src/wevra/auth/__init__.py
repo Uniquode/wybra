@@ -62,6 +62,7 @@ _EXPORTS = {
     "load_auth_settings": "wevra.auth.settings",
     "load_auth_settings_from_config": "wevra.auth.settings",
     "required_authentication_methods_for_totp_policy": "wevra.auth.mfa.challenges",
+    "validate_auth_settings": "wevra.auth.settings",
 }
 
 __all__ = sorted(_EXPORTS)

@@ -144,6 +144,31 @@ def identity_options_from_state(state: State) -> IdentityOptions:
     return auth_settings_from_state(state).identity_options
 
 
+def validate_auth_settings(
+    settings: AuthSettings,
+    *,
+    allow_local_secrets: bool = False,
+) -> None:
+    if allow_local_secrets:
+        return
+
+    identity_options = settings.identity_options
+    if (
+        is_generate_local_identity_secret(identity_options.reset_password_token_secret)
+        or is_generate_local_identity_secret(identity_options.verification_token_secret)
+        or not identity_options.token_secrets_configured
+    ):
+        raise ConfigurationError(
+            "Non-local deployments must configure identity reset and "
+            "verification token secrets."
+        )
+    if not identity_options.session_cookie_force_secure:
+        raise ConfigurationError(
+            "Non-local deployments must force secure session cookies; set "
+            "SESSION_FORCE_SECURE=true or auth.session_cookie_force_secure = true."
+        )
+
+
 def load_auth_settings(
     *,
     app_config: AppConfig,

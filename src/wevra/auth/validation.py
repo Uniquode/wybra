@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+from wevra.auth.configuration import ConfigurationError
+from wevra.auth.settings import (
+    DATABASE_URL_ENV,
+    AuthSettings,
+    load_auth_settings_from_config,
+    validate_auth_settings,
+)
+from wevra.config import AppConfigSource, ConfigService
+from wevra.core.composition import AppConfig
+from wevra.tools.validation.core import ValidationCheck, ValidationResult, record_check
+
+AUTH_SETTINGS_VALIDATION_DESCRIPTION = (
+    "auth settings are valid for the current environment"
+)
+LOCAL_DEPLOYMENT_ENVIRONMENT = "local"
+
+
+class AuthValidationSettings(Protocol):
+    database_url: str
+    app_config: AppConfig | None
+    deployment_environment: str
+
+
+def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
+    errors: list[str] = []
+    checks: list[ValidationCheck] = []
+
+    try:
+        auth_settings = _load_auth_settings(settings)
+        validate_auth_settings(
+            auth_settings,
+            allow_local_secrets=_allow_local_auth_secrets(settings),
+        )
+    except ConfigurationError as exc:
+        record_check(
+            checks,
+            errors,
+            passed=False,
+            description=AUTH_SETTINGS_VALIDATION_DESCRIPTION,
+            error=str(exc),
+        )
+        return ValidationResult(name="auth", errors=tuple(errors), checks=tuple(checks))
+
+    record_check(
+        checks,
+        errors,
+        passed=True,
+        description=AUTH_SETTINGS_VALIDATION_DESCRIPTION,
+    )
+    return ValidationResult(name="auth", errors=tuple(errors), checks=tuple(checks))
+
+
+def _load_auth_settings(settings: AuthValidationSettings) -> AuthSettings:
+    if settings.app_config is None:
+        return AuthSettings(database_url=settings.database_url)
+
+    return load_auth_settings_from_config(
+        ConfigService([AppConfigSource(settings.app_config)]),
+        app_config=settings.app_config,
+        environ=_auth_settings_environ(settings),
+    )
+
+
+def _auth_settings_environ(settings: AuthValidationSettings) -> dict[str, str]:
+    if not settings.database_url.strip():
+        return {}
+
+    return {DATABASE_URL_ENV: settings.database_url}
+
+
+def _allow_local_auth_secrets(settings: AuthValidationSettings) -> bool:
+    return _is_local_deployment_environment(settings.deployment_environment)
+
+
+def _is_local_deployment_environment(value: str) -> bool:
+    return value == LOCAL_DEPLOYMENT_ENVIRONMENT
+
+
+validation_targets = {"auth": validate_auth}
