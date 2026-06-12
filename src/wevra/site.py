@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from importlib import import_module
 from pathlib import Path
+from types import ModuleType
 from typing import TypeGuard, TypeVar, cast
 from urllib.parse import unquote, urlparse
 
@@ -19,6 +22,8 @@ from wevra.config import (
 from wevra.core.composition import AppConfig
 
 ConfigSourceInput = str | AppConfig | ConfigSource
+ModuleLoader = Callable[[str], ModuleType | object | None]
+SETUP_SITE_ATTRIBUTE = "setup_site"
 T = TypeVar("T")
 
 
@@ -73,11 +78,18 @@ class Site:
         return capability_type in self._capabilities
 
 
-def start(app: FastAPI, *, config_source: ConfigSourceInput) -> Site:
-    return Site(
+def start(
+    app: FastAPI,
+    *,
+    config_source: ConfigSourceInput,
+    module_loader: ModuleLoader | None = None,
+) -> Site:
+    site = Site(
         app=app,
         config=ConfigService([_normalise_config_source(config_source)]),
     )
+    _setup_modules(site, module_loader or import_module)
+    return site
 
 
 def _normalise_config_source(config_source: ConfigSourceInput) -> ConfigSource:
@@ -133,3 +145,25 @@ def _matches_capability_type(value: object, capability_type: type[object]) -> bo
         return isinstance(value, capability_type)
     except TypeError:
         return True
+
+
+def _setup_modules(site: Site, module_loader: ModuleLoader) -> None:
+    for module_name in site.modules:
+        module = module_loader(module_name)
+        if module is None:
+            raise SiteCapabilityError(
+                f"Configured module {module_name!r} was not found."
+            )
+        setup_site = getattr(module, SETUP_SITE_ATTRIBUTE, None)
+        if setup_site is None:
+            continue
+        if not callable(setup_site):
+            raise SiteCapabilityError(
+                f"Configured module {module_name!r} exposes non-callable setup_site."
+            )
+        try:
+            setup_site(site)
+        except Exception as exc:
+            raise SiteCapabilityError(
+                f"Configured module {module_name!r} setup_site failed: {exc}"
+            ) from exc

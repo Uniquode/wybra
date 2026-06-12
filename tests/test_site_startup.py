@@ -192,3 +192,91 @@ def test_start_accepts_config_source_object() -> None:
 def test_start_reports_missing_required_config_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigSourceError, match="file: App config file"):
         start(FastAPI(), config_source=str(tmp_path / "missing.toml"))
+
+
+def _write_module(root: Path, name: str, body: str) -> None:
+    module_path = root / f"{name}.py"
+    module_path.write_text(body, encoding="utf-8")
+
+
+def test_start_invokes_setup_site_hooks_in_configured_module_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(tmp_path, "site_setup_recorder", "calls = []\n")
+    _write_module(
+        tmp_path,
+        "first_module",
+        "from site_setup_recorder import calls\n"
+        'def setup_site(site):\n    calls.append("first")\n',
+    )
+    _write_module(
+        tmp_path,
+        "second_module",
+        "from site_setup_recorder import calls\n"
+        'def setup_site(site):\n    calls.append("second")\n',
+    )
+
+    site = start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {"app": {"modules": ("first_module", "second_module")}}
+        ),
+    )
+
+    from site_setup_recorder import calls
+
+    assert isinstance(site, Site)
+    assert calls == ["first", "second"]
+
+
+def test_start_ignores_modules_without_setup_site(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(tmp_path, "plain_module", "")
+
+    site = start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ("plain_module",)}}),
+    )
+
+    assert site.modules == ("plain_module",)
+
+
+def test_start_rejects_non_callable_setup_site(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(tmp_path, "invalid_module", "setup_site = object()\n")
+
+    with pytest.raises(SiteCapabilityError, match="setup_site"):
+        start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {"app": {"modules": ("invalid_module",)}}
+            ),
+        )
+
+
+def test_start_reports_setup_site_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(
+        tmp_path,
+        "failing_module",
+        'def setup_site(site):\n    raise RuntimeError("boom")\n',
+    )
+
+    with pytest.raises(SiteCapabilityError, match="failing_module"):
+        start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {"app": {"modules": ("failing_module",)}}
+            ),
+        )
