@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from importlib import import_module
+from inspect import iscoroutinefunction
 from pathlib import Path
 from types import ModuleType
 from typing import TypeGuard, TypeVar, cast
@@ -23,6 +25,7 @@ from wevra.core.composition import AppConfig
 
 ConfigSourceInput = str | AppConfig | ConfigSource
 ModuleLoader = Callable[[str], ModuleType | object | None]
+SiteLifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 SETUP_SITE_ATTRIBUTE = "setup_site"
 T = TypeVar("T")
 
@@ -77,8 +80,40 @@ class Site:
     def has_capability(self, capability_type: type[object]) -> bool:
         return capability_type in self._capabilities
 
+    async def close(self) -> None:
+        for capability in self._capabilities.values():
+            close = getattr(capability, "close", None)
+            if close is None:
+                continue
+            if not callable(close) or not iscoroutinefunction(close):
+                raise SiteCapabilityError(
+                    f"Capability {type(capability).__name__} close must be async."
+                )
+            await close()
 
-def start(
+
+def start_site(
+    *,
+    config_source: ConfigSourceInput,
+    module_loader: ModuleLoader | None = None,
+) -> SiteLifespan:
+    @asynccontextmanager
+    async def _start_site(app: FastAPI):
+        site = await start(
+            app,
+            config_source=config_source,
+            module_loader=module_loader,
+        )
+        app.state.site = site
+        try:
+            yield
+        finally:
+            await site.close()
+
+    return _start_site
+
+
+async def start(
     app: FastAPI,
     *,
     config_source: ConfigSourceInput,
@@ -88,7 +123,7 @@ def start(
         app=app,
         config=ConfigService([_normalise_config_source(config_source)]),
     )
-    _setup_modules(site, module_loader or import_module)
+    await _setup_modules(site, module_loader or import_module)
     return site
 
 
@@ -147,7 +182,7 @@ def _matches_capability_type(value: object, capability_type: type[object]) -> bo
         return True
 
 
-def _setup_modules(site: Site, module_loader: ModuleLoader) -> None:
+async def _setup_modules(site: Site, module_loader: ModuleLoader) -> None:
     for module_name in site.modules:
         module = module_loader(module_name)
         if module is None:
@@ -161,8 +196,12 @@ def _setup_modules(site: Site, module_loader: ModuleLoader) -> None:
             raise SiteCapabilityError(
                 f"Configured module {module_name!r} exposes non-callable setup_site."
             )
+        if not iscoroutinefunction(setup_site):
+            raise SiteCapabilityError(
+                f"Configured module {module_name!r} setup_site must be async."
+            )
         try:
-            setup_site(site)
+            await setup_site(site)
         except Exception as exc:
             raise SiteCapabilityError(
                 f"Configured module {module_name!r} setup_site failed: {exc}"

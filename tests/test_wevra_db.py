@@ -1,5 +1,4 @@
 import ast
-import asyncio
 import importlib
 import tomllib
 from dataclasses import dataclass
@@ -9,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import MetaData, text
 
-from wevra import SiteCapabilityError, start
+from wevra import SiteCapabilityError
 from wevra.config import MappingConfigSource
 from wevra.db import DatabaseCapability
 from wevra.db.capabilities import DatabaseCapabilityError
@@ -35,6 +34,7 @@ from wevra.db.urls import (
     safe_database_error_message,
 )
 from wevra.db.validation import validate_persistence
+from wevra.site import start
 from wevra.tools.validation.core import ValidationResult
 
 
@@ -125,8 +125,11 @@ def test_wevra_db_package_imports() -> None:
     assert package.__name__ == "wevra.db"
 
 
-def test_wevra_db_setup_site_registers_database_capability(tmp_path: Path) -> None:
-    site = start(FastAPI(), config_source=_database_config_source(tmp_path))
+@pytest.mark.anyio
+async def test_wevra_db_setup_site_registers_database_capability(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
 
     database = site.require_capability(DatabaseCapability)
 
@@ -134,22 +137,20 @@ def test_wevra_db_setup_site_registers_database_capability(tmp_path: Path) -> No
     assert isinstance(database, DatabaseCapability)
 
 
-def test_wevra_db_setup_site_requires_database_url() -> None:
+@pytest.mark.anyio
+async def test_wevra_db_setup_site_requires_database_url() -> None:
     with pytest.raises(SiteCapabilityError, match="database_url"):
-        start(
+        await start(
             FastAPI(),
             config_source=MappingConfigSource({"app": {"modules": ("wevra.db",)}}),
         )
 
 
-def test_database_capability_provides_clean_sessions(tmp_path: Path) -> None:
-    asyncio.run(_assert_database_capability_provides_clean_sessions(tmp_path))
-
-
-async def _assert_database_capability_provides_clean_sessions(
+@pytest.mark.anyio
+async def test_database_capability_provides_clean_sessions(
     tmp_path: Path,
 ) -> None:
-    site = start(FastAPI(), config_source=_database_config_source(tmp_path))
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
     database = site.require_capability(DatabaseCapability)
     try:
         async with database.session() as first_session:
@@ -159,18 +160,11 @@ async def _assert_database_capability_provides_clean_sessions(
         await database.close()
 
 
-def test_database_capability_transaction_commits_and_rolls_back(
+@pytest.mark.anyio
+async def test_database_capability_transaction_commits_and_rolls_back(
     tmp_path: Path,
 ) -> None:
-    asyncio.run(
-        _assert_database_capability_transaction_commits_and_rolls_back(tmp_path)
-    )
-
-
-async def _assert_database_capability_transaction_commits_and_rolls_back(
-    tmp_path: Path,
-) -> None:
-    site = start(FastAPI(), config_source=_database_config_source(tmp_path))
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
     database = site.require_capability(DatabaseCapability)
     try:
         async with database.transaction() as session:
@@ -194,16 +188,11 @@ async def _assert_database_capability_transaction_commits_and_rolls_back(
         await database.close()
 
 
-def test_database_capability_supports_named_connection_aliases(
+@pytest.mark.anyio
+async def test_database_capability_supports_named_connection_aliases(
     tmp_path: Path,
 ) -> None:
-    asyncio.run(_assert_database_capability_supports_named_connection_aliases(tmp_path))
-
-
-async def _assert_database_capability_supports_named_connection_aliases(
-    tmp_path: Path,
-) -> None:
-    site = start(FastAPI(), config_source=_database_config_source(tmp_path))
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
     database = site.require_capability(DatabaseCapability)
     try:
         async with database.session("reader") as reader_session:
@@ -213,16 +202,11 @@ async def _assert_database_capability_supports_named_connection_aliases(
         await database.close()
 
 
-def test_database_capability_rejects_unknown_connection_name(
+@pytest.mark.anyio
+async def test_database_capability_rejects_unknown_connection_name(
     tmp_path: Path,
 ) -> None:
-    asyncio.run(_assert_database_capability_rejects_unknown_connection_name(tmp_path))
-
-
-async def _assert_database_capability_rejects_unknown_connection_name(
-    tmp_path: Path,
-) -> None:
-    site = start(FastAPI(), config_source=_database_config_source(tmp_path))
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
     database = site.require_capability(DatabaseCapability)
     try:
         with pytest.raises(

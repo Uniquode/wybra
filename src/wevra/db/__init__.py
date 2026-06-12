@@ -16,7 +16,7 @@ from wevra.db.validation import (
 from wevra.site import Site, SiteCapabilityError
 
 
-def setup_site(site: Site) -> None:
+async def setup_site(site: Site) -> None:
     app_config = site.config.get_config("app") or {}
     database_url = app_config.get("database_url")
     if not isinstance(database_url, str) or not database_url.strip():
