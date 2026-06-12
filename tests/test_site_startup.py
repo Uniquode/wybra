@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 
-from wevra import Site, start
+from wevra import Site, SiteCapabilityError, start
 from wevra.config import ConfigSourceError, ConfigSourceResult, MappingConfigSource
 from wevra.core.composition import (
     AppConfig,
@@ -14,6 +14,18 @@ from wevra.core.composition import (
     StaticOptions,
     TemplateOptions,
 )
+
+
+class ExampleCapability:
+    pass
+
+
+class OtherCapability:
+    pass
+
+
+class ExampleImplementation(ExampleCapability):
+    pass
 
 
 def _write_app_config(path: Path, *, modules: tuple[str, ...]) -> Path:
@@ -103,6 +115,50 @@ def test_start_rejects_config_source_object_with_invalid_metadata() -> None:
 
     with pytest.raises(ConfigSourceError, match="string, AppConfig, or ConfigSource"):
         start(FastAPI(), config_source=InvalidConfigSource())  # type: ignore[arg-type]
+
+
+def test_site_provides_and_requires_type_keyed_capability() -> None:
+    site = start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    capability = ExampleImplementation()
+
+    site.provide_capability(ExampleCapability, capability)
+
+    assert site.has_capability(ExampleCapability) is True
+    assert site.require_capability(ExampleCapability) is capability
+
+
+def test_site_reports_missing_required_capability() -> None:
+    site = start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        site.require_capability(ExampleCapability)
+
+
+def test_site_rejects_duplicate_capability_provider() -> None:
+    site = start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    site.provide_capability(ExampleCapability, ExampleImplementation())
+
+    with pytest.raises(SiteCapabilityError, match="already provided"):
+        site.provide_capability(ExampleCapability, ExampleImplementation())
+
+
+def test_site_rejects_capability_value_with_wrong_runtime_type() -> None:
+    site = start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+
+    with pytest.raises(SiteCapabilityError, match="invalid type"):
+        site.provide_capability(ExampleCapability, OtherCapability())
 
 
 def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:

@@ -22,6 +22,9 @@ _.optional_current_user
 _.require_current_user
 _.require_anonymous_user
 _.has_module
+_.has_capability
+_.require_capability
+_.provide_capability
 
 # Click command callbacks registered through decorators.
 _.create_command

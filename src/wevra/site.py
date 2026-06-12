@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeGuard
+from typing import TypeGuard, TypeVar, cast
 from urllib.parse import unquote, urlparse
 
 from fastapi import FastAPI
@@ -19,12 +19,22 @@ from wevra.config import (
 from wevra.core.composition import AppConfig
 
 ConfigSourceInput = str | AppConfig | ConfigSource
+T = TypeVar("T")
+
+
+class SiteCapabilityError(RuntimeError):
+    """Raised when a site capability cannot be registered or resolved."""
 
 
 @dataclass(frozen=True, slots=True)
 class Site:
     app: FastAPI
     config: ConfigService
+    _capabilities: dict[type[object], object] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     @property
     def modules(self) -> tuple[str, ...]:
@@ -38,6 +48,29 @@ class Site:
 
     def has_module(self, owner: str) -> bool:
         return owner in self.modules
+
+    def provide_capability(self, capability_type: type[T], value: T) -> None:
+        if capability_type in self._capabilities:
+            raise SiteCapabilityError(
+                f"Capability {capability_type.__name__} is already provided."
+            )
+        if not _matches_capability_type(value, capability_type):
+            raise SiteCapabilityError(
+                f"Capability value for {capability_type.__name__} has invalid type."
+            )
+        self._capabilities[capability_type] = value
+
+    def require_capability(self, capability_type: type[T]) -> T:
+        try:
+            capability = self._capabilities[capability_type]
+        except KeyError as exc:
+            raise SiteCapabilityError(
+                f"Missing capability {capability_type.__name__}."
+            ) from exc
+        return cast(T, capability)
+
+    def has_capability(self, capability_type: type[object]) -> bool:
+        return capability_type in self._capabilities
 
 
 def start(app: FastAPI, *, config_source: ConfigSourceInput) -> Site:
@@ -93,3 +126,10 @@ def _is_config_source(value: object) -> TypeGuard[ConfigSource]:
 
 def _is_windows_absolute_path(value: str) -> bool:
     return re.match(r"^[A-Za-z]:(?:\\|/)", value) is not None
+
+
+def _matches_capability_type(value: object, capability_type: type[object]) -> bool:
+    try:
+        return isinstance(value, capability_type)
+    except TypeError:
+        return True
