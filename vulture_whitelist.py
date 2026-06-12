@@ -25,6 +25,9 @@ _.has_module
 _.has_capability
 _.require_capability
 _.provide_capability
+_.session
+_.transaction
+_.close
 
 # Click command callbacks registered through decorators.
 _.create_command
