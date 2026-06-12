@@ -21,6 +21,7 @@ _.create_fastapi_users
 _.optional_current_user
 _.require_current_user
 _.require_anonymous_user
+_.has_module
 
 # Click command callbacks registered through decorators.
 _.create_command
