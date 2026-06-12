@@ -13,6 +13,7 @@ from wevra.config import (
     ConfigService,
     ConfigSource,
     ConfigSourceError,
+    ConfigSourceMetadata,
     FileConfigSource,
 )
 from wevra.core.composition import AppConfig
@@ -84,7 +85,10 @@ def _file_config_path(config_source: str) -> Path:
 
 
 def _is_config_source(value: object) -> TypeGuard[ConfigSource]:
-    return callable(getattr(value, "load", None)) and hasattr(value, "metadata")
+    return callable(getattr(value, "load", None)) and isinstance(
+        getattr(value, "metadata", None),
+        ConfigSourceMetadata,
+    )
 
 
 def _is_windows_absolute_path(value: str) -> bool:

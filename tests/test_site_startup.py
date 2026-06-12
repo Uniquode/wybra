@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 
 from wevra import Site, start
-from wevra.config import ConfigSourceError, MappingConfigSource
+from wevra.config import ConfigSourceError, ConfigSourceResult, MappingConfigSource
 from wevra.core.composition import (
     AppConfig,
     RouteOptions,
@@ -92,6 +92,17 @@ def test_start_treats_windows_absolute_source_string_as_file_path() -> None:
 def test_start_rejects_invalid_config_source_object() -> None:
     with pytest.raises(ConfigSourceError, match="string, AppConfig, or ConfigSource"):
         start(FastAPI(), config_source=object())  # type: ignore[arg-type]
+
+
+def test_start_rejects_config_source_object_with_invalid_metadata() -> None:
+    class InvalidConfigSource:
+        metadata = object()
+
+        def load(self) -> ConfigSourceResult:
+            return ConfigSourceResult()
+
+    with pytest.raises(ConfigSourceError, match="string, AppConfig, or ConfigSource"):
+        start(FastAPI(), config_source=InvalidConfigSource())  # type: ignore[arg-type]
 
 
 def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
