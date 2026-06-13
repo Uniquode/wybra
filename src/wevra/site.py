@@ -155,6 +155,7 @@ def start_site(
 ) -> SiteLifespan[FastAPI]:
     @asynccontextmanager
     async def _start_site(app: FastAPI):
+        app.middleware_stack = None
         site = await start(
             app,
             config_source=config_source,

@@ -139,6 +139,7 @@ _.accepts_body
 _.accepts_form
 _.path_parameters
 _.template
+_.middleware_stack
 
 # Alembic revision module metadata.
 _.down_revision

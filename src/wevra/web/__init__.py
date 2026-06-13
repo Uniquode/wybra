@@ -29,6 +29,7 @@ from wevra.web.security import SecurityHeaderOptions, register_security_headers
 from wevra.web.staticfiles import ComposedStaticFiles, NoStaticFiles
 
 AUTH_MODULE_NAME = "wevra.auth"
+HOST_ROUTE_MODULES_STATE_ATTRIBUTE = "wevra_web_host_route_modules"
 TEMPLATE_CONTEXT_MIDDLEWARE_STATE_ATTRIBUTE = (
     "wevra_web_template_context_middleware_registered"
 )
@@ -76,7 +77,7 @@ async def setup_site(site: Site) -> None:
     register_module_routes(
         site.app,
         load_module_routes(
-            _modules_registered_by_web(site.modules),
+            _modules_registered_by_web(site),
             route_prefixes=app_config.routes.prefixes,
         ),
     )
@@ -118,8 +119,14 @@ def _static_app(site: Site) -> ASGIApp:
     return NoStaticFiles()
 
 
-def _modules_registered_by_web(modules: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(module for module in modules if module != AUTH_MODULE_NAME)
+def _modules_registered_by_web(site: Site) -> tuple[str, ...]:
+    host_modules = getattr(site.app.state, HOST_ROUTE_MODULES_STATE_ATTRIBUTE, ())
+    excluded_modules = {AUTH_MODULE_NAME}
+    if isinstance(host_modules, tuple) and all(
+        isinstance(module, str) for module in host_modules
+    ):
+        excluded_modules.update(host_modules)
+    return tuple(module for module in site.modules if module not in excluded_modules)
 
 
 def _should_resolve_template_context(request: Request) -> bool:
