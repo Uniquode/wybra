@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from jinja2 import Environment, select_autoescape
 from jinja2.exceptions import TemplateNotFound
 
+from wevra.config import MappingConfigSource
 from wevra.core.composition import (
     AppConfig,
     CompositionError,
@@ -32,7 +33,9 @@ from wevra.core.settings import (
     load_composed_settings,
     values_from_env_settings,
 )
+from wevra.site import start
 from wevra.web.context import ContextProviderError, resolve_context_providers
+from wevra.web.rendering import TemplateRenderer
 from wevra.web.routes import (
     ConfiguredModuleRouter,
     RouteCompositionError,
@@ -60,6 +63,7 @@ from wevra.web.security import (
     register_security_headers,
 )
 from wevra.web.staticfiles import (
+    ComposedStaticFiles,
     StaticAssetDuplicate,
     export_configured_static_assets,
     export_static_assets,
@@ -72,6 +76,85 @@ def test_wevra_web_package_imports() -> None:
     package = importlib.import_module("wevra.web")
 
     assert package.__name__ == "wevra.web"
+
+
+@pytest.mark.anyio
+async def test_wevra_web_setup_site_registers_routes_renderer_and_static(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "configured_web_app"
+    static_root = package_root / "static" / "styles"
+    template_root = package_root / "templates"
+    static_root.mkdir(parents=True)
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+            from fastapi.responses import Response
+
+            router = APIRouter()
+
+            @router.get("/ping", name="configured:ping")
+            async def ping():
+                return Response("pong")
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    (template_root / "page.html").write_text("page", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("configured_web_app", "wevra.web"),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "configured_web_app": {"default": ""},
+                        "wevra.web": {"partials": "", "api": ""},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    assert site.app is app
+    assert isinstance(app.state.renderer, TemplateRenderer)
+    assert app.state.renderer.render_template("page.html", {}) == "page"
+    static_route = next(
+        route for route in app.routes if getattr(route, "name", None) == "static"
+    )
+    assert isinstance(static_route.app, ComposedStaticFiles)
+    assert TestClient(app).get("/ping").text == "pong"
+    assert TestClient(app).get("/static/styles/app.css").text == "body {}"
+
+
+@pytest.mark.anyio
+async def test_wevra_web_setup_is_omitted_when_module_is_not_configured() -> None:
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+
+    assert not hasattr(app.state, "renderer")
+    assert all(getattr(route, "name", None) != "static" for route in app.routes)
 
 
 def test_wevra_web_package_exposes_expected_submodules() -> None:

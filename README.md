@@ -49,6 +49,62 @@ The framework project does not contain host application settings, `app.toml`,
 or change-management artifacts. Host-facing commands resolve the configured
 application through the host project's `[tool.wevra]` metadata and `app.toml`.
 
+## Application Startup
+
+Host applications own their FastAPI instance and product routes. Wevra owns the
+common engine setup behind the FastAPI lifespan hook:
+
+```python
+from fastapi import FastAPI
+import wevra
+
+app = FastAPI(
+    title="example",
+    lifespan=wevra.start_site(config_source="app.toml"),
+)
+```
+
+Configured modules expose one async setup hook at their package root:
+
+```python
+from wevra import Site
+
+
+async def setup_site(site: Site) -> None:
+    ...
+```
+
+Startup calls configured module hooks in `app.toml` order. Modules use
+type-keyed capabilities for shared services rather than importing another
+module's implementation details:
+
+```python
+from wevra.db import DatabaseCapability
+
+
+async def setup_site(site: Site) -> None:
+    database = site.require_capability(DatabaseCapability)
+    async with database.transaction() as session:
+        ...
+```
+
+Auth is exposed through `AuthCapability`, so applications can depend on public
+helpers rather than auth internals:
+
+```python
+from fastapi import Depends
+from wevra.auth import login_required
+
+
+@router.get("/admin", dependencies=[Depends(login_required)])
+async def admin_page():
+    ...
+```
+
+App-side Wevra database, auth, route, template, static, or runtime-state setup
+is not supported. Configure modules and settings once, then let
+`wevra.start_site(...)` initialise the Wevra-owned concerns.
+
 ## Project Commands
 
 Wevra publishes prefixed console scripts to avoid collisions with host

@@ -269,7 +269,7 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
     app_config = AppConfig(
         config_path=tmp_path / "app.toml",
         project_root=tmp_path,
-        modules=("wevra.web", "wevra.auth"),
+        modules=("wevra.web",),
         routes=RouteOptions(prefixes={}),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
         static=StaticOptions(url_path="/static/", export_root=Path("static")),
@@ -277,8 +277,8 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
 
     site = await start(FastAPI(), config_source=app_config)
 
-    assert site.modules == ("wevra.web", "wevra.auth")
-    assert site.has_module("wevra.auth") is True
+    assert site.modules == ("wevra.web",)
+    assert site.has_module("wevra.web") is True
 
 
 @pytest.mark.anyio
