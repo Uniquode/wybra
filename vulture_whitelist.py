@@ -26,6 +26,7 @@ _.has_capability
 _.require_capability
 _.provide_capability
 _.start_site
+_.get_site
 _.session
 _.transaction
 _.close

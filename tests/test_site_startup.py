@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 from fastapi import FastAPI
 
-from wevra import Site, SiteCapabilityError, start_site
+from wevra import Site, SiteCapabilityError, get_site, start_site
 from wevra.config import ConfigSourceError, ConfigSourceResult, MappingConfigSource
 from wevra.core.composition import (
     AppConfig,
@@ -25,6 +26,10 @@ class OtherCapability:
     pass
 
 
+class UnsupportedCapability(Protocol):
+    pass
+
+
 class ExampleImplementation(ExampleCapability):
     pass
 
@@ -35,6 +40,11 @@ class ClosingCapability:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class SyncClosingCapability:
+    def close(self) -> None:
+        pass
 
 
 def _write_app_config(path: Path, *, modules: tuple[str, ...]) -> Path:
@@ -188,6 +198,17 @@ async def test_site_rejects_capability_value_with_wrong_runtime_type() -> None:
 
 
 @pytest.mark.anyio
+async def test_site_rejects_capability_type_without_runtime_validation() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+
+    with pytest.raises(SiteCapabilityError, match="cannot be runtime-validated"):
+        site.provide_capability(UnsupportedCapability, object())
+
+
+@pytest.mark.anyio
 async def test_site_close_closes_async_capabilities() -> None:
     site = await start(
         FastAPI(),
@@ -199,6 +220,29 @@ async def test_site_close_closes_async_capabilities() -> None:
     await site.close()
 
     assert capability.closed is True
+    assert site.has_capability(ClosingCapability) is False
+
+    await site.close()
+
+
+@pytest.mark.anyio
+async def test_site_close_reports_invalid_hooks_after_closing_valid_capabilities() -> (
+    None
+):
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    closing = ClosingCapability()
+    site.provide_capability(ClosingCapability, closing)
+    site.provide_capability(SyncClosingCapability, SyncClosingCapability())
+
+    with pytest.raises(SiteCapabilityError, match="error_count=1"):
+        await site.close()
+
+    assert closing.closed is True
+    assert site.has_capability(ClosingCapability) is False
+    assert site.has_capability(SyncClosingCapability) is False
 
 
 @pytest.mark.anyio
@@ -211,6 +255,13 @@ async def test_start_site_returns_fastapi_lifespan_and_stores_site() -> None:
     async with lifespan(app):
         assert isinstance(app.state.site, Site)
         assert app.state.site.app is app
+        assert get_site(app) is app.state.site
+
+
+@pytest.mark.anyio
+async def test_get_site_rejects_missing_site() -> None:
+    with pytest.raises(SiteCapabilityError, match="attribute=site"):
+        get_site(FastAPI())
 
 
 @pytest.mark.anyio
@@ -311,7 +362,10 @@ async def test_start_rejects_non_callable_setup_site(
     monkeypatch.syspath_prepend(str(tmp_path))
     _write_module(tmp_path, "invalid_module", "setup_site = object()\n")
 
-    with pytest.raises(SiteCapabilityError, match="setup_site"):
+    with pytest.raises(
+        SiteCapabilityError,
+        match="module=invalid_module.*attribute_type=object",
+    ):
         await start(
             FastAPI(),
             config_source=MappingConfigSource(
@@ -332,7 +386,10 @@ async def test_start_rejects_sync_setup_site(
         'def setup_site(site):\n    raise RuntimeError("should not be called")\n',
     )
 
-    with pytest.raises(SiteCapabilityError, match="setup_site must be async"):
+    with pytest.raises(
+        SiteCapabilityError,
+        match="module=sync_module.*expected=async_callable",
+    ):
         await start(
             FastAPI(),
             config_source=MappingConfigSource({"app": {"modules": ("sync_module",)}}),
@@ -351,7 +408,10 @@ async def test_start_reports_setup_site_failure(
         'async def setup_site(site):\n    raise RuntimeError("boom")\n',
     )
 
-    with pytest.raises(SiteCapabilityError, match="failing_module"):
+    with pytest.raises(
+        SiteCapabilityError,
+        match="module=failing_module.*error_type=RuntimeError",
+    ):
         await start(
             FastAPI(),
             config_source=MappingConfigSource(

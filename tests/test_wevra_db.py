@@ -217,6 +217,19 @@ async def test_database_capability_rejects_unknown_connection_name(
         await database.close()
 
 
+@pytest.mark.anyio
+async def test_database_capability_rejects_use_after_close(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+    database = site.require_capability(DatabaseCapability)
+
+    await database.close()
+
+    with pytest.raises(DatabaseCapabilityError, match="Database capability is closed"):
+        database.session()
+
+
 def test_wevra_db_modules_do_not_import_application_or_auth_packages() -> None:
     project_root = Path(__file__).resolve().parents[1]
     forbidden_modules = ("wevra.auth", "host_app")
