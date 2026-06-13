@@ -859,6 +859,80 @@ def test_register_module_routes_skips_later_method_path_conflicts(
     )
 
 
+def test_register_module_routes_existing_app_route_wins_on_conflict(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = FastAPI()
+
+    @app.get("/shared")
+    async def app_shared() -> Response:
+        return Response("app")
+
+    router = APIRouter()
+
+    @router.get("/shared", name="module:shared")
+    async def module_shared() -> Response:
+        return Response("module")
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="wevra.web.routes.registration",
+    ):
+        register_module_routes(
+            app,
+            (
+                ConfiguredModuleRouter(
+                    module_name="module",
+                    label="pages",
+                    router=router,
+                    prefix="",
+                ),
+            ),
+        )
+
+    assert TestClient(app).get("/shared").text == "app"
+    assert any(
+        record.message == "Skipping duplicate configured route."
+        and record.route_module == "module"
+        and record.route_router == "pages"
+        and record.route_method == "GET"
+        and record.route_path == "/shared"
+        and record.winning_route_module == "app"
+        and record.winning_route_router == "existing"
+        for record in caplog.records
+    )
+
+
+def test_register_module_routes_rejects_partial_method_path_conflicts() -> None:
+    app = FastAPI()
+
+    @app.get("/shared")
+    async def app_shared() -> Response:
+        return Response("app")
+
+    router = APIRouter()
+
+    @router.api_route("/shared", methods=["GET", "POST"], name="module:shared")
+    async def module_shared() -> Response:
+        return Response("module")
+
+    with pytest.raises(
+        RouteCompositionError,
+        match="partial method/path conflict.*GET",
+    ):
+        register_module_routes(
+            app,
+            (
+                ConfiguredModuleRouter(
+                    module_name="module",
+                    label="pages",
+                    router=router,
+                    prefix="",
+                ),
+            ),
+        )
+
+
 def test_register_module_routes_rejects_non_string_http_methods() -> None:
     router = APIRouter()
 

@@ -304,6 +304,12 @@ def _first_winning_router(
             if (method, full_path) in method_paths
         }
         if winning_owners:
+            if len(winning_owners) != len(methods):
+                raise RouteCompositionError(
+                    "Route has a partial method/path conflict: "
+                    f"{owner.label} at {full_path} conflicts for "
+                    f"{_format_label_list(tuple(winning_owners))}."
+                )
             _warn_duplicate_route(
                 route=route,
                 owner=owner,
