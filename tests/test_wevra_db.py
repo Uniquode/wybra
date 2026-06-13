@@ -3,6 +3,7 @@ import importlib
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 from fastapi import FastAPI
@@ -11,13 +12,17 @@ from sqlalchemy import MetaData, text
 from wevra import SiteCapabilityError
 from wevra.config import MappingConfigSource
 from wevra.db import DatabaseCapability
-from wevra.db.capabilities import DatabaseCapabilityError
+from wevra.db.capabilities import (
+    DatabaseCapabilityError,
+    SqlAlchemyDatabaseCapability,
+)
 from wevra.db.migrate import (
     DEFAULT_MIGRATIONS_SCRIPT_LOCATION,
     migration_script_location,
     migration_script_root,
 )
 from wevra.db.models import Base, metadata
+from wevra.db.persistence import Database
 from wevra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
@@ -228,6 +233,37 @@ async def test_database_capability_rejects_use_after_close(
 
     with pytest.raises(DatabaseCapabilityError, match="Database capability is closed"):
         database.session()
+
+
+@pytest.mark.anyio
+async def test_database_capability_attempts_all_distinct_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_database = cast(Database, object())
+    second_database = cast(Database, object())
+    closed_databases: list[Database] = []
+
+    async def close_or_fail(database: Database) -> None:
+        closed_databases.append(database)
+        if database is first_database:
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(
+        "wevra.db.capabilities.close_database",
+        close_or_fail,
+    )
+    database = SqlAlchemyDatabaseCapability.from_connections(
+        {
+            "default": first_database,
+            "reader": second_database,
+            "writer": first_database,
+        }
+    )
+
+    with pytest.raises(DatabaseCapabilityError, match="error_count=1"):
+        await database.close()
+
+    assert closed_databases == [first_database, second_database]
 
 
 def test_wevra_db_modules_do_not_import_application_or_auth_packages() -> None:

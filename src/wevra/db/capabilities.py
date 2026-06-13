@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ DEFAULT_CONNECTION_NAMES = (
     READER_CONNECTION_NAME,
     WRITER_CONNECTION_NAME,
 )
+logger = logging.getLogger(__name__)
 
 
 class DatabaseCapabilityError(RuntimeError):
@@ -85,13 +87,30 @@ class SqlAlchemyDatabaseCapability:
         """
         if self._closed:
             return
+        error_count = 0
         closed: set[int] = set()
         for database in self._connections.values():
             identity = id(database)
             if identity in closed:
                 continue
-            await close_database(database)
             closed.add(identity)
+            try:
+                await close_database(database)
+            except Exception as exc:
+                error_count += 1
+                logger.exception(
+                    "Database close failed",
+                    extra={
+                        "database_identity": identity,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+
+        if error_count:
+            raise DatabaseCapabilityError(
+                f"Database close failed: error_count={error_count}."
+            )
+
         object.__setattr__(self, "_closed", True)
 
     @asynccontextmanager

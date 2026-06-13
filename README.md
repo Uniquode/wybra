@@ -51,7 +51,7 @@ application through the host project's `[tool.wevra]` metadata and `app.toml`.
 
 ## Application Startup
 
-Host applications own their FastAPI instance and product routes. Wevra owns the
+Host applications own their FastAPI instance and application routes. Wevra owns the
 common engine setup behind the FastAPI lifespan hook:
 
 ```python

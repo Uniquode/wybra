@@ -16,6 +16,14 @@ ModuleRouters = Mapping[str, APIRouter]
 RoutePrefixMap = Mapping[str, Mapping[str, str]]
 logger = logging.getLogger(__name__)
 
+ROUTE_LOG_FIELD_MODULE = "route_module"
+ROUTE_LOG_FIELD_ROUTER = "route_router"
+ROUTE_LOG_FIELD_NAME = "route_name"
+ROUTE_LOG_FIELD_METHOD = "route_method"
+ROUTE_LOG_FIELD_PATH = "route_path"
+ROUTE_LOG_FIELD_WINNING_MODULE = "winning_route_module"
+ROUTE_LOG_FIELD_WINNING_ROUTER = "winning_route_router"
+
 
 @dataclass(frozen=True, slots=True)
 class ConfiguredModuleRouter:
@@ -305,6 +313,11 @@ def _first_winning_router(
             )
             continue
 
+        # FastAPI does not expose a public API for cloning an arbitrary existing
+        # route object without reconstructing all APIRoute/Starlette metadata.
+        # We append the already-constructed route object so dependencies, names,
+        # OpenAPI metadata, response options, and custom route classes are kept,
+        # while still physically omitting later duplicate method/path routes.
         filtered_router.routes.append(route)
         for method in methods:
             method_paths[(method, full_path)] = owner
@@ -325,13 +338,13 @@ def _warn_duplicate_route(
         logger.warning(
             "Skipping duplicate configured route.",
             extra={
-                "route_module": owner.module_name,
-                "route_router": owner.router_label,
-                "route_name": getattr(route, "name", None),
-                "route_method": method,
-                "route_path": path,
-                "winning_route_module": winning_owner.module_name,
-                "winning_route_router": winning_owner.router_label,
+                ROUTE_LOG_FIELD_MODULE: owner.module_name,
+                ROUTE_LOG_FIELD_ROUTER: owner.router_label,
+                ROUTE_LOG_FIELD_NAME: getattr(route, "name", None),
+                ROUTE_LOG_FIELD_METHOD: method,
+                ROUTE_LOG_FIELD_PATH: path,
+                ROUTE_LOG_FIELD_WINNING_MODULE: winning_owner.module_name,
+                ROUTE_LOG_FIELD_WINNING_ROUTER: winning_owner.router_label,
             },
         )
 

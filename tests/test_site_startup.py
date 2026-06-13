@@ -8,14 +8,21 @@ import pytest
 from fastapi import FastAPI
 
 from wevra import Site, SiteCapabilityError, get_site, start_site
-from wevra.config import ConfigSourceError, ConfigSourceResult, MappingConfigSource
+from wevra.config import (
+    ConfigService,
+    ConfigSourceError,
+    ConfigSourceResult,
+    MappingConfigSource,
+)
 from wevra.core.composition import (
     AppConfig,
+    CompositionError,
     RouteOptions,
     StaticOptions,
     TemplateOptions,
 )
 from wevra.site import start
+from wevra.site_config import app_config_from_site
 
 
 class ExampleCapability:
@@ -67,6 +74,76 @@ def _write_app_config(path: Path, *, modules: tuple[str, ...]) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _site_from_mapping(values: dict[str, dict[str, object]]) -> Site:
+    return Site(
+        app=FastAPI(),
+        config=ConfigService(
+            [MappingConfigSource(values)],
+            discover_module_config=False,
+        ),
+    )
+
+
+def test_app_config_from_site_rejects_non_mapping_route_prefixes() -> None:
+    site = _site_from_mapping(
+        {
+            "app": {"modules": ("host_app",)},
+            "app.routes": {"prefixes": []},
+        }
+    )
+
+    with pytest.raises(
+        CompositionError,
+        match=r"'app\.routes' prefixes must be a mapping",
+    ):
+        app_config_from_site(site)
+
+
+def test_app_config_from_site_rejects_non_mapping_module_route_prefixes() -> None:
+    site = _site_from_mapping(
+        {
+            "app": {"modules": ("host_app",)},
+            "app.routes": {"prefixes": {"host_app": ""}},
+        }
+    )
+
+    with pytest.raises(
+        CompositionError,
+        match=r"prefixes for 'host_app' must be a mapping",
+    ):
+        app_config_from_site(site)
+
+
+def test_app_config_from_site_rejects_non_string_route_prefix() -> None:
+    site = _site_from_mapping(
+        {
+            "app": {"modules": ("host_app",)},
+            "app.routes": {"prefixes": {"host_app": {"admin": 123}}},
+        }
+    )
+
+    with pytest.raises(
+        CompositionError,
+        match=r"prefix for 'host_app' router 'admin' must be a string",
+    ):
+        app_config_from_site(site)
+
+
+def test_app_config_from_site_rejects_malformed_scalar_options() -> None:
+    site = _site_from_mapping(
+        {
+            "app": {"modules": ("host_app",)},
+            "app.templates": {"cache_size": -1},
+        }
+    )
+
+    with pytest.raises(
+        CompositionError,
+        match=r"cache_size' must be a non-negative integer",
+    ):
+        app_config_from_site(site)
 
 
 @pytest.mark.anyio
