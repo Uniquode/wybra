@@ -148,6 +148,7 @@ def _normalise_static_mount_path(url_path: str) -> str:
 
 
 __all__ = [
+    "HOST_ROUTE_MODULES_STATE_ATTRIBUTE",
     "setup_site",
     "template_context_middleware",
 ]
