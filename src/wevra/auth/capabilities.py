@@ -23,14 +23,12 @@ from wevra.auth.sessions import (
     require_current_user as _require_current_user,
 )
 from wevra.auth.settings import (
-    AUTH_SETTINGS_OWNER,
     AuthSettings,
     load_auth_settings_from_config,
 )
 from wevra.db.capabilities import DatabaseCapability
 from wevra.site import Site, get_site
 from wevra.site_config import app_config_from_site
-from wevra.web.routes.registration import load_module_routes, register_module_routes
 
 OptionalCurrentUserDependency = Callable[[Request], Awaitable[User | None]]
 RequiredCurrentUserDependency = Callable[[Request], Awaitable[User]]
@@ -108,13 +106,6 @@ async def setup_site(site: Site) -> None:
     site.app.state.identity_delivery = NullIdentityDelivery()
     site.app.state.fastapi_users = capability.fastapi_users
     site.provide_capability(AuthCapability, capability)
-    register_module_routes(
-        site.app,
-        load_module_routes(
-            (AUTH_SETTINGS_OWNER,),
-            route_prefixes=app_config.routes.prefixes,
-        ),
-    )
 
 
 def _auth_capability_from_request(request: Request) -> AuthCapability:

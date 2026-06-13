@@ -53,7 +53,6 @@ async def test_wevra_auth_setup_site_registers_auth_capability(
     assert callable(auth.anonymous_required)
     assert callable(login_required)
     assert callable(anonymous_required)
-    assert any(route.path == "/account/login" for route in app.routes)
 
 
 @pytest.mark.anyio

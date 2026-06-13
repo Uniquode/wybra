@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
@@ -13,6 +14,7 @@ from wevra.core.composition import AppConfig, CompositionError
 
 ModuleRouters = Mapping[str, APIRouter]
 RoutePrefixMap = Mapping[str, Mapping[str, str]]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,14 +62,19 @@ def load_module_routes(
         if not module_routers:
             continue
 
-        module_prefixes = (
-            None if route_prefixes is None else route_prefixes.get(module_name)
+        selected_labels = _published_router_labels(
+            module_name,
+            module_routers,
+            route_prefixes,
         )
-        for label, router in module_routers.items():
-            prefix = _prefix_for_module_router(
-                module_name,
-                label,
-                module_prefixes,
+        for label in selected_labels:
+            router = module_routers[label]
+            prefix = _prefix_for_published_router(
+                module_name=module_name,
+                label=label,
+                prefix=""
+                if route_prefixes is None
+                else route_prefixes[module_name][label],
             )
             configured_routers.append(
                 ConfiguredModuleRouter(
@@ -129,9 +136,14 @@ def register_module_routes(
 
     routers = tuple(configured_routers)
     _validate_configured_routers(routers)
+    method_paths = _registered_method_paths(app)
     for configured_router in routers:
+        filtered_router = _first_winning_router(configured_router, method_paths)
+        if not filtered_router.routes:
+            continue
+
         route_start = len(app.routes)
-        app.include_router(configured_router.router, prefix=configured_router.prefix)
+        app.include_router(filtered_router, prefix=configured_router.prefix)
         for route in app.routes[route_start:]:
             route_path = getattr(route, "path", None)
             route_name = getattr(route, "name", None)
@@ -151,21 +163,41 @@ def register_module_routes(
             )
 
 
-def _prefix_for_module_router(
+def _prefix_for_published_router(
+    *,
     module_name: str,
     label: str,
-    module_prefixes: Mapping[str, str] | None,
+    prefix: str,
 ) -> str:
-    if module_prefixes is None:
-        return ""
+    return _normalise_include_prefix(module_name, label, prefix)
 
-    if label not in module_prefixes:
+
+def _published_router_labels(
+    module_name: str,
+    module_routers: ModuleRouters,
+    route_prefixes: RoutePrefixMap | None,
+) -> tuple[str, ...]:
+    if route_prefixes is None:
+        return tuple(module_routers)
+
+    module_prefixes = route_prefixes.get(module_name)
+    if module_prefixes is None:
+        return ()
+
+    unknown_labels = tuple(
+        label for label in module_prefixes if label not in module_routers
+    )
+    if unknown_labels:
         raise RouteCompositionError(
-            f"Route config for configured module {module_name!r} is missing "
-            f"router label {label!r}."
+            f"Route config for configured module {module_name!r} references "
+            f"unknown router label {_format_label_list(unknown_labels)}."
         )
 
-    return _normalise_include_prefix(module_name, label, module_prefixes[label])
+    return tuple(module_prefixes)
+
+
+def _format_label_list(labels: tuple[str, ...]) -> str:
+    return ", ".join(repr(label) for label in labels)
 
 
 def _normalise_include_prefix(module_name: str, label: str, prefix: str) -> str:
@@ -190,8 +222,6 @@ def _normalise_include_prefix(module_name: str, label: str, prefix: str) -> str:
 def _validate_configured_routers(
     configured_routers: Iterable[ConfiguredModuleRouter],
 ) -> None:
-    route_names: dict[str, _RouteOwner] = {}
-    method_paths: dict[tuple[str, str], _RouteOwner] = {}
     for configured_router in configured_routers:
         owner = _RouteOwner(
             module_name=configured_router.module_name,
@@ -205,10 +235,6 @@ def _validate_configured_routers(
             )
 
         for route in configured_router.router.routes:
-            route_name = getattr(route, "name", None)
-            if isinstance(route_name, str) and route_name:
-                _record_route_name(route_name, owner, route_names)
-
             route_path = getattr(route, "path", None)
             route_methods = getattr(route, "methods", None)
             if route_path is None or route_methods is None:
@@ -229,40 +255,85 @@ def _validate_configured_routers(
                 raise RouteCompositionError(
                     f"Route {owner.label} resolves to an empty path."
                 )
-            for method in _normalised_methods(route_methods, owner, full_path):
-                _record_method_path(method, full_path, owner, method_paths)
+            _normalised_methods(route_methods, owner, full_path)
 
 
-def _record_route_name(
-    route_name: str,
-    owner: _RouteOwner,
-    route_names: dict[str, _RouteOwner],
-) -> None:
-    if route_name in route_names:
-        previous = route_names[route_name]
-        raise RouteCompositionError(
-            f"Route name conflict for {route_name!r}: "
-            f"{previous.label} conflicts with {owner.label}."
-        )
-
-    route_names[route_name] = owner
+def _registered_method_paths(app: FastAPI) -> dict[tuple[str, str], _RouteOwner]:
+    method_paths: dict[tuple[str, str], _RouteOwner] = {}
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if not isinstance(path, str) or methods is None:
+            continue
+        owner = _RouteOwner(module_name="app", router_label="existing")
+        for method in _route_origin_methods(route):
+            method_paths[(method, path)] = owner
+    return method_paths
 
 
-def _record_method_path(
-    method: str,
-    path: str,
-    owner: _RouteOwner,
+def _first_winning_router(
+    configured_router: ConfiguredModuleRouter,
     method_paths: dict[tuple[str, str], _RouteOwner],
-) -> None:
-    key = (method, path)
-    if key in method_paths:
-        previous = method_paths[key]
-        raise RouteCompositionError(
-            f"Route method/path conflict for {method} {path}: "
-            f"{previous.label} conflicts with {owner.label}."
-        )
+) -> APIRouter:
+    filtered_router = APIRouter()
+    owner = _RouteOwner(
+        module_name=configured_router.module_name,
+        router_label=configured_router.label,
+    )
 
-    method_paths[key] = owner
+    for route in configured_router.router.routes:
+        route_path = getattr(route, "path", None)
+        route_methods = getattr(route, "methods", None)
+        if not isinstance(route_path, str) or route_methods is None:
+            filtered_router.routes.append(route)
+            continue
+
+        full_path = f"{configured_router.prefix}{route_path}"
+        methods = _normalised_methods(route_methods, owner, full_path)
+        winning_owners = {
+            method: method_paths[(method, full_path)]
+            for method in methods
+            if (method, full_path) in method_paths
+        }
+        if winning_owners:
+            _warn_duplicate_route(
+                route=route,
+                owner=owner,
+                methods=tuple(winning_owners),
+                path=full_path,
+                winning_owners=winning_owners,
+            )
+            continue
+
+        filtered_router.routes.append(route)
+        for method in methods:
+            method_paths[(method, full_path)] = owner
+
+    return filtered_router
+
+
+def _warn_duplicate_route(
+    *,
+    route: object,
+    owner: _RouteOwner,
+    methods: tuple[str, ...],
+    path: str,
+    winning_owners: Mapping[str, _RouteOwner],
+) -> None:
+    for method in methods:
+        winning_owner = winning_owners[method]
+        logger.warning(
+            "Skipping duplicate configured route.",
+            extra={
+                "route_module": owner.module_name,
+                "route_router": owner.router_label,
+                "route_name": getattr(route, "name", None),
+                "route_method": method,
+                "route_path": path,
+                "winning_route_module": winning_owner.module_name,
+                "winning_route_router": winning_owner.router_label,
+            },
+        )
 
 
 def _normalised_methods(
