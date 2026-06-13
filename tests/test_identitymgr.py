@@ -82,6 +82,7 @@ from wevra.core.composition import (
     load_app_config,
 )
 from wevra.core.exceptions import ConfigurationError
+from wevra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
 from wevra.db.persistence import (
     close_database,
     create_database,
@@ -89,6 +90,7 @@ from wevra.db.persistence import (
     create_session_factory,
     session_scope,
 )
+from wevra.site import Site
 
 STRONG_TEST_PASSWORD = "Correct horse 42!"
 UPDATED_STRONG_TEST_PASSWORD = "New correct horse 42!"
@@ -177,7 +179,30 @@ def create_auth_test_app(
         database_url=database_url,
         identity_options=options,
     )
-    app.state.database = create_database(settings)
+    database = create_database(settings)
+    app.state.database = database
+    site = Site(
+        app=app,
+        config=ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app": {
+                            "modules": ("wevra.db", "wevra.auth"),
+                            "database_url": database_url,
+                        }
+                    }
+                )
+            ]
+        ),
+    )
+    site.provide_capability(
+        DatabaseCapability,
+        SqlAlchemyDatabaseCapability.from_connections(
+            {"default": database, "reader": database, "writer": database}
+        ),
+    )
+    app.state.site = site
     return app
 
 

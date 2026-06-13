@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import importlib
+import logging
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 from jinja2 import Environment, select_autoescape
 from jinja2.exceptions import TemplateNotFound
 
+from wevra.config import MappingConfigSource
 from wevra.core.composition import (
     AppConfig,
     CompositionError,
@@ -32,7 +34,9 @@ from wevra.core.settings import (
     load_composed_settings,
     values_from_env_settings,
 )
+from wevra.site import start
 from wevra.web.context import ContextProviderError, resolve_context_providers
+from wevra.web.rendering import TemplateRenderer
 from wevra.web.routes import (
     ConfiguredModuleRouter,
     RouteCompositionError,
@@ -60,6 +64,7 @@ from wevra.web.security import (
     register_security_headers,
 )
 from wevra.web.staticfiles import (
+    ComposedStaticFiles,
     StaticAssetDuplicate,
     export_configured_static_assets,
     export_static_assets,
@@ -72,6 +77,116 @@ def test_wevra_web_package_imports() -> None:
     package = importlib.import_module("wevra.web")
 
     assert package.__name__ == "wevra.web"
+
+
+@pytest.mark.anyio
+async def test_wevra_web_setup_site_registers_routes_renderer_and_static(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "configured_web_app"
+    static_root = package_root / "static" / "styles"
+    template_root = package_root / "templates"
+    static_root.mkdir(parents=True)
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+            from fastapi.responses import Response
+
+            router = APIRouter()
+
+            @router.get("/ping", name="configured:ping")
+            async def ping():
+                return Response("pong")
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    (template_root / "page.html").write_text("page", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("configured_web_app", "wevra.web"),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "configured_web_app": {"default": ""},
+                        "wevra.web": {"partials": "", "api": ""},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    assert site.app is app
+    assert isinstance(app.state.renderer, TemplateRenderer)
+    assert app.state.renderer.render_template("page.html", {}) == "page"
+    static_route = next(
+        route for route in app.routes if getattr(route, "name", None) == "static"
+    )
+    assert isinstance(static_route.app, ComposedStaticFiles)
+    assert TestClient(app).get("/ping").text == "pong"
+    assert TestClient(app).get("/static/styles/app.css").text == "body {}"
+
+
+@pytest.mark.anyio
+async def test_wevra_web_setup_is_omitted_when_module_is_not_configured() -> None:
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+
+    assert not hasattr(app.state, "renderer")
+    assert all(getattr(route, "name", None) != "static" for route in app.routes)
+
+
+@pytest.mark.anyio
+async def test_wevra_web_registers_auth_routes_through_module_composition(
+    tmp_path: Path,
+) -> None:
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wevra.web", "wevra.db", "wevra.auth"),
+                    "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "wevra.web": {"partials": "", "api": ""},
+                        "wevra.auth": {"account": "/account", "api": ""},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    assert TestClient(app).get("/account/login").status_code == 200
 
 
 def test_wevra_web_package_exposes_expected_submodules() -> None:
@@ -660,7 +775,7 @@ def test_module_router_can_bypass_module_prefix_with_separate_label() -> None:
     assert client.get("/account/oauth/callback").status_code == 404
 
 
-def test_register_module_routes_rejects_route_name_conflicts() -> None:
+def test_register_module_routes_allows_route_name_conflicts() -> None:
     first_router = APIRouter()
     second_router = APIRouter()
 
@@ -670,14 +785,51 @@ def test_register_module_routes_rejects_route_name_conflicts() -> None:
 
     @second_router.get("/second", name="shared:home")
     async def second() -> Response:
-        return Response()
+        return Response("second")
 
-    with pytest.raises(
-        RouteCompositionError,
-        match="Route name conflict.*shared:home.*first.*second",
+    app = FastAPI()
+    register_module_routes(
+        app,
+        (
+            ConfiguredModuleRouter(
+                module_name="first",
+                label="pages",
+                router=first_router,
+                prefix="",
+            ),
+            ConfiguredModuleRouter(
+                module_name="second",
+                label="pages",
+                router=second_router,
+                prefix="",
+            ),
+        ),
+    )
+
+    assert TestClient(app).get("/second").text == "second"
+
+
+def test_register_module_routes_skips_later_method_path_conflicts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first_router = APIRouter()
+    second_router = APIRouter()
+
+    @first_router.get("/shared", name="first:shared")
+    async def first() -> Response:
+        return Response("first")
+
+    @second_router.get("/shared", name="second:shared")
+    async def second() -> Response:
+        return Response("second")
+
+    app = FastAPI()
+    with caplog.at_level(
+        logging.WARNING,
+        logger="wevra.web.routes.registration",
     ):
         register_module_routes(
-            FastAPI(),
+            app,
             (
                 ConfiguredModuleRouter(
                     module_name="first",
@@ -694,36 +846,87 @@ def test_register_module_routes_rejects_route_name_conflicts() -> None:
             ),
         )
 
+    assert TestClient(app).get("/shared").text == "first"
+    assert any(
+        record.message == "Skipping duplicate configured route."
+        and record.route_module == "second"
+        and record.route_router == "pages"
+        and record.route_method == "GET"
+        and record.route_path == "/shared"
+        and record.winning_route_module == "first"
+        and record.winning_route_router == "pages"
+        for record in caplog.records
+    )
 
-def test_register_module_routes_rejects_method_path_conflicts() -> None:
-    first_router = APIRouter()
-    second_router = APIRouter()
 
-    @first_router.get("/shared", name="first:shared")
-    async def first() -> Response:
-        return Response()
+def test_register_module_routes_existing_app_route_wins_on_conflict(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = FastAPI()
 
-    @second_router.get("/shared", name="second:shared")
-    async def second() -> Response:
-        return Response()
+    @app.get("/shared")
+    async def app_shared() -> Response:
+        return Response("app")
+
+    router = APIRouter()
+
+    @router.get("/shared", name="module:shared")
+    async def module_shared() -> Response:
+        return Response("module")
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="wevra.web.routes.registration",
+    ):
+        register_module_routes(
+            app,
+            (
+                ConfiguredModuleRouter(
+                    module_name="module",
+                    label="pages",
+                    router=router,
+                    prefix="",
+                ),
+            ),
+        )
+
+    assert TestClient(app).get("/shared").text == "app"
+    assert any(
+        record.message == "Skipping duplicate configured route."
+        and record.route_module == "module"
+        and record.route_router == "pages"
+        and record.route_method == "GET"
+        and record.route_path == "/shared"
+        and record.winning_route_module == "app"
+        and record.winning_route_router == "existing"
+        for record in caplog.records
+    )
+
+
+def test_register_module_routes_rejects_partial_method_path_conflicts() -> None:
+    app = FastAPI()
+
+    @app.get("/shared")
+    async def app_shared() -> Response:
+        return Response("app")
+
+    router = APIRouter()
+
+    @router.api_route("/shared", methods=["GET", "POST"], name="module:shared")
+    async def module_shared() -> Response:
+        return Response("module")
 
     with pytest.raises(
         RouteCompositionError,
-        match="Route method/path conflict.*GET /shared.*first.*second",
+        match="partial method/path conflict.*GET",
     ):
         register_module_routes(
-            FastAPI(),
+            app,
             (
                 ConfiguredModuleRouter(
-                    module_name="first",
+                    module_name="module",
                     label="pages",
-                    router=first_router,
-                    prefix="",
-                ),
-                ConfiguredModuleRouter(
-                    module_name="second",
-                    label="pages",
-                    router=second_router,
+                    router=router,
                     prefix="",
                 ),
             ),
@@ -758,11 +961,88 @@ def test_register_module_routes_rejects_non_string_http_methods() -> None:
         )
 
 
-def test_load_module_routes_rejects_missing_router_prefix_config(
+def test_load_module_routes_omits_unpublished_router_labels(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    package_root = tmp_path / "missing_prefix_route_app"
+    package_root = tmp_path / "unpublished_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+
+            public_router = APIRouter()
+            admin_router = APIRouter()
+
+            @public_router.get("/public", name="app:public")
+            async def public():
+                pass
+
+            @admin_router.get("/admin", name="app:admin")
+            async def admin():
+                pass
+
+            module_routers = {
+                "public": public_router,
+                "admin": admin_router,
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    routes = load_module_routes(
+        ("unpublished_route_app",),
+        route_prefixes={"unpublished_route_app": {"public": ""}},
+    )
+
+    assert tuple(route.label for route in routes) == ("public",)
+
+
+def test_load_module_routes_omits_modules_without_route_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "unpublished_module_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+
+            router = APIRouter()
+
+            @router.get("/admin", name="app:admin")
+            async def admin():
+                pass
+
+            module_routers = {"admin": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    assert (
+        load_module_routes(
+            ("unpublished_module_route_app",),
+            route_prefixes={},
+        )
+        == ()
+    )
+
+
+def test_load_module_routes_rejects_unknown_router_prefix_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "unknown_prefix_route_app"
     package_root.mkdir()
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (package_root / "routes.py").write_text(
@@ -776,15 +1056,15 @@ def test_load_module_routes_rejects_missing_router_prefix_config(
 
     with pytest.raises(
         RouteCompositionError,
-        match="missing router label 'pages'",
+        match="unknown router label 'admin'",
     ):
         load_module_routes(
-            ("missing_prefix_route_app",),
-            route_prefixes={"missing_prefix_route_app": {}},
+            ("unknown_prefix_route_app",),
+            route_prefixes={"unknown_prefix_route_app": {"admin": ""}},
         )
 
 
-def test_load_module_routes_defaults_missing_module_prefix_config(
+def test_load_module_routes_without_route_prefixes_publishes_all_surfaces(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -812,7 +1092,6 @@ def test_load_module_routes_defaults_missing_module_prefix_config(
 
     routes = load_module_routes(
         ("default_prefix_route_app",),
-        route_prefixes={},
     )
 
     assert tuple(route.prefix for route in routes) == ("",)

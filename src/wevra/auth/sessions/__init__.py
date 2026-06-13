@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Final, Protocol, cast
+from contextlib import AbstractAsyncContextManager
+from typing import Any, Final
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import Response
@@ -23,7 +24,7 @@ from fastapi_users.exceptions import (
 from fastapi_users.jwt import decode_jwt
 from jwt import PyJWTError
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from wevra.auth.accounts.manager import (
     UserManager,
@@ -58,6 +59,8 @@ from wevra.auth.result import (
 )
 from wevra.auth.settings import identity_options_from_state
 from wevra.auth.timestamps import current_timestamp
+from wevra.db import DatabaseCapability
+from wevra.site import get_site
 
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"
 _CURRENT_USER_CACHE_VALUE_ATTR = "identity_current_user"
@@ -81,33 +84,18 @@ _logged_forward_header_misconfig = False
 logger = logging.getLogger(__name__)
 
 
-class SupportsSessionFactory(Protocol):
-    session_factory: async_sessionmaker[AsyncSession]
-
-
-def _database_from_request(request: Request) -> SupportsSessionFactory:
-    database = getattr(request.app.state, "database", None)
-    if database is None:
-        raise RuntimeError("Database is not configured on the application.")
-
-    if not hasattr(database, "session_factory"):
-        raise RuntimeError("Database session factory is not configured.")
-
-    return cast(SupportsSessionFactory, database)
-
-
-def _session_factory_from_request(
-    request: Request,
-) -> async_sessionmaker[AsyncSession]:
-    session_factory = _database_from_request(request).session_factory
-    if session_factory is None:
-        raise RuntimeError("Database session factory is not configured.")
-
-    return session_factory
-
-
 def _identity_options_from_request(request: Request) -> IdentityOptions:
     return identity_options_from_state(request.app.state)
+
+
+def _database_from_request(request: Request) -> DatabaseCapability:
+    return get_site(request.app).require_capability(DatabaseCapability)
+
+
+def _session_from_request(
+    request: Request,
+) -> AbstractAsyncContextManager[AsyncSession]:
+    return _database_from_request(request).session()
 
 
 def _delivery_from_request(request: Request) -> IdentityDelivery:
@@ -122,8 +110,8 @@ def create_user_manager_dependency(
     options: IdentityOptions,
 ) -> Callable[[Request], AsyncIterator[UserManager]]:
     async def get_user_manager(request: Request) -> AsyncIterator[UserManager]:
-        session_factory = _session_factory_from_request(request)
-        async with session_factory() as session:
+        database = _database_from_request(request)
+        async with database.session() as session:
             yield create_user_manager(session, options, _delivery_from_request(request))
 
     return get_user_manager
@@ -135,8 +123,8 @@ def create_database_strategy_dependency(
     async def get_database_strategy(
         request: Request,
     ) -> AsyncIterator[DatabaseStrategy[User, uuid.UUID, AccessToken]]:
-        session_factory = _session_factory_from_request(request)
-        async with session_factory() as session:
+        database = _database_from_request(request)
+        async with database.session() as session:
             yield create_database_strategy(session, options)
 
     return get_database_strategy
@@ -311,8 +299,7 @@ async def resolve_current_user(request: Request) -> User | None:
     if token is None:
         return _cache_current_user(request, token, None)
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         manager = create_user_manager(
             session,
             options,
@@ -358,10 +345,9 @@ async def authenticate_user(
     password: str,
 ) -> User | None:
     options = _identity_options_from_request(request)
-    session_factory = _session_factory_from_request(request)
     credentials = OAuth2PasswordRequestForm(username=email, password=password)
 
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         manager = create_user_manager(
             session,
             options,
@@ -384,8 +370,7 @@ async def create_local_user_from_signup(
     if options.account_creation_policy != "public-signup":
         return Result.failure(ERROR_POLICY_DISABLED)
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         manager = create_user_manager(
             session,
             options,
@@ -422,9 +407,7 @@ async def complete_authentication_ceremony(
     assertions: tuple[AuthenticationAssertion, ...] = (),
 ) -> Result[str]:
     options = _identity_options_from_request(request)
-    session_factory = _session_factory_from_request(request)
-
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         current_user = await session.get(User, user.id)
         now = current_timestamp()
         if current_user is None or not is_user_effectively_active(
@@ -454,8 +437,7 @@ async def destroy_session_token(request: Request) -> None:
     if token is None:
         return
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         await delete_session_token_by_value(session, token)
 
     _cache_current_user(request, token, None)
@@ -463,9 +445,7 @@ async def destroy_session_token(request: Request) -> None:
 
 async def request_password_reset(request: Request, email: str) -> None:
     options = _identity_options_from_request(request)
-    session_factory = _session_factory_from_request(request)
-
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         manager = create_user_manager(
             session,
             options,
@@ -492,9 +472,7 @@ async def request_password_reset(request: Request, email: str) -> None:
 
 async def reset_password(request: Request, token: str, password: str) -> bool:
     options = _identity_options_from_request(request)
-    session_factory = _session_factory_from_request(request)
-
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         manager = create_user_manager(
             session,
             options,
@@ -513,9 +491,7 @@ async def reset_password(request: Request, token: str, password: str) -> bool:
 
 async def request_verification(request: Request, email: str) -> None:
     options = _identity_options_from_request(request)
-    session_factory = _session_factory_from_request(request)
-
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         manager = create_user_manager(
             session,
             options,
@@ -607,9 +583,7 @@ async def _reset_token_user_is_effectively_active(
 
 async def verify_user(request: Request, token: str) -> Result[str]:
     options = _identity_options_from_request(request)
-    session_factory = _session_factory_from_request(request)
-
-    async with session_factory() as session:
+    async with _session_from_request(request) as session:
         manager = create_user_manager(
             session,
             options,
