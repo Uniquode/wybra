@@ -85,7 +85,9 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
             }
         ),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        static=StaticOptions(url_path="/static/", export_root=Path("static")),
+        static=StaticOptions(
+            url_path="/static/", root=None, export_root=Path("static")
+        ),
     )
 
 
@@ -180,7 +182,7 @@ def test_validate_web_checks_framework_web_foundation(tmp_path: Path) -> None:
     )
 
 
-def test_validate_command_reports_missing_host_adapter_configuration(capsys) -> None:
+def test_validate_command_reports_missing_project_configuration(capsys) -> None:
     exit_code = validate_main(["web"])
 
     captured = capsys.readouterr()
@@ -188,7 +190,7 @@ def test_validate_command_reports_missing_host_adapter_configuration(capsys) -> 
     assert exit_code == 1
     assert captured.out == ""
     assert "configuration: failed" in captured.err
-    assert "[tool.wevra].settings_loader" in captured.err
+    assert "Application config file could not be resolved" in captured.err
 
 
 def test_validate_command_help_returns_cleanly(capsys) -> None:

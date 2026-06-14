@@ -170,6 +170,7 @@ def _apply_config_defs(
             _env_values(merged_def, environ),
             ConfigSourceMetadata(source="environment"),
         )
+    _transform_values(merged_def, values)
     return values, sources
 
 
@@ -192,6 +193,28 @@ def _env_values(
             if env_name is not None:
                 values.setdefault(section_name, {})[field_name] = environ[env_name]
     return values
+
+
+def _transform_values(
+    definition: ConfigDef,
+    values: dict[str, dict[str, Any]],
+) -> None:
+    for section_name, section in definition.sections.items():
+        section_values = values.get(section_name)
+        if section_values is None:
+            continue
+
+        for field_name, field_def in section.field_map.items():
+            if field_def.transform is None or field_name not in section_values:
+                continue
+            try:
+                section_values[field_name] = field_def.transform(
+                    section_values[field_name]
+                )
+            except Exception as exc:
+                raise ConfigSourceError(
+                    f"Config value {section_name}.{field_name} is invalid: {exc}"
+                ) from exc
 
 
 def _merge_values(

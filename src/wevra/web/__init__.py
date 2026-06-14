@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 
 from fastapi import Request
 from fastapi.responses import Response
-from starlette.types import ASGIApp
 
 from wevra.site import Site
 from wevra.site_config import app_config_from_site
+from wevra.utils.paths import resolve_project_path
+from wevra.web.config import module_config
 from wevra.web.context import (
     resolve_context_providers,
     set_request_context,
     validate_context_providers,
 )
+from wevra.web.csrf import csrf_settings_from_config
 from wevra.web.errors import ErrorHandlerOptions, register_error_handlers
 from wevra.web.forms.csrf import CsrfProtector
-from wevra.web.rendering import RESERVED_TEMPLATE_CONTEXT_KEYS, TemplateRenderer
+from wevra.web.rendering import TemplateRenderer
 from wevra.web.routes.contracts import API_PATH_PREFIX
 from wevra.web.routes.discovery import (
     context_providers_from_modules,
@@ -26,7 +29,7 @@ from wevra.web.routes.discovery import (
 )
 from wevra.web.routes.registration import load_module_routes, register_module_routes
 from wevra.web.security import SecurityHeaderOptions, register_security_headers
-from wevra.web.staticfiles import ComposedStaticFiles, NoStaticFiles
+from wevra.web.staticfiles import static_app_from_config
 
 TEMPLATE_CONTEXT_MIDDLEWARE_STATE_ATTRIBUTE = (
     "wevra_web_template_context_middleware_registered"
@@ -39,14 +42,24 @@ async def setup_site(site: Site) -> None:
     site.app.state.static_mount_path = static_mount_path
 
     csrf = getattr(site.app.state, "csrf", None)
-    if csrf is not None and not isinstance(csrf, CsrfProtector):
+    if csrf is None:
+        csrf = csrf_settings_from_config(
+            dict(site.config.get_config("app") or {}),
+            dict(site.config.get_config("wevra.web") or {}),
+        ).protector()
+        site.app.state.csrf = csrf
+    elif not isinstance(csrf, CsrfProtector):
         raise RuntimeError("CSRF protector is not configured correctly.")
 
     if not hasattr(site.app.state, "renderer"):
         site.app.state.renderer = TemplateRenderer(
-            template_root=getattr(site.app.state, "template_root", None),
+            template_root=_template_root(
+                app_config.project_root,
+                app_config.templates.root,
+            ),
             csrf=csrf,
             template_sources=template_sources_from_modules(site.modules),
+            include_request_context=_request_context_enabled(site),
             auto_reload=app_config.templates.auto_reload,
             cache_size=app_config.templates.cache_size,
         )
@@ -69,7 +82,11 @@ async def setup_site(site: Site) -> None:
     )
     site.app.mount(
         static_mount_path,
-        _static_app(site),
+        static_app_from_config(
+            project_root=app_config.project_root,
+            static_root=app_config.static.root,
+            static_sources=static_sources_from_modules(site.modules),
+        ),
         name="static",
     )
     register_module_routes(
@@ -90,7 +107,6 @@ async def template_context_middleware(
         context = await resolve_context_providers(
             providers,
             request,
-            reserved_keys=RESERVED_TEMPLATE_CONTEXT_KEYS,
         )
         set_request_context(request, context)
 
@@ -103,18 +119,6 @@ def _register_template_context_middleware(site: Site) -> None:
 
     site.app.middleware("http")(template_context_middleware)
     setattr(site.app.state, TEMPLATE_CONTEXT_MIDDLEWARE_STATE_ATTRIBUTE, True)
-
-
-def _static_app(site: Site) -> ASGIApp:
-    configured_static_app = getattr(site.app.state, "static_app", None)
-    if configured_static_app is not None:
-        return configured_static_app
-
-    static_sources = static_sources_from_modules(site.modules)
-    if static_sources:
-        return ComposedStaticFiles(static_sources)
-
-    return NoStaticFiles()
 
 
 def _should_resolve_template_context(request: Request) -> bool:
@@ -135,7 +139,26 @@ def _normalise_static_mount_path(url_path: str) -> str:
     return f"/{url_path.strip('/')}"
 
 
+def _template_root(project_root: Path, template_root: Path | None) -> Path | None:
+    return resolve_project_path(project_root, template_root)
+
+
+def _request_context_enabled(site: Site) -> bool:
+    web_config = site.config.get_config("wevra.web")
+    if web_config is None:
+        return True
+    if not isinstance(web_config, Mapping):
+        raise RuntimeError("Config value 'wevra.web' must be a mapping when set.")
+    value = web_config.get("request_context_enabled")
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    raise RuntimeError("Config value 'request_context_enabled' must be a boolean.")
+
+
 __all__ = [
+    "module_config",
     "setup_site",
     "template_context_middleware",
 ]

@@ -9,6 +9,7 @@ from wevra.db.capabilities import (
     DatabaseCapabilityError,
     SqlAlchemyDatabaseCapability,
 )
+from wevra.db.config import module_config
 from wevra.db.validation import (
     PersistenceValidationSettings,
     validate_persistence,
@@ -32,6 +33,7 @@ async def setup_site(site: Site) -> None:
 __all__ = (
     "DatabaseCapability",
     "DatabaseCapabilityError",
+    "module_config",
     "PersistenceValidationSettings",
     "SqlAlchemyDatabaseCapability",
     "setup_site",

@@ -29,12 +29,18 @@ def app_config_from_site(site: Site) -> AppConfig:
         templates=TemplateOptions(
             auto_reload=_bool_value(template_config, "auto_reload", True),
             cache_size=_int_value(template_config, "cache_size", 0),
+            root=_optional_path_value(template_config, "root"),
         ),
         static=StaticOptions(
             url_path=_str_value(static_config, "url_path", "/static/"),
+            root=_optional_path_value(static_config, "root"),
             export_root=_path_value(static_config, "export_root", Path("static")),
         ),
         database_url=_optional_str_value(app_config, "database_url"),
+        deployment_environment=_optional_str_value(
+            app_config,
+            "deployment_environment",
+        ),
         auth=dict(_section(site, "auth")),
     )
 
@@ -101,6 +107,17 @@ def _path_value(config: Mapping[str, Any], key: str, default: Path) -> Path:
     value = config.get(key)
     if value is None:
         return default
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str) and value.strip():
+        return Path(value)
+    raise CompositionError(f"Config value {key!r} must be a non-blank path.")
+
+
+def _optional_path_value(config: Mapping[str, Any], key: str) -> Path | None:
+    value = config.get(key)
+    if value is None:
+        return None
     if isinstance(value, Path):
         return value
     if isinstance(value, str) and value.strip():

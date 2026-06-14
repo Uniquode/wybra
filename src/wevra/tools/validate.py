@@ -6,10 +6,12 @@ from typing import Any, TextIO
 
 import click
 
+from wevra.core.exceptions import ConfigurationError
 from wevra.tools.project import (
     ProjectToolConfigurationError,
-    load_wevra_tool_runtime,
+    runtime_project_root,
 )
+from wevra.tools.settings import load_project_settings
 from wevra.tools.validation.core import ValidationResult
 from wevra.tools.validation.registry import (
     ValidationDiscoveryError,
@@ -55,13 +57,9 @@ def _resolve_targets(
 
 
 def _build_settings(overrides: ValidationOverrides) -> Any:
-    tool_runtime = load_wevra_tool_runtime()
-    project_root = tool_runtime.project_root
-    load_settings = tool_runtime.settings_loader
-    configuration_error = tool_runtime.configuration_error
-
+    project_root = runtime_project_root()
     try:
-        defaults = load_settings(project_root=project_root)
+        defaults = load_project_settings(project_root=project_root)
         return replace(
             defaults,
             database_url=(
@@ -95,7 +93,7 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
                 else defaults.static_url_path
             ),
         )
-    except configuration_error as exc:
+    except ConfigurationError as exc:
         raise ProjectToolConfigurationError(str(exc)) from exc
 
 

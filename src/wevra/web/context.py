@@ -3,16 +3,61 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Set
+import logging
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from wevra.core.composition import CompositionError
 from wevra.core.diagnostics import diagnostic_message
 
-type ContextValue = Mapping[str, Any]
-type ContextResult = ContextValue | Awaitable[ContextValue]
-type ContextProvider = Callable[[Any], ContextResult]
-type ContextProviderRegistration = ContextProvider | ContextValue
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateContext(Mapping[str, Any]):
+    values: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> TemplateContext:
+        return cls(values=dict(values))
+
+    def with_values(self, **kwargs: Any) -> TemplateContext:
+        return self.merge(kwargs)
+
+    def merge(self, values: Mapping[str, Any]) -> TemplateContext:
+        context_values = dict(self.values)
+        ignored_keys = tuple(sorted(set(context_values) & set(values)))
+        if ignored_keys:
+            logger.warning(
+                "Ignored template context key overwrite.",
+                extra={"template_context_keys": ignored_keys},
+            )
+        context_values.update(
+            {key: value for key, value in values.items() if key not in context_values}
+        )
+        return TemplateContext.from_mapping(context_values)
+
+    def as_dict(self) -> dict[str, Any]:
+        return dict(self.values)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+
+type ContextResult = TemplateContext | Awaitable[TemplateContext]
+type ContextProvider = Callable[[Any, TemplateContext], ContextResult]
+type ContextProviderRegistration = ContextProvider | Mapping[str, Any]
 
 _CONTEXT_PROVIDERS: dict[str, list[ContextProvider]] = {}
 REQUEST_CONTEXT_STATE_ATTRIBUTE = "wevra_web_template_context"
@@ -32,11 +77,10 @@ def add_to_context(provider: ContextProviderRegistration) -> ContextProvider:
 
 def _normalise_provider(provider: ContextProviderRegistration) -> ContextProvider:
     if isinstance(provider, Mapping):
-        context = dict(provider)
+        context_values = dict(provider)
 
-        def static_context(request: Any) -> ContextValue:
-            del request
-            return dict(context)
+        def static_context(_request: Any, context: TemplateContext) -> TemplateContext:
+            return context.merge(context_values)
 
         return static_context
 
@@ -65,28 +109,30 @@ async def resolve_context_providers(
     providers: Iterable[ContextProvider],
     request: Any,
     *,
-    reserved_keys: Set[str] = frozenset(),
-) -> dict[str, Any]:
-    context: dict[str, Any] = {}
+    initial_context: TemplateContext | None = None,
+) -> TemplateContext:
+    context = initial_context or TemplateContext()
     for provider in providers:
-        provider_context = await _call_provider(provider, request)
-        _merge_provider_context(context, provider_context, reserved_keys, provider)
+        context = await _call_provider(provider, request, context)
 
     return context
 
 
-def set_request_context(request: Any, context: Mapping[str, Any]) -> None:
-    setattr(request.state, REQUEST_CONTEXT_STATE_ATTRIBUTE, dict(context))
+def set_request_context(request: Any, context: TemplateContext) -> None:
+    setattr(request.state, REQUEST_CONTEXT_STATE_ATTRIBUTE, context)
 
 
 def get_request_context(request: Any) -> dict[str, Any]:
     context = getattr(request.state, REQUEST_CONTEXT_STATE_ATTRIBUTE, None)
     if context is None:
         return {}
-    if isinstance(context, Mapping):
-        return dict(context)
+    if isinstance(context, TemplateContext):
+        return context.as_dict()
 
-    raise ContextProviderError("Stored request template context must be a mapping.")
+    raise ContextProviderError(
+        "Stored request template context must be a TemplateContext; migrate raw "
+        "mapping values with TemplateContext.from_mapping(...)."
+    )
 
 
 def clear_context_providers(module_name: str | None = None) -> None:
@@ -97,21 +143,27 @@ def clear_context_providers(module_name: str | None = None) -> None:
     _CONTEXT_PROVIDERS.pop(module_name, None)
 
 
-def wevra_web_theme_context(request: Any) -> dict[str, str]:
+def wevra_web_theme_context(
+    request: Any,
+    context: TemplateContext,
+) -> TemplateContext:
     from starlette.routing import NoMatchFound
 
     from wevra.web.theme import THEME_MODE_ROUTE_NAME, theme_template_context
 
-    context = theme_template_context(request)
+    values = theme_template_context(request)
     try:
         theme_update_path = str(request.url_for(THEME_MODE_ROUTE_NAME))
     except NoMatchFound:
-        return context
+        return context.merge(values)
 
-    return context | {
-        "theme_update_path": theme_update_path,
-        "theme_return_path": request.url.path,
-    }
+    return context.merge(
+        values
+        | {
+            "theme_update_path": theme_update_path,
+            "theme_return_path": request.url.path,
+        }
+    )
 
 
 def _calling_module_name() -> str:
@@ -127,20 +179,23 @@ def _calling_module_name() -> str:
     return module_name
 
 
-async def _call_provider(provider: ContextProvider, request: Any) -> ContextValue:
-    provider_context = provider(request)
+async def _call_provider(
+    provider: ContextProvider,
+    request: Any,
+    context: TemplateContext,
+) -> TemplateContext:
+    provider_context = provider(request, context)
     if inspect.isawaitable(provider_context):
         provider_context = await provider_context
-    if not isinstance(provider_context, Mapping):
+    if not isinstance(provider_context, TemplateContext):
         raise ContextProviderError(
             diagnostic_message(
                 f"Context provider {_provider_name(provider)}",
-                "must return a mapping.",
+                "must return a TemplateContext.",
             )
         )
 
-    context: dict[str, Any] = {}
-    for key, value in provider_context.items():
+    for key, _value in provider_context.items():
         if not isinstance(key, str):
             raise ContextProviderError(
                 diagnostic_message(
@@ -148,39 +203,8 @@ async def _call_provider(provider: ContextProvider, request: Any) -> ContextValu
                     "returned a non-string template context key.",
                 )
             )
-        context[key] = value
 
-    return context
-
-
-def _merge_provider_context(
-    context: dict[str, Any],
-    provider_context: ContextValue,
-    reserved_keys: Set[str],
-    provider: ContextProvider,
-) -> None:
-    provider_keys = set(provider_context)
-    reserved_collisions = provider_keys & set(reserved_keys)
-    if reserved_collisions:
-        keys = ", ".join(sorted(reserved_collisions))
-        raise ContextProviderError(
-            diagnostic_message(
-                f"Context provider {_provider_name(provider)}",
-                f"overrides reserved template context keys: {keys}",
-            )
-        )
-
-    provider_collisions = provider_keys & context.keys()
-    if provider_collisions:
-        keys = ", ".join(sorted(provider_collisions))
-        raise ContextProviderError(
-            diagnostic_message(
-                f"Context provider {_provider_name(provider)}",
-                f"collides with existing template context keys: {keys}",
-            )
-        )
-
-    context.update(dict(provider_context))
+    return provider_context
 
 
 def _provider_name(provider: ContextProvider) -> str:
@@ -197,8 +221,8 @@ __all__ = [
     "ContextProviderError",
     "ContextProviderRegistration",
     "ContextResult",
-    "ContextValue",
     "REQUEST_CONTEXT_STATE_ATTRIBUTE",
+    "TemplateContext",
     "add_to_context",
     "clear_context_providers",
     "get_context_providers",

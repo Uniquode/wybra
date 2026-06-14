@@ -99,6 +99,7 @@ async def setup_site(site: Site) -> None:
     settings = load_auth_settings_from_config(
         site.config,
         app_config=app_config,
+        deployment_environment=app_config.deployment_environment,
     )
     capability = SiteAuthCapability.from_settings(settings)
 

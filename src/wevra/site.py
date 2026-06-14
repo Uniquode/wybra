@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from importlib import import_module
@@ -22,12 +22,16 @@ from wevra.config import (
     ConfigSourceMetadata,
     FileConfigSource,
 )
-from wevra.core.composition import AppConfig
+from wevra.core.composition import APP_CONFIG_ENV, DEFAULT_APP_CONFIG, AppConfig
+from wevra.core.config import RUNTIME_CONFIG_DEF
+from wevra.core.environment import EnvironmentMapping, load_environment
+from wevra.core.settings import load_composition_config_from_environment
 from wevra.errors import structured_error, type_name
+from wevra.tools.project import runtime_project_root
 
 logger = logging.getLogger(__name__)
 
-ConfigSourceInput = str | AppConfig | ConfigSource
+ConfigSourceInput = str | AppConfig | ConfigSource | None
 ModuleLoader = Callable[[str], ModuleType]
 AppT = TypeVar("AppT", bound=FastAPI)
 SETUP_SITE_ATTRIBUTE = "setup_site"
@@ -150,8 +154,9 @@ class Site:
 
 def start_site(
     *,
-    config_source: ConfigSourceInput,
+    config_source: ConfigSourceInput = None,
     module_loader: ModuleLoader | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> SiteLifespan[FastAPI]:
     @asynccontextmanager
     async def _start_site(app: FastAPI):
@@ -160,6 +165,7 @@ def start_site(
             app,
             config_source=config_source,
             module_loader=module_loader,
+            environ=environ,
         )
         app.state.site = site
         try:
@@ -185,18 +191,52 @@ def get_site(app: FastAPI) -> Site:
 async def start(
     app: FastAPI,
     *,
-    config_source: ConfigSourceInput,
+    config_source: ConfigSourceInput = None,
     module_loader: ModuleLoader | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> Site:
     site = Site(
         app=app,
-        config=ConfigService([_normalise_config_source(config_source)]),
+        config=ConfigService(
+            [_normalise_config_source(config_source, environ)],
+            config_defs=(RUNTIME_CONFIG_DEF,),
+            environ=_startup_environ(config_source, environ),
+        ),
     )
     await _setup_modules(site, module_loader or import_module)
     return site
 
 
-def _normalise_config_source(config_source: ConfigSourceInput) -> ConfigSource:
+def _startup_environ(
+    config_source: ConfigSourceInput,
+    environ: Mapping[str, str] | None,
+) -> Mapping[str, str]:
+    if environ is not None:
+        return environ
+    project_root = _config_source_project_root(config_source)
+    return EnvironmentMapping(load_environment(project_root=project_root))
+
+
+def _normalise_config_source(
+    config_source: ConfigSourceInput,
+    environ: Mapping[str, str] | None,
+) -> ConfigSource:
+    if config_source is None:
+        project_root = runtime_project_root()
+        env = load_environment(environ=environ, project_root=project_root)
+        app_config = load_composition_config_from_environment(
+            env,
+            project_root=project_root,
+            app_config_env=APP_CONFIG_ENV,
+            default_app_config=DEFAULT_APP_CONFIG,
+            require_app_config=True,
+        )
+        if app_config is None:  # pragma: no cover - require_app_config prevents this
+            raise ConfigSourceError(
+                "Application config file could not be resolved; run from the "
+                f"app project or set {APP_CONFIG_ENV}."
+            )
+        return AppConfigSource(app_config)
     if isinstance(config_source, AppConfig):
         return AppConfigSource(config_source)
     if isinstance(config_source, str):
@@ -206,6 +246,14 @@ def _normalise_config_source(config_source: ConfigSourceInput) -> ConfigSource:
     raise ConfigSourceError(
         "Config source must be a string, AppConfig, or ConfigSource."
     )
+
+
+def _config_source_project_root(config_source: ConfigSourceInput) -> Path | None:
+    if isinstance(config_source, AppConfig):
+        return config_source.project_root
+    if config_source is None:
+        return runtime_project_root()
+    return None
 
 
 def _file_config_path(config_source: str) -> Path:

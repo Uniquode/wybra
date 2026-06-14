@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, Protocol
 
-EnvOverride = str | tuple[str, ...]
 ConfigDiagnosticSeverity = Literal["error", "warning", "info"]
+type ConfigTransform = Callable[[Any], Any]
+type EnvOverride = str | tuple[str, ...]
+
+
+class _NoDefault:
+    pass
+
+
+NO_DEFAULT = _NoDefault()
 
 
 class ConfigError(RuntimeError):
@@ -45,39 +53,79 @@ class ConfigDiagnostic:
 
 
 @dataclass(frozen=True, slots=True)
-class ConfigSection:
-    fields: frozenset[str] = frozenset()
-    defaults: Mapping[str, Any] = field(default_factory=dict)
-    env: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+class ConfigField:
+    name: str
+    default: Any = NO_DEFAULT
+    env: tuple[str, ...] = ()
+    transform: ConfigTransform | None = None
 
     def __init__(
         self,
         *,
-        fields: set[str] | frozenset[str] | tuple[str, ...] = (),
-        defaults: Mapping[str, Any] | None = None,
-        env: Mapping[str, EnvOverride] | None = None,
+        name: str,
+        default: Any = NO_DEFAULT,
+        env: EnvOverride = (),
+        transform: ConfigTransform | None = None,
     ) -> None:
-        declared_fields = frozenset(fields)
-        default_values = dict(defaults or {})
-        env_values = {
-            field_name: _normalise_env_override(value)
-            for field_name, value in (env or {}).items()
-        }
-        unknown_defaults = set(default_values) - declared_fields
-        if unknown_defaults:
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "default", default)
+        object.__setattr__(self, "env", _normalise_env_override(env))
+        object.__setattr__(self, "transform", transform)
+        if not self.name:
+            raise ConfigDefinitionError("Config field name must not be blank.")
+
+    @property
+    def has_default(self) -> bool:
+        return self.default is not NO_DEFAULT
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigSection:
+    fields: tuple[ConfigField, ...] = ()
+    field_map: Mapping[str, ConfigField] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        *,
+        fields: tuple[ConfigField, ...] = (),
+    ) -> None:
+        field_map = _field_map(fields)
+        object.__setattr__(self, "fields", tuple(fields))
+        object.__setattr__(self, "field_map", MappingProxyType(field_map))
+
+    @property
+    def field_names(self) -> frozenset[str]:
+        return frozenset(self.field_map)
+
+    @property
+    def defaults(self) -> Mapping[str, Any]:
+        return MappingProxyType(
+            {field.name: field.default for field in self.fields if field.has_default}
+        )
+
+    @property
+    def env(self) -> Mapping[str, tuple[str, ...]]:
+        return MappingProxyType(
+            {field.name: field.env for field in self.fields if field.env}
+        )
+
+
+def _field_map(fields: tuple[ConfigField, ...]) -> dict[str, ConfigField]:
+    values: dict[str, ConfigField] = {}
+    duplicates: set[str] = set()
+    for field_def in fields:
+        if not isinstance(field_def, ConfigField):
             raise ConfigDefinitionError(
-                "Config defaults contain keys not declared in fields: "
-                + ", ".join(sorted(unknown_defaults))
+                "ConfigSection fields must be ConfigField instances."
             )
-        unknown_env = set(env_values) - declared_fields
-        if unknown_env:
-            raise ConfigDefinitionError(
-                "Config env overrides contain keys not declared in fields: "
-                + ", ".join(sorted(unknown_env))
-            )
-        object.__setattr__(self, "fields", declared_fields)
-        object.__setattr__(self, "defaults", MappingProxyType(default_values))
-        object.__setattr__(self, "env", MappingProxyType(env_values))
+        if field_def.name in values:
+            duplicates.add(field_def.name)
+        values[field_def.name] = field_def
+    if duplicates:
+        raise ConfigDefinitionError(
+            "Config fields contain duplicate names: " + ", ".join(sorted(duplicates))
+        )
+    return values
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,32 +178,27 @@ def merge_config_defs(definitions: tuple[ConfigDef, ...]) -> ConfigDef:
                 sections[section_name] = section
                 continue
 
-            merged_defaults = dict(existing.defaults)
-            for field_name, value in section.defaults.items():
-                if (
-                    field_name in existing.defaults
-                    and existing.defaults[field_name] != value
-                ):
-                    raise ConfigDefinitionError(
-                        f"Conflicting default for field {section_name}.{field_name}."
-                    )
-                merged_defaults[field_name] = value
-
-            merged_env = dict(existing.env)
-            for field_name, value in section.env.items():
-                if field_name in existing.env and existing.env[field_name] != value:
-                    raise ConfigDefinitionError(
-                        f"Conflicting env override for field "
-                        f"{section_name}.{field_name}."
-                    )
-                merged_env[field_name] = value
-
-            sections[section_name] = ConfigSection(
-                fields=existing.fields | section.fields,
-                defaults=merged_defaults,
-                env=merged_env,
-            )
+            merged_fields = _merge_fields(section_name, existing, section)
+            sections[section_name] = ConfigSection(fields=merged_fields)
     return ConfigDef(sections)
+
+
+def _merge_fields(
+    section_name: str,
+    first: ConfigSection,
+    second: ConfigSection,
+) -> tuple[ConfigField, ...]:
+    merged = dict(first.field_map)
+    for field_name, field_def in second.field_map.items():
+        existing = merged.get(field_name)
+        if existing is None:
+            merged[field_name] = field_def
+            continue
+        if existing != field_def:
+            raise ConfigDefinitionError(
+                f"Conflicting definition for field {section_name}.{field_name}."
+            )
+    return tuple(merged.values())
 
 
 def _normalise_env_override(value: EnvOverride) -> tuple[str, ...]:
@@ -180,3 +223,15 @@ def _freeze_nested_mapping(
             for section, section_values in values.items()
         }
     )
+
+
+def config_environment_names(config_def: ConfigDef) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for section in config_def.sections.values():
+        for env_names in section.env.values():
+            for env_name in env_names:
+                if env_name not in seen:
+                    seen.add(env_name)
+                    names.append(env_name)
+    return tuple(names)

@@ -349,7 +349,9 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
         modules=("wevra.web",),
         routes=RouteOptions(prefixes={}),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        static=StaticOptions(url_path="/static/", export_root=Path("static")),
+        static=StaticOptions(
+            url_path="/static/", root=None, export_root=Path("static")
+        ),
     )
 
     site = await start(FastAPI(), config_source=app_config)
