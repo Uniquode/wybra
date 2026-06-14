@@ -215,6 +215,15 @@ def _collect_routes(
     counter: _RouteIdCounter,
 ) -> None:
     for route in routes:
+        if _is_included_router(route):
+            _collect_included_router_routes(
+                route,
+                route_records=route_records,
+                origin_map=origin_map,
+                counter=counter,
+            )
+            continue
+
         path = _join_paths(parent_path, getattr(route, "path", ""))
         record = _route_record(
             route,
@@ -239,6 +248,40 @@ def _collect_routes(
                 )
             else:
                 warnings.append(f"Mount {path} is opaque.")
+
+
+def _collect_included_router_routes(
+    route: object,
+    *,
+    route_records: list[RouteRecord],
+    origin_map: Mapping[int, RouteOrigin],
+    counter: _RouteIdCounter,
+) -> None:
+    for candidate in _included_router_candidates(route):
+        original_route = getattr(candidate, "original_route", None)
+        path = getattr(candidate, "path", None)
+        if not isinstance(original_route, BaseRoute) or not isinstance(path, str):
+            continue
+        route_records.append(
+            _route_record(
+                original_route,
+                path=path,
+                name_prefix="",
+                origin_map=origin_map,
+                counter=counter,
+            )
+        )
+
+
+def _is_included_router(route: object) -> bool:
+    return callable(getattr(route, "effective_route_contexts", None))
+
+
+def _included_router_candidates(route: object) -> tuple[object, ...]:
+    route_contexts = getattr(route, "effective_route_contexts", None)
+    if not callable(route_contexts):
+        return ()
+    return tuple(route_contexts())
 
 
 def _route_record(

@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from fastapi import FastAPI
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
 from starlette.routing import BaseRoute
 
 from wevra.core.composition import AppConfig, CompositionError
@@ -270,6 +270,11 @@ def _validate_configured_routers(
 def _registered_method_paths(app: FastAPI) -> dict[tuple[str, str], _RouteOwner]:
     method_paths: dict[tuple[str, str], _RouteOwner] = {}
     for route in app.routes:
+        for path, methods in _effective_route_method_paths(route):
+            owner = _RouteOwner(module_name="app", router_label="existing")
+            for method in methods:
+                method_paths[(method, path)] = owner
+
         path = getattr(route, "path", None)
         methods = getattr(route, "methods", None)
         if not isinstance(path, str) or methods is None:
@@ -278,6 +283,23 @@ def _registered_method_paths(app: FastAPI) -> dict[tuple[str, str], _RouteOwner]
         for method in _route_origin_methods(route):
             method_paths[(method, path)] = owner
     return method_paths
+
+
+def _effective_route_method_paths(
+    route: object,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    route_contexts = getattr(route, "effective_route_contexts", None)
+    if not callable(route_contexts):
+        return ()
+
+    method_paths: list[tuple[str, tuple[str, ...]]] = []
+    for candidate in route_contexts():
+        path = getattr(candidate, "path", None)
+        methods = getattr(candidate, "methods", None)
+        if not isinstance(path, str) or methods is None:
+            continue
+        method_paths.append((path, tuple(sorted(methods))))
+    return tuple(method_paths)
 
 
 def _first_winning_routes(
@@ -332,12 +354,94 @@ def _include_selected_routes(
     configured_router: ConfiguredModuleRouter,
     selected_routes: tuple[BaseRoute, ...],
 ) -> None:
-    original_routes = configured_router.router.routes
-    configured_router.router.routes = list(selected_routes)
-    try:
-        app.include_router(configured_router.router, prefix=configured_router.prefix)
-    finally:
-        configured_router.router.routes = original_routes
+    selected_router = APIRouter()
+    for route in selected_routes:
+        if isinstance(route, APIRoute):
+            route_options: dict[str, Any] = {
+                "response_model": getattr(route, "response_model", None),
+                "status_code": getattr(route, "status_code", None),
+                "tags": getattr(route, "tags", None),
+                "dependencies": getattr(route, "dependencies", None),
+                "summary": getattr(route, "summary", None),
+                "description": getattr(route, "description", None),
+                "response_description": getattr(
+                    route, "response_description", "Successful Response"
+                ),
+                "responses": getattr(route, "responses", None),
+                "deprecated": getattr(route, "deprecated", None),
+                "methods": route.methods,
+                "operation_id": getattr(route, "operation_id", None),
+                "response_model_include": getattr(
+                    route, "response_model_include", None
+                ),
+                "response_model_exclude": getattr(
+                    route, "response_model_exclude", None
+                ),
+                "response_model_by_alias": getattr(
+                    route, "response_model_by_alias", True
+                ),
+                "response_model_exclude_unset": getattr(
+                    route, "response_model_exclude_unset", False
+                ),
+                "response_model_exclude_defaults": getattr(
+                    route, "response_model_exclude_defaults", False
+                ),
+                "response_model_exclude_none": getattr(
+                    route, "response_model_exclude_none", False
+                ),
+                "include_in_schema": route.include_in_schema,
+                "name": route.name,
+                "route_class_override": type(route),
+                "callbacks": getattr(route, "callbacks", None),
+                "openapi_extra": getattr(route, "openapi_extra", None),
+                "strict_content_type": getattr(route, "strict_content_type", True),
+            }
+            response_class = getattr(route, "response_class", None)
+            if response_class is not None:
+                route_options["response_class"] = response_class
+            generate_unique_id_function = getattr(
+                route, "generate_unique_id_function", None
+            )
+            if generate_unique_id_function is not None:
+                route_options["generate_unique_id_function"] = (
+                    generate_unique_id_function
+                )
+            selected_router.add_api_route(route.path, route.endpoint, **route_options)
+            _record_selected_route_origin(
+                app,
+                configured_router,
+                selected_router.routes[-1],
+            )
+            continue
+        selected_router.routes.append(route)
+        _record_selected_route_origin(app, configured_router, route)
+
+    app.include_router(selected_router, prefix=configured_router.prefix)
+
+
+def _record_selected_route_origin(
+    app: FastAPI,
+    configured_router: ConfiguredModuleRouter,
+    route: BaseRoute,
+) -> None:
+    from wevra.web.routes.inspection import RouteOrigin, record_route_origin
+
+    route_path = getattr(route, "path", None)
+    route_name = getattr(route, "name", None)
+    if not isinstance(route_path, str):
+        return
+    record_route_origin(
+        app,
+        route,
+        RouteOrigin(
+            module_name=configured_router.module_name,
+            router_label=configured_router.label,
+            include_prefix=configured_router.prefix,
+            route_name=route_name if isinstance(route_name, str) else None,
+            path=f"{configured_router.prefix}{route_path}" or "/",
+            methods=_route_origin_methods(route),
+        ),
+    )
 
 
 def _warn_duplicate_route(

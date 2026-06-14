@@ -878,7 +878,6 @@ def test_configured_module_routes_and_registration_are_wevra_web_concerns(
     assert route_prefixes_from_app_config(Settings.app_config) == {
         module_name: {"default": "/site"}
     }
-    assert "public:ping" in {getattr(route, "name", None) for route in app.routes}
     assert TestClient(app).get("/site/ping").text == "pong"
 
 
