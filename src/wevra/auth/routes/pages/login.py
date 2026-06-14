@@ -1,7 +1,7 @@
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
-from wevra.auth.ids import log_safe_uuid
+from wevra.auth.ids import log_safe_line, log_safe_uuid
 from wevra.auth.mfa.recovery import RECOVERY_CODE_LENGTH
 from wevra.auth.mfa.storage import TOTP_ACTIVE_STATUS, SqlAlchemyChallengeStore
 from wevra.auth.models import User
@@ -349,9 +349,9 @@ async def _handle_login_totp_challenge(
             logger.warning(
                 "TOTP challenge credential rejected: challenge_id=%s "
                 "credential_id=%s user_id=%s reason=%s",
-                log_safe_uuid(challenge_id),
-                log_safe_uuid(credential_id),
-                log_safe_uuid(user.id),
+                log_safe_line(log_safe_uuid(challenge_id)),
+                log_safe_line(log_safe_uuid(credential_id)),
+                log_safe_line(log_safe_uuid(user.id)),
                 credential_problem,
             )
             await challenge_store.consume_challenge(challenge_id)
