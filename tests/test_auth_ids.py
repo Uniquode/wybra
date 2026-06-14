@@ -14,5 +14,15 @@ def test_log_safe_uuid_rejects_invalid_values() -> None:
     assert log_safe_uuid("not-a-uuid") == "<invalid-uuid>"
 
 
+def test_log_safe_uuid_returns_single_line_identifier() -> None:
+    value = UUID("12345678-1234-5678-1234-567812345678")
+
+    assert log_safe_uuid(value) == str(value)
+    assert log_safe_uuid(f"\r\n{value}\n") == "<invalid-uuid>"
+
+
 def test_log_safe_line_strips_line_breaks() -> None:
-    assert log_safe_line("first\r\nsecond\nthird\rfourth") == "firstsecondthirdfourth"
+    assert (
+        log_safe_line("first\r\nsecond\nthird\rfourth\tunchanged")
+        == "firstsecondthirdfourth\tunchanged"
+    )
