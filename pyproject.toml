@@ -42,7 +42,7 @@ module-name = ["wevra"]
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.3.0",
+    "httpx2>=2.4.0",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.16",
