@@ -29,11 +29,13 @@ class RouteOptions:
 class TemplateOptions:
     auto_reload: bool
     cache_size: int
+    root: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class StaticOptions:
     url_path: str
+    root: Path | None
     export_root: Path
 
 
@@ -46,7 +48,9 @@ class AppConfig:
     templates: TemplateOptions
     static: StaticOptions
     database_url: str | None = None
+    deployment_environment: str | None = None
     auth: dict[str, Any] = field(default_factory=dict)
+    raw_config: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 def load_app_config(
@@ -91,7 +95,12 @@ def load_app_config(
         templates=_load_template_options(app_data),
         static=_load_static_options(app_data),
         database_url=_optional_str_or_none(app_data, "app.database_url"),
+        deployment_environment=_optional_str_or_none(
+            app_data,
+            "app.deployment_environment",
+        ),
         auth=_optional_table(data, "auth"),
+        raw_config=_raw_config_sections(data),
     )
 
 
@@ -172,6 +181,31 @@ def _optional_table(data: dict[str, Any], name: str) -> dict[str, Any]:
         return value
 
     raise CompositionError(f"App config {name} must be a table.")
+
+
+def _raw_config_sections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    sections: dict[str, dict[str, Any]] = {}
+    app_data = data.get("app")
+    if isinstance(app_data, dict):
+        sections["app"] = {
+            key: value for key, value in app_data.items() if not isinstance(value, dict)
+        }
+        for nested_name in ("routes", "static", "templates"):
+            nested_value = app_data.get(nested_name)
+            if isinstance(nested_value, dict):
+                sections[f"app.{nested_name}"] = dict(nested_value)
+
+    auth_data = data.get("auth")
+    if isinstance(auth_data, dict):
+        sections["auth"] = {
+            key: value
+            for key, value in auth_data.items()
+            if not isinstance(value, dict)
+        }
+        for nested_name, nested_value in auth_data.items():
+            if isinstance(nested_value, dict):
+                sections[f"auth.{nested_name}"] = dict(nested_value)
+    return sections
 
 
 def _required_str_tuple(data: dict[str, Any], name: str) -> tuple[str, ...]:
@@ -310,6 +344,11 @@ def _load_template_options(data: dict[str, Any]) -> TemplateOptions:
             template_data,
             "app.templates.cache_size",
         ),
+        root=(
+            Path(root)
+            if (root := _optional_str_or_none(template_data, "app.templates.root"))
+            else None
+        ),
     )
 
 
@@ -317,6 +356,11 @@ def _load_static_options(data: dict[str, Any]) -> StaticOptions:
     static_data = _required_table(data, "app.static")
     return StaticOptions(
         url_path=_required_str(static_data, "app.static.url_path"),
+        root=(
+            Path(root)
+            if (root := _optional_str_or_none(static_data, "app.static.root"))
+            else None
+        ),
         export_root=Path(
             _optional_str(
                 static_data,

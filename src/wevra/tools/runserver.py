@@ -7,9 +7,9 @@ import click
 import uvicorn
 
 from wevra.config import ConfigService, MappingConfigSource
+from wevra.core.environment import load_environment
 from wevra.tools.project import (
     ProjectToolConfigurationError,
-    import_wevra_tool_callable,
     runtime_project_root,
     wevra_tool_option,
 )
@@ -93,15 +93,6 @@ def _looks_like_app_target(value: str) -> bool:
 
 def run_uvicorn_command(args: Sequence[str]) -> None:
     uvicorn.main.main(args=list(args), prog_name="uvicorn")
-
-
-def load_environment(**kwargs: object):
-    project_root = kwargs.get("project_root")
-    loader = import_wevra_tool_callable(
-        "environment_loader",
-        project_root=project_root if isinstance(project_root, Path) else None,
-    )
-    return loader(**kwargs)
 
 
 def load_runserver_config(

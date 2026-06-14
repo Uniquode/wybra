@@ -789,7 +789,9 @@ def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None
         modules=("wevra.auth",),
         routes=RouteOptions(),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        static=StaticOptions(url_path="/static/", export_root=Path("static")),
+        static=StaticOptions(
+            url_path="/static/", root=None, export_root=Path("static")
+        ),
     )
 
     with pytest.raises(ConfigurationError, match=r"\[app\]\.database_url"):
@@ -904,7 +906,7 @@ def test_auth_settings_validation_allows_local_secret_sentinels() -> None:
 def test_auth_settings_rejects_unknown_deployment_environment() -> None:
     with pytest.raises(
         ConfigurationError,
-        match="Invalid deployment environment 'prod'",
+        match="Deployment environment must be one of: local, staging, production.",
     ):
         AuthSettings(
             database_url=SQLITE_MEMORY_DATABASE_URL,

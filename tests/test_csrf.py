@@ -214,3 +214,52 @@ def test_csrf_exempt_allows_route_to_bypass_protected_router() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_csrf_settings_generates_local_secret(caplog) -> None:
+    from wevra.web.csrf import CsrfSettings
+
+    caplog.set_level(logging.INFO, logger="wevra.web.csrf")
+
+    settings = CsrfSettings()
+
+    assert settings.token_secret
+    assert settings.cookie_secure is False
+    assert "Generated startup-local CSRF token secret." in caplog.text
+
+
+def test_csrf_settings_requires_stable_secret_for_non_local_environment() -> None:
+    from wevra.core.exceptions import ConfigurationError
+    from wevra.web.csrf import CsrfSettings
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Non-local deployments must configure a stable CSRF token secret",
+    ):
+        CsrfSettings(deployment_environment="production")
+
+    with pytest.raises(ConfigurationError, match="CSRF token secret must not be blank"):
+        CsrfSettings(deployment_environment="production", token_secret="   ")
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Non-local deployments must use secure CSRF cookies",
+    ):
+        CsrfSettings(
+            deployment_environment="production",
+            token_secret="production-csrf-secret",
+            cookie_secure=False,
+        )
+
+
+def test_csrf_settings_accepts_stable_secure_non_local_configuration() -> None:
+    from wevra.web.csrf import CsrfSettings
+
+    settings = CsrfSettings(
+        deployment_environment="production",
+        token_secret="production-csrf-secret",
+        cookie_secure=True,
+    )
+
+    assert settings.token_secret == "production-csrf-secret"
+    assert settings.cookie_secure is True

@@ -11,6 +11,10 @@ from wevra.auth.settings import (
 )
 from wevra.core.composition import AppConfig
 from wevra.core.exceptions import ConfigurationError
+from wevra.core.runtime import (
+    DEFAULT_DEPLOYMENT_ENVIRONMENT,
+    normalise_deployment_environment,
+)
 from wevra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 
 AUTH_SETTINGS_VALIDATION_DESCRIPTION = (
@@ -19,9 +23,8 @@ AUTH_SETTINGS_VALIDATION_DESCRIPTION = (
 
 
 class AuthValidationSettings(Protocol):
-    database_url: str
+    database_url: str | None
     app_config: AppConfig | None
-    deployment_environment: DeploymentEnvironment | str
 
 
 def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
@@ -33,13 +36,13 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
             load_runtime_auth_settings(
                 app_config=None,
                 database_url=settings.database_url,
-                deployment_environment=settings.deployment_environment,
+                deployment_environment=_deployment_environment(settings),
                 environ=_auth_settings_environ(settings),
             )
         else:
             load_runtime_auth_settings(
                 app_config=settings.app_config,
-                deployment_environment=settings.deployment_environment,
+                deployment_environment=_deployment_environment(settings),
                 environ=_auth_settings_environ(settings),
             )
     except ConfigurationError as exc:
@@ -83,10 +86,19 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
 
 
 def _auth_settings_environ(settings: AuthValidationSettings) -> dict[str, str]:
-    if not settings.database_url.strip():
+    if settings.database_url is None or not settings.database_url.strip():
         return {}
 
     return {DATABASE_URL_ENV: settings.database_url}
+
+
+def _deployment_environment(
+    settings: AuthValidationSettings,
+) -> DeploymentEnvironment | str:
+    if settings.app_config is None:
+        return DEFAULT_DEPLOYMENT_ENVIRONMENT
+
+    return normalise_deployment_environment(settings.app_config.deployment_environment)
 
 
 validation_targets = {"auth": validate_auth}

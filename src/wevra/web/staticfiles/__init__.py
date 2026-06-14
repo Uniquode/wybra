@@ -7,8 +7,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from fastapi.staticfiles import StaticFiles
 from starlette.responses import PlainTextResponse, Response
-from starlette.types import Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from wevra.core.composition import AppConfig, load_app_config
 from wevra.core.resources import (
@@ -18,6 +19,7 @@ from wevra.core.resources import (
     first_existing_resource,
     iter_package_resource_files,
 )
+from wevra.utils.paths import resolve_project_path
 from wevra.web.routes.discovery import static_sources_from_modules
 
 
@@ -96,6 +98,26 @@ class NoStaticFiles:
             status_code=404,
         )
         await response(scope, receive, send)
+
+
+def static_app_from_config(
+    *,
+    project_root: Path,
+    static_root: Path | None,
+    static_sources: tuple[PackageResourceSource, ...],
+) -> ASGIApp:
+    """Build the runtime static ASGI app.
+
+    A configured filesystem static root takes precedence over module static
+    assets. Module assets are served only when no filesystem root is configured.
+    """
+    resolved_static_root = _resolve_static_root(project_root, static_root)
+    if resolved_static_root is not None:
+        return StaticFiles(directory=resolved_static_root, check_dir=True)
+    if static_sources:
+        return ComposedStaticFiles(static_sources)
+
+    return NoStaticFiles()
 
 
 def static_asset_response(
@@ -190,6 +212,10 @@ def _logical_path_from_scope(scope: Scope) -> str:
     return path.lstrip("/")
 
 
+def _resolve_static_root(project_root: Path, static_root: Path | None) -> Path | None:
+    return resolve_project_path(project_root, static_root)
+
+
 def _resolve_export_root(config: AppConfig, export_root: Path | None) -> Path:
     path = export_root if export_root is not None else config.static.export_root
     if not path.is_absolute():
@@ -206,5 +232,6 @@ __all__ = [
     "StaticExportedAsset",
     "export_configured_static_assets",
     "export_static_assets",
+    "static_app_from_config",
     "static_asset_response",
 ]

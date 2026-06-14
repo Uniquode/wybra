@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import tomllib
-from collections.abc import Callable
-from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 
 class ProjectToolConfigurationError(ValueError):
-    """Raised when Wevra project tool adapter metadata is missing or invalid."""
+    """Raised when Wevra project tool metadata is missing or invalid."""
 
 
 def runtime_project_root(start: Path | None = None) -> Path:
@@ -28,15 +26,6 @@ def runtime_project_root(start: Path | None = None) -> Path:
         return candidate
 
     return root
-
-
-@dataclass(frozen=True, slots=True)
-class ProjectToolRuntime:
-    """Resolved project adapter hooks shared by Wevra command wrappers."""
-
-    project_root: Path
-    settings_loader: Callable[..., Any]
-    configuration_error: type[Exception]
 
 
 def wevra_tool_options(project_root: Path | None = None) -> dict[str, Any]:
@@ -160,49 +149,3 @@ def import_from_string(spec: str) -> Any:
 
 def import_wevra_tool_option(name: str, *, project_root: Path | None = None) -> Any:
     return import_from_string(wevra_tool_option(name, project_root=project_root))
-
-
-def import_wevra_tool_callable(
-    name: str,
-    *,
-    project_root: Path | None = None,
-) -> Callable[..., Any]:
-    resolved = import_wevra_tool_option(name, project_root=project_root)
-    if not callable(resolved):
-        raise ProjectToolConfigurationError(
-            f"[tool.wevra].{name} must resolve to a callable."
-        )
-
-    return resolved
-
-
-def import_wevra_tool_exception_class(
-    name: str,
-    *,
-    project_root: Path | None = None,
-) -> type[Exception]:
-    resolved = import_wevra_tool_option(name, project_root=project_root)
-    if not isinstance(resolved, type) or not issubclass(resolved, Exception):
-        raise ProjectToolConfigurationError(
-            f"[tool.wevra].{name} must resolve to an exception class."
-        )
-
-    return resolved
-
-
-def load_wevra_tool_runtime(
-    *,
-    project_root: Path | None = None,
-) -> ProjectToolRuntime:
-    root = runtime_project_root() if project_root is None else project_root
-    return ProjectToolRuntime(
-        project_root=root,
-        settings_loader=import_wevra_tool_callable(
-            "settings_loader",
-            project_root=root,
-        ),
-        configuration_error=import_wevra_tool_exception_class(
-            "configuration_error",
-            project_root=root,
-        ),
-    )

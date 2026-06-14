@@ -12,6 +12,7 @@ from envex import Env
 from fastapi import Depends, FastAPI
 from fastapi.responses import Response
 from fastapi.routing import APIRoute, APIRouter
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from jinja2 import Environment, select_autoescape
 from jinja2.exceptions import TemplateNotFound
@@ -35,7 +36,10 @@ from wevra.core.settings import (
     values_from_env_settings,
 )
 from wevra.site import start
-from wevra.web.context import ContextProviderError, resolve_context_providers
+from wevra.web.context import (
+    TemplateContext,
+    resolve_context_providers,
+)
 from wevra.web.rendering import TemplateRenderer
 from wevra.web.routes import (
     ConfiguredModuleRouter,
@@ -143,6 +147,167 @@ async def test_wevra_web_setup_site_registers_routes_renderer_and_static(
     assert isinstance(static_route.app, ComposedStaticFiles)
     assert TestClient(app).get("/ping").text == "pong"
     assert TestClient(app).get("/static/styles/app.css").text == "body {}"
+
+
+@pytest.mark.anyio
+async def test_wevra_web_setup_serves_configured_filesystem_static_root(
+    tmp_path: Path,
+) -> None:
+    static_root = tmp_path / "assets"
+    static_root.mkdir()
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wevra.web",),
+                },
+                "app.routes": {"prefixes": {"wevra.web": {"partials": "", "api": ""}}},
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {
+                    "url_path": "/static/",
+                    "root": "assets",
+                    "export_root": "static",
+                },
+            }
+        ),
+    )
+
+    static_route = next(
+        route for route in app.routes if getattr(route, "name", None) == "static"
+    )
+    assert isinstance(static_route.app, StaticFiles)
+    assert TestClient(app).get("/static/app.css").text == "body {}"
+
+
+@pytest.mark.anyio
+async def test_wevra_web_request_context_is_enabled_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "request_context_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter, Request
+            from wevra.web.rendering import render_page
+
+            router = APIRouter()
+
+            @router.get("/request-path")
+            async def request_path(request: Request):
+                return render_page(request, "request_path.html")
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (template_root / "request_path.html").write_text(
+        "{{ request.url.path if request is defined else 'missing' }}",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("request_context_app", "wevra.web"),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "request_context_app": {"default": ""},
+                        "wevra.web": {"partials": "", "api": ""},
+                    }
+                },
+                "app.templates": {
+                    "auto_reload": True,
+                    "cache_size": 0,
+                    "root": str(template_root),
+                },
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    assert TestClient(app).get("/request-path").text == "/request-path"
+
+
+@pytest.mark.anyio
+async def test_wevra_web_request_context_can_be_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "disabled_request_context_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter, Request
+            from wevra.web.rendering import render_page
+
+            router = APIRouter()
+
+            @router.get("/request-path")
+            async def request_path(request: Request):
+                return render_page(request, "request_path.html")
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (template_root / "request_path.html").write_text(
+        "{{ request.url.path if request is defined else 'missing' }}",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("disabled_request_context_app", "wevra.web"),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "disabled_request_context_app": {"default": ""},
+                        "wevra.web": {"partials": "", "api": ""},
+                    }
+                },
+                "app.templates": {
+                    "auto_reload": True,
+                    "cache_size": 0,
+                    "root": str(template_root),
+                },
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "wevra.web": {"request_context_enabled": False},
+            }
+        ),
+    )
+
+    assert TestClient(app).get("/request-path").text == "missing"
 
 
 @pytest.mark.anyio
@@ -700,7 +865,9 @@ def test_configured_module_routes_and_registration_are_wevra_web_concerns(
             modules=modules,
             routes=RouteOptions(prefixes={module_name: {"default": "/site"}}),
             templates=TemplateOptions(auto_reload=True, cache_size=0),
-            static=StaticOptions(url_path="/static/", export_root=Path("static")),
+            static=StaticOptions(
+                url_path="/static/", root=None, export_root=Path("static")
+            ),
         )
 
     route_set = load_configured_module_routes(Settings())
@@ -711,7 +878,6 @@ def test_configured_module_routes_and_registration_are_wevra_web_concerns(
     assert route_prefixes_from_app_config(Settings.app_config) == {
         module_name: {"default": "/site"}
     }
-    assert "public:ping" in {getattr(route, "name", None) for route in app.routes}
     assert TestClient(app).get("/site/ping").text == "pong"
 
 
@@ -1446,9 +1612,9 @@ def test_discover_context_providers_imports_context_registration_module(
     (package_root / "context.py").write_text(
         "from wevra.web.context import add_to_context\n"
         "\n"
-        "def site_context(request):\n"
+        "def site_context(request, context):\n"
         "    del request\n"
-        "    return {'site_name': 'Test app'}\n"
+        "    return context.with_values(site_name='Test app')\n"
         "\n"
         "add_to_context({'app_mode': 'test'})\n"
         "add_to_context(site_context)\n",
@@ -1460,8 +1626,10 @@ def test_discover_context_providers_imports_context_registration_module(
     providers = discover_context_providers("context_surface_app")
 
     assert len(providers) == 2
-    assert providers[0](object()) == {"app_mode": "test"}
-    assert providers[1](object()) == {"site_name": "Test app"}
+    assert providers[0](object(), TemplateContext()).as_dict() == {"app_mode": "test"}
+    assert providers[1](object(), TemplateContext()).as_dict() == {
+        "site_name": "Test app"
+    }
 
 
 def test_context_providers_from_modules_preserves_configured_order(
@@ -1487,62 +1655,122 @@ def test_context_providers_from_modules_preserves_configured_order(
         ("first_context_app", "second_context_app")
     )
 
-    assert tuple(provider(object()) for provider in providers) == (
+    assert tuple(
+        provider(object(), TemplateContext()).as_dict() for provider in providers
+    ) == (
         {"first": True},
         {"second": True},
     )
 
 
-def test_resolve_context_providers_merges_async_context_in_order() -> None:
-    def sync_provider(request: object) -> dict[str, object]:
+def test_resolve_context_providers_accumulates_immutable_context_in_order() -> None:
+    def sync_provider(
+        request: object,
+        context: TemplateContext,
+    ) -> TemplateContext:
         del request
-        return {"site_name": "Test app"}
+        return context.with_values(site_name="Test app")
 
-    async def async_provider(request: object) -> dict[str, object]:
+    async def async_provider(
+        request: object,
+        context: TemplateContext,
+    ) -> TemplateContext:
         del request
-        return {"authenticated": False}
+        return context.with_values(authenticated=False)
 
     context = asyncio.run(
         resolve_context_providers((sync_provider, async_provider), object())
     )
 
-    assert context == {"site_name": "Test app", "authenticated": False}
+    assert context.as_dict() == {"site_name": "Test app", "authenticated": False}
 
 
-def test_resolve_context_providers_rejects_reserved_keys() -> None:
-    def provider(request: object) -> dict[str, object]:
+def test_resolve_context_providers_allows_provider_owned_request_key() -> None:
+    def provider(
+        request: object,
+        context: TemplateContext,
+    ) -> TemplateContext:
         del request
-        return {"request": "caller-controlled"}
+        return context.with_values(request="caller-controlled")
 
-    with pytest.raises(
-        ContextProviderError,
-        match="reserved template context keys: request",
-    ):
-        asyncio.run(
+    context = asyncio.run(resolve_context_providers((provider,), object()))
+
+    assert context.as_dict() == {"request": "caller-controlled"}
+
+
+def test_resolve_context_providers_preserves_empty_initial_context() -> None:
+    initial_context = TemplateContext()
+    observed: dict[str, TemplateContext] = {}
+
+    def provider(
+        request: object,
+        context: TemplateContext,
+    ) -> TemplateContext:
+        del request
+        observed["context"] = context
+        return context.with_values(app_name="wevra")
+
+    context = asyncio.run(
+        resolve_context_providers(
+            (provider,),
+            object(),
+            initial_context=initial_context,
+        )
+    )
+
+    assert observed["context"] is initial_context
+    assert context.as_dict() == {"app_name": "wevra"}
+
+
+def test_resolve_context_providers_warns_and_preserves_seeded_keys(
+    caplog,
+) -> None:
+    original_request = object()
+
+    def provider(
+        request: object,
+        context: TemplateContext,
+    ) -> TemplateContext:
+        del request
+        return context.with_values(request=object())
+
+    with caplog.at_level(logging.WARNING, logger="wevra.web.context"):
+        context = asyncio.run(
             resolve_context_providers(
                 (provider,),
                 object(),
-                reserved_keys=frozenset({"request"}),
+                initial_context=TemplateContext.from_mapping(
+                    {"request": original_request}
+                ),
             )
         )
 
+    assert context.as_dict() == {"request": original_request}
+    assert "Ignored template context key overwrite" in caplog.text
 
-def test_resolve_context_providers_rejects_provider_key_collisions() -> None:
-    def first_provider(request: object) -> dict[str, object]:
+
+def test_resolve_context_providers_warns_and_preserves_existing_keys(caplog) -> None:
+    def first_provider(
+        request: object,
+        context: TemplateContext,
+    ) -> TemplateContext:
         del request
-        return {"shared": "first"}
+        return context.with_values(shared="first")
 
-    def second_provider(request: object) -> dict[str, object]:
+    def second_provider(
+        request: object,
+        context: TemplateContext,
+    ) -> TemplateContext:
         del request
-        return {"shared": "second"}
+        return context.with_values(shared="second")
 
-    with pytest.raises(
-        ContextProviderError,
-        match="collides with existing template context keys: shared",
-    ):
-        asyncio.run(
+    with caplog.at_level(logging.WARNING, logger="wevra.web.context"):
+        context = asyncio.run(
             resolve_context_providers((first_provider, second_provider), object())
         )
+
+    assert context.as_dict() == {"shared": "first"}
+    assert "Ignored template context key overwrite" in caplog.text
 
 
 def test_load_modules_imports_explicit_modules_in_configured_order() -> None:
@@ -1599,6 +1827,7 @@ def test_load_app_config_reads_modules_from_app_toml(
     )
     assert config.static == StaticOptions(
         url_path="/assets/",
+        root=None,
         export_root=Path("build/assets"),
     )
 
