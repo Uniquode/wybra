@@ -9,6 +9,7 @@ from typing import Protocol
 
 from fastapi import FastAPI
 from fastapi.routing import APIRouter
+from starlette.routing import BaseRoute
 
 from wevra.core.composition import AppConfig, CompositionError
 
@@ -146,12 +147,12 @@ def register_module_routes(
     _validate_configured_routers(routers)
     method_paths = _registered_method_paths(app)
     for configured_router in routers:
-        filtered_router = _first_winning_router(configured_router, method_paths)
-        if not filtered_router.routes:
+        selected_routes = _first_winning_routes(configured_router, method_paths)
+        if not selected_routes:
             continue
 
         route_start = len(app.routes)
-        app.include_router(filtered_router, prefix=configured_router.prefix)
+        _include_selected_routes(app, configured_router, selected_routes)
         for route in app.routes[route_start:]:
             route_path = getattr(route, "path", None)
             route_name = getattr(route, "name", None)
@@ -279,11 +280,11 @@ def _registered_method_paths(app: FastAPI) -> dict[tuple[str, str], _RouteOwner]
     return method_paths
 
 
-def _first_winning_router(
+def _first_winning_routes(
     configured_router: ConfiguredModuleRouter,
     method_paths: dict[tuple[str, str], _RouteOwner],
-) -> APIRouter:
-    filtered_router = APIRouter()
+) -> tuple[BaseRoute, ...]:
+    selected_routes: list[BaseRoute] = []
     owner = _RouteOwner(
         module_name=configured_router.module_name,
         router_label=configured_router.label,
@@ -293,7 +294,7 @@ def _first_winning_router(
         route_path = getattr(route, "path", None)
         route_methods = getattr(route, "methods", None)
         if not isinstance(route_path, str) or route_methods is None:
-            filtered_router.routes.append(route)
+            selected_routes.append(route)
             continue
 
         full_path = f"{configured_router.prefix}{route_path}"
@@ -319,16 +320,24 @@ def _first_winning_router(
             )
             continue
 
-        # FastAPI does not expose a public API for cloning an arbitrary existing
-        # route object without reconstructing all APIRoute/Starlette metadata.
-        # We append the already-constructed route object so dependencies, names,
-        # OpenAPI metadata, response options, and custom route classes are kept,
-        # while still physically omitting later duplicate method/path routes.
-        filtered_router.routes.append(route)
+        selected_routes.append(route)
         for method in methods:
             method_paths[(method, full_path)] = owner
 
-    return filtered_router
+    return tuple(selected_routes)
+
+
+def _include_selected_routes(
+    app: FastAPI,
+    configured_router: ConfiguredModuleRouter,
+    selected_routes: tuple[BaseRoute, ...],
+) -> None:
+    original_routes = configured_router.router.routes
+    configured_router.router.routes = list(selected_routes)
+    try:
+        app.include_router(configured_router.router, prefix=configured_router.prefix)
+    finally:
+        configured_router.router.routes = original_routes
 
 
 def _warn_duplicate_route(
