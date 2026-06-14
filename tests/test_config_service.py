@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -7,10 +8,12 @@ import pytest
 
 from wevra.config import (
     AppConfigSource,
+    BaseSettings,
     ConfigDef,
     ConfigDefinitionError,
     ConfigDiagnostic,
-    ConfigSection,
+    ConfigField,
+    ConfigGroup,
     ConfigService,
     ConfigSourceError,
     ConfigSourceMetadata,
@@ -18,6 +21,8 @@ from wevra.config import (
     EnvironmentConfigSource,
     FileConfigSource,
     MappingConfigSource,
+    to_bool,
+    to_path,
 )
 from wevra.core.composition import (
     AppConfig,
@@ -286,8 +291,13 @@ account_creation_policy = "closed"
     assert service.get_config("app.static") == {
         "url_path": "/static",
         "export_root": Path("static"),
+        "root": None,
     }
-    assert service.get_config("app.templates") == {"auto_reload": True, "cache_size": 0}
+    assert service.get_config("app.templates") == {
+        "auto_reload": True,
+        "cache_size": 0,
+        "root": None,
+    }
     assert service.get_config("auth") == {"account_creation_policy": "closed"}
 
 
@@ -319,10 +329,15 @@ def test_optional_file_source_diagnostic_includes_source_location(
 def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
     config_def = ConfigDef(
         {
-            "app.static": ConfigSection(
-                fields={"url_path", "export_root"},
-                defaults={"url_path": "/static/", "export_root": "static"},
-                env={"export_root": "APP_STATIC_EXPORT"},
+            "app.static": ConfigGroup(
+                fields=(
+                    ConfigField(name="url_path", default="/static/"),
+                    ConfigField(
+                        name="export_root",
+                        default="static",
+                        env="APP_STATIC_EXPORT",
+                    ),
+                ),
             )
         }
     )
@@ -340,32 +355,222 @@ def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
     assert service.config.sources["app.static.export_root"] == "environment"
 
 
-def test_config_section_rejects_undeclared_default_key() -> None:
-    with pytest.raises(
-        ConfigDefinitionError,
-        match="Config defaults contain keys not declared in fields: missing",
-    ):
-        ConfigSection(fields={"known"}, defaults={"missing": "value"})
+def test_config_def_field_without_transform_preserves_raw_value() -> None:
+    config_def = ConfigDef(
+        {
+            "app": ConfigGroup(
+                fields=(ConfigField(name="enabled", default="true"),),
+            )
+        }
+    )
+
+    service = ConfigService(config_defs=(config_def,))
+
+    assert service.get_config("app") == {"enabled": "true"}
 
 
-def test_config_section_rejects_undeclared_env_key() -> None:
+def test_config_def_field_transform_applies_to_resolved_value() -> None:
+    config_def = ConfigDef(
+        {
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="enabled",
+                        default=False,
+                        env="APP_ENABLED",
+                        transform=to_bool,
+                    ),
+                ),
+            )
+        }
+    )
+
+    service = ConfigService(
+        config_defs=(config_def,),
+        environ={"APP_ENABLED": "yes"},
+    )
+
+    assert service.get_config("app") == {"enabled": True}
+    assert service.config.sources["app.enabled"] == "environment"
+
+
+def test_config_def_field_transform_can_normalise_paths() -> None:
+    config_def = ConfigDef(
+        {
+            "app.static": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="root",
+                        default="static",
+                        transform=to_path,
+                    ),
+                ),
+            )
+        }
+    )
+
+    service = ConfigService(config_defs=(config_def,))
+
+    config = service.get_config("app.static")
+    assert config is not None
+    assert config["root"] == (Path.cwd() / "static").resolve()
+
+
+def test_config_def_field_transform_failure_fails_loading() -> None:
+    config_def = ConfigDef(
+        {
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="enabled",
+                        default="maybe",
+                        transform=to_bool,
+                    ),
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(
+        ConfigSourceError,
+        match=(
+            r"Config value app\.enabled is invalid: must be a boolean value\. "
+            r"\(source: default\)"
+        ),
+    ):
+        ConfigService(config_defs=(config_def,))
+
+
+def test_config_def_field_transform_failure_names_environment_source() -> None:
+    config_def = ConfigDef(
+        {
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="enabled",
+                        env="APP_ENABLED",
+                        transform=to_bool,
+                    ),
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(
+        ConfigSourceError,
+        match=(
+            r"Config value app\.enabled is invalid: must be a boolean value\. "
+            r"\(source: environment\)"
+        ),
+    ):
+        ConfigService(config_defs=(config_def,), environ={"APP_ENABLED": "maybe"})
+
+
+def test_base_settings_infers_single_config_section() -> None:
+    @dataclass(frozen=True, slots=True)
+    class ExampleSettings(BaseSettings):
+        module_config = ConfigDef(
+            {
+                "example": ConfigGroup(
+                    fields=(
+                        ConfigField(
+                            name="enabled",
+                            default="true",
+                            transform=to_bool,
+                        ),
+                        ConfigField(name="ignored", default="not-a-setting"),
+                    ),
+                )
+            }
+        )
+
+        enabled: bool = False
+
+    settings = ExampleSettings.load_settings(
+        ConfigService(config_defs=(ExampleSettings.module_config,))
+    )
+
+    assert settings == ExampleSettings(enabled=True)
+
+
+def test_base_settings_requires_section_for_multi_section_config_def() -> None:
+    @dataclass(frozen=True, slots=True)
+    class ExampleSettings(BaseSettings):
+        module_config = ConfigDef(
+            {
+                "first": ConfigGroup(fields=(ConfigField(name="name"),)),
+                "second": ConfigGroup(fields=(ConfigField(name="name"),)),
+            }
+        )
+
+        name: str = "default"
+
     with pytest.raises(
         ConfigDefinitionError,
-        match="Config env overrides contain keys not declared in fields: missing",
+        match=(
+            "config_section must be set when module_config declares multiple sections"
+        ),
     ):
-        ConfigSection(fields={"known"}, env={"missing": "MISSING"})
+        ExampleSettings.load_settings({"name": "configured"})
+
+
+def test_base_settings_accepts_explicit_section_for_multi_section_config_def() -> None:
+    @dataclass(frozen=True, slots=True)
+    class ExampleSettings(BaseSettings):
+        module_config = ConfigDef(
+            {
+                "first": ConfigGroup(fields=(ConfigField(name="name"),)),
+                "second": ConfigGroup(fields=(ConfigField(name="name"),)),
+            }
+        )
+        config_section = "second"
+
+        name: str = "default"
+
+    settings = ExampleSettings.load_settings({"name": "configured"})
+
+    assert settings == ExampleSettings(name="configured")
+
+
+def test_config_section_rejects_duplicate_field_names() -> None:
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="Config fields contain duplicate names: known",
+    ):
+        ConfigGroup(
+            fields=(
+                ConfigField(name="known"),
+                ConfigField(name="known"),
+            )
+        )
+
+
+def test_config_field_rejects_blank_names() -> None:
+    with pytest.raises(ConfigDefinitionError, match="must not be blank"):
+        ConfigField(name="   ")
+
+
+def test_config_section_rejects_non_field_values() -> None:
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="ConfigGroup fields must be ConfigField instances.",
+    ):
+        ConfigGroup(fields=("known",))  # type: ignore[arg-type]
 
 
 def test_config_def_supports_multiple_sections_and_source_overrides() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
-                fields={"database_url"},
-                defaults={"database_url": "sqlite:///default.db"},
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="database_url",
+                        default="sqlite:///default.db",
+                    ),
+                ),
             ),
-            "auth": ConfigSection(
-                fields={"session_cookie_name"},
-                defaults={"session_cookie_name": "default"},
+            "auth": ConfigGroup(
+                fields=(ConfigField(name="session_cookie_name", default="default"),),
             ),
         }
     )
@@ -382,24 +587,32 @@ def test_config_def_supports_multiple_sections_and_source_overrides() -> None:
 def test_config_def_rejects_conflicting_default_definitions() -> None:
     first = ConfigDef(
         {
-            "app": ConfigSection(
-                fields={"database_url"},
-                defaults={"database_url": "sqlite:///first.db"},
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="database_url",
+                        default="sqlite:///first.db",
+                    ),
+                ),
             )
         }
     )
     second = ConfigDef(
         {
-            "app": ConfigSection(
-                fields={"database_url"},
-                defaults={"database_url": "sqlite:///second.db"},
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="database_url",
+                        default="sqlite:///second.db",
+                    ),
+                ),
             )
         }
     )
 
     with pytest.raises(
         ConfigDefinitionError,
-        match="Conflicting default for field app.database_url.",
+        match="Conflicting definition for field app.database_url.",
     ):
         ConfigService(config_defs=(first, second))
 
@@ -407,24 +620,51 @@ def test_config_def_rejects_conflicting_default_definitions() -> None:
 def test_config_def_rejects_conflicting_env_definitions() -> None:
     first = ConfigDef(
         {
-            "app": ConfigSection(
-                fields={"database_url"},
-                env={"database_url": "DATABASE_URL"},
+            "app": ConfigGroup(
+                fields=(ConfigField(name="database_url", env="DATABASE_URL"),),
             )
         }
     )
     second = ConfigDef(
         {
-            "app": ConfigSection(
-                fields={"database_url"},
-                env={"database_url": "SA_DATABASE_URL"},
+            "app": ConfigGroup(
+                fields=(ConfigField(name="database_url", env="SA_DATABASE_URL"),),
             )
         }
     )
 
     with pytest.raises(
         ConfigDefinitionError,
-        match="Conflicting env override for field app.database_url.",
+        match="Conflicting definition for field app.database_url.",
+    ):
+        ConfigService(config_defs=(first, second))
+
+
+def test_config_def_rejects_conflicting_field_transforms() -> None:
+    def first_transform(value: Any) -> Any:
+        return value
+
+    def second_transform(value: Any) -> Any:
+        return value
+
+    first = ConfigDef(
+        {
+            "app": ConfigGroup(
+                fields=(ConfigField(name="enabled", transform=first_transform),),
+            )
+        }
+    )
+    second = ConfigDef(
+        {
+            "app": ConfigGroup(
+                fields=(ConfigField(name="enabled", transform=second_transform),),
+            )
+        }
+    )
+
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="Conflicting definition for field app.enabled.",
     ):
         ConfigService(config_defs=(first, second))
 
@@ -435,10 +675,10 @@ def test_module_config_def_is_discovered_from_module_root(
     module_root = tmp_path / "example_module"
     module_root.mkdir()
     module_root.joinpath("__init__.py").write_text(
-        "from wevra.config import ConfigDef, ConfigSection\n"
+        "from wevra.config import ConfigDef, ConfigField, ConfigGroup\n"
         "module_config = ConfigDef({\n"
-        "    'example': ConfigSection(\n"
-        "        fields={'enabled'}, defaults={'enabled': True}\n"
+        "    'example': ConfigGroup(\n"
+        "        fields=(ConfigField(name='enabled', default=True),)\n"
         "    )\n"
         "})\n",
         encoding="utf-8",
@@ -483,10 +723,14 @@ def test_invalid_module_config_def_is_rejected(tmp_path: Path, monkeypatch) -> N
 def test_config_def_env_override_uses_first_present_environment_name() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
-                fields={"database_url"},
-                defaults={"database_url": "sqlite:///default.db"},
-                env={"database_url": ("DATABASE_URL", "SA_DATABASE_URL")},
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="database_url",
+                        default="sqlite:///default.db",
+                        env=("DATABASE_URL", "SA_DATABASE_URL"),
+                    ),
+                ),
             )
         }
     )
@@ -502,10 +746,14 @@ def test_config_def_env_override_uses_first_present_environment_name() -> None:
 def test_config_def_env_override_prefers_first_environment_name() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
-                fields={"database_url"},
-                defaults={"database_url": "sqlite:///default.db"},
-                env={"database_url": ("DATABASE_URL", "SA_DATABASE_URL")},
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="database_url",
+                        default="sqlite:///default.db",
+                        env=("DATABASE_URL", "SA_DATABASE_URL"),
+                    ),
+                ),
             )
         }
     )
@@ -528,7 +776,9 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
         modules=("app",),
         routes=RouteOptions(prefixes={"app": {"default": ""}}),
         templates=TemplateOptions(auto_reload=True, cache_size=12),
-        static=StaticOptions(url_path="/assets/", export_root=Path("static")),
+        static=StaticOptions(
+            url_path="/assets/", root=None, export_root=Path("static")
+        ),
         database_url="sqlite+aiosqlite:///app.sqlite3",
         auth={"account_creation_policy": "closed"},
     )
@@ -540,14 +790,17 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
         "project_root": tmp_path,
         "modules": ("app",),
         "database_url": "sqlite+aiosqlite:///app.sqlite3",
+        "deployment_environment": None,
     }
     assert service.get_config("app.routes") == {"prefixes": {"app": {"default": ""}}}
     assert service.get_config("app.static") == {
         "url_path": "/assets/",
+        "root": None,
         "export_root": Path("static"),
     }
     assert service.get_config("app.templates") == {
         "auto_reload": True,
         "cache_size": 12,
+        "root": None,
     }
     assert service.get_config("auth") == {"account_creation_policy": "closed"}

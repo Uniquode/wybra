@@ -18,4 +18,8 @@ def log_safe_uuid(value: str | UUID) -> str:
     if parsed is None:
         return "<invalid-uuid>"
 
-    return str(parsed)
+    return log_safe_line(parsed)
+
+
+def log_safe_line(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")

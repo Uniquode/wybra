@@ -21,7 +21,19 @@ _.create_fastapi_users
 _.optional_current_user
 _.require_current_user
 _.require_anonymous_user
+_.login_required
+_.anonymous_required
 _.has_module
+_.has_capability
+_.require_capability
+_.provide_capability
+_.start_site
+_.get_site
+_.setup_site
+_.template_context_middleware
+_.session
+_.transaction
+_.close
 
 # Click command callbacks registered through decorators.
 _.create_command
@@ -127,6 +139,7 @@ _.accepts_body
 _.accepts_form
 _.path_parameters
 _.template
+_.middleware_stack
 
 # Alembic revision module metadata.
 _.down_revision

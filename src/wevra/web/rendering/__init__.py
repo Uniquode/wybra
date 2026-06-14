@@ -7,20 +7,9 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, select_autoescape
 
 from wevra.core.resources import PackageResourceSource
-from wevra.web.context import get_request_context
+from wevra.web.context import TemplateContext, get_request_context
 from wevra.web.forms.csrf import CsrfProtector
 from wevra.web.templating import build_template_loader
-
-RESERVED_TEMPLATE_CONTEXT_KEYS = frozenset(
-    {
-        "request",
-        "route_name",
-        "csrf_field_name",
-        "csrf_header_name",
-        "csrf_token",
-        "static_mount_path",
-    }
-)
 
 
 @dataclass(slots=True)
@@ -28,6 +17,7 @@ class TemplateRenderer:
     template_root: Path | None = None
     csrf: CsrfProtector | None = None
     template_sources: tuple[PackageResourceSource, ...] = ()
+    include_request_context: bool = True
     auto_reload: bool | None = None
     cache_size: int = 400
     environment: Environment = field(init=False)
@@ -65,18 +55,21 @@ class TemplateRenderer:
         request: Request,
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        base_context: dict[str, Any] = {
-            "request": request,
+        framework_context: dict[str, Any] = {
             "route_name": self._resolve_route_name(request),
             "static_mount_path": self._resolve_static_mount_path(request),
         }
-        csrf_context = self.csrf.token_context(request) if self.csrf is not None else {}
-        internal_keys = base_context.keys() | csrf_context.keys()
-        provider_context = get_request_context(request)
-        self._reject_internal_context_overrides(internal_keys, provider_context)
-        self._reject_internal_context_overrides(internal_keys, context)
+        if self.include_request_context:
+            framework_context["request"] = request
+        if self.csrf is not None:
+            framework_context.update(self.csrf.token_context(request))
 
-        return base_context | csrf_context | provider_context | context
+        return (
+            TemplateContext.from_mapping(framework_context)
+            .merge(context)
+            .merge(get_request_context(request))
+            .as_dict()
+        )
 
     @staticmethod
     def _resolve_static_mount_path(request: Request) -> str:
@@ -98,16 +91,6 @@ class TemplateRenderer:
             return settings_static_mount_path.rstrip("/")
 
         return "/static"
-
-    @staticmethod
-    def _reject_internal_context_overrides(
-        internal_keys: set[str],
-        context: dict[str, Any],
-    ) -> None:
-        overlapping_keys = internal_keys & context.keys()
-        if overlapping_keys:
-            keys = ", ".join(sorted(overlapping_keys))
-            raise ValueError(f"Template context overrides internal keys: {keys}")
 
     def render_page(
         self,

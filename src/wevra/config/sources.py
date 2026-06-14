@@ -172,24 +172,35 @@ def _parse_bool(value: str, name: str) -> bool:
     raise ValueError(f"{name} must be a boolean value.")
 
 
-def _app_config_sections(app_config: AppConfig) -> dict[str, Mapping[str, Any]]:
-    values: dict[str, Mapping[str, Any]] = {
-        "app": {
+def _app_config_sections(app_config: AppConfig) -> Mapping[str, Mapping[str, Any]]:
+    values: dict[str, dict[str, Any]] = {
+        section: dict(section_values)
+        for section, section_values in app_config.raw_config.items()
+    }
+    values.setdefault("app", {}).update(
+        {
             "config_path": app_config.config_path,
             "project_root": app_config.project_root,
             "modules": app_config.modules,
             "database_url": app_config.database_url,
-        },
-        "app.routes": {"prefixes": app_config.routes.prefixes},
-        "app.static": {
+            "deployment_environment": app_config.deployment_environment,
+        }
+    )
+    values.setdefault("app.routes", {}).update({"prefixes": app_config.routes.prefixes})
+    values.setdefault("app.static", {}).update(
+        {
             "url_path": app_config.static.url_path,
+            "root": app_config.static.root,
             "export_root": app_config.static.export_root,
-        },
-        "app.templates": {
+        }
+    )
+    values.setdefault("app.templates", {}).update(
+        {
             "auto_reload": app_config.templates.auto_reload,
             "cache_size": app_config.templates.cache_size,
-        },
-    }
+            "root": app_config.templates.root,
+        }
+    )
     if app_config.auth:
-        values["auth"] = dict(app_config.auth)
+        values.setdefault("auth", {}).update(dict(app_config.auth))
     return values

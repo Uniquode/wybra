@@ -3,16 +3,26 @@ import importlib
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
-from sqlalchemy import MetaData
+from fastapi import FastAPI
+from sqlalchemy import MetaData, text
 
+from wevra import SiteCapabilityError
+from wevra.config import MappingConfigSource
+from wevra.db import DatabaseCapability
+from wevra.db.capabilities import (
+    DatabaseCapabilityError,
+    SqlAlchemyDatabaseCapability,
+)
 from wevra.db.migrate import (
     DEFAULT_MIGRATIONS_SCRIPT_LOCATION,
     migration_script_location,
     migration_script_root,
 )
 from wevra.db.models import Base, metadata
+from wevra.db.persistence import Database
 from wevra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
@@ -29,6 +39,7 @@ from wevra.db.urls import (
     safe_database_error_message,
 )
 from wevra.db.validation import validate_persistence
+from wevra.site import start
 from wevra.tools.validation.core import ValidationResult
 
 
@@ -102,10 +113,157 @@ def _failed_check_descriptions(result_errors: tuple[str, ...]) -> str:
     return "\n".join(result_errors)
 
 
+def _database_config_source(tmp_path: Path) -> MappingConfigSource:
+    return MappingConfigSource(
+        {
+            "app": {
+                "modules": ("wevra.db",),
+                "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+            }
+        }
+    )
+
+
 def test_wevra_db_package_imports() -> None:
     package = importlib.import_module("wevra.db")
 
     assert package.__name__ == "wevra.db"
+
+
+@pytest.mark.anyio
+async def test_wevra_db_setup_site_registers_database_capability(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+
+    database = site.require_capability(DatabaseCapability)
+
+    assert site.has_capability(DatabaseCapability) is True
+    assert isinstance(database, DatabaseCapability)
+
+
+@pytest.mark.anyio
+async def test_wevra_db_setup_site_requires_database_url() -> None:
+    with pytest.raises(SiteCapabilityError, match="database_url"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource({"app": {"modules": ("wevra.db",)}}),
+        )
+
+
+@pytest.mark.anyio
+async def test_database_capability_provides_clean_sessions(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+    database = site.require_capability(DatabaseCapability)
+    try:
+        async with database.session() as first_session:
+            async with database.session() as second_session:
+                assert first_session is not second_session
+    finally:
+        await database.close()
+
+
+@pytest.mark.anyio
+async def test_database_capability_transaction_commits_and_rolls_back(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+    database = site.require_capability(DatabaseCapability)
+    try:
+        async with database.transaction() as session:
+            await session.execute(text("create table records (value text not null)"))
+            await session.execute(text("insert into records values ('committed')"))
+
+        with pytest.raises(RuntimeError, match="rollback"):
+            async with database.transaction() as session:
+                await session.execute(
+                    text("insert into records values ('rolled-back')")
+                )
+                raise RuntimeError("rollback")
+
+        async with database.session() as session:
+            rows = (
+                await session.execute(text("select value from records order by value"))
+            ).all()
+
+        assert rows == [("committed",)]
+    finally:
+        await database.close()
+
+
+@pytest.mark.anyio
+async def test_database_capability_supports_named_connection_aliases(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+    database = site.require_capability(DatabaseCapability)
+    try:
+        async with database.session("reader") as reader_session:
+            async with database.transaction("writer") as writer_session:
+                assert reader_session is not writer_session
+    finally:
+        await database.close()
+
+
+@pytest.mark.anyio
+async def test_database_capability_rejects_unknown_connection_name(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+    database = site.require_capability(DatabaseCapability)
+    try:
+        with pytest.raises(
+            DatabaseCapabilityError, match="Unknown database connection"
+        ):
+            database.session("analytics")
+    finally:
+        await database.close()
+
+
+@pytest.mark.anyio
+async def test_database_capability_rejects_use_after_close(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+    database = site.require_capability(DatabaseCapability)
+
+    await database.close()
+
+    with pytest.raises(DatabaseCapabilityError, match="Database capability is closed"):
+        database.session()
+
+
+@pytest.mark.anyio
+async def test_database_capability_attempts_all_distinct_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_database = cast(Database, object())
+    second_database = cast(Database, object())
+    closed_databases: list[Database] = []
+
+    async def close_or_fail(database: Database) -> None:
+        closed_databases.append(database)
+        if database is first_database:
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(
+        "wevra.db.capabilities.close_database",
+        close_or_fail,
+    )
+    database = SqlAlchemyDatabaseCapability.from_connections(
+        {
+            "default": first_database,
+            "reader": second_database,
+            "writer": first_database,
+        }
+    )
+
+    with pytest.raises(DatabaseCapabilityError, match="error_count=1"):
+        await database.close()
+
+    assert closed_databases == [first_database, second_database]
 
 
 def test_wevra_db_modules_do_not_import_application_or_auth_packages() -> None:
