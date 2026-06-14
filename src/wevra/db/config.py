@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
-from wevra.config import ConfigDef, ConfigField, ConfigSection
+from wevra.config import ConfigDef, ConfigField, ConfigGroup
 
 DEFAULT_ALEMBIC_CONFIG: Final = Path("alembic.ini")
 ENV_ALEMBIC_CONFIG: Final = "ALEMBIC_CONFIG"
@@ -12,7 +12,7 @@ ENV_MIGRATIONS_ROOT: Final = "MIGRATIONS_ROOT"
 
 module_config: Final = ConfigDef(
     {
-        "app": ConfigSection(
+        "app": ConfigGroup(
             fields=(
                 ConfigField(name="alembic_config", env=ENV_ALEMBIC_CONFIG),
                 ConfigField(name="database_url", env=ENV_DATABASE_URL),

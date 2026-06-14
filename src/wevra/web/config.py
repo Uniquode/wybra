@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from wevra.config import ConfigDef, ConfigField, ConfigSection, to_bool
+from wevra.config import ConfigDef, ConfigField, ConfigGroup, to_bool
 
 ENV_CSRF_SECRET: Final = "CSRF_SECRET"
 ENV_CSRF_SECURE: Final = "CSRF_SECURE"
@@ -13,7 +13,7 @@ ENV_TEMPLATE_ROOT: Final = "TEMPLATE_ROOT"
 
 module_config: Final = ConfigDef(
     {
-        "wevra.web": ConfigSection(
+        "wevra.web": ConfigGroup(
             fields=(
                 ConfigField(name="csrf_cookie_secure", env=ENV_CSRF_SECURE),
                 ConfigField(name="csrf_token_secret", env=ENV_CSRF_SECRET),
@@ -24,13 +24,13 @@ module_config: Final = ConfigDef(
                 ),
             ),
         ),
-        "app.static": ConfigSection(
+        "app.static": ConfigGroup(
             fields=(
                 ConfigField(name="root", env=ENV_STATIC_ROOT),
                 ConfigField(name="url_path", env=ENV_STATIC_URL),
             ),
         ),
-        "app.templates": ConfigSection(
+        "app.templates": ConfigGroup(
             fields=(
                 ConfigField(name="auto_reload"),
                 ConfigField(name="cache_size"),

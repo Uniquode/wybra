@@ -67,12 +67,13 @@ class ConfigField:
         env: EnvOverride = (),
         transform: ConfigTransform | None = None,
     ) -> None:
-        object.__setattr__(self, "name", name)
+        field_name = name.strip()
+        if not field_name:
+            raise ConfigDefinitionError("Config field name must not be blank.")
+        object.__setattr__(self, "name", field_name)
         object.__setattr__(self, "default", default)
         object.__setattr__(self, "env", _normalise_env_override(env))
         object.__setattr__(self, "transform", transform)
-        if not self.name:
-            raise ConfigDefinitionError("Config field name must not be blank.")
 
     @property
     def has_default(self) -> bool:
@@ -80,7 +81,7 @@ class ConfigField:
 
 
 @dataclass(frozen=True, slots=True)
-class ConfigSection:
+class ConfigGroup:
     fields: tuple[ConfigField, ...] = ()
     field_map: Mapping[str, ConfigField] = field(default_factory=dict)
 
@@ -116,7 +117,7 @@ def _field_map(fields: tuple[ConfigField, ...]) -> dict[str, ConfigField]:
     for field_def in fields:
         if not isinstance(field_def, ConfigField):
             raise ConfigDefinitionError(
-                "ConfigSection fields must be ConfigField instances."
+                "ConfigGroup fields must be ConfigField instances."
             )
         if field_def.name in values:
             duplicates.add(field_def.name)
@@ -130,9 +131,9 @@ def _field_map(fields: tuple[ConfigField, ...]) -> dict[str, ConfigField]:
 
 @dataclass(frozen=True, slots=True)
 class ConfigDef:
-    sections: Mapping[str, ConfigSection]
+    sections: Mapping[str, ConfigGroup]
 
-    def __init__(self, sections: Mapping[str, ConfigSection]) -> None:
+    def __init__(self, sections: Mapping[str, ConfigGroup]) -> None:
         object.__setattr__(self, "sections", MappingProxyType(dict(sections)))
 
 
@@ -170,7 +171,7 @@ class ConfigSource(Protocol):
 
 
 def merge_config_defs(definitions: tuple[ConfigDef, ...]) -> ConfigDef:
-    sections: dict[str, ConfigSection] = {}
+    sections: dict[str, ConfigGroup] = {}
     for definition in definitions:
         for section_name, section in definition.sections.items():
             existing = sections.get(section_name)
@@ -179,14 +180,14 @@ def merge_config_defs(definitions: tuple[ConfigDef, ...]) -> ConfigDef:
                 continue
 
             merged_fields = _merge_fields(section_name, existing, section)
-            sections[section_name] = ConfigSection(fields=merged_fields)
+            sections[section_name] = ConfigGroup(fields=merged_fields)
     return ConfigDef(sections)
 
 
 def _merge_fields(
     section_name: str,
-    first: ConfigSection,
-    second: ConfigSection,
+    first: ConfigGroup,
+    second: ConfigGroup,
 ) -> tuple[ConfigField, ...]:
     merged = dict(first.field_map)
     for field_name, field_def in second.field_map.items():

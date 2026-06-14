@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from typing import cast
 
 from wevra.core.diagnostics import wrapped_error
+from wevra.core.exceptions import ConfigurationError
 from wevra.db import migrate as data_migrate
 from wevra.db.config import ENV_DATABASE_URL
 from wevra.tools.project import (
@@ -42,6 +43,8 @@ def _build_settings(database_url: str | None) -> data_migrate.MigrationSettings:
             load_project_settings(environ=environment, project_root=project_root),
         )
     except ProjectToolConfigurationError as exc:
+        raise wrapped_error(data_migrate.MigrationConfigurationError, exc) from exc
+    except ConfigurationError as exc:
         raise wrapped_error(data_migrate.MigrationConfigurationError, exc) from exc
     except data_migrate.MigrationConfigurationError:
         raise

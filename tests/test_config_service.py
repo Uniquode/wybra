@@ -13,7 +13,7 @@ from wevra.config import (
     ConfigDefinitionError,
     ConfigDiagnostic,
     ConfigField,
-    ConfigSection,
+    ConfigGroup,
     ConfigService,
     ConfigSourceError,
     ConfigSourceMetadata,
@@ -329,7 +329,7 @@ def test_optional_file_source_diagnostic_includes_source_location(
 def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
     config_def = ConfigDef(
         {
-            "app.static": ConfigSection(
+            "app.static": ConfigGroup(
                 fields=(
                     ConfigField(name="url_path", default="/static/"),
                     ConfigField(
@@ -358,7 +358,7 @@ def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
 def test_config_def_field_without_transform_preserves_raw_value() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(ConfigField(name="enabled", default="true"),),
             )
         }
@@ -372,7 +372,7 @@ def test_config_def_field_without_transform_preserves_raw_value() -> None:
 def test_config_def_field_transform_applies_to_resolved_value() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="enabled",
@@ -397,7 +397,7 @@ def test_config_def_field_transform_applies_to_resolved_value() -> None:
 def test_config_def_field_transform_can_normalise_paths() -> None:
     config_def = ConfigDef(
         {
-            "app.static": ConfigSection(
+            "app.static": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="root",
@@ -419,7 +419,7 @@ def test_config_def_field_transform_can_normalise_paths() -> None:
 def test_config_def_field_transform_failure_fails_loading() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="enabled",
@@ -433,9 +433,37 @@ def test_config_def_field_transform_failure_fails_loading() -> None:
 
     with pytest.raises(
         ConfigSourceError,
-        match=r"Config value app\.enabled is invalid: must be a boolean value\.",
+        match=(
+            r"Config value app\.enabled is invalid: must be a boolean value\. "
+            r"\(source: default\)"
+        ),
     ):
         ConfigService(config_defs=(config_def,))
+
+
+def test_config_def_field_transform_failure_names_environment_source() -> None:
+    config_def = ConfigDef(
+        {
+            "app": ConfigGroup(
+                fields=(
+                    ConfigField(
+                        name="enabled",
+                        env="APP_ENABLED",
+                        transform=to_bool,
+                    ),
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(
+        ConfigSourceError,
+        match=(
+            r"Config value app\.enabled is invalid: must be a boolean value\. "
+            r"\(source: environment\)"
+        ),
+    ):
+        ConfigService(config_defs=(config_def,), environ={"APP_ENABLED": "maybe"})
 
 
 def test_base_settings_infers_single_config_section() -> None:
@@ -443,7 +471,7 @@ def test_base_settings_infers_single_config_section() -> None:
     class ExampleSettings(BaseSettings):
         module_config = ConfigDef(
             {
-                "example": ConfigSection(
+                "example": ConfigGroup(
                     fields=(
                         ConfigField(
                             name="enabled",
@@ -470,8 +498,8 @@ def test_base_settings_requires_section_for_multi_section_config_def() -> None:
     class ExampleSettings(BaseSettings):
         module_config = ConfigDef(
             {
-                "first": ConfigSection(fields=(ConfigField(name="name"),)),
-                "second": ConfigSection(fields=(ConfigField(name="name"),)),
+                "first": ConfigGroup(fields=(ConfigField(name="name"),)),
+                "second": ConfigGroup(fields=(ConfigField(name="name"),)),
             }
         )
 
@@ -491,8 +519,8 @@ def test_base_settings_accepts_explicit_section_for_multi_section_config_def() -
     class ExampleSettings(BaseSettings):
         module_config = ConfigDef(
             {
-                "first": ConfigSection(fields=(ConfigField(name="name"),)),
-                "second": ConfigSection(fields=(ConfigField(name="name"),)),
+                "first": ConfigGroup(fields=(ConfigField(name="name"),)),
+                "second": ConfigGroup(fields=(ConfigField(name="name"),)),
             }
         )
         config_section = "second"
@@ -509,7 +537,7 @@ def test_config_section_rejects_duplicate_field_names() -> None:
         ConfigDefinitionError,
         match="Config fields contain duplicate names: known",
     ):
-        ConfigSection(
+        ConfigGroup(
             fields=(
                 ConfigField(name="known"),
                 ConfigField(name="known"),
@@ -517,18 +545,23 @@ def test_config_section_rejects_duplicate_field_names() -> None:
         )
 
 
+def test_config_field_rejects_blank_names() -> None:
+    with pytest.raises(ConfigDefinitionError, match="must not be blank"):
+        ConfigField(name="   ")
+
+
 def test_config_section_rejects_non_field_values() -> None:
     with pytest.raises(
         ConfigDefinitionError,
-        match="ConfigSection fields must be ConfigField instances.",
+        match="ConfigGroup fields must be ConfigField instances.",
     ):
-        ConfigSection(fields=("known",))  # type: ignore[arg-type]
+        ConfigGroup(fields=("known",))  # type: ignore[arg-type]
 
 
 def test_config_def_supports_multiple_sections_and_source_overrides() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="database_url",
@@ -536,7 +569,7 @@ def test_config_def_supports_multiple_sections_and_source_overrides() -> None:
                     ),
                 ),
             ),
-            "auth": ConfigSection(
+            "auth": ConfigGroup(
                 fields=(ConfigField(name="session_cookie_name", default="default"),),
             ),
         }
@@ -554,7 +587,7 @@ def test_config_def_supports_multiple_sections_and_source_overrides() -> None:
 def test_config_def_rejects_conflicting_default_definitions() -> None:
     first = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="database_url",
@@ -566,7 +599,7 @@ def test_config_def_rejects_conflicting_default_definitions() -> None:
     )
     second = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="database_url",
@@ -587,14 +620,14 @@ def test_config_def_rejects_conflicting_default_definitions() -> None:
 def test_config_def_rejects_conflicting_env_definitions() -> None:
     first = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(ConfigField(name="database_url", env="DATABASE_URL"),),
             )
         }
     )
     second = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(ConfigField(name="database_url", env="SA_DATABASE_URL"),),
             )
         }
@@ -616,14 +649,14 @@ def test_config_def_rejects_conflicting_field_transforms() -> None:
 
     first = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(ConfigField(name="enabled", transform=first_transform),),
             )
         }
     )
     second = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(ConfigField(name="enabled", transform=second_transform),),
             )
         }
@@ -642,9 +675,9 @@ def test_module_config_def_is_discovered_from_module_root(
     module_root = tmp_path / "example_module"
     module_root.mkdir()
     module_root.joinpath("__init__.py").write_text(
-        "from wevra.config import ConfigDef, ConfigField, ConfigSection\n"
+        "from wevra.config import ConfigDef, ConfigField, ConfigGroup\n"
         "module_config = ConfigDef({\n"
-        "    'example': ConfigSection(\n"
+        "    'example': ConfigGroup(\n"
         "        fields=(ConfigField(name='enabled', default=True),)\n"
         "    )\n"
         "})\n",
@@ -690,7 +723,7 @@ def test_invalid_module_config_def_is_rejected(tmp_path: Path, monkeypatch) -> N
 def test_config_def_env_override_uses_first_present_environment_name() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="database_url",
@@ -713,7 +746,7 @@ def test_config_def_env_override_uses_first_present_environment_name() -> None:
 def test_config_def_env_override_prefers_first_environment_name() -> None:
     config_def = ConfigDef(
         {
-            "app": ConfigSection(
+            "app": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="database_url",

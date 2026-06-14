@@ -106,7 +106,11 @@ def static_app_from_config(
     static_root: Path | None,
     static_sources: tuple[PackageResourceSource, ...],
 ) -> ASGIApp:
-    """Build the runtime static ASGI app for filesystem and module assets."""
+    """Build the runtime static ASGI app.
+
+    A configured filesystem static root takes precedence over module static
+    assets. Module assets are served only when no filesystem root is configured.
+    """
     resolved_static_root = _resolve_static_root(project_root, static_root)
     if resolved_static_root is not None:
         return StaticFiles(directory=resolved_static_root, check_dir=True)

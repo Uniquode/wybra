@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Final
 
-from wevra.config import ConfigDef, ConfigField, ConfigSection
+from wevra.config import ConfigDef, ConfigField, ConfigGroup
 
 ENV_APP_ENV: Final = "APP_ENV"
 
 RUNTIME_CONFIG_DEF: Final = ConfigDef(
     {
-        "app": ConfigSection(
+        "app": ConfigGroup(
             fields=(
                 ConfigField(
                     name="deployment_environment",

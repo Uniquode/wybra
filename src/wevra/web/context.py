@@ -111,7 +111,7 @@ async def resolve_context_providers(
     *,
     initial_context: TemplateContext | None = None,
 ) -> TemplateContext:
-    context = initial_context or TemplateContext()
+    context = initial_context if initial_context is not None else TemplateContext()
     for provider in providers:
         context = await _call_provider(provider, request, context)
 

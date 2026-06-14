@@ -1699,6 +1699,30 @@ def test_resolve_context_providers_allows_provider_owned_request_key() -> None:
     assert context.as_dict() == {"request": "caller-controlled"}
 
 
+def test_resolve_context_providers_preserves_empty_initial_context() -> None:
+    initial_context = TemplateContext()
+    observed: dict[str, TemplateContext] = {}
+
+    def provider(
+        request: object,
+        context: TemplateContext,
+    ) -> TemplateContext:
+        del request
+        observed["context"] = context
+        return context.with_values(app_name="wevra")
+
+    context = asyncio.run(
+        resolve_context_providers(
+            (provider,),
+            object(),
+            initial_context=initial_context,
+        )
+    )
+
+    assert observed["context"] is initial_context
+    assert context.as_dict() == {"app_name": "wevra"}
+
+
 def test_resolve_context_providers_warns_and_preserves_seeded_keys(
     caplog,
 ) -> None:

@@ -296,7 +296,11 @@ def _endpoint_shape(route: BaseRoute, *, path: str, kind: RouteKind) -> Endpoint
     response_class_name = _response_class_name(response_class)
     response_media_type = getattr(response_class, "media_type", None)
     if isinstance(route, APIRoute) and response_media_type is None:
-        response_media_type = getattr(route.response_class, "media_type", None)
+        response_media_type = getattr(
+            getattr(route, "response_class", None),
+            "media_type",
+            None,
+        )
 
     return EndpointShape(
         surface=_route_surface(
