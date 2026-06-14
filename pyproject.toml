@@ -22,7 +22,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pyjwt>=2.13.0",
     "sqlalchemy[asyncio]>=2.0.50",
-    "starlette>=1.2.1",
+    "starlette>=1.3.1",
     "uvicorn>=0.49.0",
 ]
 
@@ -34,7 +34,7 @@ wevra-runserver = "wevra.tools.runserver:main"
 wevra-validate = "wevra.tools.validate:main"
 
 [build-system]
-requires = ["uv_build>=0.11.19,<0.12.0"]
+requires = ["uv_build>=0.11.21,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -42,10 +42,10 @@ module-name = ["wevra"]
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.3.0",
+    "httpx2>=2.4.0",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
-    "ruff>=0.15.16",
+    "ruff>=0.15.17",
     "ty>=0.0.49",
 ]
 
