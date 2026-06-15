@@ -124,7 +124,7 @@ def _non_blank_option(value: str, option_name: str) -> str:
     # invalid CLI override values.
     if not value.strip():
         raise click.UsageError(f"{option_name} must not be blank.")
-    return value
+    return value.strip()
 
 
 def load_runserver_config(
