@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from fastapi import Request
+from fastapi.responses import Response
 from fastapi_users import FastAPIUsers
 
 from wevra.auth.delivery import NullIdentityDelivery
 from wevra.auth.models import User
 from wevra.auth.sessions import (
+    clear_marked_session_cookie,
     create_fastapi_users,
 )
 from wevra.auth.sessions import (
@@ -107,6 +109,26 @@ async def setup_site(site: Site) -> None:
     site.app.state.identity_delivery = NullIdentityDelivery()
     site.app.state.fastapi_users = capability.fastapi_users
     site.provide_capability(AuthCapability, capability)
+    _register_session_cookie_cleanup_middleware(site, settings)
+
+
+def _register_session_cookie_cleanup_middleware(
+    site: Site,
+    settings: AuthSettings,
+) -> None:
+    if getattr(site.app.state, "identity_session_cookie_cleanup_registered", False):
+        return
+
+    @site.app.middleware("http")
+    async def session_cookie_cleanup_middleware(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        response = await call_next(request)
+        clear_marked_session_cookie(response, request, settings.identity_options)
+        return response
+
+    site.app.state.identity_session_cookie_cleanup_registered = True
 
 
 def _auth_capability_from_request(request: Request) -> AuthCapability:
