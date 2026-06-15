@@ -87,6 +87,8 @@ def resolve_database_url(database_url: str, project_root: Path) -> str:
         return database_url
 
     database_path = sqlite_url.path
+    if database_path.is_absolute():
+        return database_url
     if not database_path.is_absolute():
         database_path = project_root / database_path
 

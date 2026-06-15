@@ -15,12 +15,16 @@ from wevra.config import (
     MappingConfigSource,
 )
 from wevra.core.composition import (
+    APP_CONFIG_ENV,
+    APP_ROOT_ENV,
     AppConfig,
     CompositionError,
     RouteOptions,
     StaticOptions,
     TemplateOptions,
 )
+from wevra.core.config import ENV_APP_ENV
+from wevra.db.config import ENV_DATABASE_URL
 from wevra.site import start
 from wevra.site_config import app_config_from_site
 
@@ -173,6 +177,91 @@ async def test_start_accepts_relative_file_source_string(
     site = await start(FastAPI(), config_source="app.toml")
 
     assert site.modules == ("wevra.web",)
+
+
+@pytest.mark.anyio
+async def test_start_uses_app_root_environment_for_default_config(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _write_app_config(project_root / "app.toml", modules=("wevra.web",))
+
+    site = await start(
+        FastAPI(),
+        environ={APP_ROOT_ENV: project_root.as_posix()},
+    )
+
+    app_config = app_config_from_site(site)
+    assert app_config.project_root == project_root.resolve()
+    assert app_config.config_path == (project_root / "app.toml").resolve()
+
+
+@pytest.mark.anyio
+async def test_start_app_config_does_not_override_project_root(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    config_root = project_root / "config"
+    config_root.mkdir(parents=True)
+    _write_app_config(config_root / "app.toml", modules=("wevra.web",))
+
+    site = await start(
+        FastAPI(),
+        environ={
+            APP_ROOT_ENV: project_root.as_posix(),
+            APP_CONFIG_ENV: "config/app.toml",
+        },
+    )
+
+    app_config = app_config_from_site(site)
+    assert app_config.project_root == project_root.resolve()
+    assert app_config.config_path == (config_root / "app.toml").resolve()
+
+
+@pytest.mark.anyio
+async def test_start_relative_config_source_uses_supplied_app_root(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    config_root = project_root / "config"
+    config_root.mkdir(parents=True)
+    _write_app_config(config_root / "app.toml", modules=("wevra.web",))
+
+    site = await start(
+        FastAPI(),
+        config_source="config/app.toml",
+        environ={APP_ROOT_ENV: project_root.as_posix()},
+    )
+
+    app_config = app_config_from_site(site)
+    assert app_config.project_root == project_root.resolve()
+    assert app_config.config_path == (config_root / "app.toml").resolve()
+
+
+@pytest.mark.anyio
+async def test_start_environment_overrides_database_url_and_deployment_environment(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _write_app_config(project_root / "app.toml", modules=("wevra.db",))
+
+    site = await start(
+        FastAPI(),
+        environ={
+            APP_ROOT_ENV: project_root.as_posix(),
+            ENV_DATABASE_URL: "sqlite+aiosqlite:///override.sqlite3",
+            ENV_APP_ENV: "staging",
+        },
+    )
+
+    try:
+        app_config = app_config_from_site(site)
+        assert app_config.database_url == "sqlite+aiosqlite:///override.sqlite3"
+        assert app_config.deployment_environment == "staging"
+    finally:
+        await site.close()
 
 
 @pytest.mark.anyio

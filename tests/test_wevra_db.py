@@ -143,6 +143,18 @@ async def test_wevra_db_setup_site_registers_database_capability(
 
 
 @pytest.mark.anyio
+async def test_database_capability_exposes_public_connection_helper(
+    tmp_path: Path,
+) -> None:
+    site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+    database = site.require_capability(DatabaseCapability)
+    try:
+        assert isinstance(database.connection(), Database)
+    finally:
+        await database.close()
+
+
+@pytest.mark.anyio
 async def test_wevra_db_setup_site_resolves_relative_database_url(
     tmp_path: Path,
 ) -> None:
@@ -331,6 +343,20 @@ def test_wevra_db_owns_database_url_helpers(tmp_path: Path) -> None:
         redact_database_url("postgresql+asyncpg://user:password@host.example/app")
         == "postgresql+asyncpg://***:***@host.example/app"
     )
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    (
+        "sqlite+aiosqlite:////tmp/absolute.sqlite3",
+        "postgresql+asyncpg://user:password@example.test/app",
+    ),
+)
+def test_resolve_database_url_leaves_absolute_and_non_sqlite_urls_unchanged(
+    tmp_path: Path,
+    database_url: str,
+) -> None:
+    assert resolve_database_url(database_url, tmp_path) == database_url
 
 
 def test_wevra_db_owns_default_migration_script_location() -> None:

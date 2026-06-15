@@ -13,7 +13,12 @@ from wevra.config import (
     ConfigSourceError,
     discover_module_config_defs,
 )
-from wevra.core.composition import APP_CONFIG_ENV, DEFAULT_APP_CONFIG, AppConfig
+from wevra.core.composition import (
+    APP_CONFIG_ENV,
+    DEFAULT_APP_CONFIG,
+    AppConfig,
+    resolve_project_root,
+)
 from wevra.core.config import RUNTIME_CONFIG_DEF
 from wevra.core.diagnostics import wrapped_error
 from wevra.core.environment import environment_mapping, load_environment
@@ -112,7 +117,7 @@ def load_project_settings(
     project_root: Path | None = None,
     read_dotenv: bool = True,
 ) -> ProjectSettings:
-    resolved_project_root = (project_root or Path.cwd()).resolve()
+    resolved_project_root = resolve_project_root(project_root, environ)
     try:
         env = load_environment(
             environ=environ,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -7,7 +8,11 @@ import click
 import uvicorn
 
 from wevra.config import ConfigService, MappingConfigSource
+from wevra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV
+from wevra.core.config import ENV_APP_ENV
 from wevra.core.environment import load_environment
+from wevra.core.runtime import ALLOWED_DEPLOYMENT_ENVIRONMENTS
+from wevra.db.config import ENV_DATABASE_URL
 from wevra.tools.project import (
     ProjectToolConfigurationError,
     runtime_project_root,
@@ -95,6 +100,33 @@ def run_uvicorn_command(args: Sequence[str]) -> None:
     uvicorn.main.main(args=list(args), prog_name="uvicorn")
 
 
+def runserver_environment_overrides(
+    *,
+    project_root: Path | None,
+    config_source: str | None,
+    database_url: str | None,
+    deployment_environment: str | None,
+) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    if project_root is not None:
+        overrides[APP_ROOT_ENV] = project_root.resolve().as_posix()
+    if config_source is not None:
+        overrides[APP_CONFIG_ENV] = _non_blank_option(config_source, "--config")
+    if database_url is not None:
+        overrides[ENV_DATABASE_URL] = _non_blank_option(database_url, "--database-url")
+    if deployment_environment is not None:
+        overrides[ENV_APP_ENV] = _non_blank_option(deployment_environment, "--deploy")
+    return overrides
+
+
+def _non_blank_option(value: str, option_name: str) -> str:
+    # `None` means the option was not supplied; blank strings are supplied but
+    # invalid CLI override values.
+    if not value.strip():
+        raise click.UsageError(f"{option_name} must not be blank.")
+    return value.strip()
+
+
 def load_runserver_config(
     *,
     project_root: Path,
@@ -126,24 +158,54 @@ def load_runserver_config(
     "--reload/--no-reload",
     "reload_requested",
     default=None,
-    help="Enable or disable reload. Defaults to APP_RELOAD.",
+    help="Override APP_RELOAD; reload on changes.",
+)
+@click.option(
+    "--project",
+    "project_root",
+    type=click.Path(path_type=Path, file_okay=False, dir_okay=True),
+    help="Override APP_ROOT or current directory.",
+)
+@click.option(
+    "--config",
+    "config_source",
+    help='Override APP_CONFIG or "app.toml".',
+)
+@click.option(
+    "--database-url",
+    help="Override DATABASE_URL or configured default.",
+)
+@click.option(
+    "--deploy",
+    "deployment_environment",
+    type=click.Choice(ALLOWED_DEPLOYMENT_ENVIRONMENTS),
+    help="Override APP_ENV or configured default.",
 )
 @click.argument("uvicorn_args", nargs=-1, type=click.UNPROCESSED)
 def runserver_command(
     host: str,
     port: int,
     reload_requested: bool | None,
+    project_root: Path | None,
+    config_source: str | None,
+    database_url: str | None,
+    deployment_environment: str | None,
     uvicorn_args: tuple[str, ...],
 ) -> None:
-    project_root = runtime_project_root()
+    selected_project_root = (
+        project_root.resolve() if project_root is not None else runtime_project_root()
+    )
     try:
-        app_target = wevra_tool_option(APP_TARGET_OPTION, project_root=project_root)
+        app_target = wevra_tool_option(
+            APP_TARGET_OPTION,
+            project_root=selected_project_root,
+        )
         reload_env_var = wevra_tool_option(
             RELOAD_ENV_VAR_OPTION,
-            project_root=project_root,
+            project_root=selected_project_root,
         )
         config = load_runserver_config(
-            project_root=project_root,
+            project_root=selected_project_root,
             reload_env_var=reload_env_var,
         )
     except ProjectToolConfigurationError as exc:
@@ -159,6 +221,14 @@ def runserver_command(
         else reload_requested
     )
     _reject_extra_app_target(uvicorn_args, app_target=app_target)
+    os.environ.update(
+        runserver_environment_overrides(
+            project_root=project_root,
+            config_source=config_source,
+            database_url=database_url,
+            deployment_environment=deployment_environment,
+        )
+    )
     run_uvicorn_command(
         build_uvicorn_args(
             app_target=app_target,
