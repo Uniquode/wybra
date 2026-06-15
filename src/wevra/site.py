@@ -22,7 +22,13 @@ from wevra.config import (
     ConfigSourceMetadata,
     FileConfigSource,
 )
-from wevra.core.composition import APP_CONFIG_ENV, DEFAULT_APP_CONFIG, AppConfig
+from wevra.core.composition import (
+    APP_CONFIG_ENV,
+    APP_ROOT_ENV,
+    DEFAULT_APP_CONFIG,
+    AppConfig,
+    resolve_project_root,
+)
 from wevra.core.config import RUNTIME_CONFIG_DEF
 from wevra.core.environment import EnvironmentMapping, load_environment
 from wevra.core.settings import load_composition_config_from_environment
@@ -213,7 +219,7 @@ def _startup_environ(
 ) -> Mapping[str, str]:
     if environ is not None:
         return environ
-    project_root = _config_source_project_root(config_source)
+    project_root = _config_source_project_root(config_source, environ)
     return EnvironmentMapping(load_environment(project_root=project_root))
 
 
@@ -222,7 +228,7 @@ def _normalise_config_source(
     environ: Mapping[str, str] | None,
 ) -> ConfigSource:
     if config_source is None:
-        project_root = runtime_project_root()
+        project_root = _startup_project_root(environ)
         env = load_environment(environ=environ, project_root=project_root)
         app_config = load_composition_config_from_environment(
             env,
@@ -240,7 +246,10 @@ def _normalise_config_source(
     if isinstance(config_source, AppConfig):
         return AppConfigSource(config_source)
     if isinstance(config_source, str):
-        return FileConfigSource(_file_config_path(config_source))
+        return FileConfigSource(
+            _file_config_path(config_source),
+            project_root=_explicit_config_project_root(environ),
+        )
     if _is_config_source(config_source):
         return config_source
     raise ConfigSourceError(
@@ -248,12 +257,38 @@ def _normalise_config_source(
     )
 
 
-def _config_source_project_root(config_source: ConfigSourceInput) -> Path | None:
+def _config_source_project_root(
+    config_source: ConfigSourceInput,
+    environ: Mapping[str, str] | None,
+) -> Path | None:
     if isinstance(config_source, AppConfig):
         return config_source.project_root
     if config_source is None:
-        return runtime_project_root()
+        return _startup_project_root(environ)
     return None
+
+
+def _startup_project_root(environ: Mapping[str, str] | None) -> Path:
+    """Resolve the root for default startup discovery.
+
+    Default startup may use the process environment because this is the path
+    used by imported ASGI apps after `wevra-runserver` has populated startup
+    overrides.
+    """
+    if environ is not None and APP_ROOT_ENV in environ:
+        return resolve_project_root(environ=environ)
+    return runtime_project_root()
+
+
+def _explicit_config_project_root(environ: Mapping[str, str] | None) -> Path:
+    """Resolve the root for an explicit config source string.
+
+    Explicit config paths are caller input, so process APP_ROOT must not affect
+    them unless the caller also supplied an explicit environment mapping.
+    """
+    if environ is not None and APP_ROOT_ENV in environ:
+        return resolve_project_root(environ=environ)
+    return Path.cwd().resolve()
 
 
 def _file_config_path(config_source: str) -> Path:

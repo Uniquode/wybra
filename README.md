@@ -119,6 +119,23 @@ application or environment-specific tooling:
 Host applications may add their own short aliases when appropriate, but the
 portable package-owned command names are the `wevra-*` commands.
 
+`wevra-runserver` reads the configured Uvicorn app target from
+`[tool.wevra].runserver_app`. By default, Wevra uses the current project root
+and `app.toml` in that project root for application startup. Runtime overrides
+are passed through the same startup configuration channel used by ASGI startup:
+
+- `--project` sets `APP_ROOT` and is the only CLI option that changes the
+  effective project root.
+- `--config` sets `APP_CONFIG` and selects the application config file without
+  changing the project root.
+- `--database-url` sets `DATABASE_URL` for database, auth, validation, and
+  migration consumers.
+- `--deploy` sets `APP_ENV` for deployment-policy consumers.
+
+Precedence is CLI override, then environment variable, then default. Relative
+config paths and relative SQLite database paths are resolved from the effective
+project root.
+
 ## Migration Workflow
 
 Provision a first-time managed database and initialise Alembic state

@@ -208,10 +208,7 @@ def create_auth_test_app(
 
 
 def _database_from_app(app: FastAPI) -> Database:
-    capability = app.state.site.require_capability(DatabaseCapability)
-    if not isinstance(capability, SqlAlchemyDatabaseCapability):
-        raise AssertionError("Expected SQLAlchemy database capability in auth tests.")
-    return capability._connection("default")
+    return app.state.site.require_capability(DatabaseCapability).connection()
 
 
 def _session_factory_from_app(app: FastAPI) -> async_sessionmaker[AsyncSession]:

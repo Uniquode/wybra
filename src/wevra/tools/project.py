@@ -5,13 +5,28 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from wevra.core.composition import resolve_project_root
+
 
 class ProjectToolConfigurationError(ValueError):
     """Raised when Wevra project tool metadata is missing or invalid."""
 
 
 def runtime_project_root(start: Path | None = None) -> Path:
-    root = (start or Path.cwd()).resolve()
+    """Return the Wevra project root used by package-owned tools.
+
+    Without an explicit starting path, discovery honours APP_ROOT through
+    `resolve_project_root()`. That is intentional: runserver and imported ASGI
+    startup share APP_ROOT as the startup channel for overriding the effective
+    project root.
+    """
+    if start is None:
+        return _runtime_project_root_from(resolve_project_root())
+
+    return _runtime_project_root_from(start.resolve())
+
+
+def _runtime_project_root_from(root: Path) -> Path:
     for candidate in (root, *root.parents):
         pyproject = _read_pyproject(candidate)
         if pyproject is None:

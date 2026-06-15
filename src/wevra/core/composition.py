@@ -11,6 +11,7 @@ from typing import Any, Final
 
 from wevra.core.diagnostics import app_config_message, configured_module_import_message
 
+APP_ROOT_ENV: Final = "APP_ROOT"
 DEFAULT_APP_CONFIG: Final = Path("app.toml")
 APP_CONFIG_ENV: Final = "APP_CONFIG"
 DEFAULT_STATIC_EXPORT_ROOT: Final = Path("static")
@@ -59,7 +60,7 @@ def load_app_config(
     config_path: Path | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> AppConfig:
-    resolved_project_root = (project_root or Path.cwd()).resolve()
+    resolved_project_root = resolve_project_root(project_root, environ)
     resolved_config_path = _resolve_config_path(
         resolved_project_root,
         config_path,
@@ -118,7 +119,7 @@ def load_app_config_modules(
     that intentionally support installed/default operation without a project
     `app.toml`.
     """
-    resolved_project_root = (project_root or Path.cwd()).resolve()
+    resolved_project_root = resolve_project_root(project_root, environ)
     environment = environ if environ is not None else os.environ
     if (
         default_modules is not None
@@ -160,6 +161,26 @@ def _resolve_config_path(
     if not path.is_absolute():
         path = project_root / path
 
+    return path.resolve()
+
+
+def resolve_project_root(
+    project_root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    if project_root is not None:
+        return project_root.resolve()
+
+    environment = environ or os.environ
+    root_value = environment.get(APP_ROOT_ENV)
+    if root_value is None:
+        return Path.cwd().resolve()
+    if not root_value.strip():
+        raise CompositionError(f"{APP_ROOT_ENV} must not be blank.")
+
+    path = Path(root_value)
+    if not path.is_absolute():
+        path = Path.cwd() / path
     return path.resolve()
 
 
@@ -374,6 +395,7 @@ def _load_static_options(data: dict[str, Any]) -> StaticOptions:
 __all__ = [
     "AppConfig",
     "APP_CONFIG_ENV",
+    "APP_ROOT_ENV",
     "CompositionError",
     "DEFAULT_APP_CONFIG",
     "DEFAULT_STATIC_EXPORT_ROOT",
@@ -383,4 +405,5 @@ __all__ = [
     "load_app_config",
     "load_app_config_modules",
     "load_modules",
+    "resolve_project_root",
 ]

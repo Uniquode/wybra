@@ -29,6 +29,11 @@ class DatabaseCapabilityError(RuntimeError):
 class DatabaseCapability(Protocol):
     """Public database capability exposed through ``Site``."""
 
+    def connection(
+        self,
+        name: str = DEFAULT_CONNECTION_NAME,
+    ) -> Database: ...
+
     def session(
         self,
         name: str = DEFAULT_CONNECTION_NAME,
@@ -70,14 +75,21 @@ class SqlAlchemyDatabaseCapability:
         name: str = DEFAULT_CONNECTION_NAME,
     ) -> AbstractAsyncContextManager[AsyncSession]:
         self._require_open()
-        return self._session_scope(self._connection(name))
+        return self._session_scope(self.connection(name))
 
     def transaction(
         self,
         name: str = DEFAULT_CONNECTION_NAME,
     ) -> AbstractAsyncContextManager[AsyncSession]:
         self._require_open()
-        return self._transaction_scope(self._connection(name))
+        return self._transaction_scope(self.connection(name))
+
+    def connection(
+        self,
+        name: str = DEFAULT_CONNECTION_NAME,
+    ) -> Database:
+        self._require_open()
+        return self._connection(name)
 
     async def close(self) -> None:
         """Close all underlying databases.
