@@ -1,9 +1,13 @@
+import logging
 from dataclasses import dataclass
 
 from fastapi import Request
+from sqlalchemy.exc import SQLAlchemyError
 
-from wevra.auth.sessions import resolve_current_user
+from wevra.auth.sessions import mark_session_cookie_for_clearing, resolve_current_user
 from wevra.web.context import TemplateContext, add_to_context
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +23,22 @@ async def identity_template_context(
     request: Request,
     context: TemplateContext,
 ) -> TemplateContext:
-    user = await resolve_current_user(request)
+    try:
+        user = await resolve_current_user(request)
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "Auth session lookup failed while building template context; "
+            "treating request as anonymous and clearing the session cookie.",
+            extra={
+                "request_path": getattr(getattr(request, "url", None), "path", None),
+                "error_type": type(exc).__name__,
+                "auth_context": "template_context",
+            },
+            exc_info=True,
+        )
+        mark_session_cookie_for_clearing(request)
+        user = None
+
     if user is None:
         return context.with_values(
             user=None,

@@ -65,6 +65,7 @@ from wevra.site import get_site
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"
 _CURRENT_USER_CACHE_VALUE_ATTR = "identity_current_user"
 _CURRENT_USER_CACHE_MISSING = object()
+_CLEAR_SESSION_COOKIE_ATTR = "identity_clear_session_cookie"
 # Cookie security trust model:
 # - The ASGI request scheme is authoritative only after the server or middleware
 #   has normalised headers from trusted proxies.
@@ -191,6 +192,19 @@ def clear_session_cookie(
         httponly=True,
         samesite="lax",
     )
+
+
+def mark_session_cookie_for_clearing(request: Request) -> None:
+    setattr(request.state, _CLEAR_SESSION_COOKIE_ATTR, True)
+
+
+def clear_marked_session_cookie(
+    response: Response,
+    request: Request,
+    options: IdentityOptions,
+) -> None:
+    if getattr(request.state, _CLEAR_SESSION_COOKIE_ATTR, False):
+        clear_session_cookie(response, request, options)
 
 
 def session_cookie_secure_for_request(

@@ -143,6 +143,33 @@ async def test_wevra_db_setup_site_registers_database_capability(
 
 
 @pytest.mark.anyio
+async def test_wevra_db_setup_site_resolves_relative_database_url(
+    tmp_path: Path,
+) -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "modules": ("wevra.db",),
+                    "project_root": tmp_path,
+                    "database_url": "sqlite+aiosqlite:///relative.sqlite3",
+                }
+            }
+        ),
+    )
+    database = site.require_capability(DatabaseCapability)
+    try:
+        async with database.session() as session:
+            await session.execute(text("CREATE TABLE runtime_probe (id INTEGER)"))
+            await session.commit()
+
+        assert (tmp_path / "relative.sqlite3").exists()
+    finally:
+        await database.close()
+
+
+@pytest.mark.anyio
 async def test_wevra_db_setup_site_requires_database_url() -> None:
     with pytest.raises(SiteCapabilityError, match="database_url"):
         await start(

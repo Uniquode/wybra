@@ -8,7 +8,9 @@ from typing import cast
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
+import wevra.auth.context as auth_context
 from wevra.auth import (
     ERROR_ALREADY_EXISTS,
     ERROR_INVALID_PASSWORD,
@@ -100,6 +102,7 @@ from wevra.services.crypto import (
     SecretEnvelopeService,
     SecretMaterialMissingError,
 )
+from wevra.web.context import TemplateContext
 
 
 def sqlite_file_url(path: Path) -> str:
@@ -168,6 +171,31 @@ def test_wevra_auth_package_is_independent_from_application_modules() -> None:
                 module == "host_app" or module.startswith("host_app.")
                 for module in imported_modules
             )
+
+
+def test_identity_template_context_treats_session_lookup_failure_as_anonymous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def resolve_current_user(_request: object) -> None:
+        raise SQLAlchemyError("stale session token")
+
+    async def assert_context() -> None:
+        request = SimpleNamespace(state=SimpleNamespace())
+
+        context = await auth_context.identity_template_context(
+            request,
+            TemplateContext(),
+        )
+
+        assert context.as_dict() == {
+            "user": None,
+            "identity": {"authenticated": False},
+        }
+        assert request.state.identity_clear_session_cookie is True
+
+    monkeypatch.setattr(auth_context, "resolve_current_user", resolve_current_user)
+
+    asyncio.run(assert_context())
 
 
 def test_wevra_auth_metadata_exposes_authorisation_group_tables() -> None:

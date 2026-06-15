@@ -31,6 +31,7 @@ _.start_site
 _.get_site
 _.setup_site
 _.template_context_middleware
+_.session_cookie_cleanup_middleware
 _.session
 _.transaction
 _.close

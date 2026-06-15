@@ -26,6 +26,7 @@ from fastapi_users.exceptions import UserAlreadyExists, UserNotExists
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import wevra.auth.admin.management as identity_management
 import wevra.auth.cli.authmgr as identitymgr
@@ -84,6 +85,7 @@ from wevra.core.composition import (
 from wevra.core.exceptions import ConfigurationError
 from wevra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
 from wevra.db.persistence import (
+    Database,
     close_database,
     create_database,
     create_database_engine,
@@ -180,7 +182,6 @@ def create_auth_test_app(
         identity_options=options,
     )
     database = create_database(settings)
-    app.state.database = database
     site = Site(
         app=app,
         config=ConfigService(
@@ -204,6 +205,17 @@ def create_auth_test_app(
     )
     app.state.site = site
     return app
+
+
+def _database_from_app(app: FastAPI) -> Database:
+    capability = app.state.site.require_capability(DatabaseCapability)
+    if not isinstance(capability, SqlAlchemyDatabaseCapability):
+        raise AssertionError("Expected SQLAlchemy database capability in auth tests.")
+    return capability._connection("default")
+
+
+def _session_factory_from_app(app: FastAPI) -> async_sessionmaker[AsyncSession]:
+    return _database_from_app(app).session_factory
 
 
 def run_auth_migration(argv: list[str]) -> int:
@@ -1381,10 +1393,10 @@ def test_user_manager_get_by_email_resolves_secondary_emails(tmp_path: Path) -> 
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_secondary_email_lookup() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -1417,7 +1429,7 @@ def test_user_manager_get_by_email_resolves_secondary_emails(tmp_path: Path) -> 
     try:
         asyncio.run(assert_secondary_email_lookup())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_resolve_user_target_uses_secondary_email_addresses(
@@ -1428,10 +1440,10 @@ def test_resolve_user_target_uses_secondary_email_addresses(
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_secondary_target_resolution() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -1474,7 +1486,7 @@ def test_resolve_user_target_uses_secondary_email_addresses(
     try:
         asyncio.run(assert_secondary_target_resolution())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_identity_session_authenticate_user_accepts_secondary_email_alias(
@@ -1485,10 +1497,10 @@ def test_identity_session_authenticate_user_accepts_secondary_email_alias(
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_secondary_alias_authentication() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -1522,7 +1534,7 @@ def test_identity_session_authenticate_user_accepts_secondary_email_alias(
     try:
         asyncio.run(assert_secondary_alias_authentication())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_identity_session_authenticate_user_secondary_email_stays_with_owner_account(
@@ -1533,10 +1545,10 @@ def test_identity_session_authenticate_user_secondary_email_stays_with_owner_acc
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_secondary_alias_stays_with_owner() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -1577,7 +1589,7 @@ def test_identity_session_authenticate_user_secondary_email_stays_with_owner_acc
     try:
         asyncio.run(assert_secondary_alias_stays_with_owner())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_identity_session_request_password_reset_uses_secondary_email_alias(
@@ -1591,10 +1603,10 @@ def test_identity_session_request_password_reset_uses_secondary_email_alias(
     web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
 
     async def assert_password_reset_alias_resolution() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -1628,7 +1640,7 @@ def test_identity_session_request_password_reset_uses_secondary_email_alias(
     try:
         asyncio.run(assert_password_reset_alias_resolution())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_identity_session_request_password_reset_ignores_unknown_email_alias(
@@ -1640,10 +1652,10 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
     web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
 
     async def assert_missing_alias_is_ignored() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -1667,7 +1679,7 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
     try:
         asyncio.run(assert_missing_alias_is_ignored())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_request_verification_uses_secondary_email_alias_for_lookup(
@@ -1677,15 +1689,15 @@ def test_request_verification_uses_secondary_email_alias_for_lookup(
     initialise_identity_database(database_url)
     web_app = create_auth_test_app(database_url=database_url)
     web_app.state.identity_delivery = TimestampVisibleVerificationDelivery(
-        session_factory=web_app.state.database.session_factory,
+        session_factory=_session_factory_from_app(web_app),
         verification_tokens=[],
     )
 
     async def assert_verification_alias_resolution() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -1723,7 +1735,7 @@ def test_request_verification_uses_secondary_email_alias_for_lookup(
     try:
         asyncio.run(assert_verification_alias_resolution())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_user_manager_create_rollback_when_after_register_fails(
@@ -1742,10 +1754,10 @@ def test_user_manager_create_rollback_when_after_register_fails(
             raise RuntimeError("post-register hook failed")
 
     async def assert_rollback_when_hook_fails() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = _FailingPostRegisterManager(
                 create_user_database(session),
                 web_app.state.auth_settings.identity_options,
@@ -1764,7 +1776,7 @@ def test_user_manager_create_rollback_when_after_register_fails(
         assert identity_users_from_database(database_url) == []
         assert identity_user_emails_from_database(database_url) == []
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
@@ -1782,10 +1794,10 @@ def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
             raise UserNotExists()
 
     async def assert_duplicate_secondary_email_returns_user_already_exists() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -1829,7 +1841,7 @@ def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
     try:
         asyncio.run(assert_duplicate_secondary_email_returns_user_already_exists())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_migrate_upgrade_creates_user_management_metadata_columns(
@@ -2187,10 +2199,10 @@ def test_authentication_finalisation_updates_last_login_timestamp() -> None:
     web_app = create_auth_test_app()
 
     async def assert_last_login_update() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2211,7 +2223,7 @@ def test_authentication_finalisation_updates_last_login_timestamp() -> None:
 
         assert result.is_ok() is True
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             refreshed_user = await session.get(User, user.id)
             assert refreshed_user is not None
             assert isinstance(refreshed_user.last_login_at, float)
@@ -2220,17 +2232,17 @@ def test_authentication_finalisation_updates_last_login_timestamp() -> None:
     try:
         asyncio.run(assert_last_login_update())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
     web_app = create_auth_test_app()
 
     async def assert_expired_user_rejected() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2253,7 +2265,7 @@ def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
         assert result.is_failure() is True
         assert result.error_type == ERROR_INACTIVE_USER
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             refreshed_user = await session.get(User, user.id)
             assert refreshed_user is not None
             assert refreshed_user.last_login_at is None
@@ -2261,17 +2273,17 @@ def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
     try:
         asyncio.run(assert_expired_user_rejected())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
     web_app = create_auth_test_app()
 
     async def assert_inactive_user_rejected() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2294,7 +2306,7 @@ def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
         assert result.is_failure() is True
         assert result.error_type == ERROR_INACTIVE_USER
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             refreshed_user = await session.get(User, user.id)
             assert refreshed_user is not None
             assert refreshed_user.last_login_at is None
@@ -2302,7 +2314,7 @@ def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
     try:
         asyncio.run(assert_inactive_user_rejected())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_is_user_effectively_active_uses_exclusive_expiry_boundary() -> None:
@@ -2322,10 +2334,10 @@ def test_request_verification_records_email_verification_sent_timestamp() -> Non
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def seed_user() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2344,7 +2356,7 @@ def test_request_verification_records_email_verification_sent_timestamp() -> Non
             "verify-time@example.com",
         )
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             user = (
                 await session.execute(
                     select(User).where(User.email == "verify-time@example.com")
@@ -2357,22 +2369,22 @@ def test_request_verification_records_email_verification_sent_timestamp() -> Non
         asyncio.run(seed_user())
         asyncio.run(assert_verification_timestamp())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_request_verification_commits_timestamp_before_delivery() -> None:
     web_app = create_auth_test_app()
     delivery = TimestampVisibleVerificationDelivery(
-        session_factory=web_app.state.database.session_factory,
+        session_factory=_session_factory_from_app(web_app),
         verification_tokens=[],
     )
     web_app.state.identity_delivery = delivery
 
     async def seed_user() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2400,7 +2412,7 @@ def test_request_verification_commits_timestamp_before_delivery() -> None:
         asyncio.run(seed_user())
         asyncio.run(assert_timestamp_visible_to_delivery())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_request_verification_ignores_missing_users_without_modifying_rows() -> None:
@@ -2408,7 +2420,7 @@ def test_request_verification_ignores_missing_users_without_modifying_rows() -> 
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_missing_user_is_ignored() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
         await identity_sessions.request_verification(
@@ -2416,7 +2428,7 @@ def test_request_verification_ignores_missing_users_without_modifying_rows() -> 
             "missing@example.com",
         )
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             users = (await session.execute(select(User))).scalars().all()
             assert users == []
             assert web_app.state.identity_delivery.verification_tokens == []
@@ -2424,7 +2436,7 @@ def test_request_verification_ignores_missing_users_without_modifying_rows() -> 
     try:
         asyncio.run(assert_missing_user_is_ignored())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 @pytest.mark.parametrize(
@@ -2442,10 +2454,10 @@ def test_request_verification_does_not_overwrite_ineligible_user_timestamp(
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_ineligible_user_timestamp_is_preserved() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2467,7 +2479,7 @@ def test_request_verification_does_not_overwrite_ineligible_user_timestamp(
             email,
         )
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             refreshed_user = (
                 await session.execute(select(User).where(User.email == email))
             ).scalar_one()
@@ -2477,7 +2489,7 @@ def test_request_verification_does_not_overwrite_ineligible_user_timestamp(
     try:
         asyncio.run(assert_ineligible_user_timestamp_is_preserved())
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_identitymgr_create_user_with_metadata_from_stdin_password(
@@ -3093,10 +3105,10 @@ def test_identitymgr_create_rejects_duplicate_secondary_email(
     web_app = create_auth_test_app(database_url=database_url)
 
     async def seed_secondary_email_user() -> None:
-        async with web_app.state.database.engine.begin() as connection:
+        async with _database_from_app(web_app).engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-        async with session_scope(web_app.state.database.session_factory) as session:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3130,7 +3142,7 @@ def test_identitymgr_create_rejects_duplicate_secondary_email(
         assert exit_code == 1
         assert "already exists" in capsys.readouterr().err
     finally:
-        asyncio.run(close_database(web_app.state.database))
+        asyncio.run(close_database(_database_from_app(web_app)))
 
 
 def test_identitymgr_list_json_omits_null_fields(

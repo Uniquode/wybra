@@ -10,23 +10,27 @@ from wevra.db.capabilities import (
     SqlAlchemyDatabaseCapability,
 )
 from wevra.db.config import module_config
+from wevra.db.urls import resolve_database_url
 from wevra.db.validation import (
     PersistenceValidationSettings,
     validate_persistence,
 )
 from wevra.site import Site, SiteCapabilityError
+from wevra.site_config import app_config_from_site
 
 
 async def setup_site(site: Site) -> None:
-    app_config = site.config.get_config("app") or {}
-    database_url = app_config.get("database_url")
+    app_config = app_config_from_site(site)
+    database_url = app_config.database_url
     if not isinstance(database_url, str) or not database_url.strip():
         raise SiteCapabilityError(
             "Database capability requires [app].database_url to be configured."
         )
     site.provide_capability(
         DatabaseCapability,
-        SqlAlchemyDatabaseCapability.from_database_url(database_url),
+        SqlAlchemyDatabaseCapability.from_database_url(
+            resolve_database_url(database_url, app_config.project_root)
+        ),
     )
 
 

@@ -1,12 +1,13 @@
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractAsyncContextManager
 from typing import Any, cast
 from urllib.parse import unquote, urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import FormData
 
 from wevra.auth.ids import parse_uuid
@@ -34,6 +35,8 @@ from wevra.auth.sessions import (
 )
 from wevra.auth.settings import identity_options_from_state
 from wevra.auth.timestamps import current_timestamp
+from wevra.db import DatabaseCapability
+from wevra.site import get_site
 from wevra.web.forms.csrf import request_form_data, validate_csrf
 from wevra.web.rendering import render_page
 from wevra.web.routes.contracts import API_PATH_PREFIX
@@ -92,12 +95,8 @@ def normalise_return_to(value: str | None, default: str = "/account") -> str:
 
 def _session_factory_from_request(
     request: Request,
-) -> async_sessionmaker[AsyncSession]:
-    database = getattr(request.app.state, "database", None)
-    if database is None or not hasattr(database, "session_factory"):
-        raise RuntimeError("Database is not configured on the application.")
-
-    return database.session_factory
+) -> Callable[[], AbstractAsyncContextManager[AsyncSession]]:
+    return get_site(request.app).require_capability(DatabaseCapability).session
 
 
 async def _load_user_by_id(
