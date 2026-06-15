@@ -102,6 +102,17 @@ body {
   width: 1px;
 }
 
+@media (max-width: 48rem) {
+  .web-responsive-compact-hidden {
+    display: none !important;
+  }
+
+  .web-responsive-compact-centre {
+    justify-content: center;
+    text-align: center;
+  }
+}
+
 .eyebrow {
   color: var(--web-core-colour-accent);
   font-size: 0.875rem;

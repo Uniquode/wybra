@@ -2,6 +2,7 @@ import ast
 import asyncio
 import importlib
 import logging
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,11 +91,11 @@ def test_wevra_widgets_package_imports() -> None:
     assert package.__name__ == "wevra.widgets"
 
 
-def test_wevra_widgets_config_defaults_to_theme_feature() -> None:
+def test_wevra_widgets_config_defaults_to_theme_and_login_features() -> None:
     config = MappingConfigSource({"app": {"modules": ("wevra.widgets",)}})
     service = ConfigService([config])
 
-    assert widgets_settings_from_config(service).enabled_features == ("theme",)
+    assert widgets_settings_from_config(service).enabled_features == ("theme", "login")
 
 
 def test_wevra_widgets_config_rejects_unknown_feature() -> None:
@@ -107,6 +108,118 @@ def test_wevra_widgets_config_rejects_unknown_feature() -> None:
 
     with pytest.raises(ConfigSourceError, match="unknown widget feature"):
         ConfigService([config])
+
+
+def _write_widget_page_app(tmp_path: Path, module_name: str) -> None:
+    package_root = tmp_path / module_name
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter, Request
+            from wevra.web.rendering import render_page
+
+            router = APIRouter()
+
+            @router.get("/")
+            async def home(request: Request):
+                return render_page(request, "home.html", {"page_title": "Widgets"})
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (template_root / "home.html").write_text(
+        "{% extends 'layouts/page.html' %}{% block content %}home{% endblock %}",
+        encoding="utf-8",
+    )
+
+
+def _write_fake_auth_module(
+    tmp_path: Path,
+    module_name: str,
+    *,
+    user_email: str | None = None,
+) -> None:
+    package_root = tmp_path / module_name
+    package_root.mkdir(parents=True)
+    user_expression = (
+        "None"
+        if user_email is None
+        else f"SimpleNamespace(id='user-id', email={user_email!r})"
+    )
+    (package_root / "__init__.py").write_text(
+        dedent(
+            f"""
+            from types import SimpleNamespace
+
+            from wevra.auth import AuthCapability
+
+            from .routes import module_routers
+
+
+            async def optional_current_user(_request):
+                return {user_expression}
+
+
+            async def login_required(request):
+                user = await optional_current_user(request)
+                if user is None:
+                    raise RuntimeError("not authenticated")
+                return user
+
+
+            async def anonymous_required(_request):
+                return None
+
+
+            class FakeAuthCapability:
+                settings = None
+                fastapi_users = None
+
+                @property
+                def optional_current_user(self):
+                    return optional_current_user
+
+                @property
+                def login_required(self):
+                    return login_required
+
+                @property
+                def anonymous_required(self):
+                    return anonymous_required
+
+
+            async def setup_site(site):
+                site.provide_capability(AuthCapability, FakeAuthCapability())
+            """
+        ),
+        encoding="utf-8",
+    )
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+            from fastapi.responses import Response
+
+            router = APIRouter()
+
+            @router.get("/login", name="auth:login")
+            async def login():
+                return Response("login")
+
+            @router.get("/logout", name="auth:logout")
+            async def logout():
+                return Response("logout")
+
+            module_routers = {"account": router}
+            """
+        ),
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.anyio
@@ -279,6 +392,214 @@ async def test_wevra_widgets_publish_theme_selector_when_enabled(
     assert theme.json() == {"theme_mode": "auto"}
     assert widgets_css.status_code == 200
     assert ".theme-selector" in widgets_css.text
+
+
+@pytest.mark.anyio
+async def test_wevra_widgets_publish_login_button_when_auth_is_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_widget_page_app(tmp_path, "login_widget_page_app")
+    _write_fake_auth_module(tmp_path, "login_widget_auth")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": (
+                        "login_widget_page_app",
+                        "login_widget_auth",
+                        "wevra.widgets",
+                        "wevra.web",
+                    ),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "login_widget_page_app": {"default": ""},
+                        "login_widget_auth": {"account": "/account"},
+                        "wevra.widgets": {"partials": "", "api": ""},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    page = TestClient(app).get("/")
+
+    assert page.status_code == 200
+    assert 'class="login-widget login-widget--anonymous"' in page.text
+    assert 'href="/account/login"' in page.text
+    assert page.text.index("login-widget") < page.text.index("theme-selector")
+
+
+@pytest.mark.anyio
+async def test_wevra_widgets_publish_profile_initial_and_logout_when_authenticated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_widget_page_app(tmp_path, "authenticated_widget_page_app")
+    _write_fake_auth_module(
+        tmp_path,
+        "authenticated_widget_auth",
+        user_email="david@example.com",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": (
+                        "authenticated_widget_page_app",
+                        "authenticated_widget_auth",
+                        "wevra.widgets",
+                        "wevra.web",
+                    ),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "authenticated_widget_page_app": {"default": ""},
+                        "authenticated_widget_auth": {"account": "/account"},
+                        "wevra.widgets": {"partials": "", "api": ""},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    page = TestClient(app).get("/")
+
+    assert page.status_code == 200
+    assert 'class="login-widget login-widget--authenticated"' in page.text
+    assert 'href="/account/logout"' in page.text
+    assert "login-widget__avatar login-widget__avatar--fallback" in page.text
+    assert re.search(
+        r'<span[^>]*class="[^"]*login-widget__avatar[^"]*"[^>]*>\s*D\s*</span>',
+        page.text,
+    )
+
+
+@pytest.mark.anyio
+async def test_wevra_widgets_do_not_publish_login_button_without_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_widget_page_app(tmp_path, "no_auth_widget_page_app")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": (
+                        "no_auth_widget_page_app",
+                        "wevra.widgets",
+                        "wevra.web",
+                    ),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "no_auth_widget_page_app": {"default": ""},
+                        "wevra.widgets": {"partials": "", "api": ""},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    page = TestClient(app).get("/")
+
+    assert page.status_code == 200
+    assert "login-widget" not in page.text
+    assert 'id="theme-selector"' in page.text
+
+
+@pytest.mark.anyio
+async def test_wevra_widgets_can_disable_login_button_when_auth_is_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_widget_page_app(tmp_path, "disabled_login_widget_page_app")
+    _write_fake_auth_module(tmp_path, "disabled_login_widget_auth")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": (
+                        "disabled_login_widget_page_app",
+                        "disabled_login_widget_auth",
+                        "wevra.widgets",
+                        "wevra.web",
+                    ),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "disabled_login_widget_page_app": {"default": ""},
+                        "disabled_login_widget_auth": {"account": "/account"},
+                        "wevra.widgets": {"partials": "", "api": ""},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "wevra.widgets": {"features": ["theme"]},
+            }
+        ),
+    )
+
+    page = TestClient(app).get("/")
+
+    assert page.status_code == 200
+    assert "login-widget" not in page.text
+    assert 'id="theme-selector"' in page.text
+
+
+def test_wevra_widgets_css_defines_login_and_mobile_semantics() -> None:
+    css = read_text_resource(
+        (PackageResourceSource(package="wevra.widgets", directory="static"),),
+        "styles/widgets.css",
+    )
+    web_css = read_text_resource(
+        (PackageResourceSource(package="wevra.web", directory="static"),),
+        "styles/app.css",
+    )
+
+    assert ".login-widget__action" in css
+    assert ".login-widget__avatar" in css
+    assert ".web-responsive-compact-hidden" in web_css
+    assert ".web-responsive-compact-centre" in web_css
 
 
 @pytest.mark.anyio

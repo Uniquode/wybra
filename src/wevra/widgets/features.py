@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from wevra.widgets.config import THEME_FEATURE
+from wevra.widgets.config import LOGIN_FEATURE, THEME_FEATURE
 
 _enabled_features: tuple[str, ...] = (THEME_FEATURE,)
 
@@ -21,7 +21,12 @@ THEME_WIDGET = WidgetFeature(
     templates=("layouts/page.html", "components/theme_selector.html"),
     static_assets=("styles/widgets.css",),
 )
-WIDGET_FEATURES: tuple[WidgetFeature, ...] = (THEME_WIDGET,)
+LOGIN_WIDGET = WidgetFeature(
+    name=LOGIN_FEATURE,
+    templates=("layouts/page.html", "components/login_control.html"),
+    static_assets=("styles/widgets.css",),
+)
+WIDGET_FEATURES: tuple[WidgetFeature, ...] = (THEME_WIDGET, LOGIN_WIDGET)
 
 
 def configure_widgets(features: tuple[str, ...]) -> None:
@@ -43,6 +48,7 @@ def enabled_features() -> tuple[str, ...]:
 
 
 __all__ = (
+    "LOGIN_WIDGET",
     "THEME_WIDGET",
     "WIDGET_FEATURES",
     "WidgetFeature",
