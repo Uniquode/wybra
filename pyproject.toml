@@ -13,7 +13,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "click>=8.4.1",
     "cryptography>=48.0.1",
-    "dateparser>=1.4.0",
+    "dateparser>=1.4.1",
     "dbscripts",
     "envex>=5.0.0",
     "fastapi>=0.136.3",
