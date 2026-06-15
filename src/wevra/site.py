@@ -209,6 +209,7 @@ async def start(
             environ=_startup_environ(config_source, environ),
         ),
     )
+    app.state.site = site
     await _setup_modules(site, module_loader or import_module)
     return site
 

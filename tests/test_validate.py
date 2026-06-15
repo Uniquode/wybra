@@ -1,5 +1,5 @@
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
@@ -95,14 +95,18 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
 def _web_settings(
     tmp_path: Path,
     modules: tuple[str, ...] = ("wevra.web",),
+    raw_config: dict[str, dict[str, object]] | None = None,
 ) -> WebSettings:
     wevra_web_root = Path(wevra.web.__file__).resolve().parent
+    app_config = _app_config(tmp_path, modules)
+    if raw_config is not None:
+        app_config = replace(app_config, raw_config=raw_config)
     return WebSettings(
         project_root=tmp_path,
         modules=modules,
         template_root=wevra_web_root / "templates",
         static_root=wevra_web_root / "static",
-        app_config=_app_config(tmp_path, modules),
+        app_config=app_config,
     )
 
 
@@ -485,6 +489,22 @@ def test_validate_widgets_checks_theme_resources(tmp_path: Path) -> None:
     )
     assert any(
         check.description == "widget static asset exists: styles/widgets.css"
+        for check in result.checks
+    )
+
+
+def test_validate_widgets_checks_login_resources_when_enabled(tmp_path: Path) -> None:
+    result = validate_widgets(
+        _web_settings(
+            tmp_path,
+            ("wevra.widgets",),
+            raw_config={"wevra.widgets": {"features": ["login"]}},
+        )
+    )
+
+    assert result.is_ok
+    assert any(
+        check.description == "widget template exists: components/login_control.html"
         for check in result.checks
     )
 

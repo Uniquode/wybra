@@ -141,6 +141,11 @@ _.accepts_form
 _.path_parameters
 _.template
 _.middleware_stack
+_.src
+_.alt
+_.fallback_text
+_.authenticated
+_.profile_image
 
 # Alembic revision module metadata.
 _.down_revision

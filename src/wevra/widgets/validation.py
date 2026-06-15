@@ -5,11 +5,13 @@ from typing import Protocol
 from wevra.core.resources import PackageResourceSource, first_existing_resource
 from wevra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 from wevra.widgets.config import (
+    DEFAULT_WIDGET_FEATURES,
+    LOGIN_FEATURE,
     THEME_FEATURE,
     WIDGETS_CONFIG_SECTION,
     to_widget_features,
 )
-from wevra.widgets.features import THEME_WIDGET
+from wevra.widgets.features import LOGIN_WIDGET, THEME_WIDGET, WidgetFeature
 
 
 class WidgetsValidationSettings(Protocol):
@@ -57,7 +59,9 @@ def validate_widgets(settings: WidgetsValidationSettings) -> ValidationResult:
         )
 
     if THEME_FEATURE in enabled_features:
-        _validate_theme_resources(checks, errors)
+        _validate_widget_resources(THEME_WIDGET, checks, errors)
+    if LOGIN_FEATURE in enabled_features:
+        _validate_widget_resources(LOGIN_WIDGET, checks, errors)
 
     return ValidationResult(name="widgets", errors=tuple(errors), checks=tuple(checks))
 
@@ -67,7 +71,7 @@ def _enabled_features_from_settings(
 ) -> tuple[str, ...] | None:
     app_config = getattr(settings, "app_config", None)
     if app_config is None:
-        return (THEME_FEATURE,)
+        return DEFAULT_WIDGET_FEATURES
     raw_config = getattr(app_config, "raw_config", {})
     widgets_config = raw_config.get(WIDGETS_CONFIG_SECTION, {})
     try:
@@ -76,7 +80,8 @@ def _enabled_features_from_settings(
         return None
 
 
-def _validate_theme_resources(
+def _validate_widget_resources(
+    feature: WidgetFeature,
     checks: list[ValidationCheck],
     errors: list[str],
 ) -> None:
@@ -85,7 +90,7 @@ def _validate_theme_resources(
         directory="templates",
     )
     static_source = PackageResourceSource(package="wevra.widgets", directory="static")
-    for template in THEME_WIDGET.templates:
+    for template in feature.templates:
         record_check(
             checks,
             errors,
@@ -93,7 +98,7 @@ def _validate_theme_resources(
             description=f"widget template exists: {template}",
             error=f"Missing widget template: {template}",
         )
-    for asset in THEME_WIDGET.static_assets:
+    for asset in feature.static_assets:
         record_check(
             checks,
             errors,

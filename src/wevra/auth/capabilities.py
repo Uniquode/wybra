@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -8,12 +9,14 @@ from typing import Protocol, runtime_checkable
 from fastapi import Request
 from fastapi.responses import Response
 from fastapi_users import FastAPIUsers
+from sqlalchemy.exc import SQLAlchemyError
 
 from wevra.auth.delivery import NullIdentityDelivery
 from wevra.auth.models import User
 from wevra.auth.sessions import (
     clear_marked_session_cookie,
     create_fastapi_users,
+    mark_session_cookie_for_clearing,
 )
 from wevra.auth.sessions import (
     optional_current_user as _optional_current_user,
@@ -32,6 +35,7 @@ from wevra.db.capabilities import DatabaseCapability
 from wevra.site import Site, get_site
 from wevra.site_config import app_config_from_site
 
+logger = logging.getLogger(__name__)
 OptionalCurrentUserDependency = Callable[[Request], Awaitable[User | None]]
 RequiredCurrentUserDependency = Callable[[Request], Awaitable[User]]
 AnonymousUserDependency = Callable[[Request], Awaitable[None]]
@@ -71,7 +75,7 @@ class SiteAuthCapability:
 
     @property
     def optional_current_user(self) -> OptionalCurrentUserDependency:
-        return _optional_current_user
+        return _safe_optional_current_user
 
     @property
     def login_required(self) -> RequiredCurrentUserDependency:
@@ -133,3 +137,21 @@ def _register_session_cookie_cleanup_middleware(
 
 def _auth_capability_from_request(request: Request) -> AuthCapability:
     return get_site(request.app).require_capability(AuthCapability)
+
+
+async def _safe_optional_current_user(request: Request) -> User | None:
+    try:
+        return await _optional_current_user(request)
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "Auth optional current user lookup failed.",
+            extra={
+                "request_path": getattr(getattr(request, "url", None), "path", None),
+                "error_type": type(exc).__name__,
+                "auth_context": "optional_current_user",
+                "auth_action": "clear_session_cookie_and_treat_as_anonymous",
+            },
+            exc_info=True,
+        )
+        mark_session_cookie_for_clearing(request)
+        return None

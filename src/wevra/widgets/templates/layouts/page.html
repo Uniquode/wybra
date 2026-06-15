@@ -29,9 +29,14 @@
     </script>
   </head>
   <body data-route-name="{{ route_name }}">
-    {% if theme_update_path is defined and theme_update_path %}
+    {% if (login_widget is defined and login_widget) or (theme_update_path is defined and theme_update_path) %}
     <div class="page-tools" aria-label="Page controls">
+      {% if login_widget is defined and login_widget %}
+      {% include "components/login_control.html" %}
+      {% endif %}
+      {% if theme_update_path is defined and theme_update_path %}
       {% include "components/theme_selector.html" %}
+      {% endif %}
     </div>
     {% endif %}
     <main class="container">

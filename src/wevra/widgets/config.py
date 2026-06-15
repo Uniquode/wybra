@@ -8,13 +8,15 @@ from wevra.config import ConfigDef, ConfigField, ConfigGroup
 from wevra.config.types import ConfigSourceError
 
 THEME_FEATURE: Final = "theme"
+LOGIN_FEATURE: Final = "login"
 WIDGETS_CONFIG_SECTION: Final = "wevra.widgets"
-WIDGET_FEATURES: Final = frozenset({THEME_FEATURE})
+WIDGET_FEATURES: Final = frozenset({LOGIN_FEATURE, THEME_FEATURE})
+DEFAULT_WIDGET_FEATURES: Final = (THEME_FEATURE, LOGIN_FEATURE)
 
 
 @dataclass(frozen=True, slots=True)
 class WidgetsSettings:
-    enabled_features: tuple[str, ...] = (THEME_FEATURE,)
+    enabled_features: tuple[str, ...] = DEFAULT_WIDGET_FEATURES
 
 
 class WidgetsConfigProvider(Protocol):
@@ -34,9 +36,13 @@ def to_widget_features(value: object) -> tuple[str, ...]:
     raise ValueError("must be a list, tuple, or comma-separated string.")
 
 
-def widgets_settings_from_config(config: WidgetsConfigProvider) -> WidgetsSettings:
+def widgets_settings_from_config(
+    config: WidgetsConfigProvider,
+    *,
+    default_features: tuple[str, ...] = DEFAULT_WIDGET_FEATURES,
+) -> WidgetsSettings:
     values = config.get_config(WIDGETS_CONFIG_SECTION) or {}
-    features = values.get("features", (THEME_FEATURE,))
+    features = values.get("features", default_features)
     try:
         enabled_features = to_widget_features(features)
     except ValueError as exc:
@@ -65,7 +71,7 @@ module_config: Final = ConfigDef(
             fields=(
                 ConfigField(
                     name="features",
-                    default=(THEME_FEATURE,),
+                    default=DEFAULT_WIDGET_FEATURES,
                     transform=to_widget_features,
                 ),
             ),
@@ -74,6 +80,8 @@ module_config: Final = ConfigDef(
 )
 
 __all__ = (
+    "DEFAULT_WIDGET_FEATURES",
+    "LOGIN_FEATURE",
     "THEME_FEATURE",
     "WIDGETS_CONFIG_SECTION",
     "WIDGET_FEATURES",
