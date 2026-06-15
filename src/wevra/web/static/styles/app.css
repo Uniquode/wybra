@@ -66,22 +66,6 @@ body {
   color: var(--web-core-colour-text);
 }
 
-.page-tools {
-  display: flex;
-  justify-content: flex-end;
-  left: 0;
-  padding: 1rem 1rem 0;
-  pointer-events: none;
-  position: sticky;
-  right: 0;
-  top: 0;
-  z-index: 20;
-}
-
-.page-tools > * {
-  pointer-events: auto;
-}
-
 .container {
   max-width: 56rem;
   padding-block: 4rem;
@@ -116,45 +100,6 @@ body {
   position: absolute;
   white-space: nowrap;
   width: 1px;
-}
-
-.theme-selector {
-  align-items: center;
-  background: var(--web-core-colour-surface);
-  border: 1px solid var(--web-core-colour-border);
-  border-radius: 999px;
-  color: var(--web-core-colour-accent);
-  cursor: pointer;
-  display: inline-flex;
-  justify-content: center;
-  min-height: 3rem;
-  min-width: 3rem;
-  padding: 0;
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
-}
-
-.theme-selector:hover,
-.theme-selector:focus-visible {
-  background: var(--web-core-colour-accent-soft);
-  border-color: var(--web-core-colour-accent);
-}
-
-.theme-selector:active {
-  transform: scale(0.97);
-}
-
-.theme-selector__icon {
-  height: 1.25rem;
-  width: 1.25rem;
-}
-
-.theme-selector-form {
-  display: inline-flex;
-  margin: 0;
 }
 
 .eyebrow {

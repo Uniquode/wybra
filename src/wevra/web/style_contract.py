@@ -8,9 +8,3 @@ REQUIRED_THEME_TOKENS: tuple[str, ...] = (
     "--web-core-colour-border",
     "--web-core-colour-accent",
 )
-
-REQUIRED_THEME_SELECTORS: tuple[str, ...] = (
-    'html[data-theme="light"]',
-    'html[data-theme="dark"]',
-    "@media (prefers-color-scheme: dark)",
-)

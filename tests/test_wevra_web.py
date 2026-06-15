@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from jinja2 import Environment, select_autoescape
 from jinja2.exceptions import TemplateNotFound
 
-from wevra.config import MappingConfigSource
+from wevra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wevra.core.composition import (
     AppConfig,
     CompositionError,
@@ -75,12 +75,38 @@ from wevra.web.staticfiles import (
     static_asset_response,
 )
 from wevra.web.templating import build_template_loader
+from wevra.widgets.config import widgets_settings_from_config
 
 
 def test_wevra_web_package_imports() -> None:
     package = importlib.import_module("wevra.web")
 
     assert package.__name__ == "wevra.web"
+
+
+def test_wevra_widgets_package_imports() -> None:
+    package = importlib.import_module("wevra.widgets")
+
+    assert package.__name__ == "wevra.widgets"
+
+
+def test_wevra_widgets_config_defaults_to_theme_feature() -> None:
+    config = MappingConfigSource({"app": {"modules": ("wevra.widgets",)}})
+    service = ConfigService([config])
+
+    assert widgets_settings_from_config(service).enabled_features == ("theme",)
+
+
+def test_wevra_widgets_config_rejects_unknown_feature() -> None:
+    config = MappingConfigSource(
+        {
+            "app": {"modules": ("wevra.widgets",)},
+            "wevra.widgets": {"features": ["theme", "menu"]},
+        }
+    )
+
+    with pytest.raises(ConfigSourceError, match="unknown widget feature"):
+        ConfigService([config])
 
 
 @pytest.mark.anyio
@@ -129,7 +155,7 @@ async def test_wevra_web_setup_site_registers_routes_renderer_and_static(
                 "app.routes": {
                     "prefixes": {
                         "configured_web_app": {"default": ""},
-                        "wevra.web": {"partials": "", "api": ""},
+                        "wevra.web": {},
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
@@ -167,7 +193,7 @@ async def test_wevra_web_setup_serves_configured_filesystem_static_root(
                     "project_root": tmp_path,
                     "modules": ("wevra.web",),
                 },
-                "app.routes": {"prefixes": {"wevra.web": {"partials": "", "api": ""}}},
+                "app.routes": {"prefixes": {"wevra.web": {}}},
                 "app.templates": {"auto_reload": True, "cache_size": 0},
                 "app.static": {
                     "url_path": "/static/",
@@ -183,6 +209,211 @@ async def test_wevra_web_setup_serves_configured_filesystem_static_root(
     )
     assert isinstance(static_route.app, StaticFiles)
     assert TestClient(app).get("/static/app.css").text == "body {}"
+
+
+@pytest.mark.anyio
+async def test_wevra_widgets_publish_theme_selector_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "widget_page_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter, Request
+            from wevra.web.rendering import render_page
+
+            router = APIRouter()
+
+            @router.get("/")
+            async def home(request: Request):
+                return render_page(request, "home.html", {"page_title": "Widgets"})
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (template_root / "home.html").write_text(
+        "{% extends 'layouts/page.html' %}{% block content %}home{% endblock %}",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("widget_page_app", "wevra.widgets", "wevra.web"),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "widget_page_app": {"default": ""},
+                        "wevra.widgets": {"partials": "", "api": ""},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "wevra.widgets": {"features": ["theme"]},
+            }
+        ),
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/")
+        theme = client.get("/api/widgets/theme")
+        widgets_css = client.get("/static/styles/widgets.css")
+
+    assert page.status_code == 200
+    assert 'id="theme-selector"' in page.text
+    assert 'href="/static/styles/widgets.css"' in page.text
+    assert theme.json() == {"theme_mode": "auto"}
+    assert widgets_css.status_code == 200
+    assert ".theme-selector" in widgets_css.text
+
+
+@pytest.mark.anyio
+async def test_wevra_widgets_can_disable_theme_selector(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "disabled_widget_page_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter, Request
+            from wevra.web.rendering import render_page
+
+            router = APIRouter()
+
+            @router.get("/")
+            async def home(request: Request):
+                return render_page(request, "home.html", {"page_title": "Widgets"})
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (template_root / "home.html").write_text(
+        "{% extends 'layouts/page.html' %}{% block content %}home{% endblock %}",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": (
+                        "disabled_widget_page_app",
+                        "wevra.widgets",
+                        "wevra.web",
+                    ),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "disabled_widget_page_app": {"default": ""},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "wevra.widgets": {"features": []},
+            }
+        ),
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/")
+        theme = client.get("/api/widgets/theme")
+
+    assert page.status_code == 200
+    assert 'id="theme-selector"' not in page.text
+    assert theme.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_application_template_overrides_widget_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "widget_override_app"
+    template_root = package_root / "templates"
+    (template_root / "components").mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter, Request
+            from wevra.web.rendering import render_page
+
+            router = APIRouter()
+
+            @router.get("/")
+            async def home(request: Request):
+                return render_page(request, "home.html", {"page_title": "Override"})
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (template_root / "home.html").write_text(
+        "{% extends 'layouts/page.html' %}{% block content %}home{% endblock %}",
+        encoding="utf-8",
+    )
+    (template_root / "components/theme_selector.html").write_text(
+        "application selector",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("widget_override_app", "wevra.widgets", "wevra.web"),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "widget_override_app": {"default": ""},
+                        "wevra.widgets": {"partials": "", "api": ""},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    page = TestClient(app).get("/")
+
+    assert "application selector" in page.text
+    assert 'id="theme-selector"' not in page.text
 
 
 @pytest.mark.anyio
@@ -231,7 +462,7 @@ async def test_wevra_web_request_context_is_enabled_by_default(
                 "app.routes": {
                     "prefixes": {
                         "request_context_app": {"default": ""},
-                        "wevra.web": {"partials": "", "api": ""},
+                        "wevra.web": {},
                     }
                 },
                 "app.templates": {
@@ -293,7 +524,7 @@ async def test_wevra_web_request_context_can_be_disabled(
                 "app.routes": {
                     "prefixes": {
                         "disabled_request_context_app": {"default": ""},
-                        "wevra.web": {"partials": "", "api": ""},
+                        "wevra.web": {},
                     }
                 },
                 "app.templates": {
@@ -341,7 +572,7 @@ async def test_wevra_web_registers_auth_routes_through_module_composition(
                 },
                 "app.routes": {
                     "prefixes": {
-                        "wevra.web": {"partials": "", "api": ""},
+                        "wevra.web": {},
                         "wevra.auth": {"account": "/account", "api": ""},
                     }
                 },
@@ -371,8 +602,12 @@ def test_wevra_web_package_exposes_expected_submodules() -> None:
         "wevra.web.routes.discovery",
         "wevra.web.staticfiles",
         "wevra.web.templating",
-        "wevra.web.theme",
         "wevra.web.views",
+        "wevra.widgets",
+        "wevra.widgets.config",
+        "wevra.widgets.context",
+        "wevra.widgets.routes",
+        "wevra.widgets.theme",
     ):
         assert importlib.import_module(module_name).__name__ == module_name
 
