@@ -209,6 +209,14 @@ def test_profile_image_for_user_uses_capitalised_email_initial() -> None:
     assert image.fallback_text == "D"
 
 
+def test_profile_image_for_user_uses_first_alphabetic_local_part_character() -> None:
+    user = SimpleNamespace(email="123_david@example.com")
+
+    image = profile_image_for_user(user)
+
+    assert image.fallback_text == "D"
+
+
 def test_wevra_auth_metadata_exposes_authorisation_group_tables() -> None:
     assert {
         "identity_group",

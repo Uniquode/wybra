@@ -27,7 +27,11 @@ def _email_initial(email: str) -> str | None:
     cleaned_email = email.strip()
     if not cleaned_email:
         return None
-    return cleaned_email[0].upper()
+    local_part = cleaned_email.split("@", maxsplit=1)[0]
+    for character in local_part:
+        if character.isalpha():
+            return character.upper()
+    return None
 
 
 __all__ = (

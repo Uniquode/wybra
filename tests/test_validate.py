@@ -95,36 +95,18 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
 def _web_settings(
     tmp_path: Path,
     modules: tuple[str, ...] = ("wevra.web",),
+    raw_config: dict[str, dict[str, object]] | None = None,
 ) -> WebSettings:
     wevra_web_root = Path(wevra.web.__file__).resolve().parent
+    app_config = _app_config(tmp_path, modules)
+    if raw_config is not None:
+        app_config = replace(app_config, raw_config=raw_config)
     return WebSettings(
         project_root=tmp_path,
         modules=modules,
         template_root=wevra_web_root / "templates",
         static_root=wevra_web_root / "static",
-        app_config=_app_config(tmp_path, modules),
-    )
-
-
-def _web_settings_with_raw_config(
-    tmp_path: Path,
-    modules: tuple[str, ...],
-    raw_config: dict[str, dict[str, object]],
-) -> WebSettings:
-    settings = _web_settings(tmp_path, modules)
-    if settings.app_config is None:
-        raise AssertionError("test settings must include app_config")
-    return WebSettings(
-        project_root=settings.project_root,
-        modules=settings.modules,
-        template_root=settings.template_root,
-        static_root=settings.static_root,
-        static_url_path=settings.static_url_path,
-        template_auto_reload=settings.template_auto_reload,
-        template_cache_size=settings.template_cache_size,
-        app_config=replace(settings.app_config, raw_config=raw_config),
-        uses_filesystem_template_root=settings.uses_filesystem_template_root,
-        uses_filesystem_static_root=settings.uses_filesystem_static_root,
+        app_config=app_config,
     )
 
 
@@ -513,10 +495,10 @@ def test_validate_widgets_checks_theme_resources(tmp_path: Path) -> None:
 
 def test_validate_widgets_checks_login_resources_when_enabled(tmp_path: Path) -> None:
     result = validate_widgets(
-        _web_settings_with_raw_config(
+        _web_settings(
             tmp_path,
             ("wevra.widgets",),
-            {"wevra.widgets": {"features": ["login"]}},
+            raw_config={"wevra.widgets": {"features": ["login"]}},
         )
     )
 
