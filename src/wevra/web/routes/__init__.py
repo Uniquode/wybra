@@ -1,10 +1,6 @@
 """Route contracts, discovery, registration, and built-in web routes."""
 
-from wevra.web.routes.builtins import (
-    api_router,
-    module_routers,
-    partial_router,
-)
+from wevra.web.routes.builtins import module_routers
 from wevra.web.routes.contracts import (
     API_PATH_PREFIX,
     PARTIAL_PATH_PREFIX,
@@ -93,8 +89,6 @@ __all__ = [
     "load_configured_module_routes",
     "load_module_routes",
     "module_routers",
-    "api_router",
-    "partial_router",
     "record_route_origin",
     "register_configured_module_routes",
     "register_module_routes",

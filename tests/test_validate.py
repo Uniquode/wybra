@@ -23,6 +23,7 @@ from wevra.tools.validation.registry import (
     discover_validation_targets,
 )
 from wevra.web.validation import _contains_post_form, validate_web
+from wevra.widgets.validation import validate_widgets
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +72,7 @@ def _write_validation_module(
 
 def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
     route_prefixes = {
-        "wevra.web": {"partials": "", "api": ""},
+        "wevra.web": {},
     }
     return AppConfig(
         config_path=tmp_path / "app.toml",
@@ -471,7 +472,31 @@ def test_validate_web_rejects_stylesheet_missing_theme_contract(
 
     assert not result.is_ok
     assert any("Missing theme token" in error for error in result.errors)
-    assert any("Missing theme selector" in error for error in result.errors)
+    assert not any("Missing theme selector" in error for error in result.errors)
+
+
+def test_validate_widgets_checks_theme_resources(tmp_path: Path) -> None:
+    result = validate_widgets(_web_settings(tmp_path, ("wevra.widgets",)))
+
+    assert result.is_ok
+    assert any(
+        check.description == "widget template exists: components/theme_selector.html"
+        for check in result.checks
+    )
+    assert any(
+        check.description == "widget static asset exists: styles/widgets.css"
+        for check in result.checks
+    )
+
+
+def test_validate_widgets_accepts_absent_widgets_module(tmp_path: Path) -> None:
+    result = validate_widgets(_web_settings(tmp_path, ("wevra.web",)))
+
+    assert result.is_ok
+    assert any(
+        check.description == "wevra.widgets is not configured"
+        for check in result.checks
+    )
 
 
 def test_validate_web_reports_missing_configured_module(tmp_path: Path) -> None:

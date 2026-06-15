@@ -12,9 +12,9 @@ from wevra.web.rendering import render_partial
 ThemeMode = Literal["auto", "light", "dark"]
 THEME_MODES: tuple[ThemeMode, ...] = ("auto", "light", "dark")
 THEME_MODE_COOKIE = "theme_mode"
-THEME_STATUS_ROUTE_NAME = "wevra.web:partial:theme-selector"
-THEME_MODE_ROUTE_NAME = "wevra.web:partial:theme-mode"
-THEME_API_ROUTE_NAME = "wevra.web:api:theme"
+THEME_STATUS_ROUTE_NAME = "wevra.widgets:partial:theme-selector"
+THEME_MODE_ROUTE_NAME = "wevra.widgets:partial:theme-mode"
+THEME_API_ROUTE_NAME = "wevra.widgets:api:theme"
 THEME_STATUS_TEMPLATE = "components/theme_selector.html"
 THEME_MODE_ICONS: dict[ThemeMode, str] = {
     "auto": "computer",

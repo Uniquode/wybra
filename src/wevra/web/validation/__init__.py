@@ -19,7 +19,6 @@ from wevra.web.routes.discovery import (
 )
 from wevra.web.style_contract import (
     REQUIRED_STATIC_ASSETS,
-    REQUIRED_THEME_SELECTORS,
     REQUIRED_THEME_TOKENS,
 )
 
@@ -258,15 +257,6 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
                 passed=token in stylesheet_content,
                 description=f"theme token present: {token}",
                 error=f"Missing theme token: {token}",
-            )
-
-        for selector in REQUIRED_THEME_SELECTORS:
-            record_check(
-                checks,
-                errors,
-                passed=selector in stylesheet_content,
-                description=f"theme selector present: {selector}",
-                error=f"Missing theme selector: {selector}",
             )
 
     return ValidationResult(name="web", errors=tuple(errors), checks=tuple(checks))

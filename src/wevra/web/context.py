@@ -143,29 +143,6 @@ def clear_context_providers(module_name: str | None = None) -> None:
     _CONTEXT_PROVIDERS.pop(module_name, None)
 
 
-def wevra_web_theme_context(
-    request: Any,
-    context: TemplateContext,
-) -> TemplateContext:
-    from starlette.routing import NoMatchFound
-
-    from wevra.web.theme import THEME_MODE_ROUTE_NAME, theme_template_context
-
-    values = theme_template_context(request)
-    try:
-        theme_update_path = str(request.url_for(THEME_MODE_ROUTE_NAME))
-    except NoMatchFound:
-        return context.merge(values)
-
-    return context.merge(
-        values
-        | {
-            "theme_update_path": theme_update_path,
-            "theme_return_path": request.url.path,
-        }
-    )
-
-
 def _calling_module_name() -> str:
     frame = inspect.currentframe()
     calling_frame = frame.f_back if frame is not None else None
@@ -230,8 +207,4 @@ __all__ = [
     "resolve_context_providers",
     "set_request_context",
     "validate_context_providers",
-    "wevra_web_theme_context",
 ]
-
-
-add_to_context(wevra_web_theme_context)
