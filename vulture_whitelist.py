@@ -26,7 +26,9 @@ _.anonymous_required
 _.has_module
 _.has_capability
 _.require_capability
+_.optional_capability
 _.provide_capability
+_.capability_proxy
 _.start_site
 _.get_site
 _.setup_site
@@ -35,6 +37,18 @@ _.session_cookie_cleanup_middleware
 _.session
 _.transaction
 _.close
+_.available
+_.require
+_.path_for
+_.url_for
+_.store
+_.get_by_resource_key
+_.assign_resource_key
+_.validate_writable
+_.get_profile
+_.ensure_profile
+_.set_profile_picture
+_.profile_image_for_user
 
 # Click command callbacks registered through decorators.
 _.create_command
@@ -146,6 +160,30 @@ _.alt
 _.fallback_text
 _.authenticated
 _.profile_image
+_.root
+_.mount_path
+_.serve
+_.profile_picture_media_id
+_.bio
+_.first_name
+_.last_name
+_.pronouns
+_.phone_number
+_.website_links
+_.country_region
+_.city
+_.postal_code
+_.job_title
+_.company
+_.company_industry
+_.department
+_.date_time_format
+_.theme
+_.notification_preferences
+_.profile_visibility
+_.marketing_consent
+_.terms_accepted_at
+_.data_deletion_requested
 
 # Alembic revision module metadata.
 _.down_revision

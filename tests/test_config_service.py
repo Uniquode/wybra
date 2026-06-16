@@ -292,6 +292,7 @@ account_creation_policy = "closed"
         "url_path": "/static",
         "export_root": Path("static"),
         "root": None,
+        "serve": True,
     }
     assert service.get_config("app.templates") == {
         "auto_reload": True,
@@ -797,6 +798,7 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
         "url_path": "/assets/",
         "root": None,
         "export_root": Path("static"),
+        "serve": True,
     }
     assert service.get_config("app.templates") == {
         "auto_reload": True,

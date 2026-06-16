@@ -80,15 +80,16 @@ async def setup_site(site: Site) -> None:
         site.app,
         options=ErrorHandlerOptions(static_mount_path=static_mount_path),
     )
-    site.app.mount(
-        static_mount_path,
-        static_app_from_config(
-            project_root=app_config.project_root,
-            static_root=app_config.static.root,
-            static_sources=static_sources_from_modules(site.modules),
-        ),
-        name="static",
-    )
+    if app_config.static.serve:
+        site.app.mount(
+            static_mount_path,
+            static_app_from_config(
+                project_root=app_config.project_root,
+                static_root=app_config.static.root,
+                static_sources=static_sources_from_modules(site.modules),
+            ),
+            name="static",
+        )
     register_module_routes(
         site.app,
         load_module_routes(

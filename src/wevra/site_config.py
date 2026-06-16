@@ -35,6 +35,7 @@ def app_config_from_site(site: Site) -> AppConfig:
             url_path=_str_value(static_config, "url_path", "/static/"),
             root=_optional_path_value(static_config, "root"),
             export_root=_path_value(static_config, "export_root", Path("static")),
+            serve=_bool_value(static_config, "serve", True),
         ),
         database_url=_optional_str_value(app_config, "database_url"),
         deployment_environment=_optional_str_value(

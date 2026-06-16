@@ -110,6 +110,34 @@ def test_wevra_widgets_config_rejects_unknown_feature() -> None:
         ConfigService([config])
 
 
+def test_load_app_config_accepts_string_static_serve_from_config_sources(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        dedent(
+            """
+            [app]
+            modules = ["wevra.web"]
+
+            [app.templates]
+            auto_reload = true
+            cache_size = 0
+
+            [app.static]
+            url_path = "/static/"
+            export_root = "static"
+            serve = "false"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_app_config(project_root=tmp_path)
+
+    assert config.static.serve is False
+
+
 def _write_widget_page_app(tmp_path: Path, module_name: str) -> None:
     package_root = tmp_path / module_name
     template_root = package_root / "templates"
@@ -286,6 +314,52 @@ async def test_wevra_web_setup_site_registers_routes_renderer_and_static(
     assert isinstance(static_route.app, ComposedStaticFiles)
     assert TestClient(app).get("/ping").text == "pong"
     assert TestClient(app).get("/static/styles/app.css").text == "body {}"
+
+
+@pytest.mark.anyio
+async def test_wevra_web_setup_can_disable_static_serving(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "static_disabled_app"
+    static_root = package_root / "static"
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("static_disabled_app", "wevra.web"),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "static_disabled_app": {},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {
+                    "url_path": "/static/",
+                    "export_root": "static",
+                    "serve": False,
+                },
+            }
+        ),
+    )
+
+    assert app.state.static_mount_path == "/static"
+    assert not any(
+        route for route in app.routes if getattr(route, "name", None) == "static"
+    )
+    assert TestClient(app).get("/static/app.css").status_code == 404
 
 
 @pytest.mark.anyio
@@ -475,6 +549,59 @@ async def test_wevra_widgets_publish_profile_initial_and_logout_when_authenticat
                         "authenticated_widget_page_app": {"default": ""},
                         "authenticated_widget_auth": {"account": "/account"},
                         "wevra.widgets": {"partials": "", "api": ""},
+                        "wevra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.static": {"url_path": "/static/", "export_root": "static"},
+            }
+        ),
+    )
+
+    page = TestClient(app).get("/")
+
+    assert page.status_code == 200
+    assert 'class="login-widget login-widget--authenticated"' in page.text
+    assert 'href="/account/logout"' in page.text
+    assert "login-widget__avatar" not in page.text
+
+
+@pytest.mark.anyio
+async def test_wevra_widgets_use_profile_descriptor_when_profile_is_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_widget_page_app(tmp_path, "profile_widget_page_app")
+    _write_fake_auth_module(
+        tmp_path,
+        "profile_widget_auth",
+        user_email="david@example.com",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": (
+                        "profile_widget_page_app",
+                        "profile_widget_auth",
+                        "wevra.widgets",
+                        "wevra.profile",
+                        "wevra.web",
+                    ),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "profile_widget_page_app": {"default": ""},
+                        "profile_widget_auth": {"account": "/account"},
+                        "wevra.widgets": {"partials": "", "api": ""},
+                        "wevra.profile": {},
                         "wevra.web": {},
                     }
                 },

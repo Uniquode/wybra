@@ -29,6 +29,7 @@ from wevra.core.settings import (
 )
 from wevra.db.config import DEFAULT_ALEMBIC_CONFIG
 from wevra.db.urls import resolve_database_url
+from wevra.media.config import MEDIA_URL_MODES
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,10 @@ class ProjectSettings:
     migrations_root: Path | None = None
     alembic_config: Path = DEFAULT_ALEMBIC_CONFIG
     static_url_path: str = "/static/"
+    media_root: Path | None = None
+    media_mount_path: str = "/media"
+    media_serve: bool = False
+    media_url_mode: str = "storage-key"
     template_auto_reload: bool | None = None
     template_cache_size: int = 400
 
@@ -74,6 +79,11 @@ class ProjectSettings:
         )
         object.__setattr__(
             self,
+            "media_root",
+            _resolve_optional_path(self.media_root, project_root, "media_root"),
+        )
+        object.__setattr__(
+            self,
             "alembic_config",
             _resolve_path(
                 self.alembic_config,
@@ -86,6 +96,21 @@ class ProjectSettings:
             self,
             "static_url_path",
             _non_blank_string(self.static_url_path, "static_url_path"),
+        )
+        object.__setattr__(
+            self,
+            "media_mount_path",
+            _normalise_mount_path(self.media_mount_path, "media_mount_path"),
+        )
+        object.__setattr__(
+            self,
+            "media_serve",
+            _required_bool(self.media_serve, "media_serve"),
+        )
+        object.__setattr__(
+            self,
+            "media_url_mode",
+            _media_url_mode(self.media_url_mode),
         )
         object.__setattr__(
             self,
@@ -162,6 +187,7 @@ def _project_settings_kwargs(
     app_values = dict(config.get_config("app") or {})
     static_values = dict(config.get_config("app.static") or {})
     template_values = dict(config.get_config("app.templates") or {})
+    media_values = dict(config.get_config("wevra.media") or {})
     database_url = _configured_database_url(app_values, app_config.database_url)
     settings_kwargs: dict[str, Any] = {
         "project_root": app_config.project_root,
@@ -188,6 +214,14 @@ def _project_settings_kwargs(
         settings_kwargs["static_root"] = static_values["root"]
     if "root" in template_values:
         settings_kwargs["template_root"] = template_values["root"]
+    if "root" in media_values:
+        settings_kwargs["media_root"] = media_values["root"]
+    if "mount_path" in media_values:
+        settings_kwargs["media_mount_path"] = media_values["mount_path"]
+    if "serve" in media_values:
+        settings_kwargs["media_serve"] = media_values["serve"]
+    if "url_mode" in media_values:
+        settings_kwargs["media_url_mode"] = media_values["url_mode"]
     return settings_kwargs
 
 
@@ -249,6 +283,25 @@ def _optional_bool(value: object, field_name: str) -> bool | None:
         if normalised in {"0", "false", "no", "off"}:
             return False
     raise ConfigurationError(f"{field_name} must be a boolean.")
+
+
+def _required_bool(value: object, field_name: str) -> bool:
+    parsed = _optional_bool(value, field_name)
+    if parsed is None:
+        raise ConfigurationError(f"{field_name} must be a boolean.")
+    return parsed
+
+
+def _normalise_mount_path(value: object, field_name: str) -> str:
+    path = _non_blank_string(value, field_name)
+    return f"/{path.strip('/')}"
+
+
+def _media_url_mode(value: object) -> str:
+    if isinstance(value, str) and value.strip() in MEDIA_URL_MODES:
+        return value.strip()
+    allowed = ", ".join(sorted(MEDIA_URL_MODES))
+    raise ConfigurationError(f"media_url_mode must be one of: {allowed}.")
 
 
 def _non_negative_int(value: object, field_name: str) -> int:
