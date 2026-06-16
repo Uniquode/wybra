@@ -43,26 +43,6 @@ def _runtime_project_root_from(root: Path) -> Path:
     return root
 
 
-def wybra_tool_options(project_root: Path | None = None) -> dict[str, Any]:
-    root = runtime_project_root() if project_root is None else project_root
-    pyproject_path = root / "pyproject.toml"
-    try:
-        with pyproject_path.open("rb") as handle:
-            pyproject = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise ProjectToolConfigurationError(
-            f"Wybra project metadata could not be read from {pyproject_path}."
-        ) from exc
-
-    tool_options = pyproject.get("tool", {}).get("wybra", {})
-    if not isinstance(tool_options, dict):
-        raise ProjectToolConfigurationError(
-            "[tool.wybra] must be a table in pyproject.toml."
-        )
-
-    return tool_options
-
-
 def _read_pyproject(project_root: Path) -> dict[str, Any] | None:
     pyproject_path = project_root / "pyproject.toml"
     try:
@@ -124,16 +104,6 @@ def _single_workspace_wybra_project(
     return wybra_projects[0] if wybra_projects else None
 
 
-def wybra_tool_option(name: str, *, project_root: Path | None = None) -> str:
-    value = wybra_tool_options(project_root).get(name)
-    if not isinstance(value, str) or not value.strip():
-        raise ProjectToolConfigurationError(
-            f"[tool.wybra].{name} must be configured as a non-blank string."
-        )
-
-    return value.strip()
-
-
 def import_from_string(spec: str) -> Any:
     if not isinstance(spec, str):
         raise ProjectToolConfigurationError(
@@ -160,7 +130,3 @@ def import_from_string(spec: str) -> Any:
             f"Configured import attribute {attribute_name!r} was not found on "
             f"{module_name!r}."
         ) from exc
-
-
-def import_wybra_tool_option(name: str, *, project_root: Path | None = None) -> Any:
-    return import_from_string(wybra_tool_option(name, project_root=project_root))

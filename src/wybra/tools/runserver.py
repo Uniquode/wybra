@@ -8,22 +8,20 @@ import click
 import uvicorn
 
 from wybra.config import ConfigService, MappingConfigSource
-from wybra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV
+from wybra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV, CompositionError
 from wybra.core.config import ENV_APP_ENV
 from wybra.core.environment import load_environment
 from wybra.core.runtime import ALLOWED_DEPLOYMENT_ENVIRONMENTS
 from wybra.db.config import ENV_DATABASE_URL
+from wybra.tools.app_startup import resolve_configured_app_startup
 from wybra.tools.project import (
     ProjectToolConfigurationError,
     runtime_project_root,
-    wybra_tool_option,
 )
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_RELOAD = False
-APP_TARGET_OPTION = "runserver_app"
-RELOAD_ENV_VAR_OPTION = "runserver_reload_env"
 CONTEXT_SETTINGS = {
     "allow_extra_args": True,
     "help_option_names": ["-h", "--help"],
@@ -196,19 +194,15 @@ def runserver_command(
         project_root.resolve() if project_root is not None else runtime_project_root()
     )
     try:
-        app_target = wybra_tool_option(
-            APP_TARGET_OPTION,
+        startup = resolve_configured_app_startup(
             project_root=selected_project_root,
-        )
-        reload_env_var = wybra_tool_option(
-            RELOAD_ENV_VAR_OPTION,
-            project_root=selected_project_root,
+            config_source=config_source,
         )
         config = load_runserver_config(
             project_root=selected_project_root,
-            reload_env_var=reload_env_var,
+            reload_env_var=startup.reload_env_var,
         )
-    except ProjectToolConfigurationError as exc:
+    except (CompositionError, ProjectToolConfigurationError) as exc:
         raise click.ClickException(str(exc)) from exc
 
     runserver_config = config.get_config("runserver") or {}
@@ -220,7 +214,7 @@ def runserver_command(
         if reload_requested is None
         else reload_requested
     )
-    _reject_extra_app_target(uvicorn_args, app_target=app_target)
+    _reject_extra_app_target(uvicorn_args, app_target=startup.app_target)
     os.environ.update(
         runserver_environment_overrides(
             project_root=project_root,
@@ -231,7 +225,7 @@ def runserver_command(
     )
     run_uvicorn_command(
         build_uvicorn_args(
-            app_target=app_target,
+            app_target=startup.app_target,
             host=host,
             port=port,
             reload_enabled=reload_enabled,

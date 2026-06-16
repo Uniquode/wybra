@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from enum import StrEnum
@@ -7,9 +8,11 @@ from typing import Any, TextIO
 
 import click
 
+from wybra.core.composition import CompositionError
+from wybra.tools.app_startup import resolve_configured_asgi_app_target
 from wybra.tools.project import (
     ProjectToolConfigurationError,
-    import_wybra_tool_option,
+    import_from_string,
     runtime_project_root,
 )
 from wybra.web.routes import (
@@ -21,8 +24,6 @@ from wybra.web.routes import (
     render_succinct,
 )
 
-APP_TARGET_OPTION = "runserver_app"
-
 
 class RouteOutputFormat(StrEnum):
     SUCCINCT = "succinct"
@@ -31,9 +32,13 @@ class RouteOutputFormat(StrEnum):
     JSON = "json"
 
 
-def load_configured_asgi_app() -> Any:
+def load_configured_asgi_app(config_source: str | None = None) -> Any:
     project_root = runtime_project_root()
-    return import_wybra_tool_option(APP_TARGET_OPTION, project_root=project_root)
+    app_target = resolve_configured_asgi_app_target(
+        project_root=project_root,
+        config_source=config_source,
+    )
+    return import_from_string(app_target)
 
 
 def render_inspection(
@@ -99,6 +104,11 @@ def render_inspection(
     is_flag=True,
     help="With --check, suppress route-tree output and report only exit status.",
 )
+@click.option(
+    "--config",
+    "config_source",
+    help='Override APP_CONFIG or "app.toml".',
+)
 def routes_command(
     output_format: str | None,
     succinct_format: bool,
@@ -107,6 +117,32 @@ def routes_command(
     json_format: bool,
     check: bool,
     quiet: bool,
+    config_source: str | None,
+) -> int:
+    return asyncio.run(
+        _run_routes_command(
+            output_format=output_format,
+            succinct_format=succinct_format,
+            graph_format=graph_format,
+            mermaid_format=mermaid_format,
+            json_format=json_format,
+            check=check,
+            quiet=quiet,
+            config_source=config_source,
+        )
+    )
+
+
+async def _run_routes_command(
+    *,
+    output_format: str | None,
+    succinct_format: bool,
+    graph_format: bool,
+    mermaid_format: bool,
+    json_format: bool,
+    check: bool,
+    quiet: bool,
+    config_source: str | None,
 ) -> int:
     if quiet and not check:
         raise click.UsageError("--quiet can only be used with --check.")
@@ -120,8 +156,12 @@ def routes_command(
     )
 
     try:
-        app = load_configured_asgi_app()
-    except ProjectToolConfigurationError as exc:
+        app = (
+            load_configured_asgi_app(config_source)
+            if config_source is not None
+            else load_configured_asgi_app()
+        )
+    except (CompositionError, ProjectToolConfigurationError) as exc:
         print("configuration: failed", file=sys.stderr)
         print(f"- {exc}", file=sys.stderr)
         return 1
@@ -145,7 +185,7 @@ def routes_command(
         return 1
 
     try:
-        inspection = inspect_route_tree(app)
+        inspection = await _inspect_installed_route_tree(app)
     except TypeError as exc:
         print("configuration: failed", file=sys.stderr)
         print(
@@ -191,6 +231,14 @@ def _is_supported_route_tree(routes: object) -> bool:
         routes,
         (Mapping, str, bytes),
     )
+
+
+async def _inspect_installed_route_tree(app: Any) -> RouteInspection:
+    lifespan_context = getattr(getattr(app, "router", None), "lifespan_context", None)
+    if callable(lifespan_context):
+        async with lifespan_context(app):
+            return inspect_route_tree(app)
+    return inspect_route_tree(app)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

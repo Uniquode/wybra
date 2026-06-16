@@ -51,10 +51,19 @@ def _default_modules() -> tuple[str, ...] | None:
     return modules or None
 
 
+_configured_app_config_path = _app_config_path()
+_configured_default_modules = _default_modules()
+
 target_metadata = load_model_metadata(
     project_root=_project_root(),
-    config_path=_app_config_path(),
-    default_modules=_default_modules(),
+    config_path=_configured_app_config_path,
+    default_modules=_configured_default_modules,
+    environ=(
+        {}
+        if _configured_app_config_path is None
+        and _configured_default_modules is not None
+        else None
+    ),
 )
 
 

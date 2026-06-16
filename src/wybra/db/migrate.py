@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -19,7 +20,7 @@ from sqlalchemy import MetaData, Table, select
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.exc import SQLAlchemyError
 
-from wybra.core.composition import AppConfig
+from wybra.core.composition import APP_CONFIG_ENV, AppConfig
 from wybra.db.migration_metadata import MigrationConfigError
 from wybra.db.persistence import close_database, create_database_engine
 from wybra.db.provisioning import (
@@ -42,6 +43,7 @@ ALEMBIC_VERSION_TABLE = "alembic_version"
 DATABASE_URL_HELP = (
     "Override the configured SQLAlchemy async database URL for this migration command."
 )
+APP_CONFIG_HELP = "Override APP_CONFIG or the default app.toml for this invocation."
 REVISION_HELP = (
     "Create an Alembic revision in a configured module.\n\n"
     "Roll-forward order: Upgrade to the current head before autogenerate; "
@@ -68,7 +70,7 @@ class MigrationSettings(Protocol):
     def modules(self) -> tuple[str, ...]: ...
 
 
-MigrationSettingsLoader = Callable[[str | None], MigrationSettings]
+MigrationSettingsLoader = Callable[..., MigrationSettings]
 
 
 class MigrationConfigurationError(ValueError):
@@ -101,10 +103,16 @@ def create_migrate_command(
         help="Run application schema migrations through Alembic.",
     )
     @_database_url_option
+    @click.option("--config", "config_source", help=APP_CONFIG_HELP)
     @click.pass_context
-    def migrate_command(ctx: click.Context, database_url: str | None) -> None:
+    def migrate_command(
+        ctx: click.Context,
+        database_url: str | None,
+        config_source: str | None,
+    ) -> None:
         ctx.ensure_object(dict)
         ctx.obj["database_url"] = database_url
+        ctx.obj["config_source"] = config_source
 
     @migrate_command.command(
         "init",
@@ -127,6 +135,7 @@ def create_migrate_command(
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
             lambda config: _initialise_database(config, admin_database_url),
         )
 
@@ -140,6 +149,7 @@ def create_migrate_command(
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
             lambda config: _upgrade_initialised_database(config, revision),
         )
 
@@ -153,6 +163,7 @@ def create_migrate_command(
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
             lambda config: command.downgrade(config, revision),
         )
 
@@ -163,6 +174,7 @@ def create_migrate_command(
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
             _show_current_revision,
         )
 
@@ -173,6 +185,7 @@ def create_migrate_command(
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
             command.history,
         )
 
@@ -207,6 +220,7 @@ def create_migrate_command(
         return _run_revision(
             settings_loader,
             _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
             module_name=module_name,
             message=message,
             autogenerate=autogenerate,
@@ -245,13 +259,39 @@ def _database_url_for_command(
     return root_database_url
 
 
+def _config_source_for_command(ctx: click.Context) -> str | None:
+    if ctx.obj is None:
+        return None
+    if not isinstance(ctx.obj, dict):
+        raise click.UsageError(
+            "Invalid Click context object for wybra-migrate; expected a dictionary."
+        )
+
+    config_source = ctx.obj.get("config_source")
+    if config_source is None:
+        return None
+    if not isinstance(config_source, str):
+        raise click.UsageError(
+            "Invalid root config_source type "
+            f"{type(config_source)!r}; expected a string."
+        )
+    if not config_source.strip():
+        raise click.UsageError("--config must not be blank.")
+    return config_source.strip()
+
+
 def _run_migration(
     settings_loader: MigrationSettingsLoader,
     database_url: str | None,
+    config_source: str | None,
     operation: Callable[[Config], None],
 ) -> int:
     try:
-        settings = settings_loader(database_url)
+        settings = _load_migration_settings(
+            settings_loader,
+            database_url,
+            config_source,
+        )
         config = build_alembic_config(settings)
     except (MigrationConfigurationError, DataCompositionError) as exc:
         print("configuration: failed", file=sys.stderr)
@@ -282,6 +322,7 @@ def _run_migration(
 def _run_revision(
     settings_loader: MigrationSettingsLoader,
     database_url: str | None,
+    config_source: str | None,
     *,
     module_name: str,
     message: str,
@@ -293,7 +334,11 @@ def _run_revision(
     rev_id: str | None,
 ) -> int:
     try:
-        settings = settings_loader(database_url)
+        settings = _load_migration_settings(
+            settings_loader,
+            database_url,
+            config_source,
+        )
         version_path = migration_version_location_for_configured_module(
             module_name,
             settings.modules,
@@ -329,6 +374,49 @@ def _run_revision(
         print(f"- {safe_database_error_message(exc)}", file=sys.stderr)
         return 1
     return 0
+
+
+def _load_migration_settings(
+    settings_loader: MigrationSettingsLoader,
+    database_url: str | None,
+    config_source: str | None,
+) -> MigrationSettings:
+    if _loader_accepts_config_source(settings_loader):
+        return settings_loader(database_url, config_source)
+
+    if config_source is None:
+        return settings_loader(database_url)
+
+    original_config = os.environ.get(APP_CONFIG_ENV)
+    os.environ[APP_CONFIG_ENV] = config_source
+    try:
+        return settings_loader(database_url)
+    finally:
+        if original_config is None:
+            os.environ.pop(APP_CONFIG_ENV, None)
+        else:
+            os.environ[APP_CONFIG_ENV] = original_config
+
+
+def _loader_accepts_config_source(settings_loader: MigrationSettingsLoader) -> bool:
+    try:
+        signature = inspect.signature(settings_loader)
+    except (TypeError, ValueError):
+        return False
+
+    parameters = tuple(signature.parameters.values())
+    positional_parameters = tuple(
+        parameter
+        for parameter in parameters
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    )
+    return len(positional_parameters) >= 2 or any(
+        parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in parameters
+    )
 
 
 def run_migrate_command(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
@@ -61,7 +62,9 @@ from .schema import _verify_identity_schema
 
 def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
     try:
-        exit_code = asyncio.run(_main_async(args))
+        exit_code = asyncio.run(
+            _main_async(args, config_source=_config_source_from_context(ctx))
+        )
     except PasswordSourceError as exc:
         raise click.BadParameter(str(exc), param_hint=["--password"]) from exc
     except ConfigurationError as exc:
@@ -72,8 +75,8 @@ def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
     ctx.exit(exit_code)
 
 
-async def _main_async(args: AuthmgrArgs) -> int:
-    settings = _load_auth_settings_for_command()
+async def _main_async(args: AuthmgrArgs, *, config_source: str | None = None) -> int:
+    settings = _load_auth_settings_for_command(config_source=config_source)
     database = create_database(settings.database_url)
     try:
         async with session_scope(database.session_factory) as session:
@@ -568,10 +571,13 @@ _COMMAND_HANDLERS: dict[str, CommandHandler] = {
 }
 
 
-def _load_auth_settings_for_command() -> AuthSettings:
+def _load_auth_settings_for_command(config_source: str | None = None) -> AuthSettings:
     try:
         project_root = runtime_project_root()
-        app_config = load_app_config(project_root=project_root)
+        app_config = load_app_config(
+            project_root=project_root,
+            config_path=_config_source_path(config_source),
+        )
     except ProjectToolConfigurationError as exc:
         raise ConfigurationError(str(exc)) from exc
     except CompositionError as exc:
@@ -580,6 +586,27 @@ def _load_auth_settings_for_command() -> AuthSettings:
         ) from exc
 
     return load_auth_settings(app_config=app_config)
+
+
+def _config_source_from_context(ctx: click.Context) -> str | None:
+    root_context = ctx.find_root()
+    obj = root_context.obj
+    if not isinstance(obj, dict):
+        return None
+    value = obj.get("config_source")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigurationError("APP_CONFIG must be a string.")
+    if not value.strip():
+        raise ConfigurationError("APP_CONFIG must not be blank.")
+    return value.strip()
+
+
+def _config_source_path(config_source: str | None) -> Path | None:
+    if config_source is None:
+        return None
+    return Path(config_source)
 
 
 async def _resolve_target_record(

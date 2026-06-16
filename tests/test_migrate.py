@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 import wybra.db.migrate as migrate_module
 import wybra.db.provisioning as provisioning_module
+import wybra.tools.migrate as tools_migrate
 
 
 @dataclass(frozen=True, slots=True)
@@ -726,3 +727,38 @@ def test_migrate_revision_help_describes_roll_forward_order(capsys) -> None:
     assert "generated operations" in captured.out
     assert "down_revision" in captured.out
     assert "depends_on" in captured.out
+
+
+def test_wybra_migrate_config_option_overrides_app_config_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ambient_config = tmp_path / "ambient.toml"
+    selected_config = tmp_path / "selected.toml"
+    monkeypatch.setenv("APP_CONFIG", ambient_config.as_posix())
+    observed: dict[str, str | None] = {}
+    config_path = alembic_config_path()
+
+    def load_project_settings(*, environ=None, project_root=None, read_dotenv=True):
+        observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
+        return MigrationTestSettings(
+            database_url="sqlite+aiosqlite:///:memory:",
+            alembic_config=config_path,
+        )
+
+    def record_current(_config) -> None:
+        return None
+
+    monkeypatch.setattr(tools_migrate, "runtime_project_root", lambda: tmp_path)
+    monkeypatch.setattr(tools_migrate, "load_project_settings", load_project_settings)
+    monkeypatch.setattr(tools_migrate.command, "current", record_current)
+
+    try:
+        exit_code = tools_migrate.main(
+            ["--config", selected_config.as_posix(), "current"]
+        )
+    finally:
+        config_path.unlink(missing_ok=True)
+
+    assert exit_code == 0
+    assert observed["app_config"] == selected_config.as_posix()

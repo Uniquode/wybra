@@ -30,8 +30,8 @@ Repository: <https://github.com/Uniquode/wybra>
 - `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
 - `wybra.tools`: generic project command adapters and validation target
-  discovery. Host applications provide concrete settings loaders through their
-  own `[tool.wybra]` metadata.
+  discovery. Host applications provide concrete runtime settings through their
+  app config.
 - `wybra.auth`: local identity models, FastAPI Users integration, browser auth
   routes, auth templates, password policy, group/scope administration, and the
   `wybra-authmgr` operator CLI.
@@ -51,7 +51,8 @@ uv build
 
 The framework project does not contain host application settings, `app.toml`,
 or change-management artifacts. Host-facing commands resolve the configured
-application through the host project's `[tool.wybra]` metadata and `app.toml`.
+application through the host app config file selected by `--config`,
+`APP_CONFIG`, or the default `app.toml`.
 
 ## Application Startup
 
@@ -124,9 +125,12 @@ Host applications may add their own short aliases when appropriate, but the
 portable package-owned command names are the `wybra-*` commands.
 
 `wybra-runserver` reads the configured Uvicorn app target from
-`[tool.wybra].runserver_app`. By default, Wybra uses the current project root
-and `app.toml` in that project root for application startup. Runtime overrides
-are passed through the same startup configuration channel used by ASGI startup:
+`[app.runserver].asgi_app` in the selected app config file. The reload
+environment variable is configured with `[app.runserver].reload_env`.
+
+By default, Wybra uses the current project root and `app.toml` in that project
+root for application startup. Runtime overrides are passed through the same
+startup configuration channel used by ASGI startup:
 
 - `--project` sets `APP_ROOT` and is the only CLI option that changes the
   effective project root.
@@ -136,9 +140,15 @@ are passed through the same startup configuration channel used by ASGI startup:
   migration consumers.
 - `--deploy` sets `APP_ENV` for deployment-policy consumers.
 
-Precedence is CLI override, then environment variable, then default. Relative
-config paths and relative SQLite database paths are resolved from the effective
-project root.
+Precedence is CLI override, then environment variable, then app config default.
+Relative config paths and relative SQLite database paths are resolved from the
+effective project root.
+
+```toml
+[app.runserver]
+asgi_app = "example_app.asgi:app"
+reload_env = "APP_RELOAD"
+```
 
 ## Migration Workflow
 
@@ -147,6 +157,7 @@ explicitly:
 
 ```sh
 uv run wybra-migrate init
+uv run wybra-migrate --config config/app.toml init
 ```
 
 `init` stops after infrastructure and migration-state setup. After migration
@@ -164,6 +175,7 @@ Inspect migration state without mutating the database:
 
 ```sh
 uv run wybra-migrate current
+uv run wybra-migrate --config config/app.toml current
 ```
 
 Create module-owned Alembic revisions through the project command:
@@ -184,6 +196,7 @@ Inspect the installed route tree:
 
 ```sh
 uv run wybra-routes
+uv run wybra-routes --config config/app.toml
 uv run wybra-routes --graph
 uv run wybra-routes --mermaid
 uv run wybra-routes --json
@@ -201,7 +214,8 @@ project-structure validation command.
 
 Wybra-hosted applications configure auth through the host application's
 `app.toml`. `wybra-authmgr` resolves the same host application config as the
-other package-owned project commands, then reads `[auth]` from that file:
+other package-owned project commands, then reads `[auth]` from that file. Use
+`--config <path>` to select a specific app config for one invocation:
 
 ```toml
 [app]
@@ -240,3 +254,7 @@ common_fragments = [
 
 Database selection precedence for auth configuration is `DATABASE_URL`, then
 `[app].database_url`.
+
+```sh
+uv run wybra-authmgr --config config/app.toml user list
+```

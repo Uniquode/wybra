@@ -43,6 +43,12 @@ class StaticOptions:
 
 
 @dataclass(frozen=True, slots=True)
+class RunserverOptions:
+    asgi_app: str | None = None
+    reload_env: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     config_path: Path
     project_root: Path
@@ -50,6 +56,7 @@ class AppConfig:
     routes: RouteOptions
     templates: TemplateOptions
     static: StaticOptions
+    runserver: RunserverOptions = field(default_factory=RunserverOptions)
     database_url: str | None = None
     deployment_environment: str | None = None
     auth: dict[str, Any] = field(default_factory=dict)
@@ -97,6 +104,7 @@ def load_app_config(
         ),
         templates=_load_template_options(app_data),
         static=_load_static_options(app_data),
+        runserver=_load_runserver_options(app_data),
         database_url=_optional_str_or_none(app_data, "app.database_url"),
         deployment_environment=_optional_str_or_none(
             app_data,
@@ -213,7 +221,7 @@ def _raw_config_sections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
         sections["app"] = {
             key: value for key, value in app_data.items() if not isinstance(value, dict)
         }
-        for nested_name in ("routes", "static", "templates"):
+        for nested_name in ("routes", "runserver", "static", "templates"):
             nested_value = app_data.get(nested_name)
             if isinstance(nested_value, dict):
                 sections[f"app.{nested_name}"] = dict(nested_value)
@@ -395,6 +403,14 @@ def _load_static_options(data: dict[str, Any]) -> StaticOptions:
     )
 
 
+def _load_runserver_options(data: dict[str, Any]) -> RunserverOptions:
+    runserver_data = _optional_table(data, "app.runserver")
+    return RunserverOptions(
+        asgi_app=_optional_str_or_none(runserver_data, "app.runserver.asgi_app"),
+        reload_env=_optional_str_or_none(runserver_data, "app.runserver.reload_env"),
+    )
+
+
 def _bool_from_config(data: dict[str, Any], name: str, default: bool) -> bool:
     key = name.rsplit(".", maxsplit=1)[-1]
     value = data.get(key)
@@ -414,6 +430,7 @@ __all__ = [
     "DEFAULT_APP_CONFIG",
     "DEFAULT_STATIC_EXPORT_ROOT",
     "RouteOptions",
+    "RunserverOptions",
     "StaticOptions",
     "TemplateOptions",
     "load_app_config",
