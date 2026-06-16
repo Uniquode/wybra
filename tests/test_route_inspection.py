@@ -467,7 +467,8 @@ def test_routes_command_ignores_incompatible_lifespan_context(
         return None
 
     app = _AppWithRoutes([Route("/plain", endpoint, name="plain")])
-    app.router = type("Router", (), {"lifespan_context": lifespan})()
+    app.router = type("Router", (), {})()
+    app.router.lifespan_context = lifespan
     monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
 
     exit_code = routes_tool.main(["--format", "json"])
@@ -476,6 +477,28 @@ def test_routes_command_ignores_incompatible_lifespan_context(
     assert exit_code == 0
     assert captured.err == ""
     assert json.loads(captured.out)["routes"][0]["path"] == "/plain"
+
+
+def test_routes_command_reports_lifespan_startup_type_error(
+    monkeypatch,
+    capsys,
+) -> None:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        raise TypeError("startup failed")
+        yield
+
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
+
+    exit_code = routes_tool.main(["--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "configuration: failed" in captured.err
+    assert "Failed to inspect configured ASGI app route tree" in captured.err
+    assert "startup failed" in captured.err
 
 
 @pytest.mark.parametrize(

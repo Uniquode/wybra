@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from enum import StrEnum
 from typing import Any, TextIO, TypeGuard
@@ -238,23 +239,26 @@ async def _inspect_installed_route_tree(app: Any) -> RouteInspection:
     router = getattr(app, "router", None)
     lifespan_context = getattr(router, "lifespan_context", None)
     if _is_async_context_manager(lifespan_context):
-        try:
-            async with lifespan_context:
-                return inspect_route_tree(app)
-        except TypeError:
+        async with lifespan_context:
             return inspect_route_tree(app)
-    if callable(lifespan_context):
-        try:
-            context = lifespan_context(app)
-        except TypeError:
-            return inspect_route_tree(app)
+    if callable(lifespan_context) and _accepts_app_argument(lifespan_context, app):
+        context = lifespan_context(app)
         if _is_async_context_manager(context):
-            try:
-                async with context:
-                    return inspect_route_tree(app)
-            except TypeError:
+            async with context:
                 return inspect_route_tree(app)
     return inspect_route_tree(app)
+
+
+def _accepts_app_argument(factory: Callable[..., object], app: Any) -> bool:
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return True
+    try:
+        signature.bind(app)
+    except TypeError:
+        return False
+    return True
 
 
 def _is_async_context_manager(
