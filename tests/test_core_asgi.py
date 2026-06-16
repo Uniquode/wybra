@@ -1,7 +1,7 @@
 import pytest
 
-from wevra.core.asgi import load_asgi_app
-from wevra.core.exceptions import ConfigurationError
+from wybra.core.asgi import load_asgi_app
+from wybra.core.exceptions import ConfigurationError
 
 
 def test_load_asgi_app_returns_created_app() -> None:

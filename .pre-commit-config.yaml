@@ -22,15 +22,15 @@ repos:
 
   - repo: local
     hooks:
-      - id: ty-wevra
-        name: ty type checker wevra
+      - id: ty-wybra
+        name: ty type checker wybra
         entry: uv run ty check src/
         language: system
         pass_filenames: false
         types: [python]
 
-      - id: pytest-wevra
-        name: pytest wevra
+      - id: pytest-wybra
+        name: pytest wybra
         entry: uv run pytest -q
         language: system
         pass_filenames: false

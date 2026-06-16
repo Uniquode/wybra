@@ -1,0 +1,8 @@
+#!/bin/sh
+
+echo ===== Project root ===== $(git branch --show-current)
+git status
+
+echo
+echo ===== Wybra project ===== $(git -C wybra branch --show-current)
+git -C wybra status

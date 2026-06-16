@@ -7,7 +7,7 @@ import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
-from wevra.web.forms.csrf import (
+from wybra.web.forms.csrf import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
     CsrfProtector,
@@ -113,7 +113,7 @@ def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
         },
         body=body,
     )
-    caplog.set_level(logging.DEBUG, logger="wevra.web.forms.csrf")
+    caplog.set_level(logging.DEBUG, logger="wybra.web.forms.csrf")
 
     assert asyncio.run(protector.validate_request(request)) is False
     assert "CSRF request rejected." in caplog.text
@@ -217,9 +217,9 @@ def test_csrf_exempt_allows_route_to_bypass_protected_router() -> None:
 
 
 def test_csrf_settings_generates_local_secret(caplog) -> None:
-    from wevra.web.csrf import CsrfSettings
+    from wybra.web.csrf import CsrfSettings
 
-    caplog.set_level(logging.INFO, logger="wevra.web.csrf")
+    caplog.set_level(logging.INFO, logger="wybra.web.csrf")
 
     settings = CsrfSettings()
 
@@ -229,8 +229,8 @@ def test_csrf_settings_generates_local_secret(caplog) -> None:
 
 
 def test_csrf_settings_requires_stable_secret_for_non_local_environment() -> None:
-    from wevra.core.exceptions import ConfigurationError
-    from wevra.web.csrf import CsrfSettings
+    from wybra.core.exceptions import ConfigurationError
+    from wybra.web.csrf import CsrfSettings
 
     with pytest.raises(
         ConfigurationError,
@@ -253,7 +253,7 @@ def test_csrf_settings_requires_stable_secret_for_non_local_environment() -> Non
 
 
 def test_csrf_settings_accepts_stable_secure_non_local_configuration() -> None:
-    from wevra.web.csrf import CsrfSettings
+    from wybra.web.csrf import CsrfSettings
 
     settings = CsrfSettings(
         deployment_environment="production",

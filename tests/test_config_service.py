@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from wevra.config import (
+from wybra.config import (
     AppConfigSource,
     BaseSettings,
     ConfigDef,
@@ -24,13 +24,13 @@ from wevra.config import (
     to_bool,
     to_path,
 )
-from wevra.core.composition import (
+from wybra.core.composition import (
     AppConfig,
     RouteOptions,
     StaticOptions,
     TemplateOptions,
 )
-from wevra.core.settings import EnvironmentSetting, EnvironmentValueType
+from wybra.core.settings import EnvironmentSetting, EnvironmentValueType
 
 
 class FailingSource:
@@ -266,7 +266,7 @@ def test_file_source_reads_resolved_app_config(tmp_path: Path) -> None:
     config_path.write_text(
         """
 [app]
-modules = ["wevra"]
+modules = ["wybra"]
 database_url = "sqlite+aiosqlite:///app.sqlite3"
 
 [app.templates]
@@ -676,7 +676,7 @@ def test_module_config_def_is_discovered_from_module_root(
     module_root = tmp_path / "example_module"
     module_root.mkdir()
     module_root.joinpath("__init__.py").write_text(
-        "from wevra.config import ConfigDef, ConfigField, ConfigGroup\n"
+        "from wybra.config import ConfigDef, ConfigField, ConfigGroup\n"
         "module_config = ConfigDef({\n"
         "    'example': ConfigGroup(\n"
         "        fields=(ConfigField(name='enabled', default=True),)\n"

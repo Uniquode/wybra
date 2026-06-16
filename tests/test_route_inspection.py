@@ -8,9 +8,9 @@ from fastapi.responses import HTMLResponse
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
-import wevra.tools.routes as routes_tool
-from wevra.tools.project import ProjectToolConfigurationError
-from wevra.web.routes import (
+import wybra.tools.routes as routes_tool
+from wybra.tools.project import ProjectToolConfigurationError
+from wybra.web.routes import (
     ConfiguredModuleRouter,
     RouteKind,
     RouteOrigin,
@@ -28,18 +28,18 @@ from wevra.web.routes import (
 )
 
 
-def test_wevra_package_command_scripts_are_prefixed() -> None:
+def test_wybra_package_command_scripts_are_prefixed() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
     with pyproject.open("rb") as handle:
         data = tomllib.load(handle)
 
     assert data["project"]["scripts"] == {
-        "wevra-authmgr": "wevra.auth.cli.authmgr:main",
-        "wevra-migrate": "wevra.tools.migrate:main",
-        "wevra-routes": "wevra.tools.routes:main",
-        "wevra-runserver": "wevra.tools.runserver:main",
-        "wevra-validate": "wevra.tools.validate:main",
+        "wybra-authmgr": "wybra.auth.cli.authmgr:main",
+        "wybra-migrate": "wybra.tools.migrate:main",
+        "wybra-routes": "wybra.tools.routes:main",
+        "wybra-runserver": "wybra.tools.runserver:main",
+        "wybra-validate": "wybra.tools.validate:main",
     }
 
 
@@ -122,7 +122,7 @@ def test_inspect_route_tree_reports_installed_routes_and_endpoint_shape(
     assert tree_by_path["/tools"]["opaque"] is False
 
 
-def test_inspect_route_tree_uses_wevra_origin_metadata() -> None:
+def test_inspect_route_tree_uses_wybra_origin_metadata() -> None:
     app = _app()
     router = APIRouter()
 
@@ -296,13 +296,13 @@ def test_graph_renderer_uses_compact_visual_tree() -> None:
                 prefix="",
             ),
             ConfiguredModuleRouter(
-                module_name="wevra.auth",
+                module_name="wybra.auth",
                 label="account",
                 router=account_router,
                 prefix="/account",
             ),
             ConfiguredModuleRouter(
-                module_name="wevra.web",
+                module_name="wybra.web",
                 label="partials",
                 router=partials_router,
                 prefix="",
@@ -314,10 +314,10 @@ def test_graph_renderer_uses_compact_visual_tree() -> None:
 
     assert graph.splitlines() == [
         "/ [get] public:home app:default",
-        "├─ [get] /account auth:account wevra.auth:account",
+        "├─ [get] /account auth:account wybra.auth:account",
         "│  └─ [get,post] /login auth:login",
         "├─ [get] /health health",
-        "└─ /partials wevra.web:partials",
+        "└─ /partials wybra.web:partials",
         "   ├─ [get] /theme-mode theme-mode (partial)",
         "   └─ [get] /theme-selector theme-selector (partial)",
     ]

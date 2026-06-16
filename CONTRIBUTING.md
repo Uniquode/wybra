@@ -1,4 +1,4 @@
-# Contributing to wevra
+# Contributing to wybra
 
 ## Development Setup
 
@@ -58,23 +58,23 @@ uv build
 
 ### Package Areas
 
-- `wevra.core`: composition, settings loading, diagnostics, and conventions.
-- `wevra.web`: route registration, templates, static assets, CSRF, errors, and
+- `wybra.core`: composition, settings loading, diagnostics, and conventions.
+- `wybra.web`: route registration, templates, static assets, CSRF, errors, and
   web validation.
-- `wevra.db`: database URL helpers, async database helpers, SQLAlchemy metadata
+- `wybra.db`: database URL helpers, async database helpers, SQLAlchemy metadata
   conventions, and Alembic command support.
-- `wevra.tools`: project command adapters.
-- `wevra.auth`: reusable local identity, authentication, templates, routes, and
+- `wybra.tools`: project command adapters.
+- `wybra.auth`: reusable local identity, authentication, templates, routes, and
   operator tooling.
 
 ## Project Commands
 
 ```bash
-uv run wevra-runserver
-uv run wevra-migrate --help
-uv run wevra-routes --help
-uv run wevra-validate --help
-uv run wevra-authmgr --help
+uv run wybra-runserver
+uv run wybra-migrate --help
+uv run wybra-routes --help
+uv run wybra-validate --help
+uv run wybra-authmgr --help
 ```
 
 ## Code Style

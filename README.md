@@ -1,36 +1,40 @@
-# Wevra
+# Wybra
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/Uniquode/wevra/tests.yml?branch=main&label=tests&logo=github)](https://github.com/Uniquode/wevra/actions/workflows/tests.yml)
-[![Security](https://img.shields.io/github/actions/workflow/status/Uniquode/wevra/codeql.yml?branch=main&label=security&logo=github)](https://github.com/Uniquode/wevra/security/code-scanning)
-[![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen.svg)](https://github.com/Uniquode/wevra)
-[![PyPI version](https://img.shields.io/pypi/v/wevra.svg?logo=pypi&logoColor=white)](https://pypi.org/project/wevra/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/wevra.svg?logo=pypi&logoColor=white)](https://pypi.org/project/wevra/)
-[![Python versions](https://img.shields.io/pypi/pyversions/wevra.svg?logo=python&logoColor=white)](https://pypi.org/project/wevra/)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/Uniquode/wybra/tests.yml?branch=main&label=tests&logo=github)](https://github.com/Uniquode/wybra/actions/workflows/tests.yml)
+[![Security](https://img.shields.io/github/actions/workflow/status/Uniquode/wybra/codeql.yml?branch=main&label=security&logo=github)](https://github.com/Uniquode/wybra/security/code-scanning)
+[![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen.svg)](https://github.com/Uniquode/wybra)
+[![PyPI version](https://img.shields.io/pypi/v/wybra.svg?logo=pypi&logoColor=white)](https://pypi.org/project/wybra/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/wybra.svg?logo=pypi&logoColor=white)](https://pypi.org/project/wybra/)
+[![Python versions](https://img.shields.io/pypi/pyversions/wybra.svg?logo=python&logoColor=white)](https://pypi.org/project/wybra/)
 
 <p align="center">
-  <img src="logo.svg" alt="wevra" width="160"/>
+  <img src="logo.svg" alt="wybra" width="160"/>
 </p>
 
-`wevra` is a reusable async FastAPI framework layer. It provides web
+`wybra` is a reusable async FastAPI framework layer. It provides web
 composition, database and migration helpers, project command adapters, and
 reusable local authentication building blocks.
 
-Repository: <https://github.com/Uniquode/wevra>
+The name follows attested Bundjalung and neighbouring dialect forms including
+`wybra`, `wibra`, `wybera`, and `waybara`, associated with fire, firewood, or
+wood.
+
+Repository: <https://github.com/Uniquode/wybra>
 
 ## Package Areas
 
-- `wevra.core`: module composition, package resource helpers, settings loading,
+- `wybra.core`: module composition, package resource helpers, settings loading,
   diagnostics, and shared conventions.
-- `wevra.web`: route composition, template rendering, static assets, CSRF,
+- `wybra.web`: route composition, template rendering, static assets, CSRF,
   theme defaults, error handling, views, and web validation.
-- `wevra.db`: SQLAlchemy metadata conventions, async database helpers, database
+- `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
-- `wevra.tools`: generic project command adapters and validation target
+- `wybra.tools`: generic project command adapters and validation target
   discovery. Host applications provide concrete settings loaders through their
-  own `[tool.wevra]` metadata.
-- `wevra.auth`: local identity models, FastAPI Users integration, browser auth
+  own `[tool.wybra]` metadata.
+- `wybra.auth`: local identity models, FastAPI Users integration, browser auth
   routes, auth templates, password policy, group/scope administration, and the
-  `wevra-authmgr` operator CLI.
+  `wybra-authmgr` operator CLI.
 
 ## Local Development
 
@@ -47,27 +51,27 @@ uv build
 
 The framework project does not contain host application settings, `app.toml`,
 or change-management artifacts. Host-facing commands resolve the configured
-application through the host project's `[tool.wevra]` metadata and `app.toml`.
+application through the host project's `[tool.wybra]` metadata and `app.toml`.
 
 ## Application Startup
 
-Host applications own their FastAPI instance and application routes. Wevra owns the
+Host applications own their FastAPI instance and application routes. Wybra owns the
 common engine setup behind the FastAPI lifespan hook:
 
 ```python
 from fastapi import FastAPI
-import wevra
+import wybra
 
 app = FastAPI(
     title="example",
-    lifespan=wevra.start_site(config_source="app.toml"),
+    lifespan=wybra.start_site(config_source="app.toml"),
 )
 ```
 
 Configured modules expose one async setup hook at their package root:
 
 ```python
-from wevra import Site
+from wybra import Site
 
 
 async def setup_site(site: Site) -> None:
@@ -79,7 +83,7 @@ type-keyed capabilities for shared services rather than importing another
 module's implementation details:
 
 ```python
-from wevra.db import DatabaseCapability
+from wybra.db import DatabaseCapability
 
 
 async def setup_site(site: Site) -> None:
@@ -93,7 +97,7 @@ helpers rather than auth internals:
 
 ```python
 from fastapi import Depends
-from wevra.auth import login_required
+from wybra.auth import login_required
 
 
 @router.get("/admin", dependencies=[Depends(login_required)])
@@ -101,26 +105,26 @@ async def admin_page():
     ...
 ```
 
-App-side Wevra database, auth, route, template, static, or runtime-state setup
+App-side Wybra database, auth, route, template, static, or runtime-state setup
 is not supported. Configure modules and settings once, then let
-`wevra.start_site(...)` initialise the Wevra-owned concerns.
+`wybra.start_site(...)` initialise the Wybra-owned concerns.
 
 ## Project Commands
 
-Wevra publishes prefixed console scripts to avoid collisions with host
+Wybra publishes prefixed console scripts to avoid collisions with host
 application or environment-specific tooling:
 
-- `wevra-runserver`: start the configured ASGI application with Uvicorn.
-- `wevra-migrate`: run Alembic migrations for the configured application.
-- `wevra-routes`: inspect the configured application's installed route tree.
-- `wevra-validate`: run configured project validation targets.
-- `wevra-authmgr`: manage local identity users, scopes, and groups.
+- `wybra-runserver`: start the configured ASGI application with Uvicorn.
+- `wybra-migrate`: run Alembic migrations for the configured application.
+- `wybra-routes`: inspect the configured application's installed route tree.
+- `wybra-validate`: run configured project validation targets.
+- `wybra-authmgr`: manage local identity users, scopes, and groups.
 
 Host applications may add their own short aliases when appropriate, but the
-portable package-owned command names are the `wevra-*` commands.
+portable package-owned command names are the `wybra-*` commands.
 
-`wevra-runserver` reads the configured Uvicorn app target from
-`[tool.wevra].runserver_app`. By default, Wevra uses the current project root
+`wybra-runserver` reads the configured Uvicorn app target from
+`[tool.wybra].runserver_app`. By default, Wybra uses the current project root
 and `app.toml` in that project root for application startup. Runtime overrides
 are passed through the same startup configuration channel used by ASGI startup:
 
@@ -142,14 +146,14 @@ Provision a first-time managed database and initialise Alembic state
 explicitly:
 
 ```sh
-uv run wevra-migrate init
+uv run wybra-migrate init
 ```
 
 `init` stops after infrastructure and migration-state setup. After migration
 state exists, apply schema revisions with:
 
 ```sh
-uv run wevra-migrate upgrade
+uv run wybra-migrate upgrade
 ```
 
 For PostgreSQL, `init` provisions the database, user, role, and privileges.
@@ -159,50 +163,50 @@ dbscripts-compatible `SA_DATABASE_URL` environment variable.
 Inspect migration state without mutating the database:
 
 ```sh
-uv run wevra-migrate current
+uv run wybra-migrate current
 ```
 
 Create module-owned Alembic revisions through the project command:
 
 ```sh
-uv run wevra-migrate revision --module wevra.auth --autogenerate -m "add identity field"
+uv run wybra-migrate revision --module wybra.auth --autogenerate -m "add identity field"
 ```
 
 Revision files are placed in the selected configured module's conventional
 `migrations/versions/` directory. The normal roll-forward order is to upgrade
 the working database to the current head, update the owning module's models,
 generate the revision, review generated operations plus `down_revision` and
-`depends_on`, run `wevra-migrate upgrade`, then validate.
+`depends_on`, run `wybra-migrate upgrade`, then validate.
 
 ## Route Inspection
 
 Inspect the installed route tree:
 
 ```sh
-uv run wevra-routes
-uv run wevra-routes --graph
-uv run wevra-routes --mermaid
-uv run wevra-routes --json
-uv run wevra-routes --check
-uv run wevra-routes --check --quiet
+uv run wybra-routes
+uv run wybra-routes --graph
+uv run wybra-routes --mermaid
+uv run wybra-routes --json
+uv run wybra-routes --check
+uv run wybra-routes --check --quiet
 ```
 
 The route-tree command imports the configured ASGI app target and reports the
 final installed FastAPI/Starlette route graph. Use it for route review and for
 explicit route smoke checks. Use `--check --quiet` when only the exit status is
-needed. It is separate from `wevra-validate`, which remains the broad
+needed. It is separate from `wybra-validate`, which remains the broad
 project-structure validation command.
 
 ## Auth Configuration
 
-Wevra-hosted applications configure auth through the host application's
-`app.toml`. `wevra-authmgr` resolves the same host application config as the
+Wybra-hosted applications configure auth through the host application's
+`app.toml`. `wybra-authmgr` resolves the same host application config as the
 other package-owned project commands, then reads `[auth]` from that file:
 
 ```toml
 [app]
 database_url = "sqlite+aiosqlite:///app.sqlite3"
-modules = ["wevra.web", "wevra.auth"]
+modules = ["wybra.web", "wybra.auth"]
 
 [app.templates]
 auto_reload = true
