@@ -90,7 +90,6 @@ from wevra.auth.persistence.database import (
     create_database,
     session_scope,
 )
-from wevra.auth.profile import profile_image_for_user
 from wevra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
 from wevra.auth.routes import normalise_return_to
 from wevra.core.exceptions import ConfigurationError
@@ -197,24 +196,6 @@ def test_identity_template_context_treats_session_lookup_failure_as_anonymous(
     monkeypatch.setattr(auth_context, "resolve_current_user", resolve_current_user)
 
     asyncio.run(assert_context())
-
-
-def test_profile_image_for_user_uses_capitalised_email_initial() -> None:
-    user = SimpleNamespace(email="david@example.com")
-
-    image = profile_image_for_user(user)
-
-    assert image.src is None
-    assert image.alt == "Profile picture"
-    assert image.fallback_text == "D"
-
-
-def test_profile_image_for_user_uses_first_alphabetic_local_part_character() -> None:
-    user = SimpleNamespace(email="123_david@example.com")
-
-    image = profile_image_for_user(user)
-
-    assert image.fallback_text == "D"
 
 
 def test_wevra_auth_metadata_exposes_authorisation_group_tables() -> None:

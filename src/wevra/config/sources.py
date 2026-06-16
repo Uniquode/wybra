@@ -192,6 +192,7 @@ def _app_config_sections(app_config: AppConfig) -> Mapping[str, Mapping[str, Any
             "url_path": app_config.static.url_path,
             "root": app_config.static.root,
             "export_root": app_config.static.export_root,
+            "serve": app_config.static.serve,
         }
     )
     values.setdefault("app.templates", {}).update(

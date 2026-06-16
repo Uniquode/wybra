@@ -6,7 +6,7 @@ from typing import Any
 from starlette.routing import NoMatchFound
 
 from wevra.auth.capabilities import AuthCapability
-from wevra.auth.profile import ProfileImage, profile_image_for_user
+from wevra.profile import ProfileCapability, ProfileImage
 from wevra.site import SiteCapabilityError, get_site
 
 LOGIN_TEMPLATE = "components/login_control.html"
@@ -47,7 +47,7 @@ async def login_widget_state(request: Any) -> LoginWidgetState | None:
         authenticated=True,
         login_path=None,
         logout_path=logout_path,
-        profile_image=profile_image_for_user(user),
+        profile_image=await _profile_image(request, user),
     )
 
 
@@ -56,9 +56,21 @@ def _auth_capability(request: Any) -> AuthCapability | None:
         site = get_site(request.app)
     except SiteCapabilityError:
         return None
-    if not site.has_capability(AuthCapability):
+
+    return site.capability_proxy(AuthCapability).optional()
+
+
+async def _profile_image(request: Any, user: Any) -> ProfileImage | None:
+    try:
+        profile_capability = get_site(request.app).capability_proxy(ProfileCapability)
+    except SiteCapabilityError:
         return None
-    return site.require_capability(AuthCapability)
+
+    capability = profile_capability.optional()
+    if capability is None:
+        return None
+
+    return await capability.profile_image_for_user(user)
 
 
 def _route_path(request: Any, route_name: str) -> str | None:

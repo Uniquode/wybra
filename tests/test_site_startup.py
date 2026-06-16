@@ -7,7 +7,7 @@ from typing import Protocol
 import pytest
 from fastapi import FastAPI
 
-from wevra import Site, SiteCapabilityError, get_site, start_site
+from wevra import Site, SiteCapabilityError, SiteCapabilityProxy, get_site, start_site
 from wevra.config import (
     ConfigService,
     ConfigSourceError,
@@ -30,7 +30,8 @@ from wevra.site_config import app_config_from_site
 
 
 class ExampleCapability:
-    pass
+    def label(self) -> str:
+        return "example"
 
 
 class OtherCapability:
@@ -42,7 +43,12 @@ class UnsupportedCapability(Protocol):
 
 
 class ExampleImplementation(ExampleCapability):
-    pass
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def label(self) -> str:
+        self.calls += 1
+        return "implementation"
 
 
 class ClosingCapability:
@@ -338,6 +344,66 @@ async def test_site_reports_missing_required_capability() -> None:
 
     with pytest.raises(SiteCapabilityError, match="Missing capability"):
         site.require_capability(ExampleCapability)
+
+
+@pytest.mark.anyio
+async def test_site_creates_capability_proxy_before_provider_exists() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+
+    proxy = site.capability_proxy(ExampleCapability)
+
+    assert isinstance(proxy, SiteCapabilityProxy)
+    assert proxy.available() is False
+
+
+@pytest.mark.anyio
+async def test_site_capability_proxy_binds_on_first_required_use() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    proxy = site.capability_proxy(ExampleCapability)
+    capability = ExampleImplementation()
+    site.provide_capability(ExampleCapability, capability)
+
+    assert proxy.available() is True
+    assert proxy.label() == "implementation"
+    assert proxy.require() is capability
+    assert proxy.label() == "implementation"
+    assert capability.calls == 2
+
+
+@pytest.mark.anyio
+async def test_site_capability_proxy_is_immutable_after_binding() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    capability = ExampleImplementation()
+    proxy = site.capability_proxy(ExampleCapability)
+    site.provide_capability(ExampleCapability, capability)
+
+    assert proxy.label() == "implementation"
+
+    del site._capabilities[ExampleCapability]
+
+    assert proxy.label() == "implementation"
+    assert proxy.require() is capability
+
+
+@pytest.mark.anyio
+async def test_site_capability_proxy_reports_missing_required_capability() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    proxy = site.capability_proxy(ExampleCapability)
+
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        proxy.label()
 
 
 @pytest.mark.anyio

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
+from wevra.config.transforms import to_bool
 from wevra.core.diagnostics import app_config_message, configured_module_import_message
 
 APP_ROOT_ENV: Final = "APP_ROOT"
@@ -38,6 +39,7 @@ class StaticOptions:
     url_path: str
     root: Path | None
     export_root: Path
+    serve: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,7 +391,19 @@ def _load_static_options(data: dict[str, Any]) -> StaticOptions:
                 DEFAULT_STATIC_EXPORT_ROOT.as_posix(),
             )
         ),
+        serve=_bool_from_config(static_data, "app.static.serve", True),
     )
+
+
+def _bool_from_config(data: dict[str, Any], name: str, default: bool) -> bool:
+    key = name.rsplit(".", maxsplit=1)[-1]
+    value = data.get(key)
+    if value is None:
+        return default
+    try:
+        return to_bool(value)
+    except ValueError as exc:
+        raise CompositionError(f"App config {name} must be a boolean.") from exc
 
 
 __all__ = [

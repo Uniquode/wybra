@@ -9,7 +9,7 @@ from importlib import import_module
 from inspect import iscoroutinefunction
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol, TypeGuard, TypeVar, cast
+from typing import Any, Protocol, TypeGuard, TypeVar, cast
 from urllib.parse import unquote, urlparse
 
 from fastapi import FastAPI
@@ -106,8 +106,16 @@ class Site:
             ) from exc
         return cast(T, capability)
 
+    def optional_capability(self, capability_type: type[T]) -> T | None:
+        capability = self._capabilities.get(capability_type)
+        return cast(T | None, capability)
+
     def has_capability(self, capability_type: type[object]) -> bool:
         return capability_type in self._capabilities
+
+    def capability_proxy(self, capability_type: type[T]) -> SiteCapabilityProxy[T]:
+        """Return a lazy proxy for a capability type."""
+        return SiteCapabilityProxy(self, capability_type)
 
     async def close(self) -> None:
         """Close capabilities that expose an async ``close()`` hook.
@@ -156,6 +164,43 @@ class Site:
                     error_count=error_count,
                 )
             )
+
+
+@dataclass(slots=True)
+class SiteCapabilityProxy[T]:
+    """Lazily resolve a capability from the site and cache the first result.
+
+    The first successful ``require()`` result is cached and reused for the
+    lifetime of the proxy. Proxies are therefore immutable once bound; changes to
+    registered capabilities at runtime are intentionally not reflected in
+    existing proxies.
+    """
+
+    site: Site
+    capability_type: type[T]
+    _capability: T | None = field(default=None, init=False, repr=False)
+
+    def available(self) -> bool:
+        return self.site.has_capability(self.capability_type)
+
+    def require(self) -> T:
+        if self._capability is None:
+            self._capability = self.site.require_capability(self.capability_type)
+        return self._capability
+
+    def optional(self) -> T | None:
+        if self._capability is not None:
+            return self._capability
+
+        capability = self.site._capabilities.get(self.capability_type)
+        if capability is None:
+            return None
+
+        self._capability = cast(T, capability)
+        return self._capability
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.require(), name)
 
 
 def start_site(
