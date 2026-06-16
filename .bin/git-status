@@ -1,7 +1,0 @@
-#!/bin/sh
-
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-project_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
-
-echo "===== Wybra project ===== $(git -C "$project_dir" branch --show-current)"
-git -C "$project_dir" status "$@"
