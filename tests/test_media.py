@@ -336,7 +336,7 @@ async def test_media_capability_rejects_unknown_resource_key(tmp_path: Path) -> 
         def _create_all(sync_session: Any) -> None:
             metadata.create_all(sync_session.get_bind())
 
-    await session.run_sync(_create_all)
+        await session.run_sync(_create_all)
 
     with pytest.raises(MediaCapabilityError):
         await capability.get_by_resource_key("missing")

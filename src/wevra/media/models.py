@@ -50,6 +50,7 @@ class MediaResourceKey(Base):
 
     resource_key: Mapped[str] = mapped_column(String(length=255), primary_key=True)
     media_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
         ForeignKey("media_item.id", ondelete="CASCADE"),
         nullable=False,
     )

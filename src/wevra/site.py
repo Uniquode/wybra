@@ -192,11 +192,11 @@ class SiteCapabilityProxy[T]:
         if self._capability is not None:
             return self._capability
 
-        capability = self.site._capabilities.get(self.capability_type)
+        capability = self.site.optional_capability(self.capability_type)
         if capability is None:
             return None
 
-        self._capability = cast(T, capability)
+        self._capability = capability
         return self._capability
 
     def __getattr__(self, name: str) -> Any:

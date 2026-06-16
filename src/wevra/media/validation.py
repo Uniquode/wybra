@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from wevra.media.config import MEDIA_URL_MODES
 from wevra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 
 
@@ -59,9 +60,9 @@ def validate_media(settings: MediaValidationSettings) -> ValidationResult:
     record_check(
         checks,
         errors,
-        passed=settings.media_url_mode in {"storage-key", "id"},
+        passed=settings.media_url_mode in MEDIA_URL_MODES,
         description=f"media URL mode is supported: {settings.media_url_mode}",
-        error="Media URL mode must be 'storage-key' or 'id'.",
+        error=f"Media URL mode must be one of: {', '.join(sorted(MEDIA_URL_MODES))}.",
     )
     return ValidationResult(name="media", errors=tuple(errors), checks=tuple(checks))
 
