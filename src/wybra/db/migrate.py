@@ -69,7 +69,14 @@ class MigrationSettings(Protocol):
     def modules(self) -> tuple[str, ...]: ...
 
 
-MigrationSettingsLoader = Callable[..., MigrationSettings]
+class MigrationSettingsLoader(Protocol):
+    def __call__(
+        self,
+        database_url: str | None,
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> MigrationSettings: ...
 
 
 class MigrationConfigurationError(ValueError):

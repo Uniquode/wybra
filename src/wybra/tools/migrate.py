@@ -9,6 +9,7 @@ from wybra.core.diagnostics import wrapped_error
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import migrate as data_migrate
 from wybra.db.config import ENV_DATABASE_URL
+from wybra.tools.app_startup import normalise_config_source
 from wybra.tools.project import (
     ProjectToolConfigurationError,
     runtime_project_root,
@@ -67,11 +68,7 @@ def _command_environment(
             )
         environment[ENV_DATABASE_URL] = database_url.strip()
     if config_source is not None:
-        if not config_source.strip():
-            raise data_migrate.MigrationConfigurationError(
-                "APP_CONFIG must not be blank."
-            )
-        environment[APP_CONFIG_ENV] = config_source.strip()
+        environment[APP_CONFIG_ENV] = normalise_config_source(config_source)
     return environment
 
 

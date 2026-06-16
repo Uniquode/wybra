@@ -62,7 +62,7 @@ def load_required_app_config(
     if config_source is not None:
         return load_app_config(
             project_root=project_root,
-            config_path=Path(_non_blank_config_source(config_source)),
+            config_path=Path(normalise_config_source(config_source)),
         )
     return load_app_config(project_root=project_root)
 
@@ -75,7 +75,7 @@ def _required_runserver_value(value: str | None, option_name: str) -> str:
     )
 
 
-def _non_blank_config_source(config_source: str) -> str:
+def normalise_config_source(config_source: str) -> str:
     if config_source.strip():
         return config_source.strip()
     raise ProjectToolConfigurationError("--config must not be blank.")
@@ -84,6 +84,7 @@ def _non_blank_config_source(config_source: str) -> str:
 __all__ = [
     "ConfiguredAppStartup",
     "load_required_app_config",
+    "normalise_config_source",
     "resolve_configured_app_startup",
     "resolve_configured_asgi_app_target",
 ]

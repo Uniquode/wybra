@@ -2664,6 +2664,16 @@ def test_load_app_config_uses_app_config_environment_override(
     assert config.modules == ("host_app",)
 
 
+def test_load_app_config_rejects_blank_app_config_environment(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(CompositionError, match="APP_CONFIG must not be blank"):
+        load_app_config(
+            project_root=tmp_path,
+            environ={"APP_CONFIG": "   "},
+        )
+
+
 def test_load_app_config_explicit_path_overrides_app_config_environment(
     tmp_path: Path,
 ) -> None:

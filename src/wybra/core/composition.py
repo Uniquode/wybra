@@ -72,7 +72,7 @@ def load_app_config(
     resolved_config_path = _resolve_config_path(
         resolved_project_root,
         config_path,
-        environ or os.environ,
+        environ if environ is not None else os.environ,
     )
     if not resolved_config_path.is_file():
         raise CompositionError(
@@ -149,19 +149,20 @@ def _resolve_config_path(
     config_path: Path | None,
     environ: Mapping[str, str],
 ) -> Path:
-    env_config_path = environ.get(APP_CONFIG_ENV)
-    if config_path is None and env_config_path is None:
+    raw_env_config_path = environ.get(APP_CONFIG_ENV)
+    if config_path is None and raw_env_config_path is None:
         raise CompositionError(
             "Application config file could not be resolved; pass --config or set "
             f"{APP_CONFIG_ENV}."
         )
-    if (
-        config_path is None
-        and env_config_path is not None
-        and not env_config_path.strip()
-    ):
+    env_config_path = raw_env_config_path.strip() if raw_env_config_path else None
+    if config_path is None and not env_config_path:
         raise CompositionError(f"{APP_CONFIG_ENV} must not be blank.")
-    path = config_path or Path(env_config_path or "")
+    if config_path is not None:
+        path = config_path
+    else:
+        assert env_config_path is not None
+        path = Path(env_config_path)
     if not path.is_absolute():
         path = project_root / path
 
@@ -175,7 +176,7 @@ def resolve_project_root(
     if project_root is not None:
         return project_root.resolve()
 
-    environment = environ or os.environ
+    environment = environ if environ is not None else os.environ
     root_value = environment.get(APP_ROOT_ENV)
     if root_value is None:
         return Path.cwd().resolve()

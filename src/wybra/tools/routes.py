@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from enum import StrEnum
-from typing import Any, TextIO
+from typing import Any, TextIO, TypeGuard
 
 import click
 
@@ -234,11 +235,32 @@ def _is_supported_route_tree(routes: object) -> bool:
 
 
 async def _inspect_installed_route_tree(app: Any) -> RouteInspection:
-    lifespan_context = getattr(getattr(app, "router", None), "lifespan_context", None)
-    if callable(lifespan_context):
-        async with lifespan_context(app):
+    router = getattr(app, "router", None)
+    lifespan_context = getattr(router, "lifespan_context", None)
+    if _is_async_context_manager(lifespan_context):
+        try:
+            async with lifespan_context:
+                return inspect_route_tree(app)
+        except TypeError:
             return inspect_route_tree(app)
+    if callable(lifespan_context):
+        try:
+            context = lifespan_context(app)
+        except TypeError:
+            return inspect_route_tree(app)
+        if _is_async_context_manager(context):
+            try:
+                async with context:
+                    return inspect_route_tree(app)
+            except TypeError:
+                return inspect_route_tree(app)
     return inspect_route_tree(app)
+
+
+def _is_async_context_manager(
+    value: object,
+) -> TypeGuard[AbstractAsyncContextManager[Any]]:
+    return hasattr(value, "__aenter__") and hasattr(value, "__aexit__")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

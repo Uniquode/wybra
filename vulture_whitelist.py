@@ -85,6 +85,7 @@ _.requires_challenge
 _.complete_challenge
 
 # Protocol, dataclass, and ORM fields used by consumers and SQLAlchemy.
+_.__call__
 _.additive_route_names
 _.replaces
 _.hashed_password

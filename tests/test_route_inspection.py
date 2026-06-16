@@ -455,6 +455,29 @@ def test_routes_command_inspects_routes_installed_during_lifespan(
     assert json.loads(captured.out)["routes"][0]["path"] == "/runtime"
 
 
+def test_routes_command_ignores_incompatible_lifespan_context(
+    monkeypatch,
+    capsys,
+) -> None:
+    @asynccontextmanager
+    async def lifespan():
+        yield
+
+    async def endpoint(request):
+        return None
+
+    app = _AppWithRoutes([Route("/plain", endpoint, name="plain")])
+    app.router = type("Router", (), {"lifespan_context": lifespan})()
+    monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
+
+    exit_code = routes_tool.main(["--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert json.loads(captured.out)["routes"][0]["path"] == "/plain"
+
+
 @pytest.mark.parametrize(
     ("shortcut", "expected"),
     [
