@@ -1,5 +1,5 @@
 # ruff: noqa: B018
-# Vulture whitelist: Wevra framework entry points discovered by integrations.
+# Vulture whitelist: Wybra framework entry points discovered by integrations.
 
 
 class _Whitelist:

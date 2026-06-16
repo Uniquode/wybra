@@ -7,20 +7,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from wevra.auth import models as auth_models  # noqa: F401
-from wevra.config import ConfigService, MappingConfigSource
-from wevra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
-from wevra.db.models import metadata
-from wevra.db.persistence import create_database
-from wevra.media import (
+from wybra.auth import models as auth_models  # noqa: F401
+from wybra.config import ConfigService, MappingConfigSource
+from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
+from wybra.db.models import metadata
+from wybra.db.persistence import create_database
+from wybra.media import (
     FilesystemMediaCapability,
     MediaCapability,
     MediaCapabilityError,
     MediaSettings,
 )
-from wevra.media.models import MediaItem
-from wevra.media.validation import validate_media
-from wevra.site import Site, start
+from wybra.media.models import MediaItem
+from wybra.media.validation import validate_media
+from wybra.site import Site, start
 
 
 class FakeUpload:
@@ -44,9 +44,9 @@ def _config(
                 {
                     "app": {
                         "project_root": tmp_path,
-                        "modules": ("wevra.media",),
+                        "modules": ("wybra.media",),
                     },
-                    "wevra.media": media_config or {},
+                    "wybra.media": media_config or {},
                 }
             )
         ]
@@ -360,9 +360,9 @@ async def test_media_setup_registers_capability_and_serves_files(
             {
                 "app": {
                     "project_root": tmp_path,
-                    "modules": ("wevra.media",),
+                    "modules": ("wybra.media",),
                 },
-                "wevra.media": {"root": "media", "mount_path": "/media"},
+                "wybra.media": {"root": "media", "mount_path": "/media"},
             }
         ),
     )
@@ -384,9 +384,9 @@ async def test_media_setup_skips_serving_when_disabled(tmp_path: Path) -> None:
             {
                 "app": {
                     "project_root": tmp_path,
-                    "modules": ("wevra.media",),
+                    "modules": ("wybra.media",),
                 },
-                "wevra.media": {"serve": False},
+                "wybra.media": {"serve": False},
             }
         ),
     )

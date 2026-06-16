@@ -8,25 +8,25 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 
-from wevra.auth import models as auth_models  # noqa: F401
-from wevra.config import ConfigService, MappingConfigSource
-from wevra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
-from wevra.db.models import metadata
-from wevra.db.persistence import create_database
-from wevra.media import (
+from wybra.auth import models as auth_models  # noqa: F401
+from wybra.config import ConfigService, MappingConfigSource
+from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
+from wybra.db.models import metadata
+from wybra.db.persistence import create_database
+from wybra.media import (
     FilesystemMediaCapability,
     MediaCapability,
     MediaCapabilityError,
     MediaSettings,
 )
-from wevra.profile import (
+from wybra.profile import (
     ProfileCapability,
     SiteProfileCapability,
     profile_picture_storage_key,
 )
-from wevra.profile.models import UserProfile
-from wevra.profile.validation import validate_profile
-from wevra.site import Site, start
+from wybra.profile.models import UserProfile
+from wybra.profile.validation import validate_profile
+from wybra.site import Site, start
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +80,7 @@ def test_profile_metadata_exposes_profile_table() -> None:
 
 def test_validate_profile_accepts_configured_profile_module() -> None:
     class Settings:
-        modules = ("wevra.profile",)
+        modules = ("wybra.profile",)
 
     result = validate_profile(Settings())
 
@@ -95,7 +95,7 @@ def test_validate_profile_reports_absent_profile_module() -> None:
 
     assert result.is_ok is False
     assert result.errors == (
-        "wevra.profile must be configured to validate profile resources.",
+        "wybra.profile must be configured to validate profile resources.",
     )
 
 
@@ -104,7 +104,7 @@ async def test_profile_setup_registers_profile_capability_before_media_exists() 
     site = await start(
         FastAPI(),
         config_source=MappingConfigSource(
-            {"app": {"modules": ("wevra.profile", "wevra.media")}}
+            {"app": {"modules": ("wybra.profile", "wybra.media")}}
         ),
     )
 
@@ -116,7 +116,7 @@ async def test_profile_setup_registers_profile_capability_before_media_exists() 
 async def test_profile_image_descriptor_uses_email_initial_without_media() -> None:
     site = await start(
         FastAPI(),
-        config_source=MappingConfigSource({"app": {"modules": ("wevra.profile",)}}),
+        config_source=MappingConfigSource({"app": {"modules": ("wybra.profile",)}}),
     )
     capability = site.require_capability(ProfileCapability)
 

@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-wevra is currently under active development before a stable public release.
+Wybra is currently under active development before a stable public release.
 Security fixes are handled on `main` until release support windows are defined.
 
 | Version | Supported |
@@ -12,9 +12,9 @@ Security fixes are handled on `main` until release support windows are defined.
 ## Reporting a Vulnerability
 
 Please report suspected vulnerabilities through GitHub private vulnerability
-reporting for the wevra repository when available:
+reporting for the wybra repository when available:
 
-<https://github.com/Uniquode/wevra/security/advisories/new>
+<https://github.com/Uniquode/wybra/security/advisories/new>
 
 Do not disclose security issues publicly until they have been reviewed and a
 fix or mitigation plan is available. Include the affected version or commit,

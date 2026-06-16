@@ -1,5 +1,5 @@
 [project]
-name = "wevra"
+name = "wybra"
 version = "0.1.0"
 description = "Reusable async FastAPI web, database, tooling, and auth framework components"
 readme = "README.md"
@@ -27,18 +27,18 @@ dependencies = [
 ]
 
 [project.scripts]
-wevra-authmgr = "wevra.auth.cli.authmgr:main"
-wevra-migrate = "wevra.tools.migrate:main"
-wevra-routes = "wevra.tools.routes:main"
-wevra-runserver = "wevra.tools.runserver:main"
-wevra-validate = "wevra.tools.validate:main"
+wybra-authmgr = "wybra.auth.cli.authmgr:main"
+wybra-migrate = "wybra.tools.migrate:main"
+wybra-routes = "wybra.tools.routes:main"
+wybra-runserver = "wybra.tools.runserver:main"
+wybra-validate = "wybra.tools.validate:main"
 
 [build-system]
 requires = ["uv_build>=0.11.21,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = ["wevra"]
+module-name = ["wybra"]
 
 [dependency-groups]
 dev = [

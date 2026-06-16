@@ -28,23 +28,23 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import wevra.auth.admin.management as identity_management
-import wevra.auth.cli.authmgr as identitymgr
-import wevra.auth.cli.authmgr.groups as authmgr_groups
-import wevra.auth.cli.authmgr.output as authmgr_output
-import wevra.auth.cli.authmgr.passwords as authmgr_passwords
-import wevra.auth.cli.authmgr.runtime as authmgr_runtime
-import wevra.auth.cli.authmgr.schema as authmgr_schema
-import wevra.auth.cli.authmgr.scopes as authmgr_scopes
-import wevra.auth.cli.authmgr.timestamps as authmgr_timestamps
-import wevra.auth.cli.authmgr.users as authmgr_users
-import wevra.auth.sessions as identity_sessions
-import wevra.db.migrate as migrate_module
-import wevra.db.persistence as db_persistence
-from wevra.auth import ERROR_INACTIVE_USER
-from wevra.auth.accounts.manager import UserManager, create_user_manager
-from wevra.auth.accounts.schemas import UserCreate
-from wevra.auth.models import (
+import wybra.auth.admin.management as identity_management
+import wybra.auth.cli.authmgr as identitymgr
+import wybra.auth.cli.authmgr.groups as authmgr_groups
+import wybra.auth.cli.authmgr.output as authmgr_output
+import wybra.auth.cli.authmgr.passwords as authmgr_passwords
+import wybra.auth.cli.authmgr.runtime as authmgr_runtime
+import wybra.auth.cli.authmgr.schema as authmgr_schema
+import wybra.auth.cli.authmgr.scopes as authmgr_scopes
+import wybra.auth.cli.authmgr.timestamps as authmgr_timestamps
+import wybra.auth.cli.authmgr.users as authmgr_users
+import wybra.auth.sessions as identity_sessions
+import wybra.db.migrate as migrate_module
+import wybra.db.persistence as db_persistence
+from wybra.auth import ERROR_INACTIVE_USER
+from wybra.auth.accounts.manager import UserManager, create_user_manager
+from wybra.auth.accounts.schemas import UserCreate
+from wybra.auth.models import (
     Base,
     Group,
     GroupGroup,
@@ -54,14 +54,14 @@ from wevra.auth.models import (
     Scope,
     User,
 )
-from wevra.auth.options import PROVIDER, IdentityOptions
-from wevra.auth.persistence import create_database_strategy, create_user_database
-from wevra.auth.persistence.database import (
+from wybra.auth.options import PROVIDER, IdentityOptions
+from wybra.auth.persistence import create_database_strategy, create_user_database
+from wybra.auth.persistence.database import (
     SQLITE_MEMORY_DATABASE_URL,
     parse_sqlite_database_url,
     resolve_database_url,
 )
-from wevra.auth.settings import (
+from wybra.auth.settings import (
     APP_CONFIG_SECTION,
     AUTH_CONFIG_SECTION,
     AUTH_SETTINGS_OWNER,
@@ -74,17 +74,17 @@ from wevra.auth.settings import (
     load_auth_settings_from_config,
     validate_auth_settings,
 )
-from wevra.config import ConfigService, MappingConfigSource
-from wevra.core.composition import (
+from wybra.config import ConfigService, MappingConfigSource
+from wybra.core.composition import (
     AppConfig,
     RouteOptions,
     StaticOptions,
     TemplateOptions,
     load_app_config,
 )
-from wevra.core.exceptions import ConfigurationError
-from wevra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
-from wevra.db.persistence import (
+from wybra.core.exceptions import ConfigurationError
+from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
+from wybra.db.persistence import (
     Database,
     close_database,
     create_database,
@@ -92,7 +92,7 @@ from wevra.db.persistence import (
     create_session_factory,
     session_scope,
 )
-from wevra.site import Site
+from wybra.site import Site
 
 STRONG_TEST_PASSWORD = "Correct horse 42!"
 UPDATED_STRONG_TEST_PASSWORD = "New correct horse 42!"
@@ -113,7 +113,7 @@ class MigrationTestSettings:
 
     @property
     def modules(self) -> tuple[str, ...]:
-        return ("wevra.auth",)
+        return ("wybra.auth",)
 
 
 @dataclass(slots=True)
@@ -189,7 +189,7 @@ def create_auth_test_app(
                 MappingConfigSource(
                     {
                         "app": {
-                            "modules": ("wevra.db", "wevra.auth"),
+                            "modules": ("wybra.db", "wybra.auth"),
                             "database_url": database_url,
                         }
                     }
@@ -295,7 +295,7 @@ def write_auth_app_toml(
             [
                 "[app]",
                 f'database_url = "{database_url}"',
-                'modules = ["wevra.auth"]',
+                'modules = ["wybra.auth"]',
                 "",
                 "[app.templates]",
                 "auto_reload = true",
@@ -428,7 +428,7 @@ def identity_user_emails_from_database(database_url: str) -> list[IdentityUserEm
 
 
 def access_tokens_from_database(database_url: str) -> list[str]:
-    from wevra.auth.models import AccessToken
+    from wybra.auth.models import AccessToken
 
     settings = AuthTestSettings(database_url=database_url)
     engine = create_database_engine(settings)
@@ -577,8 +577,8 @@ def update_user_fields(database_url: str, email: str, **values: object) -> None:
 def test_identitymgr_project_script_is_defined() -> None:
     data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert data["project"]["scripts"]["wevra-authmgr"] == "wevra.auth.cli.authmgr:main"
-    assert "wevra-identitymgr" not in data["project"]["scripts"]
+    assert data["project"]["scripts"]["wybra-authmgr"] == "wybra.auth.cli.authmgr:main"
+    assert "wybra-identitymgr" not in data["project"]["scripts"]
     assert "identitymgr" not in data["project"]["scripts"]
     assert "usermgr" not in data["project"]["scripts"]
 
@@ -598,7 +598,7 @@ def test_identitymgr_command_registration_is_explicit(
     monkeypatch.setattr(importlib.metadata, "entry_points", fail_discovery)
     monkeypatch.setattr(pkgutil, "iter_modules", fail_discovery)
 
-    import wevra.auth.cli.authmgr.cli as authmgr_cli
+    import wybra.auth.cli.authmgr.cli as authmgr_cli
 
     reloaded_cli = importlib.reload(authmgr_cli)
     importlib.reload(identitymgr)
@@ -678,7 +678,7 @@ def test_identitymgr_loads_project_app_toml_configuration(
     database_url = sqlite_file_url(database_path)
     initialise_identity_database(database_url)
     write_auth_app_toml(tmp_path / "app.toml", database_url=database_url)
-    (tmp_path / "pyproject.toml").write_text("[tool.wevra]\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[tool.wybra]\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("APP_CONFIG", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -795,7 +795,7 @@ def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None
     app_config = AppConfig(
         config_path=tmp_path / "app.toml",
         project_root=tmp_path,
-        modules=("wevra.auth",),
+        modules=("wybra.auth",),
         routes=RouteOptions(),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
         static=StaticOptions(
@@ -1093,17 +1093,17 @@ def test_identitymgr_help_suffix_matches_help_option(
     [
         pytest.param(
             ["help", "group", "create"],
-            "Usage: wevra-authmgr group create <abbrev>",
+            "Usage: wybra-authmgr group create <abbrev>",
             id="root-group-create",
         ),
         pytest.param(
             ["group", "help", "create"],
-            "Usage: wevra-authmgr group create <abbrev>",
+            "Usage: wybra-authmgr group create <abbrev>",
             id="group-create",
         ),
         pytest.param(
             ["group", "help", "project", "update"],
-            "Usage: wevra-authmgr group <group> update",
+            "Usage: wybra-authmgr group <group> update",
             id="group-target-update",
         ),
     ],
@@ -2030,8 +2030,8 @@ def test_identitymgr_reports_outdated_identity_schema_before_reading_password(
     assert stdin.tell() == 0
     captured = capsys.readouterr()
     assert "Auth database schema is not up to date" in captured.err
-    assert "uv run wevra-migrate init" in captured.err
-    assert "uv run wevra-migrate upgrade" in captured.err
+    assert "uv run wybra-migrate init" in captured.err
+    assert "uv run wybra-migrate upgrade" in captured.err
     assert "APP_CONFIG" in captured.err
     assert "explicit auth database" not in captured.err
     assert "is_admin" in captured.err
@@ -2180,7 +2180,7 @@ def test_identitymgr_reports_schema_inspection_error_without_leaking_context(
         async def run_sync(self, _function):
             raise SQLAlchemyError("database is locked")
 
-    with caplog.at_level(logging.DEBUG, logger="wevra.auth.cli.authmgr"):
+    with caplog.at_level(logging.DEBUG, logger="wybra.auth.cli.authmgr"):
         with pytest.raises(ConfigurationError) as exc_info:
             asyncio.run(authmgr_schema._verify_identity_schema(FailingSession()))  # type: ignore[arg-type]
 
@@ -3739,7 +3739,7 @@ def test_identitymgr_list_uses_shared_effective_active_timestamp(
 
     clock_values = iter([100.0, 300.0])
     monkeypatch.setattr(
-        "wevra.auth.admin.management.current_timestamp",
+        "wybra.auth.admin.management.current_timestamp",
         lambda: next(clock_values),
     )
 
@@ -3764,7 +3764,7 @@ def test_identitymgr_active_filter_uses_exclusive_expiry_boundary(
         == 0
     )
     update_user_fields(database_url, "boundary@example.com", expires_at=200.0)
-    monkeypatch.setattr("wevra.auth.admin.management.current_timestamp", lambda: 200.0)
+    monkeypatch.setattr("wybra.auth.admin.management.current_timestamp", lambda: 200.0)
     capsys.readouterr()
 
     assert identitymgr.main(["user", "list", "--json"]) == 0

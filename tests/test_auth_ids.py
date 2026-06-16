@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from wevra.auth.ids import log_safe_line, log_safe_uuid, parse_uuid
+from wybra.auth.ids import log_safe_line, log_safe_uuid, parse_uuid
 
 
 def test_parse_uuid_returns_uuid_for_valid_values() -> None:

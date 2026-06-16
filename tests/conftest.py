@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from wevra.db.models import metadata
+from wybra.db.models import metadata
 
 
 @pytest.fixture

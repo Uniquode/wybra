@@ -10,8 +10,8 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-import wevra.db.migrate as migrate_module
-import wevra.db.provisioning as provisioning_module
+import wybra.db.migrate as migrate_module
+import wybra.db.provisioning as provisioning_module
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +20,7 @@ class MigrationTestSettings:
     alembic_config: Path
     migrations_root: Path | None = None
     app_config: None = None
-    modules: tuple[str, ...] = ("wevra.auth",)
+    modules: tuple[str, ...] = ("wybra.auth",)
 
 
 def sqlite_file_url(path: Path) -> str:
@@ -81,7 +81,7 @@ def alembic_config_path() -> Path:
 
 def create_migrate_command(
     *,
-    modules: tuple[str, ...] = ("wevra.auth",),
+    modules: tuple[str, ...] = ("wybra.auth",),
 ) -> tuple[Path, object]:
     config_path = alembic_config_path()
 
@@ -103,7 +103,7 @@ def create_migrate_command(
 def run_migrate(
     argv: list[str],
     *,
-    modules: tuple[str, ...] = ("wevra.auth",),
+    modules: tuple[str, ...] = ("wybra.auth",),
 ) -> int:
     config_path, command = create_migrate_command(modules=modules)
     try:
@@ -536,7 +536,7 @@ def test_migrate_upgrade_rejects_uninitialised_sqlite_database(
     assert exit_code == 1
     assert "migration: failed" in captured.err
     assert "Database is not initialised" in captured.err
-    assert "uv run wevra-migrate init" in captured.err
+    assert "uv run wybra-migrate init" in captured.err
     assert not database_path.exists()
 
 
@@ -687,7 +687,7 @@ def test_migrate_revision_rejects_unconfigured_module(
             "-m",
             "add revision",
         ],
-        modules=("wevra.auth",),
+        modules=("wybra.auth",),
     )
 
     captured = capsys.readouterr()
@@ -703,7 +703,7 @@ def test_migrate_revision_requires_module_and_message() -> None:
     try:
         runner = migrate_module.run_migrate_command
         missing_module = runner(command, ["revision", "-m", "add revision"])
-        missing_message = runner(command, ["revision", "--module", "wevra.auth"])
+        missing_message = runner(command, ["revision", "--module", "wybra.auth"])
     finally:
         _config_path.unlink(missing_ok=True)
 

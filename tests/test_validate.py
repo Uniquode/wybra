@@ -7,23 +7,23 @@ from types import SimpleNamespace
 import click
 import pytest
 
-import wevra.tools.validate as validate_module
-import wevra.web
-from wevra.core.composition import (
+import wybra.tools.validate as validate_module
+import wybra.web
+from wybra.core.composition import (
     AppConfig,
     RouteOptions,
     StaticOptions,
     TemplateOptions,
 )
-from wevra.tools.project import ProjectToolConfigurationError, runtime_project_root
-from wevra.tools.validate import main as validate_main
-from wevra.tools.validation.core import ValidationResult
-from wevra.tools.validation.registry import (
+from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
+from wybra.tools.validate import main as validate_main
+from wybra.tools.validation.core import ValidationResult
+from wybra.tools.validation.registry import (
     ValidationDiscoveryError,
     discover_validation_targets,
 )
-from wevra.web.validation import _contains_post_form, validate_web
-from wevra.widgets.validation import validate_widgets
+from wybra.web.validation import _contains_post_form, validate_web
+from wybra.widgets.validation import validate_widgets
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +72,7 @@ def _write_validation_module(
 
 def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
     route_prefixes = {
-        "wevra.web": {},
+        "wybra.web": {},
     }
     return AppConfig(
         config_path=tmp_path / "app.toml",
@@ -94,18 +94,18 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
 
 def _web_settings(
     tmp_path: Path,
-    modules: tuple[str, ...] = ("wevra.web",),
+    modules: tuple[str, ...] = ("wybra.web",),
     raw_config: dict[str, dict[str, object]] | None = None,
 ) -> WebSettings:
-    wevra_web_root = Path(wevra.web.__file__).resolve().parent
+    wybra_web_root = Path(wybra.web.__file__).resolve().parent
     app_config = _app_config(tmp_path, modules)
     if raw_config is not None:
         app_config = replace(app_config, raw_config=raw_config)
     return WebSettings(
         project_root=tmp_path,
         modules=modules,
-        template_root=wevra_web_root / "templates",
-        static_root=wevra_web_root / "static",
+        template_root=wybra_web_root / "templates",
+        static_root=wybra_web_root / "static",
         app_config=app_config,
     )
 
@@ -113,10 +113,10 @@ def _web_settings(
 def test_tools_modules_do_not_import_auth_or_host_runtime_startup() -> None:
     project_root = Path(__file__).resolve().parents[1]
     forbidden_modules = (
-        "wevra.auth",
+        "wybra.auth",
         "host_app",
     )
-    tools_files = sorted((project_root / "src/wevra/tools").rglob("*.py"))
+    tools_files = sorted((project_root / "src/wybra/tools").rglob("*.py"))
 
     assert tools_files
     for path in tools_files:
@@ -130,9 +130,9 @@ def test_tools_modules_do_not_import_auth_or_host_runtime_startup() -> None:
 
 def test_tools_validation_modules_do_not_import_host_or_auth_packages() -> None:
     project_root = Path(__file__).resolve().parents[1]
-    forbidden_modules = ("wevra.auth", "host_app")
+    forbidden_modules = ("wybra.auth", "host_app")
     validation_files = sorted(
-        (project_root / "src/wevra/tools/validation").rglob("*.py")
+        (project_root / "src/wybra/tools/validation").rglob("*.py")
     )
 
     assert validation_files
@@ -182,7 +182,7 @@ def test_validate_web_checks_framework_web_foundation(tmp_path: Path) -> None:
     assert result.is_ok
     assert result.name == "web"
     assert any(
-        check.description == "configured module surfaces load: wevra.web"
+        check.description == "configured module surfaces load: wybra.web"
         for check in result.checks
     )
 
@@ -235,7 +235,7 @@ def test_validation_targets_are_discovered_from_configured_modules(
         tmp_path,
         "first_validation_module",
         """
-        from wevra.tools.validation.core import ValidationResult
+        from wybra.tools.validation.core import ValidationResult
 
         def validate_first(settings):
             return ValidationResult(name="first", errors=())
@@ -247,7 +247,7 @@ def test_validation_targets_are_discovered_from_configured_modules(
         tmp_path,
         "second_validation_module",
         """
-        from wevra.tools.validation.core import ValidationResult
+        from wybra.tools.validation.core import ValidationResult
 
         def validate_second(settings):
             return ValidationResult(name="second", errors=())
@@ -273,7 +273,7 @@ def test_unlisted_module_validation_targets_are_not_discovered(
         tmp_path,
         "listed_validation_module",
         """
-        from wevra.tools.validation.core import ValidationResult
+        from wybra.tools.validation.core import ValidationResult
 
         def validate_listed(settings):
             return ValidationResult(name="listed", errors=())
@@ -285,7 +285,7 @@ def test_unlisted_module_validation_targets_are_not_discovered(
         tmp_path,
         "unlisted_validation_module",
         """
-        from wevra.tools.validation.core import ValidationResult
+        from wybra.tools.validation.core import ValidationResult
 
         def validate_unlisted(settings):
             return ValidationResult(name="unlisted", errors=())
@@ -327,7 +327,7 @@ def test_validate_command_runs_discovered_module_targets(
         tmp_path,
         "command_validation_module",
         """
-        from wevra.tools.validation.core import ValidationResult
+        from wybra.tools.validation.core import ValidationResult
 
         def validate_command_target(settings):
             return ValidationResult(name="command-target", errors=())
@@ -387,7 +387,7 @@ def test_validate_command_unknown_target_returns_usage_error(
     monkeypatch.setattr(
         validate_module,
         "_build_settings",
-        lambda _overrides: SimpleNamespace(modules=("wevra.web",)),
+        lambda _overrides: SimpleNamespace(modules=("wybra.web",)),
     )
 
     exit_code = validate_main(["foo"])
@@ -416,7 +416,7 @@ def test_validate_main_treats_falsy_click_exception_as_failure(
     assert "invalid usage" in captured.err
 
 
-def test_validate_web_omitting_wevra_web_does_not_use_default_static_root(
+def test_validate_web_omitting_wybra_web_does_not_use_default_static_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -453,7 +453,7 @@ def test_validate_web_rejects_post_form_missing_csrf_field(
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    result = validate_web(_web_settings(tmp_path, ("csrf_missing_app", "wevra.web")))
+    result = validate_web(_web_settings(tmp_path, ("csrf_missing_app", "wybra.web")))
 
     assert not result.is_ok
     assert "POST form template must include CSRF field: missing_csrf.html" in (
@@ -480,7 +480,7 @@ def test_validate_web_rejects_stylesheet_missing_theme_contract(
 
 
 def test_validate_widgets_checks_theme_resources(tmp_path: Path) -> None:
-    result = validate_widgets(_web_settings(tmp_path, ("wevra.widgets",)))
+    result = validate_widgets(_web_settings(tmp_path, ("wybra.widgets",)))
 
     assert result.is_ok
     assert any(
@@ -497,8 +497,8 @@ def test_validate_widgets_checks_login_resources_when_enabled(tmp_path: Path) ->
     result = validate_widgets(
         _web_settings(
             tmp_path,
-            ("wevra.widgets",),
-            raw_config={"wevra.widgets": {"features": ["login"]}},
+            ("wybra.widgets",),
+            raw_config={"wybra.widgets": {"features": ["login"]}},
         )
     )
 
@@ -510,11 +510,11 @@ def test_validate_widgets_checks_login_resources_when_enabled(tmp_path: Path) ->
 
 
 def test_validate_widgets_accepts_absent_widgets_module(tmp_path: Path) -> None:
-    result = validate_widgets(_web_settings(tmp_path, ("wevra.web",)))
+    result = validate_widgets(_web_settings(tmp_path, ("wybra.web",)))
 
     assert result.is_ok
     assert any(
-        check.description == "wevra.widgets is not configured"
+        check.description == "wybra.widgets is not configured"
         for check in result.checks
     )
 

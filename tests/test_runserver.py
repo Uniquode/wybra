@@ -2,16 +2,16 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-import wevra.tools.runserver as runserver
-from wevra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV
-from wevra.core.config import ENV_APP_ENV
-from wevra.db.config import ENV_DATABASE_URL
+import wybra.tools.runserver as runserver
+from wybra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV
+from wybra.core.config import ENV_APP_ENV
+from wybra.db.config import ENV_DATABASE_URL
 
 
 def _write_pyproject(project_root: Path) -> None:
     (project_root / "pyproject.toml").write_text(
         """
-        [tool.wevra]
+        [tool.wybra]
         runserver_app = "host_app.asgi:app"
         runserver_reload_env = "APP_RELOAD"
         """,

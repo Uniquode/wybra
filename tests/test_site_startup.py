@@ -7,14 +7,14 @@ from typing import Protocol
 import pytest
 from fastapi import FastAPI
 
-from wevra import Site, SiteCapabilityError, SiteCapabilityProxy, get_site, start_site
-from wevra.config import (
+from wybra import Site, SiteCapabilityError, SiteCapabilityProxy, get_site, start_site
+from wybra.config import (
     ConfigService,
     ConfigSourceError,
     ConfigSourceResult,
     MappingConfigSource,
 )
-from wevra.core.composition import (
+from wybra.core.composition import (
     APP_CONFIG_ENV,
     APP_ROOT_ENV,
     AppConfig,
@@ -23,10 +23,10 @@ from wevra.core.composition import (
     StaticOptions,
     TemplateOptions,
 )
-from wevra.core.config import ENV_APP_ENV
-from wevra.db.config import ENV_DATABASE_URL
-from wevra.site import start
-from wevra.site_config import app_config_from_site
+from wybra.core.config import ENV_APP_ENV
+from wybra.db.config import ENV_DATABASE_URL
+from wybra.site import start
+from wybra.site_config import app_config_from_site
 
 
 class ExampleCapability:
@@ -161,15 +161,15 @@ async def test_start_composes_existing_fastapi_app_from_file_source(
     tmp_path: Path,
 ) -> None:
     app = FastAPI(title="Host app")
-    config_path = _write_app_config(tmp_path / "app.toml", modules=("wevra.web",))
+    config_path = _write_app_config(tmp_path / "app.toml", modules=("wybra.web",))
 
     site = await start(app, config_source=str(config_path))
 
     assert isinstance(site, Site)
     assert site.app is app
-    assert site.modules == ("wevra.web",)
-    assert site.has_module("wevra.web") is True
-    assert site.has_module("wevra.auth") is False
+    assert site.modules == ("wybra.web",)
+    assert site.has_module("wybra.web") is True
+    assert site.has_module("wybra.auth") is False
 
 
 @pytest.mark.anyio
@@ -177,12 +177,12 @@ async def test_start_accepts_relative_file_source_string(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _write_app_config(tmp_path / "app.toml", modules=("wevra.web",))
+    _write_app_config(tmp_path / "app.toml", modules=("wybra.web",))
     monkeypatch.chdir(tmp_path)
 
     site = await start(FastAPI(), config_source="app.toml")
 
-    assert site.modules == ("wevra.web",)
+    assert site.modules == ("wybra.web",)
 
 
 @pytest.mark.anyio
@@ -191,7 +191,7 @@ async def test_start_uses_app_root_environment_for_default_config(
 ) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
-    _write_app_config(project_root / "app.toml", modules=("wevra.web",))
+    _write_app_config(project_root / "app.toml", modules=("wybra.web",))
 
     site = await start(
         FastAPI(),
@@ -210,7 +210,7 @@ async def test_start_app_config_does_not_override_project_root(
     project_root = tmp_path / "project"
     config_root = project_root / "config"
     config_root.mkdir(parents=True)
-    _write_app_config(config_root / "app.toml", modules=("wevra.web",))
+    _write_app_config(config_root / "app.toml", modules=("wybra.web",))
 
     site = await start(
         FastAPI(),
@@ -232,7 +232,7 @@ async def test_start_relative_config_source_uses_supplied_app_root(
     project_root = tmp_path / "project"
     config_root = project_root / "config"
     config_root.mkdir(parents=True)
-    _write_app_config(config_root / "app.toml", modules=("wevra.web",))
+    _write_app_config(config_root / "app.toml", modules=("wybra.web",))
 
     site = await start(
         FastAPI(),
@@ -251,7 +251,7 @@ async def test_start_environment_overrides_database_url_and_deployment_environme
 ) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
-    _write_app_config(project_root / "app.toml", modules=("wevra.db",))
+    _write_app_config(project_root / "app.toml", modules=("wybra.db",))
 
     site = await start(
         FastAPI(),
@@ -274,12 +274,12 @@ async def test_start_environment_overrides_database_url_and_deployment_environme
 async def test_start_accepts_file_uri_source_string(tmp_path: Path) -> None:
     config_path = _write_app_config(
         tmp_path / "app.toml",
-        modules=("wevra.web",),
+        modules=("wybra.web",),
     )
 
     site = await start(FastAPI(), config_source=config_path.as_uri())
 
-    assert site.modules == ("wevra.web",)
+    assert site.modules == ("wybra.web",)
 
 
 @pytest.mark.anyio
@@ -501,7 +501,7 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
     app_config = AppConfig(
         config_path=tmp_path / "app.toml",
         project_root=tmp_path,
-        modules=("wevra.web",),
+        modules=("wybra.web",),
         routes=RouteOptions(prefixes={}),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
         static=StaticOptions(
@@ -511,8 +511,8 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
 
     site = await start(FastAPI(), config_source=app_config)
 
-    assert site.modules == ("wevra.web",)
-    assert site.has_module("wevra.web") is True
+    assert site.modules == ("wybra.web",)
+    assert site.has_module("wybra.web") is True
 
 
 @pytest.mark.anyio
@@ -520,12 +520,12 @@ async def test_start_accepts_config_source_object() -> None:
     site = await start(
         FastAPI(),
         config_source=MappingConfigSource(
-            {"app": {"modules": ("wevra.web",)}},
+            {"app": {"modules": ("wybra.web",)}},
             source="test",
         ),
     )
 
-    assert site.modules == ("wevra.web",)
+    assert site.modules == ("wybra.web",)
 
 
 @pytest.mark.anyio

@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from wevra.core.environment import load_environment
-from wevra.core.exceptions import ConfigurationError
+from wybra.core.environment import load_environment
+from wybra.core.exceptions import ConfigurationError
 
 
 def test_load_environment_reads_dotenv_without_mutating_process_environment(
@@ -25,7 +25,7 @@ def test_load_environment_wraps_loader_failures_without_raw_detail(
     def raise_sensitive_error(**_kwargs: object) -> None:
         raise RuntimeError("DATABASE_URL=postgresql://user:secret@example/app")
 
-    monkeypatch.setattr("wevra.core.environment.Env", raise_sensitive_error)
+    monkeypatch.setattr("wybra.core.environment.Env", raise_sensitive_error)
 
     with pytest.raises(
         ConfigurationError,
