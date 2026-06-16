@@ -186,7 +186,7 @@ async def test_start_accepts_relative_file_source_string(
 
 
 @pytest.mark.anyio
-async def test_start_uses_app_root_environment_for_default_config(
+async def test_start_uses_app_root_environment_for_app_config(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
@@ -195,7 +195,10 @@ async def test_start_uses_app_root_environment_for_default_config(
 
     site = await start(
         FastAPI(),
-        environ={APP_ROOT_ENV: project_root.as_posix()},
+        environ={
+            APP_ROOT_ENV: project_root.as_posix(),
+            APP_CONFIG_ENV: "app.toml",
+        },
     )
 
     app_config = app_config_from_site(site)
@@ -257,6 +260,7 @@ async def test_start_environment_overrides_database_url_and_deployment_environme
         FastAPI(),
         environ={
             APP_ROOT_ENV: project_root.as_posix(),
+            APP_CONFIG_ENV: "app.toml",
             ENV_DATABASE_URL: "sqlite+aiosqlite:///override.sqlite3",
             ENV_APP_ENV: "staging",
         },

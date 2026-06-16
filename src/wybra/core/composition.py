@@ -13,7 +13,6 @@ from wybra.config.transforms import to_bool
 from wybra.core.diagnostics import app_config_message, configured_module_import_message
 
 APP_ROOT_ENV: Final = "APP_ROOT"
-DEFAULT_APP_CONFIG: Final = Path("app.toml")
 APP_CONFIG_ENV: Final = "APP_CONFIG"
 DEFAULT_STATIC_EXPORT_ROOT: Final = Path("static")
 
@@ -120,24 +119,10 @@ def load_app_config_modules(
     project_root: Path | None = None,
     config_path: Path | None = None,
     environ: Mapping[str, str] | None = None,
-    default_modules: Iterable[str] | None = None,
 ) -> tuple[str, ...]:
-    """Return configured modules, falling back only when no app.toml is present.
-
-    Explicit `config_path` or `APP_CONFIG` values are always honoured and must
-    point at a valid config file. The default modules are used only for callers
-    that intentionally support installed/default operation without a project
-    `app.toml`.
-    """
+    """Return configured modules from an explicit config file source."""
     resolved_project_root = resolve_project_root(project_root, environ)
     environment = environ if environ is not None else os.environ
-    if (
-        default_modules is not None
-        and config_path is None
-        and not environment.get(APP_CONFIG_ENV)
-        and not (resolved_project_root / DEFAULT_APP_CONFIG).is_file()
-    ):
-        return tuple(default_modules)
 
     return load_app_config(
         project_root=resolved_project_root,
@@ -165,9 +150,18 @@ def _resolve_config_path(
     environ: Mapping[str, str],
 ) -> Path:
     env_config_path = environ.get(APP_CONFIG_ENV)
-    path = config_path or (
-        Path(env_config_path) if env_config_path else DEFAULT_APP_CONFIG
-    )
+    if config_path is None and env_config_path is None:
+        raise CompositionError(
+            "Application config file could not be resolved; pass --config or set "
+            f"{APP_CONFIG_ENV}."
+        )
+    if (
+        config_path is None
+        and env_config_path is not None
+        and not env_config_path.strip()
+    ):
+        raise CompositionError(f"{APP_CONFIG_ENV} must not be blank.")
+    path = config_path or Path(env_config_path or "")
     if not path.is_absolute():
         path = project_root / path
 
@@ -427,7 +421,6 @@ __all__ = [
     "APP_CONFIG_ENV",
     "APP_ROOT_ENV",
     "CompositionError",
-    "DEFAULT_APP_CONFIG",
     "DEFAULT_STATIC_EXPORT_ROOT",
     "RouteOptions",
     "RunserverOptions",

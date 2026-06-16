@@ -20,7 +20,7 @@ from .users import register_user_commands
     epilog=TIMESTAMP_HELP,
     help="Manage local identity resources through configured services.",
 )
-@click.option("--config", "config_source", help='Override APP_CONFIG or "app.toml".')
+@click.option("--config", "config_source", help="App config file for this invocation.")
 @click.pass_context
 def authmgr_command(ctx: click.Context, config_source: str | None) -> None:
     ctx.obj = {"config_source": config_source}

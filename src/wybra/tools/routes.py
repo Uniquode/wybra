@@ -107,7 +107,7 @@ def render_inspection(
 @click.option(
     "--config",
     "config_source",
-    help='Override APP_CONFIG or "app.toml".',
+    help="App config file for this invocation.",
 )
 def routes_command(
     output_format: str | None,

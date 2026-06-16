@@ -167,7 +167,7 @@ def load_runserver_config(
 @click.option(
     "--config",
     "config_source",
-    help='Override APP_CONFIG or "app.toml".',
+    help="App config file for this invocation.",
 )
 @click.option(
     "--database-url",

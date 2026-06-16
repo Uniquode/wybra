@@ -20,7 +20,7 @@ from sqlalchemy import MetaData, Table, select
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.exc import SQLAlchemyError
 
-from wybra.core.composition import APP_CONFIG_ENV, AppConfig
+from wybra.core.composition import AppConfig
 from wybra.db.migration_metadata import MigrationConfigError
 from wybra.db.persistence import close_database, create_database_engine
 from wybra.db.provisioning import (
@@ -36,14 +36,13 @@ from wybra.db.surfaces import (
 from wybra.db.urls import safe_database_error_message, sqlite_database_path
 
 DEFAULT_DATABASE_URL_CONFIG_KEY = "default_database_url"
-DEFAULT_MODULES_CONFIG_KEY = "default_modules"
 DEFAULT_MIGRATIONS_SCRIPT_LOCATION = "wybra.db:migrations"
 ALEMBIC_VERSION_TABLE = "alembic_version"
 
 DATABASE_URL_HELP = (
     "Override the configured SQLAlchemy async database URL for this migration command."
 )
-APP_CONFIG_HELP = "Override APP_CONFIG or the default app.toml for this invocation."
+APP_CONFIG_HELP = "App config file for this invocation."
 REVISION_HELP = (
     "Create an Alembic revision in a configured module.\n\n"
     "Roll-forward order: Upgrade to the current head before autogenerate; "
@@ -381,24 +380,40 @@ def _load_migration_settings(
     database_url: str | None,
     config_source: str | None,
 ) -> MigrationSettings:
-    if _loader_accepts_config_source(settings_loader):
-        return settings_loader(database_url, config_source)
-
     if config_source is None:
         return settings_loader(database_url)
 
-    original_config = os.environ.get(APP_CONFIG_ENV)
-    os.environ[APP_CONFIG_ENV] = config_source
+    if _loader_accepts_keyword_config_source(settings_loader):
+        return settings_loader(database_url, config_source=config_source)
+    if _loader_accepts_positional_config_source(settings_loader):
+        return settings_loader(database_url, config_source)
+    raise MigrationConfigurationError(
+        "Migration settings loader must accept config_source when --config is used."
+    )
+
+
+def _loader_accepts_keyword_config_source(
+    settings_loader: MigrationSettingsLoader,
+) -> bool:
     try:
-        return settings_loader(database_url)
-    finally:
-        if original_config is None:
-            os.environ.pop(APP_CONFIG_ENV, None)
-        else:
-            os.environ[APP_CONFIG_ENV] = original_config
+        signature = inspect.signature(settings_loader)
+    except (TypeError, ValueError):
+        return False
+
+    return any(
+        parameter.name == "config_source"
+        and parameter.kind
+        in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        for parameter in signature.parameters.values()
+    )
 
 
-def _loader_accepts_config_source(settings_loader: MigrationSettingsLoader) -> bool:
+def _loader_accepts_positional_config_source(
+    settings_loader: MigrationSettingsLoader,
+) -> bool:
     try:
         signature = inspect.signature(settings_loader)
     except (TypeError, ValueError):
@@ -469,10 +484,6 @@ def build_alembic_config(
     config.set_main_option(
         DEFAULT_DATABASE_URL_CONFIG_KEY,
         _alembic_config_value(settings.database_url),
-    )
-    config.set_main_option(
-        DEFAULT_MODULES_CONFIG_KEY,
-        _module_config_value(settings.modules),
     )
     if settings.app_config is not None:
         config.set_main_option("app_config", settings.app_config.config_path.as_posix())
@@ -646,10 +657,6 @@ def migration_script_root(migrations_root: Path | None = None) -> Path | Travers
 
 def _alembic_config_value(value: str) -> str:
     return value.replace("%", "%%")
-
-
-def _module_config_value(modules: Sequence[str]) -> str:
-    return ",".join(modules)
 
 
 def _missing_settings_loader(_database_url: str | None) -> MigrationSettings:

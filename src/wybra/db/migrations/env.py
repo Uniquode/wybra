@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from logging.config import fileConfig
 from pathlib import Path
 
@@ -12,7 +11,6 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from wybra.db.migrate import (
     DEFAULT_DATABASE_URL_CONFIG_KEY,
-    DEFAULT_MODULES_CONFIG_KEY,
 )
 from wybra.db.migration_metadata import load_model_metadata
 from wybra.db.urls import is_supported_database_url, resolve_database_url
@@ -38,32 +36,11 @@ def _app_config_path() -> Path | None:
     return Path(configured_path.strip())
 
 
-def _default_modules() -> tuple[str, ...] | None:
-    configured_modules = config.get_main_option(DEFAULT_MODULES_CONFIG_KEY)
-    if configured_modules is None or not configured_modules.strip():
-        return None
-
-    modules = tuple(
-        module.strip()
-        for module in configured_modules.replace(os.pathsep, ",").split(",")
-        if module.strip()
-    )
-    return modules or None
-
-
 _configured_app_config_path = _app_config_path()
-_configured_default_modules = _default_modules()
 
 target_metadata = load_model_metadata(
     project_root=_project_root(),
     config_path=_configured_app_config_path,
-    default_modules=_configured_default_modules,
-    environ=(
-        {}
-        if _configured_app_config_path is None
-        and _configured_default_modules is not None
-        else None
-    ),
 )
 
 

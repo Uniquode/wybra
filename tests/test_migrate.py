@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 import wybra.db.migrate as migrate_module
 import wybra.db.provisioning as provisioning_module
 import wybra.tools.migrate as tools_migrate
+from wybra.core.composition import AppConfig, load_app_config
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +21,7 @@ class MigrationTestSettings:
     database_url: str
     alembic_config: Path
     migrations_root: Path | None = None
-    app_config: None = None
+    app_config: AppConfig | None = None
     modules: tuple[str, ...] = ("wybra.auth",)
 
 
@@ -85,6 +86,10 @@ def create_migrate_command(
     modules: tuple[str, ...] = ("wybra.auth",),
 ) -> tuple[Path, object]:
     config_path = alembic_config_path()
+    app_config_path = _write_test_app_config(
+        config_path.with_suffix(".app.toml"), modules
+    )
+    app_config = load_app_config(config_path=app_config_path)
 
     def load_settings(database_url: str | None) -> MigrationTestSettings:
         if database_url is None:
@@ -95,6 +100,7 @@ def create_migrate_command(
         return MigrationTestSettings(
             database_url=database_url,
             alembic_config=config_path,
+            app_config=app_config,
             modules=modules,
         )
 
@@ -110,7 +116,33 @@ def run_migrate(
     try:
         return migrate_module.run_migrate_command(command, argv)
     finally:
+        config_path.with_suffix(".app.toml").unlink(missing_ok=True)
         config_path.unlink(missing_ok=True)
+
+
+def _write_test_app_config(config_path: Path, modules: tuple[str, ...]) -> Path:
+    modules_toml = ", ".join(f'"{module}"' for module in modules)
+    config_path.write_text(
+        dedent(
+            f"""
+            [app]
+            modules = [{modules_toml}]
+
+            [app.templates]
+            auto_reload = true
+            cache_size = 0
+
+            [app.static]
+            url_path = "/static/"
+
+            [app.runserver]
+            asgi_app = "test_app:app"
+            reload_env = "APP_RELOAD"
+            """
+        ),
+        encoding="utf-8",
+    )
+    return config_path
 
 
 def create_importable_module(root: Path, module_name: str) -> Path:
@@ -706,6 +738,7 @@ def test_migrate_revision_requires_module_and_message() -> None:
         missing_module = runner(command, ["revision", "-m", "add revision"])
         missing_message = runner(command, ["revision", "--module", "wybra.auth"])
     finally:
+        _config_path.with_suffix(".app.toml").unlink(missing_ok=True)
         _config_path.unlink(missing_ok=True)
 
     assert missing_module == 2
@@ -718,6 +751,7 @@ def test_migrate_revision_help_describes_roll_forward_order(capsys) -> None:
     try:
         exit_code = migrate_module.run_migrate_command(command, ["revision", "--help"])
     finally:
+        _config_path.with_suffix(".app.toml").unlink(missing_ok=True)
         _config_path.unlink(missing_ok=True)
 
     captured = capsys.readouterr()

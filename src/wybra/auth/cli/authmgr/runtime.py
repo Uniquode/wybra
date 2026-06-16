@@ -582,7 +582,7 @@ def _load_auth_settings_for_command(config_source: str | None = None) -> AuthSet
         raise ConfigurationError(str(exc)) from exc
     except CompositionError as exc:
         raise ConfigurationError(
-            f"{exc}. Run from a Wybra host application project or set APP_CONFIG."
+            f"{str(exc).rstrip('.')}. Pass --config or set APP_CONFIG."
         ) from exc
 
     return load_auth_settings(app_config=app_config)

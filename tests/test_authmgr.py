@@ -607,13 +607,13 @@ def test_authmgr_update_positional_is_target() -> None:
             ('session_cookie_name = "auth_session"',),
         ),
         (
-            "project",
+            "option",
             Path("app.toml"),
-            "project-config@example.com",
+            "option-config@example.com",
             (),
         ),
     ],
-    ids=("app-config-env", "project-app-toml"),
+    ids=("app-config-env", "config-option"),
 )
 def test_authmgr_loads_app_auth_configuration(
     tmp_path: Path,
@@ -633,12 +633,14 @@ def test_authmgr_loads_app_auth_configuration(
     )
     if config_mode == "env":
         monkeypatch.setenv("APP_CONFIG", str(config_path))
+        args_prefix: list[str] = []
     else:
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("APP_CONFIG", raising=False)
+        args_prefix = ["--config", str(config_path)]
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
-    assert authmgr.main(["user", "create", email, "--password", "-"]) == 0
+    assert authmgr.main([*args_prefix, "user", "create", email, "--password", "-"]) == 0
 
     [user] = identity_users_from_database(database_url)
     assert user.email == email
@@ -698,8 +700,7 @@ def test_authmgr_rejects_missing_app_config_even_when_auth_toml_exists(
     assert exit_code == 1
     assert stdin.tell() == 0
     captured = capsys.readouterr()
-    assert "App config file does not exist" in captured.err
-    assert "set APP_CONFIG" in captured.err
+    assert "pass --config or set APP_CONFIG" in captured.err
 
 
 @pytest.mark.parametrize(
@@ -2006,7 +2007,7 @@ def test_authmgr_reports_outdated_identity_schema_before_reading_password(
     assert "Auth database schema is not up to date" in captured.err
     assert "uv run wybra-migrate init" in captured.err
     assert "uv run wybra-migrate upgrade" in captured.err
-    assert "APP_CONFIG" in captured.err
+    assert "selected app config" in captured.err
     assert "explicit auth database" not in captured.err
     assert "is_admin" in captured.err
 

@@ -133,7 +133,7 @@ def test_load_app_config_accepts_string_static_serve_from_config_sources(
         encoding="utf-8",
     )
 
-    config = load_app_config(project_root=tmp_path)
+    config = load_app_config(project_root=tmp_path, config_path=config_path)
 
     assert config.static.serve is False
 
@@ -1247,7 +1247,8 @@ def test_composed_settings_loader_builds_framework_settings(tmp_path: Path) -> N
             (EnvironmentSetting("IDENTITY_LABEL", "identity_label"),),
         )
 
-    (tmp_path / "app.toml").write_text(
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
         dedent(
             """
             [app]
@@ -1274,6 +1275,7 @@ def test_composed_settings_loader_builds_framework_settings(tmp_path: Path) -> N
         ),
         extra_value_loaders=(identity_values,),
         environ={
+            "APP_CONFIG": str(config_path),
             "APP_NAME": "composed-app",
             "FEATURE_ENABLED": "true",
             "IDENTITY_LABEL": "identity",
@@ -2239,7 +2241,8 @@ def test_configured_static_export_uses_app_toml_without_route_import(
         encoding="utf-8",
     )
     (static_root / "app.css").write_text(":root {}", encoding="utf-8")
-    (tmp_path / "app.toml").write_text(
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
         """
         [app]
         modules = ["configured_export_static_app"]
@@ -2257,7 +2260,10 @@ def test_configured_static_export_uses_app_toml_without_route_import(
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
 
-    result = export_configured_static_assets(project_root=tmp_path)
+    result = export_configured_static_assets(
+        project_root=tmp_path,
+        config_path=config_path,
+    )
 
     exported_asset = tmp_path / "exported-static" / "styles" / "app.css"
     assert result.export_root == (tmp_path / "exported-static").resolve()
@@ -2496,7 +2502,7 @@ def test_load_app_config_reads_modules_from_app_toml(
         encoding="utf-8",
     )
 
-    config = load_app_config(project_root=tmp_path)
+    config = load_app_config(project_root=tmp_path, config_path=config_path)
 
     assert isinstance(config, AppConfig)
     assert config.config_path == config_path.resolve()
@@ -2585,18 +2591,17 @@ def test_load_app_config_rejects_malformed_toml(tmp_path: Path) -> None:
     config_path.write_text("[app", encoding="utf-8")
 
     with pytest.raises(CompositionError, match="App config file is invalid"):
-        load_app_config(project_root=tmp_path)
+        load_app_config(project_root=tmp_path, config_path=config_path)
 
 
-def test_load_app_config_modules_uses_defaults_when_app_toml_is_absent(
+def test_load_app_config_modules_requires_config_source(
     tmp_path: Path,
 ) -> None:
-    modules = load_app_config_modules(
-        project_root=tmp_path,
-        default_modules=("host_app", "wybra.web"),
-    )
-
-    assert modules == ("host_app", "wybra.web")
+    with pytest.raises(
+        CompositionError,
+        match="Application config file could not be resolved",
+    ):
+        load_app_config_modules(project_root=tmp_path)
 
 
 def test_load_app_config_loads_auth_table(tmp_path: Path) -> None:
@@ -2620,23 +2625,13 @@ def test_load_app_config_loads_auth_table(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    config = load_app_config(project_root=tmp_path)
+    config = load_app_config(project_root=tmp_path, config_path=config_path)
 
     assert config.config_path == config_path.resolve()
     assert config.modules == ("host_app",)
     assert config.database_url == "sqlite+aiosqlite:///app.sqlite3"
     assert config.static.export_root == Path("static")
     assert config.auth == {"account_creation_policy": "public-signup"}
-
-
-def test_framework_repository_does_not_ship_host_app_config() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-
-    assert not (project_root / "app.toml").exists()
-    assert load_app_config_modules(
-        project_root=project_root,
-        default_modules=("wybra.web",),
-    ) == ("wybra.web",)
 
 
 def test_load_app_config_uses_app_config_environment_override(
