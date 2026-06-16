@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -132,6 +132,7 @@ async def test_profile_image_descriptor_uses_email_initial_without_media() -> No
 @pytest.mark.anyio
 async def test_profile_image_descriptor_resolves_media_reference(
     tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
 ) -> None:
     site = _site_with_database(tmp_path)
     capability = SiteProfileCapability(media=site.capability_proxy(MediaCapability))
@@ -143,12 +144,7 @@ async def test_profile_image_descriptor_resolves_media_reference(
         MediaCapability,
         media_capability,
     )
-    async with media_capability.database.transaction() as session:
-
-        def _create_all(sync_session: Any) -> None:
-            metadata.create_all(sync_session.get_bind())
-
-        await session.run_sync(_create_all)
+    await create_database_schema(media_capability)
     item = await media_capability.register(
         category="profile",
         storage_key="profile/ab/cd/david.png",

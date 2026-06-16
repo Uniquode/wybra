@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -161,14 +161,10 @@ def test_media_capability_rejects_missing_writable_root(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_media_capability_registers_catalogue_item_and_resolves_by_id(
     tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
 ) -> None:
     capability = _capability(tmp_path)
-    async with capability.database.transaction() as session:
-
-        def _create_all(sync_session: Any) -> None:
-            metadata.create_all(sync_session.get_bind())
-
-        await session.run_sync(_create_all)
+    await create_database_schema(capability)
 
     item = await capability.register(
         category="profile",
@@ -189,14 +185,10 @@ async def test_media_capability_registers_catalogue_item_and_resolves_by_id(
 @pytest.mark.anyio
 async def test_media_capability_registers_and_resolves_resource_key(
     tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
 ) -> None:
     capability = _capability(tmp_path)
-    async with capability.database.transaction() as session:
-
-        def _create_all(sync_session: Any) -> None:
-            metadata.create_all(sync_session.get_bind())
-
-        await session.run_sync(_create_all)
+    await create_database_schema(capability)
 
     item = await capability.register(
         category="profile",
@@ -210,14 +202,12 @@ async def test_media_capability_registers_and_resolves_resource_key(
 
 
 @pytest.mark.anyio
-async def test_media_capability_store_accepts_resource_key(tmp_path: Path) -> None:
+async def test_media_capability_store_accepts_resource_key(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+) -> None:
     capability = _capability(tmp_path)
-    async with capability.database.transaction() as session:
-
-        def _create_all(sync_session: Any) -> None:
-            metadata.create_all(sync_session.get_bind())
-
-        await session.run_sync(_create_all)
+    await create_database_schema(capability)
 
     item = await capability.store(
         category="profile",
@@ -234,14 +224,10 @@ async def test_media_capability_store_accepts_resource_key(tmp_path: Path) -> No
 @pytest.mark.anyio
 async def test_media_capability_reassigns_resource_key(
     tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
 ) -> None:
     capability = _capability(tmp_path)
-    async with capability.database.transaction() as session:
-
-        def _create_all(sync_session: Any) -> None:
-            metadata.create_all(sync_session.get_bind())
-
-        await session.run_sync(_create_all)
+    await create_database_schema(capability)
 
     first = await capability.register(
         category="profile",
@@ -267,14 +253,10 @@ async def test_media_capability_reassigns_resource_key(
 @pytest.mark.anyio
 async def test_media_capability_stores_upload_and_registers_catalogue_item(
     tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
 ) -> None:
     capability = _capability(tmp_path)
-    async with capability.database.transaction() as session:
-
-        def _create_all(sync_session: Any) -> None:
-            metadata.create_all(sync_session.get_bind())
-
-        await session.run_sync(_create_all)
+    await create_database_schema(capability)
 
     item = await capability.store(
         category="profile",
@@ -310,14 +292,12 @@ async def test_media_capability_rejects_invalid_upload_chunk_size(
 
 
 @pytest.mark.anyio
-async def test_media_capability_resolves_id_url_mode(tmp_path: Path) -> None:
+async def test_media_capability_resolves_id_url_mode(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+) -> None:
     capability = _capability(tmp_path, url_mode="id")
-    async with capability.database.transaction() as session:
-
-        def _create_all(sync_session: Any) -> None:
-            metadata.create_all(sync_session.get_bind())
-
-        await session.run_sync(_create_all)
+    await create_database_schema(capability)
 
     item = await capability.register(
         category="profile",
@@ -329,14 +309,12 @@ async def test_media_capability_resolves_id_url_mode(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_media_capability_rejects_unknown_resource_key(tmp_path: Path) -> None:
+async def test_media_capability_rejects_unknown_resource_key(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+) -> None:
     capability = _capability(tmp_path)
-    async with capability.database.transaction() as session:
-
-        def _create_all(sync_session: Any) -> None:
-            metadata.create_all(sync_session.get_bind())
-
-        await session.run_sync(_create_all)
+    await create_database_schema(capability)
 
     with pytest.raises(MediaCapabilityError):
         await capability.get_by_resource_key("missing")
