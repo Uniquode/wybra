@@ -106,8 +106,8 @@ async def admin_page():
 ```
 
 App-side Wybra database, auth, route, template, static, or runtime-state setup
-is not supported. Configure modules and settings once, then let
-`wybra.start_site(...)` initialise the Wybra-owned concerns.
+is not supported. Configure modules and settings once, then use
+`wybra.start_site(...)` to initialise the Wybra-owned concerns.
 
 ## Project Commands
 

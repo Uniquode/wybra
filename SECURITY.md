@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-wybra is currently under active development before a stable public release.
+Wybra is currently under active development before a stable public release.
 Security fixes are handled on `main` until release support windows are defined.
 
 | Version | Supported |

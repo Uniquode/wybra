@@ -1,8 +1,7 @@
 #!/bin/sh
 
-echo ===== Project root ===== $(git branch --show-current)
-git status
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+project_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 
-echo
-echo ===== Wybra project ===== $(git -C wybra branch --show-current)
-git -C wybra status
+echo "===== Wybra project ===== $(git -C "$project_dir" branch --show-current)"
+git -C "$project_dir" status "$@"
