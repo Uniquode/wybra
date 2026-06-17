@@ -7,8 +7,10 @@ from typing import Any, Final
 
 from wybra.core.composition import AppConfig
 
+DICT_CONFIG_VERSION = 1
+
 DEFAULT_LOGGING_CONFIG: Final[dict[str, Any]] = {
-    "version": 1,
+    "version": DICT_CONFIG_VERSION,
     "disable_existing_loggers": False,
     "formatters": {
         "simple": {
@@ -57,6 +59,7 @@ def merge_logging_config(config: object) -> dict[str, Any]:
 
     configured = _plain_dict(config)
     if configured.get("disable_existing_loggers") is True:
+        configured.setdefault("version", DICT_CONFIG_VERSION)
         return configured
 
     return _deep_merge(default_logging_config(), configured)

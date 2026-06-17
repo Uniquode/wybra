@@ -72,6 +72,21 @@ def test_merge_logging_config_authoritative_with_disable_existing_loggers() -> N
     assert "alembic" not in config
 
 
+def test_merge_logging_config_authoritative_injects_required_version() -> None:
+    config = merge_logging_config(
+        {
+            "disable_existing_loggers": True,
+            "handlers": {},
+            "root": {"level": "ERROR", "handlers": []},
+        }
+    )
+
+    assert config["version"] == 1
+    assert config["disable_existing_loggers"] is True
+    assert "formatters" not in config
+    assert "alembic" not in config
+
+
 def test_merge_logging_config_rejects_non_table() -> None:
     with pytest.raises(ValueError, match=r"\[log\] must be a table"):
         merge_logging_config("not-a-table")
