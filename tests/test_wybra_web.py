@@ -41,6 +41,7 @@ from wybra.web.context import (
     TemplateContext,
     resolve_context_providers,
 )
+from wybra.web.forms.csrf import CsrfProtector
 from wybra.web.rendering import TemplateRenderer
 from wybra.web.routes import (
     ConfiguredModuleRouter,
@@ -76,7 +77,7 @@ from wybra.web.staticfiles import (
     static_asset_response,
 )
 from wybra.web.templating import build_template_loader
-from wybra.widgets.config import widgets_settings_from_config
+from wybra.widgets.config import WidgetsSettings
 
 
 def test_wybra_web_package_imports() -> None:
@@ -95,7 +96,27 @@ def test_wybra_widgets_config_defaults_to_theme_and_login_features() -> None:
     config = MappingConfigSource({"app": {"modules": ("wybra.widgets",)}})
     service = ConfigService([config])
 
-    assert widgets_settings_from_config(service).enabled_features == ("theme", "login")
+    assert WidgetsSettings.load_settings(
+        {
+            "features": "theme,login",
+            "metadata": {"nested": "option"},
+        }
+    ).features == ("theme", "login")
+    assert WidgetsSettings.load_settings(service).features == ("theme", "login")
+
+
+def test_wybra_widgets_settings_rejects_non_mapping_config_source() -> None:
+    with pytest.raises(ConfigSourceError, match="must be a mapping or ConfigService"):
+        WidgetsSettings.section_values(object(), "wybra.widgets")  # type: ignore[arg-type]
+
+
+def test_wybra_widgets_settings_transform_error_reports_field_without_value() -> None:
+    with pytest.raises(ConfigSourceError) as exc_info:
+        WidgetsSettings.load_settings({"features": "menu"})
+
+    message = str(exc_info.value)
+    assert "wybra.widgets.features" in message
+    assert "menu" not in message
 
 
 def test_wybra_widgets_config_rejects_unknown_feature() -> None:
@@ -108,6 +129,85 @@ def test_wybra_widgets_config_rejects_unknown_feature() -> None:
 
     with pytest.raises(ConfigSourceError, match="unknown widget feature"):
         ConfigService([config])
+
+
+@pytest.mark.anyio
+async def test_wybra_widgets_setup_loads_settings_class(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import wybra.widgets as widgets_module
+    from wybra.widgets.features import enabled_features
+
+    observed: list[ConfigService] = []
+
+    @dataclass(frozen=True, slots=True)
+    class StubWidgetsSettings:
+        features: tuple[str, ...] = ("theme",)
+
+    def load_settings(config: ConfigService) -> StubWidgetsSettings:
+        observed.append(config)
+        return StubWidgetsSettings()
+
+    monkeypatch.setattr(
+        widgets_module.WidgetsSettings,
+        "load_settings",
+        load_settings,
+    )
+
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.widgets",),
+                },
+            }
+        ),
+    )
+
+    assert observed == [site.config]
+    assert enabled_features() == ("theme",)
+
+
+@pytest.mark.anyio
+async def test_wybra_web_setup_loads_csrf_settings_class(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import wybra.web as web_module
+
+    protector = CsrfProtector("test-secret")
+    observed: list[ConfigService] = []
+
+    class StubCsrfSettings:
+        def protector(self) -> CsrfProtector:
+            return protector
+
+    def load_settings(config: ConfigService) -> StubCsrfSettings:
+        observed.append(config)
+        return StubCsrfSettings()
+
+    monkeypatch.setattr(web_module.CsrfSettings, "load_settings", load_settings)
+    app = FastAPI()
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.web",),
+                },
+            }
+        ),
+    )
+
+    assert observed == [site.config]
+    assert app.state.csrf is protector
 
 
 def test_load_app_config_accepts_string_static_serve_from_config_sources(

@@ -27,10 +27,7 @@ from wybra.auth.sessions import (
 from wybra.auth.sessions import (
     require_current_user as _require_current_user,
 )
-from wybra.auth.settings import (
-    AuthSettings,
-    load_auth_settings_from_config,
-)
+from wybra.auth.settings import AuthSettings
 from wybra.db.capabilities import DatabaseCapability
 from wybra.site import Site, get_site
 from wybra.site_config import app_config_from_site
@@ -102,7 +99,7 @@ async def setup_site(site: Site) -> None:
     site.require_capability(DatabaseCapability)
 
     app_config = app_config_from_site(site)
-    settings = load_auth_settings_from_config(
+    settings = AuthSettings.load_settings(
         site.config,
         app_config=app_config,
         deployment_environment=app_config.deployment_environment,

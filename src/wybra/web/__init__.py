@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from fastapi import Request
@@ -11,13 +11,13 @@ from fastapi.responses import Response
 from wybra.site import Site
 from wybra.site_config import app_config_from_site
 from wybra.utils.paths import resolve_project_path
-from wybra.web.config import module_config
+from wybra.web.config import WebSettings, module_config
 from wybra.web.context import (
     resolve_context_providers,
     set_request_context,
     validate_context_providers,
 )
-from wybra.web.csrf import csrf_settings_from_config
+from wybra.web.csrf import CsrfSettings
 from wybra.web.errors import ErrorHandlerOptions, register_error_handlers
 from wybra.web.forms.csrf import CsrfProtector
 from wybra.web.rendering import TemplateRenderer
@@ -43,10 +43,7 @@ async def setup_site(site: Site) -> None:
 
     csrf = getattr(site.app.state, "csrf", None)
     if csrf is None:
-        csrf = csrf_settings_from_config(
-            dict(site.config.get_config("app") or {}),
-            dict(site.config.get_config("wybra.web") or {}),
-        ).protector()
+        csrf = CsrfSettings.load_settings(site.config).protector()
         site.app.state.csrf = csrf
     elif not isinstance(csrf, CsrfProtector):
         raise RuntimeError("CSRF protector is not configured correctly.")
@@ -145,17 +142,7 @@ def _template_root(project_root: Path, template_root: Path | None) -> Path | Non
 
 
 def _request_context_enabled(site: Site) -> bool:
-    web_config = site.config.get_config("wybra.web")
-    if web_config is None:
-        return True
-    if not isinstance(web_config, Mapping):
-        raise RuntimeError("Config value 'wybra.web' must be a mapping when set.")
-    value = web_config.get("request_context_enabled")
-    if value is None:
-        return True
-    if isinstance(value, bool):
-        return value
-    raise RuntimeError("Config value 'request_context_enabled' must be a boolean.")
+    return WebSettings.load_settings(site.config).request_context_enabled
 
 
 __all__ = [

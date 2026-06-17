@@ -7,6 +7,7 @@ import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
+from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.web.forms.csrf import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
@@ -228,6 +229,19 @@ def test_csrf_settings_generates_local_secret(caplog) -> None:
     assert "Generated startup-local CSRF token secret." in caplog.text
 
 
+def test_csrf_settings_load_settings_generates_local_secret(caplog) -> None:
+    from wybra.web.csrf import CsrfSettings
+
+    caplog.set_level(logging.INFO, logger="wybra.web.csrf")
+
+    settings = CsrfSettings.load_settings({})
+
+    assert settings.token_secret
+    assert settings.cookie_secure is False
+    assert settings.deployment_environment == "local"
+    assert "Generated startup-local CSRF token secret." in caplog.text
+
+
 def test_csrf_settings_requires_stable_secret_for_non_local_environment() -> None:
     from wybra.core.exceptions import ConfigurationError
     from wybra.web.csrf import CsrfSettings
@@ -239,7 +253,7 @@ def test_csrf_settings_requires_stable_secret_for_non_local_environment() -> Non
         CsrfSettings(deployment_environment="production")
 
     with pytest.raises(ConfigurationError, match="CSRF token secret must not be blank"):
-        CsrfSettings(deployment_environment="production", token_secret="   ")
+        CsrfSettings(deployment_environment="production", csrf_token_secret="   ")
 
     with pytest.raises(
         ConfigurationError,
@@ -247,8 +261,8 @@ def test_csrf_settings_requires_stable_secret_for_non_local_environment() -> Non
     ):
         CsrfSettings(
             deployment_environment="production",
-            token_secret="production-csrf-secret",
-            cookie_secure=False,
+            csrf_token_secret="production-csrf-secret",
+            csrf_cookie_secure=False,
         )
 
 
@@ -257,9 +271,137 @@ def test_csrf_settings_accepts_stable_secure_non_local_configuration() -> None:
 
     settings = CsrfSettings(
         deployment_environment="production",
-        token_secret="production-csrf-secret",
-        cookie_secure=True,
+        csrf_token_secret="production-csrf-secret",
+        csrf_cookie_secure=True,
     )
 
     assert settings.token_secret == "production-csrf-secret"
     assert settings.cookie_secure is True
+
+
+def test_csrf_settings_load_settings_uses_config_service_sources() -> None:
+    from wybra.web.csrf import CsrfSettings
+
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "deployment_environment": "production",
+                        "modules": ("wybra.web",),
+                    },
+                    "wybra.web": {
+                        "csrf_token_secret": "production-csrf-secret",
+                        "csrf_cookie_secure": "true",
+                    },
+                }
+            )
+        ],
+    )
+
+    settings = CsrfSettings.load_settings(config)
+
+    assert settings.deployment_environment == "production"
+    assert settings.token_secret == "production-csrf-secret"
+    assert settings.cookie_secure is True
+
+
+def test_csrf_settings_load_settings_requires_stable_secret_for_non_local() -> None:
+    from wybra.core.exceptions import ConfigurationError
+    from wybra.web.csrf import CsrfSettings
+
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "deployment_environment": "production",
+                        "modules": ("wybra.web",),
+                    },
+                }
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Non-local deployments must configure a stable CSRF token secret",
+    ):
+        CsrfSettings.load_settings(config)
+
+
+def test_csrf_settings_load_settings_transforms_secure_cookie_policy() -> None:
+    from wybra.web.csrf import CsrfSettings
+
+    settings = CsrfSettings.load_settings(
+        {
+            "csrf_token_secret": "production-csrf-secret",
+            "csrf_cookie_secure": "false",
+            "deployment_environment": "local",
+        }
+    )
+
+    assert settings.cookie_secure is False
+
+
+def test_csrf_settings_load_settings_reads_sectioned_mapping_app_config() -> None:
+    from wybra.web.csrf import CsrfSettings
+
+    settings = CsrfSettings.load_settings(
+        {
+            "app": {"deployment_environment": "production"},
+            "wybra.web": {
+                "csrf_token_secret": "production-csrf-secret",
+                "csrf_cookie_secure": "true",
+            },
+        }
+    )
+
+    assert settings.deployment_environment == "production"
+    assert settings.token_secret == "production-csrf-secret"
+    assert settings.cookie_secure is True
+
+
+def test_csrf_settings_load_settings_rejects_non_table_app_section() -> None:
+    from wybra.core.exceptions import ConfigurationError
+    from wybra.web.csrf import CsrfSettings
+
+    with pytest.raises(ConfigurationError, match=r"\[app\] must be a table"):
+        CsrfSettings.load_settings(
+            {
+                "app": "production",
+                "csrf_token_secret": "production-csrf-secret",
+            }
+        )
+
+
+def test_csrf_settings_load_settings_rejects_blank_token_secret() -> None:
+    with pytest.raises(ConfigSourceError, match="csrf_token_secret"):
+        ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app": {"modules": ("wybra.web",)},
+                        "wybra.web": {"csrf_token_secret": "   "},
+                    }
+                )
+            ],
+        )
+
+
+def test_csrf_settings_load_settings_rejects_explicit_generator_sentinel() -> None:
+    from wybra.web.csrf import GENERATE_LOCAL_CSRF_SECRET
+
+    with pytest.raises(ConfigSourceError, match="reserved for internal use"):
+        ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app": {"modules": ("wybra.web",)},
+                        "wybra.web": {
+                            "csrf_token_secret": GENERATE_LOCAL_CSRF_SECRET,
+                        },
+                    }
+                )
+            ],
+        )
