@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
@@ -46,6 +47,9 @@ from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.core.composition import CompositionError, load_app_config
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.persistence import close_database, create_database, session_scope
+from wybra.tools.app_startup import (
+    config_source_from_click_context,
+)
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 
 from .args import AuthmgrArgs
@@ -61,7 +65,9 @@ from .schema import _verify_identity_schema
 
 def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
     try:
-        exit_code = asyncio.run(_main_async(args))
+        exit_code = asyncio.run(
+            _main_async(args, config_source=_config_source_from_context(ctx))
+        )
     except PasswordSourceError as exc:
         raise click.BadParameter(str(exc), param_hint=["--password"]) from exc
     except ConfigurationError as exc:
@@ -72,8 +78,8 @@ def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
     ctx.exit(exit_code)
 
 
-async def _main_async(args: AuthmgrArgs) -> int:
-    settings = _load_auth_settings_for_command()
+async def _main_async(args: AuthmgrArgs, *, config_source: str | None = None) -> int:
+    settings = _load_auth_settings_for_command(config_source=config_source)
     database = create_database(settings.database_url)
     try:
         async with session_scope(database.session_factory) as session:
@@ -568,18 +574,38 @@ _COMMAND_HANDLERS: dict[str, CommandHandler] = {
 }
 
 
-def _load_auth_settings_for_command() -> AuthSettings:
+def _load_auth_settings_for_command(config_source: str | None = None) -> AuthSettings:
     try:
         project_root = runtime_project_root()
-        app_config = load_app_config(project_root=project_root)
+        app_config = load_app_config(
+            project_root=project_root,
+            config_path=_config_source_path(config_source),
+        )
     except ProjectToolConfigurationError as exc:
         raise ConfigurationError(str(exc)) from exc
     except CompositionError as exc:
         raise ConfigurationError(
-            f"{exc}. Run from a Wybra host application project or set APP_CONFIG."
+            f"{str(exc).rstrip('.')}. Pass --config or set APP_CONFIG."
         ) from exc
 
     return load_auth_settings(app_config=app_config)
+
+
+def _config_source_from_context(ctx: click.Context) -> str | None:
+    return config_source_from_click_context(
+        ctx,
+        error_factory=ConfigurationError,
+        invalid_type_message=lambda value_type: (
+            "Invalid Click context for authmgr: config_source must be a string, "
+            f"got {value_type.__name__!r}."
+        ),
+    )
+
+
+def _config_source_path(config_source: str | None) -> Path | None:
+    if config_source is None:
+        return None
+    return Path(config_source)
 
 
 async def _resolve_target_record(

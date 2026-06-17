@@ -25,7 +25,6 @@ from wybra.config import (
 from wybra.core.composition import (
     APP_CONFIG_ENV,
     APP_ROOT_ENV,
-    DEFAULT_APP_CONFIG,
     AppConfig,
     resolve_project_root,
 )
@@ -280,13 +279,12 @@ def _normalise_config_source(
             env,
             project_root=project_root,
             app_config_env=APP_CONFIG_ENV,
-            default_app_config=DEFAULT_APP_CONFIG,
             require_app_config=True,
         )
         if app_config is None:  # pragma: no cover - require_app_config prevents this
             raise ConfigSourceError(
-                "Application config file could not be resolved; run from the "
-                f"app project or set {APP_CONFIG_ENV}."
+                "Application config file could not be resolved; pass --config or set "
+                f"{APP_CONFIG_ENV}."
             )
         return AppConfigSource(app_config)
     if isinstance(config_source, AppConfig):

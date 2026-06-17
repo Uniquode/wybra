@@ -9,7 +9,6 @@ from envex import Env
 
 from wybra.core.composition import (
     APP_CONFIG_ENV,
-    DEFAULT_APP_CONFIG,
     AppConfig,
     CompositionError,
     load_app_config,
@@ -56,10 +55,9 @@ def load_composed_settings(  # noqa: UP047
     project_root: Path | None = None,
     read_dotenv: bool = True,
     app_config_env: str = APP_CONFIG_ENV,
-    default_app_config: Path = DEFAULT_APP_CONFIG,
     require_app_config: bool = False,
 ) -> SettingsT:
-    """Build application settings from envex values and optional app.toml.
+    """Build application settings from envex values and optional app config.
 
     Applications keep their concrete settings class and policy validation, while
     this helper owns the reusable mechanics of reading typed environment
@@ -78,7 +76,6 @@ def load_composed_settings(  # noqa: UP047
         env,
         project_root=project_root,
         app_config_env=app_config_env,
-        default_app_config=default_app_config,
         require_app_config=require_app_config,
     )
     if app_config is not None:
@@ -106,7 +103,6 @@ def load_composition_config_from_environment(
     *,
     project_root: Path | None = None,
     app_config_env: str = APP_CONFIG_ENV,
-    default_app_config: Path = DEFAULT_APP_CONFIG,
     require_app_config: bool = False,
 ) -> AppConfig | None:
     resolved_project_root = (project_root or Path.cwd()).resolve()
@@ -120,22 +116,12 @@ def load_composition_config_from_environment(
         except CompositionError as exc:
             raise wrapped_error(SettingsLoadError, exc) from exc
 
-    default_config_path = resolved_project_root / default_app_config
-    if not default_config_path.is_file():
-        if require_app_config:
-            raise SettingsLoadError(
-                "Application config file could not be resolved; run from the "
-                f"app project or set {app_config_env}."
-            )
-        return None
-
-    try:
-        return load_app_config(
-            project_root=resolved_project_root,
-            config_path=default_config_path,
+    if require_app_config:
+        raise SettingsLoadError(
+            "Application config file could not be resolved; pass --config or set "
+            f"{app_config_env}."
         )
-    except CompositionError as exc:
-        raise wrapped_error(SettingsLoadError, exc) from exc
+    return None
 
 
 def values_from_env_settings(

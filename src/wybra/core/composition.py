@@ -13,7 +13,6 @@ from wybra.config.transforms import to_bool
 from wybra.core.diagnostics import app_config_message, configured_module_import_message
 
 APP_ROOT_ENV: Final = "APP_ROOT"
-DEFAULT_APP_CONFIG: Final = Path("app.toml")
 APP_CONFIG_ENV: Final = "APP_CONFIG"
 DEFAULT_STATIC_EXPORT_ROOT: Final = Path("static")
 
@@ -43,6 +42,12 @@ class StaticOptions:
 
 
 @dataclass(frozen=True, slots=True)
+class RunserverOptions:
+    asgi_app: str | None = None
+    reload_env: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     config_path: Path
     project_root: Path
@@ -50,6 +55,7 @@ class AppConfig:
     routes: RouteOptions
     templates: TemplateOptions
     static: StaticOptions
+    runserver: RunserverOptions = field(default_factory=RunserverOptions)
     database_url: str | None = None
     deployment_environment: str | None = None
     auth: dict[str, Any] = field(default_factory=dict)
@@ -66,7 +72,7 @@ def load_app_config(
     resolved_config_path = _resolve_config_path(
         resolved_project_root,
         config_path,
-        environ or os.environ,
+        environ if environ is not None else os.environ,
     )
     if not resolved_config_path.is_file():
         raise CompositionError(
@@ -97,6 +103,7 @@ def load_app_config(
         ),
         templates=_load_template_options(app_data),
         static=_load_static_options(app_data),
+        runserver=_load_runserver_options(app_data),
         database_url=_optional_str_or_none(app_data, "app.database_url"),
         deployment_environment=_optional_str_or_none(
             app_data,
@@ -112,24 +119,10 @@ def load_app_config_modules(
     project_root: Path | None = None,
     config_path: Path | None = None,
     environ: Mapping[str, str] | None = None,
-    default_modules: Iterable[str] | None = None,
 ) -> tuple[str, ...]:
-    """Return configured modules, falling back only when no app.toml is present.
-
-    Explicit `config_path` or `APP_CONFIG` values are always honoured and must
-    point at a valid config file. The default modules are used only for callers
-    that intentionally support installed/default operation without a project
-    `app.toml`.
-    """
+    """Return configured modules from an explicit config file source."""
     resolved_project_root = resolve_project_root(project_root, environ)
     environment = environ if environ is not None else os.environ
-    if (
-        default_modules is not None
-        and config_path is None
-        and not environment.get(APP_CONFIG_ENV)
-        and not (resolved_project_root / DEFAULT_APP_CONFIG).is_file()
-    ):
-        return tuple(default_modules)
 
     return load_app_config(
         project_root=resolved_project_root,
@@ -156,10 +149,20 @@ def _resolve_config_path(
     config_path: Path | None,
     environ: Mapping[str, str],
 ) -> Path:
-    env_config_path = environ.get(APP_CONFIG_ENV)
-    path = config_path or (
-        Path(env_config_path) if env_config_path else DEFAULT_APP_CONFIG
-    )
+    raw_env_config_path = environ.get(APP_CONFIG_ENV)
+    if config_path is None and raw_env_config_path is None:
+        raise CompositionError(
+            "Application config file could not be resolved; pass --config or set "
+            f"{APP_CONFIG_ENV}."
+        )
+    env_config_path = raw_env_config_path.strip() if raw_env_config_path else None
+    if config_path is None and not env_config_path:
+        raise CompositionError(f"{APP_CONFIG_ENV} must not be blank.")
+    if config_path is not None:
+        path = config_path
+    else:
+        assert env_config_path is not None
+        path = Path(env_config_path)
     if not path.is_absolute():
         path = project_root / path
 
@@ -173,7 +176,7 @@ def resolve_project_root(
     if project_root is not None:
         return project_root.resolve()
 
-    environment = environ or os.environ
+    environment = environ if environ is not None else os.environ
     root_value = environment.get(APP_ROOT_ENV)
     if root_value is None:
         return Path.cwd().resolve()
@@ -213,7 +216,7 @@ def _raw_config_sections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
         sections["app"] = {
             key: value for key, value in app_data.items() if not isinstance(value, dict)
         }
-        for nested_name in ("routes", "static", "templates"):
+        for nested_name in ("routes", "runserver", "static", "templates"):
             nested_value = app_data.get(nested_name)
             if isinstance(nested_value, dict):
                 sections[f"app.{nested_name}"] = dict(nested_value)
@@ -395,6 +398,14 @@ def _load_static_options(data: dict[str, Any]) -> StaticOptions:
     )
 
 
+def _load_runserver_options(data: dict[str, Any]) -> RunserverOptions:
+    runserver_data = _optional_table(data, "app.runserver")
+    return RunserverOptions(
+        asgi_app=_optional_str_or_none(runserver_data, "app.runserver.asgi_app"),
+        reload_env=_optional_str_or_none(runserver_data, "app.runserver.reload_env"),
+    )
+
+
 def _bool_from_config(data: dict[str, Any], name: str, default: bool) -> bool:
     key = name.rsplit(".", maxsplit=1)[-1]
     value = data.get(key)
@@ -411,9 +422,9 @@ __all__ = [
     "APP_CONFIG_ENV",
     "APP_ROOT_ENV",
     "CompositionError",
-    "DEFAULT_APP_CONFIG",
     "DEFAULT_STATIC_EXPORT_ROOT",
     "RouteOptions",
+    "RunserverOptions",
     "StaticOptions",
     "TemplateOptions",
     "load_app_config",

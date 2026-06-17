@@ -38,7 +38,6 @@ def load_model_metadata(
     model_packages: Sequence[str] | None = None,
     *,
     modules: Sequence[str] | None = None,
-    default_modules: Sequence[str] | None = None,
     project_root: Path | None = None,
     config_path: Path | None = None,
     environ: Mapping[str, str] | None = None,
@@ -58,7 +57,6 @@ def load_model_metadata(
                 project_root=project_root,
                 config_path=config_path,
                 environ=environ,
-                default_modules=default_modules,
             )
         )
 
@@ -81,14 +79,12 @@ def _load_modules_from_config(
     project_root: Path | None,
     config_path: Path | None,
     environ: Mapping[str, str] | None,
-    default_modules: Sequence[str] | None,
 ) -> tuple[str, ...]:
     try:
         return load_app_config_modules(
             project_root=project_root,
             config_path=config_path,
             environ=environ if environ is not None else os.environ,
-            default_modules=default_modules,
         )
     except CompositionError as exc:
         raise wrapped_error(MigrationConfigError, exc) from exc

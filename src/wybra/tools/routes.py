@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from enum import StrEnum
-from typing import Any, TextIO
+from typing import Any, TextIO, TypeGuard
 
 import click
 
+from wybra.core.composition import CompositionError
+from wybra.tools.app_startup import (
+    CONFIG_SOURCE_CONTEXT_KEY,
+    CONFIG_SOURCE_HELP,
+    CONFIG_SOURCE_OPTION,
+    resolve_configured_asgi_app_target,
+)
 from wybra.tools.project import (
     ProjectToolConfigurationError,
-    import_wybra_tool_option,
+    import_from_string,
     runtime_project_root,
 )
 from wybra.web.routes import (
@@ -21,8 +31,6 @@ from wybra.web.routes import (
     render_succinct,
 )
 
-APP_TARGET_OPTION = "runserver_app"
-
 
 class RouteOutputFormat(StrEnum):
     SUCCINCT = "succinct"
@@ -31,9 +39,13 @@ class RouteOutputFormat(StrEnum):
     JSON = "json"
 
 
-def load_configured_asgi_app() -> Any:
+def load_configured_asgi_app(config_source: str | None = None) -> Any:
     project_root = runtime_project_root()
-    return import_wybra_tool_option(APP_TARGET_OPTION, project_root=project_root)
+    app_target = resolve_configured_asgi_app_target(
+        project_root=project_root,
+        config_source=config_source,
+    )
+    return import_from_string(app_target)
 
 
 def render_inspection(
@@ -99,6 +111,11 @@ def render_inspection(
     is_flag=True,
     help="With --check, suppress route-tree output and report only exit status.",
 )
+@click.option(
+    CONFIG_SOURCE_OPTION,
+    CONFIG_SOURCE_CONTEXT_KEY,
+    help=CONFIG_SOURCE_HELP,
+)
 def routes_command(
     output_format: str | None,
     succinct_format: bool,
@@ -107,6 +124,32 @@ def routes_command(
     json_format: bool,
     check: bool,
     quiet: bool,
+    config_source: str | None,
+) -> int:
+    return asyncio.run(
+        _run_routes_command(
+            output_format=output_format,
+            succinct_format=succinct_format,
+            graph_format=graph_format,
+            mermaid_format=mermaid_format,
+            json_format=json_format,
+            check=check,
+            quiet=quiet,
+            config_source=config_source,
+        )
+    )
+
+
+async def _run_routes_command(
+    *,
+    output_format: str | None,
+    succinct_format: bool,
+    graph_format: bool,
+    mermaid_format: bool,
+    json_format: bool,
+    check: bool,
+    quiet: bool,
+    config_source: str | None,
 ) -> int:
     if quiet and not check:
         raise click.UsageError("--quiet can only be used with --check.")
@@ -120,8 +163,12 @@ def routes_command(
     )
 
     try:
-        app = load_configured_asgi_app()
-    except ProjectToolConfigurationError as exc:
+        app = (
+            load_configured_asgi_app(config_source)
+            if config_source is not None
+            else load_configured_asgi_app()
+        )
+    except (CompositionError, ProjectToolConfigurationError) as exc:
         print("configuration: failed", file=sys.stderr)
         print(f"- {exc}", file=sys.stderr)
         return 1
@@ -145,7 +192,7 @@ def routes_command(
         return 1
 
     try:
-        inspection = inspect_route_tree(app)
+        inspection = await _inspect_installed_route_tree(app)
     except TypeError as exc:
         print("configuration: failed", file=sys.stderr)
         print(
@@ -191,6 +238,58 @@ def _is_supported_route_tree(routes: object) -> bool:
         routes,
         (Mapping, str, bytes),
     )
+
+
+async def _inspect_installed_route_tree(app: Any) -> RouteInspection:
+    router = getattr(app, "router", None)
+    if router is None or not hasattr(router, "lifespan_context"):
+        return inspect_route_tree(app)
+
+    lifespan_context = getattr(router, "lifespan_context", None)
+    # Starlette/FastAPI expose either an async context manager or an
+    # `lifespan_context(app)` factory. Unsupported factory signatures are
+    # ignored, but TypeError raised while entering lifespan is reported by the
+    # command as a configuration failure.
+    if _is_async_context_manager(lifespan_context):
+        async with lifespan_context:
+            return inspect_route_tree(app)
+    if callable(lifespan_context) and _accepts_app_argument(lifespan_context, app):
+        context = lifespan_context(app)
+        if _is_async_context_manager(context):
+            async with context:
+                return inspect_route_tree(app)
+    return inspect_route_tree(app)
+
+
+def _accepts_app_argument(factory: Callable[..., object], app: Any) -> bool:
+    """Return whether a lifespan factory can be called with the ASGI app.
+
+    Starlette/FastAPI expose router lifespan factories as
+    ``lifespan_context(app)``. Factories with incompatible or uninspectable
+    signatures are ignored so route inspection can fall back to the installed
+    route tree without accidentally calling a non-standard hook with the wrong
+    argument shape.
+    """
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return False
+    try:
+        signature.bind(app)
+    except TypeError:
+        return False
+    return True
+
+
+def _is_async_context_manager(
+    value: object,
+) -> TypeGuard[AbstractAsyncContextManager[Any]]:
+    if value is None or not isinstance(value, AbstractAsyncContextManager):
+        return False
+
+    aenter = getattr(value, "__aenter__", None)
+    aexit = getattr(value, "__aexit__", None)
+    return inspect.iscoroutinefunction(aenter) and inspect.iscoroutinefunction(aexit)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

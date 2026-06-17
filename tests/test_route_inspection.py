@@ -1,5 +1,7 @@
 import json
+import sys
 import tomllib
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -387,9 +389,179 @@ def test_routes_command_outputs_configured_route_tree(
     assert json.loads(captured.out)["routes"][0]["path"] == "/api/status"
 
 
+def test_routes_command_config_option_selects_app_config(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    selected_config = tmp_path / "selected.toml"
+    selected_config.write_text(
+        """
+        [app]
+        modules = ["configured_app"]
+
+        [app.runserver]
+        asgi_app = "configured_app:app"
+
+        [app.templates]
+        auto_reload = true
+        cache_size = 0
+
+        [app.static]
+        url_path = "/static/"
+        export_root = "static"
+        """,
+        encoding="utf-8",
+    )
+    app = _app()
+
+    @app.get("/selected", name="selected")
+    async def selected() -> dict[str, str]:
+        return {"source": "selected"}
+
+    module = type("ConfiguredAppModule", (), {"app": app})
+    monkeypatch.setitem(sys.modules, "configured_app", module)
+    monkeypatch.setenv("APP_CONFIG", (tmp_path / "ambient.toml").as_posix())
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = routes_tool.main(["--config", selected_config.as_posix(), "--json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert json.loads(captured.out)["routes"][0]["path"] == "/selected"
+    assert captured.err == ""
+
+
+def test_routes_command_inspects_routes_installed_during_lifespan(
+    monkeypatch,
+    capsys,
+) -> None:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        @app.get("/runtime", name="runtime")
+        async def runtime() -> dict[str, str]:
+            return {"status": "ok"}
+
+        yield
+
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
+
+    exit_code = routes_tool.main(["--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert json.loads(captured.out)["routes"][0]["path"] == "/runtime"
+
+
+def test_routes_command_ignores_incompatible_lifespan_context(
+    monkeypatch,
+    capsys,
+) -> None:
+    @asynccontextmanager
+    async def lifespan():
+        yield
+
+    async def endpoint(request):
+        return None
+
+    app = _AppWithRoutes([Route("/plain", endpoint, name="plain")])
+    app.router = type("Router", (), {})()
+    app.router.lifespan_context = lifespan
+    monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
+
+    exit_code = routes_tool.main(["--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert json.loads(captured.out)["routes"][0]["path"] == "/plain"
+
+
+def test_routes_command_ignores_non_async_lifespan_context(
+    monkeypatch,
+    capsys,
+) -> None:
+    class SyncContext:
+        def __aenter__(self):
+            msg = "synchronous context should not be entered"
+            raise AssertionError(msg)
+
+        def __aexit__(self, *_args: object) -> None:
+            return None
+
+    async def endpoint(request):
+        return None
+
+    app = _AppWithRoutes([Route("/plain", endpoint, name="plain")])
+    app.router = type("Router", (), {})()
+    app.router.lifespan_context = SyncContext()
+    monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
+
+    exit_code = routes_tool.main(["--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert json.loads(captured.out)["routes"][0]["path"] == "/plain"
+
+
+def test_routes_command_ignores_router_without_lifespan_context(
+    monkeypatch,
+    capsys,
+) -> None:
+    async def endpoint(request):
+        return None
+
+    app = _AppWithRoutes([Route("/plain", endpoint, name="plain")])
+    app.router = object()
+    monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
+
+    exit_code = routes_tool.main(["--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert json.loads(captured.out)["routes"][0]["path"] == "/plain"
+
+
+def test_routes_command_reports_lifespan_startup_type_error(
+    monkeypatch,
+    capsys,
+) -> None:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        raise TypeError("startup failed")
+        yield
+
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
+
+    exit_code = routes_tool.main(["--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "configuration: failed" in captured.err
+    assert "Failed to inspect configured ASGI app route tree" in captured.err
+    assert "startup failed" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("shortcut", "expected"),
+    [
+        ("--succinct", "GET          /api/status name=status"),
+        ("--graph", "[get] /status status"),
+        ("--mermaid", "flowchart TD\n"),
+        ("--json", "/api/status"),
+    ],
+)
 def test_routes_command_output_format_shortcuts(
     monkeypatch,
     capsys,
+    shortcut: str,
+    expected: str,
 ) -> None:
     app = _app()
 
@@ -399,34 +571,17 @@ def test_routes_command_output_format_shortcuts(
 
     monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
 
-    exit_code = routes_tool.main(["--succinct"])
+    exit_code = routes_tool.main([shortcut])
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "GET          /api/status name=status" in captured.out
-    assert captured.err == ""
-
-    exit_code = routes_tool.main(["--graph"])
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "api" in captured.out
-    assert "[get] /status status" in captured.out
-    assert captured.err == ""
-
-    exit_code = routes_tool.main(["--mermaid"])
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert captured.out.startswith("flowchart TD\n")
-    assert "/api/status" in captured.out
-    assert captured.err == ""
-
-    exit_code = routes_tool.main(["--json"])
-    captured = capsys.readouterr()
-
-    assert exit_code == 0
-    assert json.loads(captured.out)["routes"][0]["path"] == "/api/status"
+    if shortcut == "--json":
+        assert json.loads(captured.out)["routes"][0]["path"] == expected
+    elif shortcut == "--mermaid":
+        assert captured.out.startswith(expected)
+        assert "/api/status" in captured.out
+    else:
+        assert expected in captured.out
     assert captured.err == ""
 
 
