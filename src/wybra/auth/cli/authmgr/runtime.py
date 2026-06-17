@@ -47,6 +47,7 @@ from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.core.composition import CompositionError, load_app_config
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.persistence import close_database, create_database, session_scope
+from wybra.tools.app_startup import normalise_config_source
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 
 from .args import AuthmgrArgs
@@ -598,9 +599,10 @@ def _config_source_from_context(ctx: click.Context) -> str | None:
         return None
     if not isinstance(value, str):
         raise ConfigurationError("APP_CONFIG must be a string.")
-    if not value.strip():
-        raise ConfigurationError("APP_CONFIG must not be blank.")
-    return value.strip()
+    try:
+        return normalise_config_source(value)
+    except ProjectToolConfigurationError as exc:
+        raise ConfigurationError(str(exc)) from exc
 
 
 def _config_source_path(config_source: str | None) -> Path | None:

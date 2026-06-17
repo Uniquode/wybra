@@ -36,11 +36,9 @@ def _app_config_path() -> Path | None:
     return Path(configured_path.strip())
 
 
-_configured_app_config_path = _app_config_path()
-
 target_metadata = load_model_metadata(
     project_root=_project_root(),
-    config_path=_configured_app_config_path,
+    config_path=_app_config_path(),
 )
 
 

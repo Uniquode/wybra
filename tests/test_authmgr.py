@@ -671,6 +671,16 @@ def test_authmgr_config_option_overrides_app_config_env(
     assert captured.err == ""
 
 
+def test_authmgr_rejects_blank_config_option(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = authmgr.main(["--config", "   ", "user", "list"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "--config must not be blank" in captured.err
+
+
 def test_authmgr_rejects_missing_app_config_even_when_auth_toml_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
