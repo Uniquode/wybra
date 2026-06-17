@@ -14,6 +14,9 @@ from wybra.core.environment import load_environment
 from wybra.core.runtime import ALLOWED_DEPLOYMENT_ENVIRONMENTS
 from wybra.db.config import ENV_DATABASE_URL
 from wybra.tools.app_startup import (
+    CONFIG_SOURCE_CONTEXT_KEY,
+    CONFIG_SOURCE_HELP,
+    CONFIG_SOURCE_OPTION,
     normalise_cli_config_source,
     resolve_configured_app_startup,
 )
@@ -168,9 +171,9 @@ def load_runserver_config(
     help="Override APP_ROOT or current directory.",
 )
 @click.option(
-    "--config",
-    "config_source",
-    help="App config file for this invocation.",
+    CONFIG_SOURCE_OPTION,
+    CONFIG_SOURCE_CONTEXT_KEY,
+    help=CONFIG_SOURCE_HELP,
 )
 @click.option(
     "--database-url",

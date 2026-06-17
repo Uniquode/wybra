@@ -810,6 +810,33 @@ def test_load_migration_settings_passes_keyword_only_config_source(
     }
 
 
+def test_load_migration_settings_passes_config_source_to_kwargs_loader(
+    tmp_path: Path,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def load_settings(
+        database_url: str | None, **kwargs: object
+    ) -> MigrationTestSettings:
+        observed["database_url"] = database_url
+        observed["kwargs"] = kwargs
+        return MigrationTestSettings(
+            database_url=database_url or "sqlite+aiosqlite:///:memory:",
+            alembic_config=tmp_path / "alembic.ini",
+        )
+
+    migrate_module._load_migration_settings(
+        load_settings,
+        "sqlite+aiosqlite:///app.sqlite3",
+        "app.toml",
+    )
+
+    assert observed == {
+        "database_url": "sqlite+aiosqlite:///app.sqlite3",
+        "kwargs": {"config_source": "app.toml"},
+    }
+
+
 def test_load_migration_settings_uses_legacy_loader_without_config_source(
     tmp_path: Path,
 ) -> None:

@@ -11,7 +11,12 @@ from typing import Any, TextIO, TypeGuard
 import click
 
 from wybra.core.composition import CompositionError
-from wybra.tools.app_startup import resolve_configured_asgi_app_target
+from wybra.tools.app_startup import (
+    CONFIG_SOURCE_CONTEXT_KEY,
+    CONFIG_SOURCE_HELP,
+    CONFIG_SOURCE_OPTION,
+    resolve_configured_asgi_app_target,
+)
 from wybra.tools.project import (
     ProjectToolConfigurationError,
     import_from_string,
@@ -107,9 +112,9 @@ def render_inspection(
     help="With --check, suppress route-tree output and report only exit status.",
 )
 @click.option(
-    "--config",
-    "config_source",
-    help="App config file for this invocation.",
+    CONFIG_SOURCE_OPTION,
+    CONFIG_SOURCE_CONTEXT_KEY,
+    help=CONFIG_SOURCE_HELP,
 )
 def routes_command(
     output_format: str | None,
@@ -238,6 +243,10 @@ def _is_supported_route_tree(routes: object) -> bool:
 async def _inspect_installed_route_tree(app: Any) -> RouteInspection:
     router = getattr(app, "router", None)
     lifespan_context = getattr(router, "lifespan_context", None)
+    # Starlette/FastAPI expose either an async context manager or an
+    # `lifespan_context(app)` factory. Unsupported factory signatures are
+    # ignored, but TypeError raised while entering lifespan is reported by the
+    # command as a configuration failure.
     if _is_async_context_manager(lifespan_context):
         async with lifespan_context:
             return inspect_route_tree(app)

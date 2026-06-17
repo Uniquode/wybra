@@ -9,6 +9,10 @@ from wybra.core.composition import (
 )
 from wybra.tools.project import ProjectToolConfigurationError
 
+CONFIG_SOURCE_CONTEXT_KEY = "config_source"
+CONFIG_SOURCE_HELP = "App config file for this invocation."
+CONFIG_SOURCE_OPTION = "--config"
+
 
 @dataclass(frozen=True, slots=True)
 class ConfiguredAppStartup:
@@ -86,10 +90,15 @@ def normalise_cli_config_source(config_source: str) -> str:
     try:
         return normalise_config_source(config_source)
     except ProjectToolConfigurationError as exc:
-        raise ProjectToolConfigurationError("--config must not be blank.") from exc
+        raise ProjectToolConfigurationError(
+            f"{CONFIG_SOURCE_OPTION} must not be blank."
+        ) from exc
 
 
 __all__ = [
+    "CONFIG_SOURCE_CONTEXT_KEY",
+    "CONFIG_SOURCE_HELP",
+    "CONFIG_SOURCE_OPTION",
     "ConfiguredAppStartup",
     "load_required_app_config",
     "normalise_cli_config_source",

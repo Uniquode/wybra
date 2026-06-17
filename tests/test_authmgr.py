@@ -30,6 +30,7 @@ import wybra.auth.cli.authmgr as authmgr
 import wybra.auth.cli.authmgr.groups as authmgr_groups
 import wybra.auth.cli.authmgr.output as authmgr_output
 import wybra.auth.cli.authmgr.passwords as authmgr_passwords
+import wybra.auth.cli.authmgr.runtime as authmgr_runtime
 import wybra.auth.cli.authmgr.schema as authmgr_schema
 import wybra.auth.cli.authmgr.scopes as authmgr_scopes
 import wybra.auth.cli.authmgr.timestamps as authmgr_timestamps
@@ -88,6 +89,7 @@ from wybra.db.persistence import (
     session_scope,
 )
 from wybra.site import Site
+from wybra.tools.app_startup import CONFIG_SOURCE_CONTEXT_KEY
 
 STRONG_TEST_PASSWORD = "Correct horse 42!"
 UPDATED_STRONG_TEST_PASSWORD = "New correct horse 42!"
@@ -679,6 +681,23 @@ def test_authmgr_rejects_blank_config_option(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "--config must not be blank" in captured.err
+
+
+def test_authmgr_config_source_context_requires_dict() -> None:
+    ctx = click.Context(authmgr.authmgr_command, obj=object())
+
+    with pytest.raises(RuntimeError, match="expected ctx.obj to be a dict"):
+        authmgr_runtime._config_source_from_context(ctx)
+
+
+def test_authmgr_config_source_context_requires_string_value() -> None:
+    ctx = click.Context(
+        authmgr.authmgr_command,
+        obj={CONFIG_SOURCE_CONTEXT_KEY: object()},
+    )
+
+    with pytest.raises(RuntimeError, match="config_source must be a string"):
+        authmgr_runtime._config_source_from_context(ctx)
 
 
 def test_authmgr_rejects_missing_app_config_even_when_auth_toml_exists(

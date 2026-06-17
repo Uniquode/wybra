@@ -34,6 +34,11 @@ from wybra.db.surfaces import (
     migration_version_locations_from_modules,
 )
 from wybra.db.urls import safe_database_error_message, sqlite_database_path
+from wybra.tools.app_startup import (
+    CONFIG_SOURCE_CONTEXT_KEY,
+    CONFIG_SOURCE_HELP,
+    CONFIG_SOURCE_OPTION,
+)
 
 DEFAULT_DATABASE_URL_CONFIG_KEY = "default_database_url"
 DEFAULT_MIGRATIONS_SCRIPT_LOCATION = "wybra.db:migrations"
@@ -42,7 +47,7 @@ ALEMBIC_VERSION_TABLE = "alembic_version"
 DATABASE_URL_HELP = (
     "Override the configured SQLAlchemy async database URL for this migration command."
 )
-APP_CONFIG_HELP = "App config file for this invocation."
+
 REVISION_HELP = (
     "Create an Alembic revision in a configured module.\n\n"
     "Roll-forward order: Upgrade to the current head before autogenerate; "
@@ -69,12 +74,7 @@ class MigrationSettings(Protocol):
     def modules(self) -> tuple[str, ...]: ...
 
 
-class MigrationSettingsLoader(Protocol):
-    def __call__(
-        self,
-        database_url: str | None,
-        config_source: str | None = None,
-    ) -> MigrationSettings: ...
+MigrationSettingsLoader = Callable[..., MigrationSettings]
 
 
 class MigrationConfigurationError(ValueError):
@@ -107,7 +107,9 @@ def create_migrate_command(
         help="Run application schema migrations through Alembic.",
     )
     @_database_url_option
-    @click.option("--config", "config_source", help=APP_CONFIG_HELP)
+    @click.option(
+        CONFIG_SOURCE_OPTION, CONFIG_SOURCE_CONTEXT_KEY, help=CONFIG_SOURCE_HELP
+    )
     @click.pass_context
     def migrate_command(
         ctx: click.Context,
@@ -116,7 +118,7 @@ def create_migrate_command(
     ) -> None:
         ctx.ensure_object(dict)
         ctx.obj["database_url"] = database_url
-        ctx.obj["config_source"] = config_source
+        ctx.obj[CONFIG_SOURCE_CONTEXT_KEY] = config_source
 
     @migrate_command.command(
         "init",
@@ -271,7 +273,7 @@ def _config_source_for_command(ctx: click.Context) -> str | None:
             "Invalid Click context object for wybra-migrate; expected a dictionary."
         )
 
-    config_source = ctx.obj.get("config_source")
+    config_source = ctx.obj.get(CONFIG_SOURCE_CONTEXT_KEY)
     if config_source is None:
         return None
     if not isinstance(config_source, str):
@@ -280,7 +282,7 @@ def _config_source_for_command(ctx: click.Context) -> str | None:
             f"{type(config_source)!r}; expected a string."
         )
     if not config_source.strip():
-        raise click.UsageError("--config must not be blank.")
+        raise click.UsageError(f"{CONFIG_SOURCE_OPTION} must not be blank.")
     return config_source.strip()
 
 
@@ -398,18 +400,28 @@ def _load_migration_settings(
 def _loader_accepts_keyword_config_source(
     settings_loader: MigrationSettingsLoader,
 ) -> bool:
+    # Loader adapters may be simple functions, callable objects, or wrappers.
+    # `--config` is supported only when the callable can accept a keyword named
+    # `config_source`, either explicitly or through `**kwargs`.
     try:
         signature = inspect.signature(settings_loader)
     except (TypeError, ValueError):
         return False
 
-    return any(
+    has_explicit_config_source = any(
         parameter.name == "config_source"
         and parameter.kind
         in (
             inspect.Parameter.KEYWORD_ONLY,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
         )
+        for parameter in signature.parameters.values()
+    )
+    if has_explicit_config_source:
+        return True
+
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()
     )
 
