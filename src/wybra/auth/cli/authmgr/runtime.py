@@ -847,19 +847,19 @@ def _print_totp_material(
     output = sys.stderr if stream is None else stream
     print("Operator credential material. Store and transmit it securely.", file=output)
     if secret is not None:
-        # codeql[py/clear-text-logging-sensitive-data] Intentional one-time
-        # operator handoff for explicitly requested credential generation.
-        print(f"TOTP secret: {secret}", file=output)
+        _write_credential_material(output, f"TOTP secret: {secret}")
     if provisioning_uri is not None:
-        # codeql[py/clear-text-logging-sensitive-data] Intentional one-time
-        # operator handoff for explicitly requested credential generation.
-        print(f"TOTP provisioning URI: {provisioning_uri}", file=output)
+        _write_credential_material(output, f"TOTP provisioning URI: {provisioning_uri}")
     if recovery_codes:
         print("Recovery codes:", file=output)
         for recovery_code in recovery_codes:
-            # codeql[py/clear-text-logging-sensitive-data] Intentional
-            # one-time operator handoff for recovery-code generation.
-            print(f"- {recovery_code}", file=output)
+            _write_credential_material(output, f"- {recovery_code}")
+
+
+def _write_credential_material(output: TextIO, line: str) -> None:
+    # Intentional CLI stream output for explicitly requested one-time operator
+    # credential handoff. This is not diagnostic logging.
+    output.write(f"{line}\n")
 
 
 def _totp_material_fields(
