@@ -810,18 +810,13 @@ def test_load_migration_settings_passes_keyword_only_config_source(
     }
 
 
-def test_load_migration_settings_passes_positional_config_source(
+def test_load_migration_settings_uses_legacy_loader_without_config_source(
     tmp_path: Path,
 ) -> None:
     observed: dict[str, str | None] = {}
 
-    def load_settings(
-        database_url: str | None,
-        config_source: str | None = None,
-        /,
-    ) -> MigrationTestSettings:
+    def load_settings(database_url: str | None) -> MigrationTestSettings:
         observed["database_url"] = database_url
-        observed["config_source"] = config_source
         return MigrationTestSettings(
             database_url=database_url or "sqlite+aiosqlite:///:memory:",
             alembic_config=tmp_path / "alembic.ini",
@@ -830,19 +825,20 @@ def test_load_migration_settings_passes_positional_config_source(
     migrate_module._load_migration_settings(
         load_settings,
         "sqlite+aiosqlite:///app.sqlite3",
-        "app.toml",
+        None,
     )
 
-    assert observed == {
-        "database_url": "sqlite+aiosqlite:///app.sqlite3",
-        "config_source": "app.toml",
-    }
+    assert observed == {"database_url": "sqlite+aiosqlite:///app.sqlite3"}
 
 
 def test_load_migration_settings_rejects_config_source_for_unsupported_loader(
     tmp_path: Path,
 ) -> None:
-    def load_settings(database_url: str | None) -> MigrationTestSettings:
+    def load_settings(
+        database_url: str | None,
+        config_source: str | None = None,
+        /,
+    ) -> MigrationTestSettings:
         return MigrationTestSettings(
             database_url=database_url or "sqlite+aiosqlite:///:memory:",
             alembic_config=tmp_path / "alembic.ini",

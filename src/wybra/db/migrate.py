@@ -390,8 +390,6 @@ def _load_migration_settings(
 
     if _loader_accepts_keyword_config_source(settings_loader):
         return settings_loader(database_url, config_source=config_source)
-    if _loader_accepts_positional_config_source(settings_loader):
-        return settings_loader(database_url, config_source)
     raise MigrationConfigurationError(
         "Migration settings loader must accept config_source when --config is used."
     )
@@ -413,29 +411,6 @@ def _loader_accepts_keyword_config_source(
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
         )
         for parameter in signature.parameters.values()
-    )
-
-
-def _loader_accepts_positional_config_source(
-    settings_loader: MigrationSettingsLoader,
-) -> bool:
-    try:
-        signature = inspect.signature(settings_loader)
-    except (TypeError, ValueError):
-        return False
-
-    parameters = tuple(signature.parameters.values())
-    positional_parameters = tuple(
-        parameter
-        for parameter in parameters
-        if parameter.kind
-        in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-    )
-    return len(positional_parameters) >= 2 or any(
-        parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in parameters
     )
 
 
