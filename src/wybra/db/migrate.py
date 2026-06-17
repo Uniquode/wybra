@@ -38,9 +38,8 @@ from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
     CONFIG_SOURCE_OPTION,
-    normalise_cli_config_source,
+    config_source_from_click_context,
 )
-from wybra.tools.project import ProjectToolConfigurationError
 
 DEFAULT_DATABASE_URL_CONFIG_KEY = "default_database_url"
 DEFAULT_MIGRATIONS_SCRIPT_LOCATION = "wybra.db:migrations"
@@ -283,25 +282,16 @@ def _database_url_for_command(
 
 
 def _config_source_for_command(ctx: click.Context) -> str | None:
-    if ctx.obj is None:
-        return None
-    if not isinstance(ctx.obj, dict):
-        raise click.UsageError(
+    return config_source_from_click_context(
+        ctx,
+        error_factory=click.UsageError,
+        invalid_context_message=(
             "Invalid Click context object for wybra-migrate; expected a dictionary."
-        )
-
-    config_source = ctx.obj.get(CONFIG_SOURCE_CONTEXT_KEY)
-    if config_source is None:
-        return None
-    if not isinstance(config_source, str):
-        raise click.UsageError(
-            "Invalid root config_source type "
-            f"{type(config_source)!r}; expected a string."
-        )
-    try:
-        return normalise_cli_config_source(config_source)
-    except ProjectToolConfigurationError as exc:
-        raise click.UsageError(str(exc)) from exc
+        ),
+        invalid_type_message=lambda value_type: (
+            f"Invalid root config_source type {value_type!r}; expected a string."
+        ),
+    )
 
 
 def _run_migration(

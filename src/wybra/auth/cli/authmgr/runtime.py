@@ -48,8 +48,7 @@ from wybra.core.composition import CompositionError, load_app_config
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.persistence import close_database, create_database, session_scope
 from wybra.tools.app_startup import (
-    CONFIG_SOURCE_CONTEXT_KEY,
-    normalise_cli_config_source,
+    config_source_from_click_context,
 )
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 
@@ -593,22 +592,14 @@ def _load_auth_settings_for_command(config_source: str | None = None) -> AuthSet
 
 
 def _config_source_from_context(ctx: click.Context) -> str | None:
-    root_context = ctx.find_root()
-    obj = root_context.obj
-    if not isinstance(obj, dict):
-        return None
-    value = obj.get(CONFIG_SOURCE_CONTEXT_KEY)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ConfigurationError(
+    return config_source_from_click_context(
+        ctx,
+        error_factory=ConfigurationError,
+        invalid_type_message=lambda value_type: (
             "Invalid Click context for authmgr: config_source must be a string, "
-            f"got {type(value).__name__!r}."
-        )
-    try:
-        return normalise_cli_config_source(value)
-    except ProjectToolConfigurationError as exc:
-        raise ConfigurationError(str(exc)) from exc
+            f"got {value_type.__name__!r}."
+        ),
+    )
 
 
 def _config_source_path(config_source: str | None) -> Path | None:

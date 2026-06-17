@@ -242,6 +242,9 @@ def _is_supported_route_tree(routes: object) -> bool:
 
 async def _inspect_installed_route_tree(app: Any) -> RouteInspection:
     router = getattr(app, "router", None)
+    if router is None or not hasattr(router, "lifespan_context"):
+        return inspect_route_tree(app)
+
     lifespan_context = getattr(router, "lifespan_context", None)
     # Starlette/FastAPI expose either an async context manager or an
     # `lifespan_context(app)` factory. Unsupported factory signatures are

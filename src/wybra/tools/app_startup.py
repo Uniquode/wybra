@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+import click
 
 from wybra.core.composition import (
     AppConfig,
@@ -12,6 +15,7 @@ from wybra.tools.project import ProjectToolConfigurationError
 CONFIG_SOURCE_CONTEXT_KEY = "config_source"
 CONFIG_SOURCE_HELP = "App config file for this invocation."
 CONFIG_SOURCE_OPTION = "--config"
+type ConfigSourceErrorFactory = Callable[[str], Exception]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,11 +99,37 @@ def normalise_cli_config_source(config_source: str) -> str:
         ) from exc
 
 
+def config_source_from_click_context(
+    ctx: click.Context,
+    *,
+    error_factory: ConfigSourceErrorFactory,
+    invalid_context_message: str | None = None,
+    invalid_type_message: Callable[[type[object]], str],
+) -> str | None:
+    root_context = ctx.find_root()
+    obj = root_context.obj
+    if not isinstance(obj, dict):
+        if invalid_context_message is None:
+            return None
+        raise error_factory(invalid_context_message)
+
+    value = obj.get(CONFIG_SOURCE_CONTEXT_KEY)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise error_factory(invalid_type_message(type(value)))
+    try:
+        return normalise_cli_config_source(value)
+    except ProjectToolConfigurationError as exc:
+        raise error_factory(str(exc)) from exc
+
+
 __all__ = [
     "CONFIG_SOURCE_CONTEXT_KEY",
     "CONFIG_SOURCE_HELP",
     "CONFIG_SOURCE_OPTION",
     "ConfiguredAppStartup",
+    "config_source_from_click_context",
     "load_required_app_config",
     "normalise_cli_config_source",
     "normalise_config_source",
