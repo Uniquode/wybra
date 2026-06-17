@@ -26,7 +26,6 @@ from wybra.core.settings import (
     SettingsLoadError,
     load_composition_config_from_environment,
 )
-from wybra.db.config import DEFAULT_ALEMBIC_CONFIG
 from wybra.db.urls import resolve_database_url
 from wybra.media.config import MEDIA_URL_MODES
 
@@ -39,7 +38,6 @@ class ProjectSettings:
     template_root: Path | None = None
     static_root: Path | None = None
     migrations_root: Path | None = None
-    alembic_config: Path = DEFAULT_ALEMBIC_CONFIG
     static_url_path: str = "/static/"
     media_root: Path | None = None
     media_mount_path: str = "/media"
@@ -80,16 +78,6 @@ class ProjectSettings:
             self,
             "media_root",
             _resolve_optional_path(self.media_root, project_root, "media_root"),
-        )
-        object.__setattr__(
-            self,
-            "alembic_config",
-            _resolve_path(
-                self.alembic_config,
-                project_root,
-                DEFAULT_ALEMBIC_CONFIG,
-                "alembic_config",
-            ),
         )
         object.__setattr__(
             self,
@@ -202,10 +190,7 @@ def _project_settings_kwargs(
     }
     if database_url is not None:
         settings_kwargs["database_url"] = database_url
-    for field_name in (
-        "alembic_config",
-        "migrations_root",
-    ):
+    for field_name in ("migrations_root",):
         if field_name in app_values:
             settings_kwargs[field_name] = app_values[field_name]
     if "root" in static_values:

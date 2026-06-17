@@ -231,6 +231,9 @@ def _raw_config_sections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for nested_name, nested_value in auth_data.items():
             if isinstance(nested_value, dict):
                 sections[f"auth.{nested_name}"] = dict(nested_value)
+    log_data = data.get("log")
+    if isinstance(log_data, dict):
+        sections["log"] = dict(log_data)
     return sections
 
 

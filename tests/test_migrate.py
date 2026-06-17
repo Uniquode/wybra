@@ -14,12 +14,13 @@ import wybra.db.migrate as migrate_module
 import wybra.db.provisioning as provisioning_module
 import wybra.tools.migrate as tools_migrate
 from wybra.core.composition import AppConfig, load_app_config
+from wybra.db.alembic_attributes import LOGGING_CONFIG_ATTRIBUTE
 
 
 @dataclass(frozen=True, slots=True)
 class MigrationTestSettings:
     database_url: str
-    alembic_config: Path
+    project_root: Path = Path.cwd()
     migrations_root: Path | None = None
     app_config: AppConfig | None = None
     modules: tuple[str, ...] = ("wybra.auth",)
@@ -27,79 +28,29 @@ class MigrationTestSettings:
 
 @dataclass(frozen=True, slots=True)
 class MigrationCommandFixture:
-    alembic_config: Path
     app_config: Path
     command: object
 
     def cleanup(self) -> None:
         self.app_config.unlink(missing_ok=True)
-        self.alembic_config.unlink(missing_ok=True)
 
 
 def sqlite_file_url(path: Path) -> str:
     return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
 
 
-def alembic_config_path() -> Path:
-    alembic_config = tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        suffix=".ini",
-        delete=False,
-    )
-    alembic_config.write(
-        dedent(
-            """
-            [alembic]
-
-            [loggers]
-            keys = root,sqlalchemy,alembic
-
-            [handlers]
-            keys = console
-
-            [formatters]
-            keys = generic
-
-            [logger_root]
-            level = WARNING
-            handlers = console
-            qualname =
-
-            [logger_sqlalchemy]
-            level = WARNING
-            handlers =
-            qualname = sqlalchemy.engine
-
-            [logger_alembic]
-            level = INFO
-            handlers =
-            qualname = alembic
-
-            [handler_console]
-            class = StreamHandler
-            args = (sys.stderr,)
-            level = NOTSET
-            formatter = generic
-
-            [formatter_generic]
-            format = %(levelname)-5.5s [%(name)s] %(message)s
-            datefmt = %H:%M:%S
-            """
-        )
-    )
-    alembic_config.close()
-    return Path(alembic_config.name)
-
-
 def create_migrate_command(
     *,
     modules: tuple[str, ...] = ("wybra.auth",),
 ) -> MigrationCommandFixture:
-    config_path = alembic_config_path()
-    app_config_path = _write_test_app_config(
-        config_path.with_suffix(".app.toml"), modules
+    app_config_file = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        suffix=".toml",
+        delete=False,
     )
+    app_config_file.close()
+    app_config_path = _write_test_app_config(Path(app_config_file.name), modules)
     app_config = load_app_config(config_path=app_config_path)
 
     def load_settings(database_url: str | None) -> MigrationTestSettings:
@@ -110,13 +61,12 @@ def create_migrate_command(
 
         return MigrationTestSettings(
             database_url=database_url,
-            alembic_config=config_path,
+            project_root=app_config.project_root,
             app_config=app_config,
             modules=modules,
         )
 
     return MigrationCommandFixture(
-        alembic_config=config_path,
         app_config=app_config_path,
         command=migrate_module.create_migrate_command(load_settings),
     )
@@ -781,6 +731,54 @@ def test_migrate_revision_help_describes_roll_forward_order(capsys) -> None:
     assert "depends_on" in captured.out
 
 
+def test_build_alembic_config_is_programmatic(tmp_path: Path) -> None:
+    app_config_path = _write_test_app_config(tmp_path / "app.toml", ("wybra.db",))
+    app_config = load_app_config(project_root=tmp_path, config_path=app_config_path)
+    settings = MigrationTestSettings(
+        database_url="sqlite+aiosqlite:///app.sqlite3",
+        project_root=tmp_path,
+        app_config=app_config,
+        modules=(),
+    )
+
+    config = migrate_module.build_alembic_config(settings)
+
+    assert config.config_file_name is None
+    assert config.get_main_option("project_root") == tmp_path.as_posix()
+    assert (
+        config.get_main_option("script_location")
+        == migrate_module.DEFAULT_MIGRATIONS_SCRIPT_LOCATION
+    )
+    assert config.get_main_option("sqlalchemy.url") == "sqlite+aiosqlite:///app.sqlite3"
+    assert config.get_main_option("app_config") == app_config_path.as_posix()
+    assert (
+        config.attributes[LOGGING_CONFIG_ATTRIBUTE]["loggers"]["alembic"]["level"]
+        == "INFO"
+    )
+
+
+def test_build_alembic_config_rejects_empty_logging_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = MigrationTestSettings(
+        database_url="sqlite+aiosqlite:///app.sqlite3",
+        project_root=tmp_path,
+        modules=(),
+    )
+    monkeypatch.setattr(
+        migrate_module,
+        "logging_config_from_app_config",
+        lambda _app_config: None,
+    )
+
+    with pytest.raises(
+        migrate_module.MigrationConfigurationError,
+        match="Migration logging config must not be None.",
+    ):
+        migrate_module.build_alembic_config(settings)
+
+
 def test_load_migration_settings_passes_keyword_only_config_source(
     tmp_path: Path,
 ) -> None:
@@ -795,7 +793,7 @@ def test_load_migration_settings_passes_keyword_only_config_source(
         observed["config_source"] = config_source
         return MigrationTestSettings(
             database_url=database_url or "sqlite+aiosqlite:///:memory:",
-            alembic_config=tmp_path / "alembic.ini",
+            project_root=tmp_path,
         )
 
     migrate_module._load_migration_settings(
@@ -822,7 +820,7 @@ def test_load_migration_settings_passes_config_source_to_kwargs_loader(
         observed["kwargs"] = kwargs
         return MigrationTestSettings(
             database_url=database_url or "sqlite+aiosqlite:///:memory:",
-            alembic_config=tmp_path / "alembic.ini",
+            project_root=tmp_path,
         )
 
     migrate_module._load_migration_settings(
@@ -846,7 +844,7 @@ def test_load_migration_settings_uses_legacy_loader_without_config_source(
         observed["database_url"] = database_url
         return MigrationTestSettings(
             database_url=database_url or "sqlite+aiosqlite:///:memory:",
-            alembic_config=tmp_path / "alembic.ini",
+            project_root=tmp_path,
         )
 
     migrate_module._load_migration_settings(
@@ -868,7 +866,7 @@ def test_load_migration_settings_rejects_config_source_for_unsupported_loader(
     ) -> MigrationTestSettings:
         return MigrationTestSettings(
             database_url=database_url or "sqlite+aiosqlite:///:memory:",
-            alembic_config=tmp_path / "alembic.ini",
+            project_root=tmp_path,
         )
 
     with pytest.raises(
@@ -890,13 +888,12 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
     selected_config = tmp_path / "selected.toml"
     monkeypatch.setenv("APP_CONFIG", ambient_config.as_posix())
     observed: dict[str, str | None] = {}
-    config_path = alembic_config_path()
 
     def load_project_settings(*, environ=None, project_root=None, read_dotenv=True):
         observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
         return MigrationTestSettings(
             database_url="sqlite+aiosqlite:///:memory:",
-            alembic_config=config_path,
+            project_root=tmp_path,
         )
 
     def record_current(_config) -> None:
@@ -906,12 +903,7 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
     monkeypatch.setattr(tools_migrate, "load_project_settings", load_project_settings)
     monkeypatch.setattr(tools_migrate.command, "current", record_current)
 
-    try:
-        exit_code = tools_migrate.main(
-            ["--config", selected_config.as_posix(), "current"]
-        )
-    finally:
-        config_path.unlink(missing_ok=True)
+    exit_code = tools_migrate.main(["--config", selected_config.as_posix(), "current"])
 
     assert exit_code == 0
     assert observed["app_config"] == selected_config.as_posix()
