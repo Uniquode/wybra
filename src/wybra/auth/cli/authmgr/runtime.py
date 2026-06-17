@@ -596,15 +596,12 @@ def _config_source_from_context(ctx: click.Context) -> str | None:
     root_context = ctx.find_root()
     obj = root_context.obj
     if not isinstance(obj, dict):
-        raise RuntimeError(
-            "Invalid Click context for authmgr: expected ctx.obj to be a dict, "
-            f"got {type(obj).__name__!r}."
-        )
+        return None
     value = obj.get(CONFIG_SOURCE_CONTEXT_KEY)
     if value is None:
         return None
     if not isinstance(value, str):
-        raise RuntimeError(
+        raise ConfigurationError(
             "Invalid Click context for authmgr: config_source must be a string, "
             f"got {type(value).__name__!r}."
         )

@@ -683,11 +683,10 @@ def test_authmgr_rejects_blank_config_option(
     assert "--config must not be blank" in captured.err
 
 
-def test_authmgr_config_source_context_requires_dict() -> None:
+def test_authmgr_config_source_context_ignores_non_dict_context() -> None:
     ctx = click.Context(authmgr.authmgr_command, obj=object())
 
-    with pytest.raises(RuntimeError, match="expected ctx.obj to be a dict"):
-        authmgr_runtime._config_source_from_context(ctx)
+    assert authmgr_runtime._config_source_from_context(ctx) is None
 
 
 def test_authmgr_config_source_context_requires_string_value() -> None:
@@ -696,7 +695,7 @@ def test_authmgr_config_source_context_requires_string_value() -> None:
         obj={CONFIG_SOURCE_CONTEXT_KEY: object()},
     )
 
-    with pytest.raises(RuntimeError, match="config_source must be a string"):
+    with pytest.raises(ConfigurationError, match="config_source must be a string"):
         authmgr_runtime._config_source_from_context(ctx)
 
 
