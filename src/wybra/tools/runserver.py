@@ -13,7 +13,10 @@ from wybra.core.config import ENV_APP_ENV
 from wybra.core.environment import load_environment
 from wybra.core.runtime import ALLOWED_DEPLOYMENT_ENVIRONMENTS
 from wybra.db.config import ENV_DATABASE_URL
-from wybra.tools.app_startup import resolve_configured_app_startup
+from wybra.tools.app_startup import (
+    normalise_cli_config_source,
+    resolve_configured_app_startup,
+)
 from wybra.tools.project import (
     ProjectToolConfigurationError,
     runtime_project_root,
@@ -109,7 +112,7 @@ def runserver_environment_overrides(
     if project_root is not None:
         overrides[APP_ROOT_ENV] = project_root.resolve().as_posix()
     if config_source is not None:
-        overrides[APP_CONFIG_ENV] = _non_blank_option(config_source, "--config")
+        overrides[APP_CONFIG_ENV] = normalise_cli_config_source(config_source)
     if database_url is not None:
         overrides[ENV_DATABASE_URL] = _non_blank_option(database_url, "--database-url")
     if deployment_environment is not None:

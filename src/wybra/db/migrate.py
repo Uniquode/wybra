@@ -73,9 +73,7 @@ class MigrationSettingsLoader(Protocol):
     def __call__(
         self,
         database_url: str | None,
-        /,
-        *args: Any,
-        **kwargs: Any,
+        config_source: str | None = None,
     ) -> MigrationSettings: ...
 
 
@@ -666,7 +664,11 @@ def _alembic_config_value(value: str) -> str:
     return value.replace("%", "%%")
 
 
-def _missing_settings_loader(_database_url: str | None) -> MigrationSettings:
+def _missing_settings_loader(
+    database_url: str | None,
+    config_source: str | None = None,
+) -> MigrationSettings:
+    del database_url, config_source
     raise MigrationConfigurationError("Migration settings loader is not configured.")
 
 
