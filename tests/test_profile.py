@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from wybra.profile.models import UserProfile
 from wybra.profile.validation import validate_profile
 from wybra.site import Site, start
 
+_CREATED_SITES: list[Site] = []
+
 
 @dataclass(frozen=True, slots=True)
 class ProfileUser:
@@ -48,7 +51,15 @@ def _site_with_database(tmp_path: Path) -> Site:
         DatabaseCapability,
         SqlAlchemyDatabaseCapability.from_connections({"default": database}),
     )
+    _CREATED_SITES.append(site)
     return site
+
+
+@pytest.fixture(autouse=True)
+def close_created_sites():
+    yield
+    while _CREATED_SITES:
+        asyncio.run(_CREATED_SITES.pop().close())
 
 
 def test_profile_metadata_exposes_profile_table() -> None:

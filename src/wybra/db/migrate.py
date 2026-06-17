@@ -21,6 +21,8 @@ from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.exc import SQLAlchemyError
 
 from wybra.core.composition import AppConfig
+from wybra.core.logging import logging_config_from_app_config
+from wybra.db.alembic_attributes import LOGGING_CONFIG_ATTRIBUTE
 from wybra.db.migration_metadata import MigrationConfigError
 from wybra.db.persistence import close_database, create_database_engine
 from wybra.db.provisioning import (
@@ -41,7 +43,6 @@ from wybra.tools.app_startup import (
     config_source_from_click_context,
 )
 
-DEFAULT_DATABASE_URL_CONFIG_KEY = "default_database_url"
 DEFAULT_MIGRATIONS_SCRIPT_LOCATION = "wybra.db:migrations"
 ALEMBIC_VERSION_TABLE = "alembic_version"
 
@@ -67,7 +68,7 @@ class MigrationSettings(Protocol):
     """
 
     database_url: str
-    alembic_config: Path
+    project_root: Path
     migrations_root: Path | None
     app_config: AppConfig | None
 
@@ -466,11 +467,17 @@ def build_alembic_config(
     *,
     additional_version_locations: Sequence[Path] = (),
 ) -> Config:
-    config = Config(str(settings.alembic_config))
+    config = Config()
     config.set_main_option(
         "script_location",
         migration_script_location(settings.migrations_root),
     )
+    project_root = (
+        settings.project_root
+        if settings.project_root.is_absolute()
+        else settings.project_root.resolve()
+    )
+    config.set_main_option("project_root", project_root.as_posix())
     version_locations = _deduplicated_paths(
         (
             *migration_version_locations_from_modules(settings.modules),
@@ -486,13 +493,23 @@ def build_alembic_config(
     config.set_main_option(
         "sqlalchemy.url", _alembic_config_value(settings.database_url)
     )
-    config.set_main_option(
-        DEFAULT_DATABASE_URL_CONFIG_KEY,
-        _alembic_config_value(settings.database_url),
-    )
     if settings.app_config is not None:
         config.set_main_option("app_config", settings.app_config.config_path.as_posix())
+    config.attributes[LOGGING_CONFIG_ATTRIBUTE] = _logging_config_for_settings(settings)
     return config
+
+
+def _logging_config_for_settings(settings: MigrationSettings) -> dict[str, Any]:
+    try:
+        logging_config: dict[str, Any] | None = logging_config_from_app_config(
+            settings.app_config
+        )
+    except ValueError as exc:
+        raise MigrationConfigurationError(str(exc)) from exc
+
+    if logging_config is None:
+        raise MigrationConfigurationError("Migration logging config must not be None.")
+    return logging_config
 
 
 def _deduplicated_paths(paths: Sequence[Path]) -> tuple[Path, ...]:

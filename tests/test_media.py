@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from wybra.media import (
 from wybra.media.models import MediaItem
 from wybra.media.validation import validate_media
 from wybra.site import Site, start
+
+_CREATED_SITES: list[Site] = []
 
 
 class FakeUpload:
@@ -66,7 +69,15 @@ def _site_with_media_database(tmp_path: Path) -> Site:
         DatabaseCapability,
         SqlAlchemyDatabaseCapability.from_connections({"default": database}),
     )
+    _CREATED_SITES.append(site)
     return site
+
+
+@pytest.fixture(autouse=True)
+def close_created_sites():
+    yield
+    while _CREATED_SITES:
+        asyncio.run(_CREATED_SITES.pop().close())
 
 
 def _capability(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
@@ -9,21 +8,32 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from wybra.db.migrate import (
-    DEFAULT_DATABASE_URL_CONFIG_KEY,
+from wybra.core.logging import configure_logging, default_logging_config
+from wybra.db.alembic_attributes import (
+    LOGGING_CONFIG_ATTRIBUTE,
+    LOGGING_CONFIGURED_ATTRIBUTE,
 )
 from wybra.db.migration_metadata import load_model_metadata
 from wybra.db.urls import is_supported_database_url, resolve_database_url
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name, disable_existing_loggers=False)
+
+def configure_migration_logging() -> None:
+    if config.attributes.get(LOGGING_CONFIGURED_ATTRIBUTE) is True:
+        return
+
+    configured_logging = config.attributes.get(LOGGING_CONFIG_ATTRIBUTE)
+    if configured_logging is None:
+        configured_logging = default_logging_config()
+    configure_logging(configured_logging)
+    config.attributes[LOGGING_CONFIGURED_ATTRIBUTE] = True
 
 
 def _project_root() -> Path:
-    if config.config_file_name is not None:
-        return Path(config.config_file_name).resolve().parent
+    configured_project_root = config.get_main_option("project_root")
+    if configured_project_root is not None and configured_project_root.strip():
+        return Path(configured_project_root.strip()).resolve()
 
     return Path.cwd()
 
@@ -47,7 +57,6 @@ def _database_url() -> str:
     for configured_url in (
         explicit_url,
         config.get_main_option("sqlalchemy.url"),
-        config.get_main_option(DEFAULT_DATABASE_URL_CONFIG_KEY),
     ):
         if configured_url and configured_url.strip():
             return _validated_database_url(
@@ -55,8 +64,8 @@ def _database_url() -> str:
             )
 
     raise RuntimeError(
-        "Alembic database URL is not configured. Set sqlalchemy.url, "
-        f"{DEFAULT_DATABASE_URL_CONFIG_KEY}, or pass -x database_url=<url>."
+        "Alembic database URL is not configured. Set sqlalchemy.url or pass "
+        "-x database_url=<url>."
     )
 
 
@@ -71,6 +80,7 @@ def _validated_database_url(database_url: str) -> str:
 
 
 def run_migrations_offline() -> None:
+    configure_migration_logging()
     context.configure(
         url=_database_url(),
         target_metadata=target_metadata,
@@ -83,6 +93,7 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
+    configure_migration_logging()
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():

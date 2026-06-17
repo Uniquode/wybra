@@ -19,14 +19,12 @@ from wybra.db.urls import parse_sqlite_database_url, redact_database_url
 from wybra.tools.validation.core import (
     ValidationCheck,
     ValidationResult,
-    read_text_for_validation,
     record_check,
 )
 
 
 class PersistenceValidationSettings(Protocol):
     database_url: str
-    alembic_config: Path
     migrations_root: Path | None
 
     @property
@@ -57,21 +55,17 @@ def validate_persistence(settings: PersistenceValidationSettings) -> ValidationR
         )
 
     _record_sqlite_persistence_check(settings, checks, errors)
-    has_alembic_config = _record_alembic_config_checks(settings, checks, errors)
     has_migrations_root = _record_migration_root_checks(settings, checks, errors)
 
     record_check(
         checks,
         errors,
-        passed=has_alembic_config and has_migrations_root,
+        passed=has_migrations_root,
         description=(
             "development database initialisation command is available: "
             "uv run wybra-migrate init"
         ),
-        error=(
-            "Development database initialisation requires Alembic config and "
-            "migrations."
-        ),
+        error="Development database initialisation requires migrations.",
     )
 
     return ValidationResult(
@@ -107,49 +101,6 @@ def _record_sqlite_persistence_check(
         description="SQLite database URL uses persistent file storage",
         error="SQLite database URL must not force in-memory storage.",
     )
-
-
-def _record_alembic_config_checks(
-    settings: PersistenceValidationSettings,
-    checks: list[ValidationCheck],
-    errors: list[str],
-) -> bool:
-    has_alembic_config = record_check(
-        checks,
-        errors,
-        passed=settings.alembic_config.is_file(),
-        description=f"Alembic config exists: {settings.alembic_config}",
-        error=f"Missing Alembic config: {settings.alembic_config}",
-    )
-    if not has_alembic_config:
-        return False
-
-    config_content = read_text_for_validation(
-        settings.alembic_config,
-        checks,
-        errors,
-        description=f"Alembic config reads as UTF-8: {settings.alembic_config}",
-    )
-    if config_content is None:
-        return False
-
-    record_check(
-        checks,
-        errors,
-        passed="script_location" in config_content,
-        description="Alembic config defines script_location",
-        error=(
-            f"Alembic config does not define script_location: {settings.alembic_config}"
-        ),
-    )
-    record_check(
-        checks,
-        errors,
-        passed="sqlite+aiosqlite:///:memory:" not in config_content,
-        description="Alembic config does not force in-memory SQLite",
-        error="Alembic config must not force in-memory SQLite.",
-    )
-    return True
 
 
 def _record_migration_root_checks(

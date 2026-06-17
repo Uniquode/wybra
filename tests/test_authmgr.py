@@ -5,13 +5,11 @@ import json
 import logging
 import sqlite3
 import sys
-import tempfile
 import tomllib
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from textwrap import dedent
 from time import time
 from types import SimpleNamespace
 
@@ -104,7 +102,7 @@ class AuthTestSettings:
 @dataclass(frozen=True, slots=True)
 class MigrationTestSettings:
     database_url: str
-    alembic_config: Path
+    project_root: Path = Path.cwd()
     migrations_root: Path | None = None
     app_config: None = None
 
@@ -213,72 +211,16 @@ def _session_factory_from_app(app: FastAPI) -> async_sessionmaker[AsyncSession]:
 
 
 def run_auth_migration(argv: list[str]) -> int:
-    alembic_config = tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        suffix=".ini",
-        delete=False,
-    )
-    alembic_config.write(
-        dedent(
-            """
-        [alembic]
-
-        [loggers]
-        keys = root,sqlalchemy,alembic
-
-        [handlers]
-        keys = console
-
-        [formatters]
-        keys = generic
-
-        [logger_root]
-        level = WARNING
-        handlers = console
-        qualname =
-
-        [logger_sqlalchemy]
-        level = WARNING
-        handlers =
-        qualname = sqlalchemy.engine
-
-        [logger_alembic]
-        level = INFO
-        handlers =
-        qualname = alembic
-
-        [handler_console]
-        class = StreamHandler
-        args = (sys.stderr,)
-        level = NOTSET
-        formatter = generic
-
-        [formatter_generic]
-        format = %(levelname)-5.5s [%(name)s] %(message)s
-        datefmt = %H:%M:%S
-        """
-        )
-    )
-    alembic_config.close()
-    alembic_config_path = Path(alembic_config.name)
-
     def load_settings(database_url: str | None) -> MigrationTestSettings:
         if database_url is None:
             raise migrate_module.MigrationConfigurationError(
                 "Test database URL is required."
             )
 
-        return MigrationTestSettings(
-            database_url=database_url,
-            alembic_config=alembic_config_path,
-        )
+        return MigrationTestSettings(database_url=database_url)
 
-    try:
-        command = migrate_module.create_migrate_command(load_settings)
-        return migrate_module.run_migrate_command(command, argv)
-    finally:
-        alembic_config_path.unlink(missing_ok=True)
+    command = migrate_module.create_migrate_command(load_settings)
+    return migrate_module.run_migrate_command(command, argv)
 
 
 def write_auth_app_toml(

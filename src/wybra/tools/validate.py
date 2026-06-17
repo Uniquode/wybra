@@ -37,7 +37,6 @@ class ValidationOverrides:
     template_root: Path | None = None
     static_root: Path | None = None
     migrations_root: Path | None = None
-    alembic_config: Path | None = None
     static_url_path: str | None = None
 
 
@@ -81,11 +80,6 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
                 overrides.migrations_root
                 if overrides.migrations_root is not None
                 else defaults.migrations_root
-            ),
-            alembic_config=(
-                overrides.alembic_config
-                if overrides.alembic_config is not None
-                else defaults.alembic_config
             ),
             static_url_path=(
                 overrides.static_url_path
@@ -137,11 +131,6 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
     type=click.Path(path_type=Path),
     help="Override the configured Alembic migrations root.",
 )
-@click.option(
-    "--alembic-config",
-    type=click.Path(path_type=Path),
-    help="Override the configured Alembic config file.",
-)
 @click.argument("targets", nargs=-1)
 def validate_command(
     targets: tuple[str, ...],
@@ -151,14 +140,12 @@ def validate_command(
     static_url_path: str | None,
     database_url: str | None,
     migrations_root: Path | None,
-    alembic_config: Path | None,
 ) -> int:
     overrides = ValidationOverrides(
         database_url=database_url,
         template_root=template_root,
         static_root=static_root,
         migrations_root=migrations_root,
-        alembic_config=alembic_config,
         static_url_path=static_url_path,
     )
     try:
