@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from wybra.config import (
     AppConfigSource,
+    BaseSettings,
     ConfigDef,
     ConfigDefinitionError,
     ConfigService,
@@ -31,7 +32,10 @@ from wybra.media.config import MEDIA_URL_MODES
 
 
 @dataclass(frozen=True, slots=True)
-class ProjectSettings:
+class ProjectSettings(BaseSettings):
+    module_config: ClassVar[ConfigDef] = RUNTIME_CONFIG_DEF
+    config_section: ClassVar[str | None] = "app"
+
     project_root: Path
     app_config: AppConfig
     database_url: str | None = None
@@ -45,6 +49,15 @@ class ProjectSettings:
     media_url_mode: str = "storage-key"
     template_auto_reload: bool | None = None
     template_cache_size: int = 400
+
+    @classmethod
+    def load_settings(
+        cls,
+        config: ConfigService,
+        *,
+        app_config: AppConfig,
+    ) -> ProjectSettings:  # ty: ignore[invalid-method-override]
+        return cls(**_project_settings_kwargs(config, app_config))
 
     def __post_init__(self) -> None:
         project_root = self.project_root.resolve()
@@ -157,7 +170,7 @@ def load_project_settings(
                 extra_names=(APP_CONFIG_ENV,),
             ),
         )
-        return ProjectSettings(**_project_settings_kwargs(config, app_config))
+        return ProjectSettings.load_settings(config, app_config=app_config)
     except (SettingsLoadError, ConfigDefinitionError, ConfigSourceError) as exc:
         raise wrapped_error(ConfigurationError, exc) from exc
 
@@ -170,10 +183,10 @@ def _project_settings_kwargs(
     config: ConfigService,
     app_config: AppConfig,
 ) -> dict[str, Any]:
-    app_values = dict(config.get_config("app") or {})
-    static_values = dict(config.get_config("app.static") or {})
-    template_values = dict(config.get_config("app.templates") or {})
-    media_values = dict(config.get_config("wybra.media") or {})
+    app_values = ProjectSettings.section_values(config, "app")
+    static_values = ProjectSettings.section_values(config, "app.static")
+    template_values = ProjectSettings.section_values(config, "app.templates")
+    media_values = ProjectSettings.section_values(config, "wybra.media")
     database_url = _configured_database_url(app_values, app_config.database_url)
     settings_kwargs: dict[str, Any] = {
         "project_root": app_config.project_root,

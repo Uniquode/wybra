@@ -533,6 +533,96 @@ def test_base_settings_accepts_explicit_section_for_multi_section_config_def() -
     assert settings == ExampleSettings(name="configured")
 
 
+def test_base_settings_reports_missing_module_config() -> None:
+    @dataclass(frozen=True, slots=True)
+    class BrokenSettings(BaseSettings):
+        enabled: bool = False
+
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="BrokenSettings.module_config must be a ConfigDef",
+    ):
+        BrokenSettings.load_settings({})
+
+
+def test_base_settings_reports_invalid_module_config_type() -> None:
+    @dataclass(frozen=True, slots=True)
+    class BrokenSettings(BaseSettings):
+        module_config = object()
+
+        enabled: bool = False
+
+    with pytest.raises(
+        ConfigDefinitionError,
+        match="BrokenSettings.module_config must be a ConfigDef, not 'object'",
+    ):
+        BrokenSettings.load_settings({})
+
+
+def test_base_settings_section_values_does_not_leak_non_mapping_source_value() -> None:
+    @dataclass(frozen=True, slots=True)
+    class ExampleSettings(BaseSettings):
+        module_config = ConfigDef(
+            {"example": ConfigGroup(fields=(ConfigField(name="secret"),))}
+        )
+
+        secret: str = ""
+
+    secret_value = "super-secret-token"
+
+    with pytest.raises(ConfigSourceError) as exc_info:
+        ExampleSettings.section_values(secret_value, "example")  # type: ignore[arg-type]
+
+    message = str(exc_info.value)
+    assert "str" in message
+    assert secret_value not in message
+
+
+def test_base_settings_section_values_does_not_leak_non_mapping_section() -> None:
+    @dataclass(frozen=True, slots=True)
+    class ExampleSettings(BaseSettings):
+        module_config = ConfigDef(
+            {"example": ConfigGroup(fields=(ConfigField(name="secret"),))}
+        )
+
+        secret: str = ""
+
+    secret_value = "super-secret-token"
+
+    with pytest.raises(ConfigSourceError) as exc_info:
+        ExampleSettings.section_values({"example": secret_value}, "example")
+
+    message = str(exc_info.value)
+    assert "str" in message
+    assert secret_value not in message
+
+
+def test_base_settings_transform_errors_do_not_leak_raw_values() -> None:
+    def reject_secret(value: object) -> str:
+        raise ValueError(f"cannot use {value!r}")
+
+    @dataclass(frozen=True, slots=True)
+    class ExampleSettings(BaseSettings):
+        module_config = ConfigDef(
+            {
+                "example": ConfigGroup(
+                    fields=(ConfigField(name="secret", transform=reject_secret),)
+                )
+            }
+        )
+
+        secret: str = ""
+
+    secret_value = "super-secret-token"
+
+    with pytest.raises(ConfigSourceError) as exc_info:
+        ExampleSettings.load_settings({"secret": secret_value})
+
+    message = str(exc_info.value)
+    assert "example.secret" in message
+    assert secret_value not in message
+
+
 def test_config_section_rejects_duplicate_field_names() -> None:
     with pytest.raises(
         ConfigDefinitionError,

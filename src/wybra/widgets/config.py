@@ -1,26 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Final, Protocol
+from typing import ClassVar, Final
 
-from wybra.config import ConfigDef, ConfigField, ConfigGroup
-from wybra.config.types import ConfigSourceError
+from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup
 
 THEME_FEATURE: Final = "theme"
 LOGIN_FEATURE: Final = "login"
 WIDGETS_CONFIG_SECTION: Final = "wybra.widgets"
 WIDGET_FEATURES: Final = frozenset({LOGIN_FEATURE, THEME_FEATURE})
 DEFAULT_WIDGET_FEATURES: Final = (THEME_FEATURE, LOGIN_FEATURE)
-
-
-@dataclass(frozen=True, slots=True)
-class WidgetsSettings:
-    enabled_features: tuple[str, ...] = DEFAULT_WIDGET_FEATURES
-
-
-class WidgetsConfigProvider(Protocol):
-    def get_config(self, section: str) -> Mapping[str, Any] | None: ...
 
 
 def to_widget_features(value: object) -> tuple[str, ...]:
@@ -34,22 +23,6 @@ def to_widget_features(value: object) -> tuple[str, ...]:
     if isinstance(value, list | tuple):
         return _validate_widget_features(tuple(value))
     raise ValueError("must be a list, tuple, or comma-separated string.")
-
-
-def widgets_settings_from_config(
-    config: WidgetsConfigProvider,
-    *,
-    default_features: tuple[str, ...] = DEFAULT_WIDGET_FEATURES,
-) -> WidgetsSettings:
-    values = config.get_config(WIDGETS_CONFIG_SECTION) or {}
-    features = values.get("features", default_features)
-    try:
-        enabled_features = to_widget_features(features)
-    except ValueError as exc:
-        raise ConfigSourceError(
-            f"Config value wybra.widgets.features is invalid: {exc}"
-        ) from exc
-    return WidgetsSettings(enabled_features=enabled_features)
 
 
 def _validate_widget_features(features: tuple[object, ...]) -> tuple[str, ...]:
@@ -79,6 +52,14 @@ module_config: Final = ConfigDef(
     }
 )
 
+
+@dataclass(frozen=True, slots=True)
+class WidgetsSettings(BaseSettings):
+    module_config: ClassVar[ConfigDef] = module_config
+
+    features: tuple[str, ...] = DEFAULT_WIDGET_FEATURES
+
+
 __all__ = (
     "DEFAULT_WIDGET_FEATURES",
     "LOGIN_FEATURE",
@@ -88,5 +69,4 @@ __all__ = (
     "WidgetsSettings",
     "module_config",
     "to_widget_features",
-    "widgets_settings_from_config",
 )

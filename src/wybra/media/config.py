@@ -85,22 +85,9 @@ class MediaSettings(BaseSettings):
 
     @classmethod
     def load_settings(cls, config) -> MediaSettings:  # type: ignore[override]
-        app_config = config.get_config("app") or {}
+        app_config = cls.section_values(config, "app")
         project_root = _path_value(app_config.get("project_root", Path.cwd())).resolve()
-        settings = super().load_settings(config)
-        media_config = config.get_config("wybra.media") or {}
-        return cls(
-            project_root=project_root,
-            root=_path_value(media_config.get("root", settings.root)),
-            mount_path=_mount_path_value(
-                media_config.get(
-                    "mount_path",
-                    settings.mount_path,
-                )
-            ),
-            serve=_bool_value(media_config.get("serve", settings.serve)),
-            url_mode=_url_mode_value(media_config.get("url_mode", settings.url_mode)),
-        )
+        return cls(project_root=project_root, **cls.settings_kwargs(config))
 
     def __post_init__(self) -> None:
         project_root = _path_value(self.project_root).resolve()

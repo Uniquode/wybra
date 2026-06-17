@@ -64,16 +64,19 @@ from wybra.auth.settings import (
     APP_CONFIG_SECTION,
     AUTH_CONFIG_SECTION,
     AUTH_SETTINGS_OWNER,
+    ENV_SESSION_LIFETIME,
     ENV_TOTP_ALLOWED_DRIFT,
     ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
     ENV_TOTP_PERIOD_SECONDS,
     ENV_TOTP_RECOVERY_WINDOW_SECONDS,
+    PASSWORD_POLICY_CONFIG_SECTION,
+    PASSWORD_POLICY_SECTION_FIELD,
+    PASSWORD_SECTION_FIELD,
     AuthSettings,
     load_auth_settings,
-    load_auth_settings_from_config,
     validate_auth_settings,
 )
-from wybra.config import ConfigService, MappingConfigSource
+from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core.composition import (
     AppConfig,
     RouteOptions,
@@ -877,6 +880,50 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
     assert settings.identity_options.totp_recovery_window_seconds == 900
 
 
+@pytest.mark.parametrize(
+    ("setting_name", "config_line"),
+    [
+        ("session_lifetime_seconds", "session_lifetime_seconds = 0"),
+        ("totp_period_seconds", "totp_period_seconds = 0"),
+        ("totp_challenge_expiry_seconds", "totp_challenge_expiry_seconds = -1"),
+        ("totp_recovery_window_seconds", "totp_recovery_window_seconds = 0"),
+    ],
+)
+def test_app_auth_config_rejects_non_positive_duration_settings(
+    tmp_path: Path,
+    setting_name: str,
+    config_line: str,
+) -> None:
+    app_config = load_auth_test_app_config(tmp_path / "app.toml", config_line)
+
+    with pytest.raises(
+        ConfigSourceError,
+        match=rf"auth\.{setting_name} is invalid: .*positive integer",
+    ):
+        load_auth_settings(app_config=app_config, environ={})
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value", "message"),
+    [
+        (ENV_SESSION_LIFETIME, "0", "Session lifetime"),
+        (ENV_TOTP_PERIOD_SECONDS, "0", "TOTP period"),
+        (ENV_TOTP_CHALLENGE_EXPIRY_SECONDS, "-1", "TOTP challenge expiry"),
+        (ENV_TOTP_RECOVERY_WINDOW_SECONDS, "0", "TOTP recovery window"),
+    ],
+)
+def test_app_auth_env_rejects_non_positive_duration_settings(
+    tmp_path: Path,
+    env_name: str,
+    env_value: str,
+    message: str,
+) -> None:
+    app_config = load_auth_test_app_config(tmp_path / "app.toml")
+
+    with pytest.raises(ConfigurationError, match=message):
+        load_auth_settings(app_config=app_config, environ={env_name: env_value})
+
+
 def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None:
     config_path = tmp_path / "app.toml"
     app_config = load_auth_test_app_config(config_path)
@@ -897,7 +944,7 @@ def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None
         discover_module_config=False,
     )
 
-    settings = load_auth_settings_from_config(
+    settings = AuthSettings.load_settings(
         config,
         app_config=app_config,
         environ={},
@@ -909,6 +956,63 @@ def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None
     assert settings.owner == AUTH_SETTINGS_OWNER
     assert settings.integration_enabled(PROVIDER) is True
     assert settings.is_totp_enabled() is True
+
+
+def test_auth_settings_rejects_unknown_loaded_auth_options_when_app_auth_exists(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(
+        config_path,
+        "provider_enabled = true",
+    )
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    AUTH_CONFIG_SECTION: {
+                        "session_lifetme_seconds": 3600,
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    with pytest.raises(ConfigurationError, match="session_lifetme_seconds"):
+        AuthSettings.load_settings(
+            config,
+            app_config=app_config,
+            environ={},
+        )
+
+
+def test_auth_settings_rejects_non_table_app_config_auth(tmp_path: Path) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(config_path)
+    object.__setattr__(app_config, "auth", ["not-a-table"])
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    with pytest.raises(ConfigurationError, match=r"\[auth\] must be a table"):
+        AuthSettings.load_settings(
+            config,
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_auth_settings_public_values_are_immutable() -> None:
@@ -1008,6 +1112,178 @@ def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:
     assert policy.minimum_score == 0.25
     assert policy.minimum_character_categories == 1
     assert policy.common_fragments == ("example",)
+
+
+def test_auth_settings_merges_nested_password_policy_config(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(
+        config_path,
+        "",
+        "[auth.password.policy]",
+        "minimum_length = 8",
+        "minimum_strength = 0.25",
+    )
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    AUTH_CONFIG_SECTION: {
+                        PASSWORD_SECTION_FIELD: {
+                            PASSWORD_POLICY_SECTION_FIELD: {
+                                "minimum_strength": 0.5,
+                                "common_fragments": ["example"],
+                            }
+                        }
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    settings = AuthSettings.load_settings(
+        config,
+        app_config=app_config,
+        environ={},
+    )
+
+    policy = settings.identity_options.resolved_password_policy()
+    assert policy.minimum_length == 8
+    assert policy.minimum_score == 0.5
+    assert policy.common_fragments == ("example",)
+
+
+def test_auth_settings_uses_section_password_policy_when_inline_policy_missing(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(config_path)
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    AUTH_CONFIG_SECTION: {
+                        PASSWORD_SECTION_FIELD: {},
+                    },
+                    PASSWORD_POLICY_CONFIG_SECTION: {
+                        "minimum_length": 10,
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    settings = AuthSettings.load_settings(
+        config,
+        app_config=app_config,
+        environ={},
+    )
+
+    assert settings.identity_options.resolved_password_policy().minimum_length == 10
+
+
+def test_auth_settings_rejects_conflicting_password_config_shapes(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(
+        config_path,
+        "",
+        "[auth.password.policy]",
+        "minimum_length = 8",
+    )
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    AUTH_CONFIG_SECTION: {
+                        PASSWORD_SECTION_FIELD: "strict",
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    with pytest.raises(ConfigurationError, match="Conflicting auth.password"):
+        AuthSettings.load_settings(
+            config,
+            app_config=app_config,
+            environ={},
+        )
+
+
+def test_auth_settings_rejects_non_table_password_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(config_path)
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    AUTH_CONFIG_SECTION: {
+                        PASSWORD_SECTION_FIELD: "strict",
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    with pytest.raises(ConfigurationError, match=r"\[auth\.password\] table"):
+        AuthSettings.load_settings(
+            config,
+            app_config=app_config,
+            environ={},
+        )
+
+
+def test_auth_settings_rejects_non_table_inline_password_policy(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(config_path)
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    AUTH_CONFIG_SECTION: {
+                        PASSWORD_SECTION_FIELD: {
+                            PASSWORD_POLICY_SECTION_FIELD: "strict",
+                        },
+                    },
+                    PASSWORD_POLICY_CONFIG_SECTION: {
+                        "minimum_length": 10,
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    with pytest.raises(ConfigurationError, match=r"\[auth\.password\.policy\] table"):
+        AuthSettings.load_settings(
+            config,
+            app_config=app_config,
+            environ={},
+        )
 
 
 @pytest.mark.parametrize(
