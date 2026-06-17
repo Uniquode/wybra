@@ -479,6 +479,34 @@ def test_routes_command_ignores_incompatible_lifespan_context(
     assert json.loads(captured.out)["routes"][0]["path"] == "/plain"
 
 
+def test_routes_command_ignores_non_async_lifespan_context(
+    monkeypatch,
+    capsys,
+) -> None:
+    class SyncContext:
+        def __aenter__(self):
+            msg = "synchronous context should not be entered"
+            raise AssertionError(msg)
+
+        def __aexit__(self, *_args: object) -> None:
+            return None
+
+    async def endpoint(request):
+        return None
+
+    app = _AppWithRoutes([Route("/plain", endpoint, name="plain")])
+    app.router = type("Router", (), {})()
+    app.router.lifespan_context = SyncContext()
+    monkeypatch.setattr(routes_tool, "load_configured_asgi_app", lambda: app)
+
+    exit_code = routes_tool.main(["--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert json.loads(captured.out)["routes"][0]["path"] == "/plain"
+
+
 def test_routes_command_reports_lifespan_startup_type_error(
     monkeypatch,
     capsys,

@@ -38,7 +38,9 @@ from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
     CONFIG_SOURCE_OPTION,
+    normalise_cli_config_source,
 )
+from wybra.tools.project import ProjectToolConfigurationError
 
 DEFAULT_DATABASE_URL_CONFIG_KEY = "default_database_url"
 DEFAULT_MIGRATIONS_SCRIPT_LOCATION = "wybra.db:migrations"
@@ -74,7 +76,22 @@ class MigrationSettings(Protocol):
     def modules(self) -> tuple[str, ...]: ...
 
 
-MigrationSettingsLoader = Callable[..., MigrationSettings]
+class MigrationSettingsLoader(Protocol):
+    """Callable shape used to build migration settings.
+
+    Loaders must accept the database URL as their first argument. Newer loaders
+    may accept ``config_source`` as a keyword-only argument; extra keywords are
+    permitted so wrappers can forward command context without losing type
+    information for the required database URL.
+    """
+
+    def __call__(
+        self,
+        database_url: str | None,
+        *,
+        config_source: str | None = ...,
+        **_: object,
+    ) -> MigrationSettings: ...
 
 
 class MigrationConfigurationError(ValueError):
@@ -281,9 +298,10 @@ def _config_source_for_command(ctx: click.Context) -> str | None:
             "Invalid root config_source type "
             f"{type(config_source)!r}; expected a string."
         )
-    if not config_source.strip():
-        raise click.UsageError(f"{CONFIG_SOURCE_OPTION} must not be blank.")
-    return config_source.strip()
+    try:
+        return normalise_cli_config_source(config_source)
+    except ProjectToolConfigurationError as exc:
+        raise click.UsageError(str(exc)) from exc
 
 
 def _run_migration(
@@ -653,9 +671,11 @@ def _alembic_config_value(value: str) -> str:
 
 def _missing_settings_loader(
     database_url: str | None,
+    *,
     config_source: str | None = None,
+    **_extra: object,
 ) -> MigrationSettings:
-    del database_url, config_source
+    del database_url, config_source, _extra
     raise MigrationConfigurationError("Migration settings loader is not configured.")
 
 

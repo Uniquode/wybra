@@ -25,7 +25,9 @@ command = data_migrate.command
 
 def _build_settings(
     database_url: str | None,
+    *,
     config_source: str | None = None,
+    **_extra: object,
 ) -> data_migrate.MigrationSettings:
     project_root = runtime_project_root()
 

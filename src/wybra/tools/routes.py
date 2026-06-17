@@ -262,7 +262,7 @@ def _accepts_app_argument(factory: Callable[..., object], app: Any) -> bool:
     try:
         signature = inspect.signature(factory)
     except (TypeError, ValueError):
-        return True
+        return False
     try:
         signature.bind(app)
     except TypeError:
@@ -273,7 +273,12 @@ def _accepts_app_argument(factory: Callable[..., object], app: Any) -> bool:
 def _is_async_context_manager(
     value: object,
 ) -> TypeGuard[AbstractAsyncContextManager[Any]]:
-    return hasattr(value, "__aenter__") and hasattr(value, "__aexit__")
+    if value is None or not isinstance(value, AbstractAsyncContextManager):
+        return False
+
+    aenter = getattr(value, "__aenter__", None)
+    aexit = getattr(value, "__aexit__", None)
+    return inspect.iscoroutinefunction(aenter) and inspect.iscoroutinefunction(aexit)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
