@@ -408,9 +408,14 @@ def _load_migration_settings(
 def _loader_accepts_keyword_config_source(
     settings_loader: MigrationSettingsLoader,
 ) -> bool:
-    # Loader adapters may be simple functions, callable objects, or wrappers.
-    # `--config` is supported only when the callable can accept a keyword named
-    # `config_source`, either explicitly or through `**kwargs`.
+    """Return whether a migration settings loader can accept ``config_source``.
+
+    Loader adapters may be simple functions, callable objects, or wrappers.
+    Runtime ``--config`` support is enabled only when the callable can accept a
+    keyword named ``config_source``, either explicitly or through ``**kwargs``.
+    Callables whose signatures cannot be inspected are treated as unsupported
+    so the command fails with a configuration error instead of guessing.
+    """
     try:
         signature = inspect.signature(settings_loader)
     except (TypeError, ValueError):

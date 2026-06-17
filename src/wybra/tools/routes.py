@@ -262,6 +262,14 @@ async def _inspect_installed_route_tree(app: Any) -> RouteInspection:
 
 
 def _accepts_app_argument(factory: Callable[..., object], app: Any) -> bool:
+    """Return whether a lifespan factory can be called with the ASGI app.
+
+    Starlette/FastAPI expose router lifespan factories as
+    ``lifespan_context(app)``. Factories with incompatible or uninspectable
+    signatures are ignored so route inspection can fall back to the installed
+    route tree without accidentally calling a non-standard hook with the wrong
+    argument shape.
+    """
     try:
         signature = inspect.signature(factory)
     except (TypeError, ValueError):
