@@ -39,6 +39,10 @@ class AuthmgrArgs:
     expires_at: float | None = None
     no_expires_at: bool = False
     force: bool = False
+    totp: bool = False
+    no_totp: bool = False
+    rcodes: bool = False
+    include_secrets: bool = False
     json_output: bool = False
     csv_output: bool = False
     email_pattern: str | None = None

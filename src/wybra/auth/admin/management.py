@@ -27,6 +27,12 @@ from wybra.auth.emails import (
     normalise_email_target,
     resolve_user_by_normalised_email,
 )
+from wybra.auth.mfa.recovery import generate_recovery_codes
+from wybra.auth.mfa.storage import (
+    SqlAlchemyRecoveryCodeStore,
+    SqlAlchemyTOTPCredentialStore,
+)
+from wybra.auth.mfa.totp import generate_totp_secret, totp_auth_uri
 from wybra.auth.models import (
     AccessToken,
     Group,
@@ -52,6 +58,7 @@ ERROR_NOT_FOUND = "not_found"
 ERROR_SUPERUSER_PROTECTED = "superuser_protected"
 ERROR_FINAL_SUPERUSER = "final_superuser"
 ERROR_INVALID_USER_ID = "invalid_user_id"
+ERROR_NO_ACTIVE_TOTP = "no_active_totp"
 ERROR_UNSUPPORTED_ORDER = "unsupported_order"
 ERROR_INVALID_GROUP_ID = "invalid_group_id"
 ERROR_GROUP_HAS_MEMBERSHIPS = "group_has_memberships"
@@ -88,6 +95,7 @@ GROUP_RECORD_FIELDS: tuple[str, ...] = (
     "child_groups",
     "parent_groups",
 )
+DEFAULT_MANAGEMENT_TOTP_ISSUER = "Wybra"
 
 
 def user_record(user: User, *, now: float | None = None) -> dict[str, Any]:
@@ -313,6 +321,96 @@ async def delete_scope_for_management(
     await session.delete(scope_record_model)
     await session.commit()
     return Result.ok(record)
+
+
+async def provision_totp_for_management(
+    session: AsyncSession,
+    identity_options: IdentityOptions,
+    *,
+    user: User,
+    issuer: str = DEFAULT_MANAGEMENT_TOTP_ISSUER,
+) -> Result[dict[str, Any]]:
+    secret = generate_totp_secret()
+    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    credential_id = await credential_store.create_pending_totp_credential(
+        str(user.id),
+        secret,
+    )
+    # Activation is the replacement boundary: the store disables any existing
+    # active credential for this user before marking the new credential active.
+    await credential_store.activate_totp_credential(credential_id)
+
+    recovery_codes = generate_recovery_codes()
+    recovery_store = SqlAlchemyRecoveryCodeStore(session)
+    await recovery_store.replace_recovery_codes(
+        str(user.id),
+        credential_id,
+        recovery_codes,
+    )
+    await session.commit()
+
+    return Result.ok(
+        {
+            "user": user_record(user),
+            "totp": {
+                "secret": secret,
+                "provisioning_uri": totp_auth_uri(
+                    account_name=user.email,
+                    secret=secret,
+                    issuer=issuer,
+                    period=identity_options.totp_period_seconds,
+                ),
+                "recovery_codes": recovery_codes,
+            },
+        }
+    )
+
+
+async def disable_totp_for_management(
+    session: AsyncSession,
+    *,
+    user: User,
+) -> Result[dict[str, Any]]:
+    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    active_credential_id = await credential_store.get_active_totp_credential(
+        str(user.id)
+    )
+    if active_credential_id is None:
+        return Result.failure(ERROR_NO_ACTIVE_TOTP, "User does not have active TOTP.")
+
+    await credential_store.disable_totp_credential(active_credential_id)
+    await session.commit()
+    return Result.ok({"user": user_record(user)})
+
+
+async def rotate_totp_recovery_codes_for_management(
+    session: AsyncSession,
+    *,
+    user: User,
+) -> Result[dict[str, Any]]:
+    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    active_credential_id = await credential_store.get_active_totp_credential(
+        str(user.id)
+    )
+    if active_credential_id is None:
+        return Result.failure(ERROR_NO_ACTIVE_TOTP, "User does not have active TOTP.")
+
+    recovery_codes = generate_recovery_codes()
+    recovery_store = SqlAlchemyRecoveryCodeStore(session)
+    await recovery_store.replace_recovery_codes(
+        str(user.id),
+        active_credential_id,
+        recovery_codes,
+    )
+    await session.commit()
+    return Result.ok(
+        {
+            "user": user_record(user),
+            "totp": {
+                "recovery_codes": recovery_codes,
+            },
+        }
+    )
 
 
 async def create_group_for_management(
