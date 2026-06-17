@@ -30,6 +30,24 @@ def register_user_commands(root_command: click.Group) -> None:
     @click.option("--timezone", "preferred_timezone")
     @click.option("--expires-at", callback=_timestamp_callback)
     @click.option("--group", "groups", multiple=True)
+    @click.option(
+        "--totp",
+        is_flag=True,
+        help=(
+            "Provision TOTP secret material and recovery codes for the target "
+            "user. Output contains secrets printed once for secure storage; "
+            "do not log or expose it."
+        ),
+    )
+    @click.option("--json", "json_output", is_flag=True)
+    @click.option(
+        "--include-secrets",
+        is_flag=True,
+        help=(
+            "Include generated TOTP secrets and recovery codes in JSON output. "
+            "Sensitive; use only for secure handoff."
+        ),
+    )
     @click.pass_context
     def create_command(
         ctx: click.Context,
@@ -43,6 +61,9 @@ def register_user_commands(root_command: click.Group) -> None:
         preferred_timezone: str | None,
         expires_at: float | None,
         groups: tuple[str, ...],
+        totp: bool,
+        json_output: bool,
+        include_secrets: bool,
     ) -> None:
         _run_authmgr(
             ctx,
@@ -58,6 +79,9 @@ def register_user_commands(root_command: click.Group) -> None:
                 preferred_timezone=preferred_timezone,
                 expires_at=expires_at,
                 add_groups=groups,
+                totp=totp,
+                json_output=json_output,
+                include_secrets=include_secrets,
             ),
         )
 
@@ -83,6 +107,34 @@ def register_user_commands(root_command: click.Group) -> None:
     @click.option("--rm-group", "remove_groups", multiple=True)
     @click.option("--set-group", "set_groups", multiple=True)
     @click.option("--group", "invalid_groups", multiple=True)
+    @click.option(
+        "--totp",
+        is_flag=True,
+        help=(
+            "Replace the target user's active TOTP credential and print secret "
+            "material plus recovery codes once for secure storage; do not log "
+            "or expose it."
+        ),
+    )
+    @click.option("--no-totp", is_flag=True, help="Disable the active TOTP credential.")
+    @click.option(
+        "--rcodes",
+        is_flag=True,
+        help=(
+            "Rotate recovery codes for the active TOTP credential and print "
+            "the new secret codes once for secure storage; do not log or expose "
+            "them."
+        ),
+    )
+    @click.option("--json", "json_output", is_flag=True)
+    @click.option(
+        "--include-secrets",
+        is_flag=True,
+        help=(
+            "Include generated TOTP secrets and recovery codes in JSON output. "
+            "Sensitive; use only for secure handoff."
+        ),
+    )
     @click.pass_context
     def update_command(
         ctx: click.Context,
@@ -107,6 +159,11 @@ def register_user_commands(root_command: click.Group) -> None:
         remove_groups: tuple[str, ...],
         set_groups: tuple[str, ...],
         invalid_groups: tuple[str, ...],
+        totp: bool,
+        no_totp: bool,
+        rcodes: bool,
+        json_output: bool,
+        include_secrets: bool,
     ) -> None:
         if invalid_groups:
             raise click.UsageError(
@@ -131,6 +188,9 @@ def register_user_commands(root_command: click.Group) -> None:
         _ensure_mutually_exclusive(
             (expires_at, "--expires-at"), (no_expires_at, "--no-expires-at")
         )
+        _ensure_mutually_exclusive((totp, "--totp"), (no_totp, "--no-totp"))
+        _ensure_mutually_exclusive((totp, "--totp"), (rcodes, "--rcodes"))
+        _ensure_mutually_exclusive((no_totp, "--no-totp"), (rcodes, "--rcodes"))
         _run_authmgr(
             ctx,
             AuthmgrArgs(
@@ -167,6 +227,11 @@ def register_user_commands(root_command: click.Group) -> None:
                 add_groups=add_groups,
                 remove_groups=remove_groups,
                 set_groups=set_groups,
+                totp=totp,
+                no_totp=no_totp,
+                rcodes=rcodes,
+                json_output=json_output,
+                include_secrets=include_secrets,
             ),
         )
 

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import csv
 import io
 import json
@@ -6,6 +7,7 @@ import logging
 import sqlite3
 import sys
 import tomllib
+import zlib
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -16,6 +18,7 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
+from cryptography.fernet import Fernet
 from fastapi import FastAPI, Request
 from fastapi_users.exceptions import UserAlreadyExists, UserNotExists
 from sqlalchemy import inspect as sqlalchemy_inspect
@@ -44,6 +47,8 @@ from wybra.auth.models import (
     GroupGroup,
     GroupScope,
     GroupUser,
+    IdentityTotpCredential,
+    IdentityTotpRecoveryCode,
     IdentityUserEmail,
     Scope,
     User,
@@ -86,11 +91,19 @@ from wybra.db.persistence import (
     create_session_factory,
     session_scope,
 )
+from wybra.services.crypto import ENV_WYBRA_SECRET_KEY_CURRENT
 from wybra.site import Site
 from wybra.tools.app_startup import CONFIG_SOURCE_CONTEXT_KEY
 
 STRONG_TEST_PASSWORD = "Correct horse 42!"
 UPDATED_STRONG_TEST_PASSWORD = "New correct horse 42!"
+
+
+def secret_key_entry_for_tests(version: str = "test") -> str:
+    encoded_key = Fernet.generate_key().decode("ascii")
+    raw_key = base64.urlsafe_b64decode(encoded_key)
+    checksum = f"{(zlib.crc32(raw_key) & 0xFFFFFFFF):08x}"
+    return f"{version}:{encoded_key}:{checksum}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +288,7 @@ def _authmgr_app_config(
 ) -> None:
     config_path = write_auth_app_toml(tmp_path / "app.toml")
     monkeypatch.setenv("APP_CONFIG", str(config_path))
+    monkeypatch.setenv(ENV_WYBRA_SECRET_KEY_CURRENT, secret_key_entry_for_tests())
     monkeypatch.delenv("AUTH_CONFIG", raising=False)
 
 
@@ -362,6 +376,67 @@ def identity_user_emails_from_database(database_url: str) -> list[IdentityUserEm
 
     try:
         return asyncio.run(load_user_emails())
+    finally:
+        asyncio.run(close_database(engine))
+
+
+def totp_credentials_from_database(
+    database_url: str,
+    email: str,
+) -> list[IdentityTotpCredential]:
+    settings = AuthTestSettings(database_url=database_url)
+    engine = create_database_engine(settings)
+    session_factory = create_session_factory(engine)
+
+    async def load_credentials() -> list[IdentityTotpCredential]:
+        async with session_scope(session_factory) as session:
+            user = (
+                await session.execute(select(User).where(User.email == email))
+            ).scalar_one()
+            return list(
+                (
+                    await session.execute(
+                        select(IdentityTotpCredential)
+                        .where(IdentityTotpCredential.user_id == user.id)
+                        .order_by(IdentityTotpCredential.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+    try:
+        return asyncio.run(load_credentials())
+    finally:
+        asyncio.run(close_database(engine))
+
+
+def totp_recovery_codes_from_database(
+    database_url: str,
+    credential: IdentityTotpCredential,
+) -> list[IdentityTotpRecoveryCode]:
+    settings = AuthTestSettings(database_url=database_url)
+    engine = create_database_engine(settings)
+    session_factory = create_session_factory(engine)
+
+    async def load_recovery_codes() -> list[IdentityTotpRecoveryCode]:
+        async with session_scope(session_factory) as session:
+            return list(
+                (
+                    await session.execute(
+                        select(IdentityTotpRecoveryCode)
+                        .where(
+                            IdentityTotpRecoveryCode.credential_id == credential.id,
+                        )
+                        .order_by(IdentityTotpRecoveryCode.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+    try:
+        return asyncio.run(load_recovery_codes())
     finally:
         asyncio.run(close_database(engine))
 
@@ -2478,6 +2553,343 @@ def test_authmgr_create_user_with_metadata_from_stdin_password(
     assert user.expires_at == 4102444800.0
 
 
+def test_authmgr_create_user_with_totp_outputs_one_time_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "create-totp.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+
+    exit_code = authmgr.main(
+        [
+            "user",
+            "create",
+            "totp-create@example.com",
+            "--password",
+            "-",
+            "--totp",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "created user: totp-create@example.com" in captured.out
+    assert "TOTP secret:" not in captured.out
+    assert "Recovery codes:" not in captured.out
+    assert "Operator credential material" in captured.err
+    assert "TOTP secret:" in captured.err
+    assert "otpauth://totp/Wybra:totp-create%40example.com?" in captured.err
+    assert "Recovery codes:" in captured.err
+    credentials = totp_credentials_from_database(
+        database_url, "totp-create@example.com"
+    )
+    assert [credential.status for credential in credentials] == ["active"]
+    assert credentials[0].crypt_secret not in captured.err
+    recovery_codes = totp_recovery_codes_from_database(database_url, credentials[0])
+    assert len(recovery_codes) == 10
+    assert all(code.code_verifier not in captured.err for code in recovery_codes)
+
+
+def test_authmgr_create_user_with_totp_supports_json_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "create-totp-json.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+
+    exit_code = authmgr.main(
+        [
+            "user",
+            "create",
+            "totp-json@example.com",
+            "--password",
+            "-",
+            "--totp",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["user"]["email"] == "totp-json@example.com"
+    assert payload["totp"] == {
+        "provisioned": True,
+        "recovery_codes_generated": True,
+    }
+    assert "secret" not in payload["totp"]
+    assert "provisioning_uri" not in payload["totp"]
+    assert "recovery_codes" not in payload["totp"]
+
+
+def test_authmgr_create_user_with_totp_can_include_sensitive_json_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "create-totp-json-sensitive.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+
+    exit_code = authmgr.main(
+        [
+            "user",
+            "create",
+            "totp-json-sensitive@example.com",
+            "--password",
+            "-",
+            "--totp",
+            "--json",
+            "--include-secrets",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["user"]["email"] == "totp-json-sensitive@example.com"
+    assert payload["totp"]["secret"]
+    assert payload["totp"]["provisioning_uri"].startswith("otpauth://totp/")
+    assert len(payload["totp"]["recovery_codes"]) == 10
+
+
+def test_authmgr_create_user_with_totp_does_not_provision_after_create_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "create-totp-failure.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(
+            ["user", "create", "duplicate-totp@example.com", "--password", "-"]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    exit_code = authmgr.main(
+        [
+            "user",
+            "create",
+            "duplicate-totp@example.com",
+            "--password",
+            "-",
+            "--totp",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "already exists" in captured.err
+    assert "TOTP secret:" not in captured.out
+    assert "otpauth://" not in captured.out
+    assert "Recovery codes:" not in captured.out
+    assert "TOTP secret:" not in captured.err
+    assert "otpauth://" not in captured.err
+    assert "Recovery codes:" not in captured.err
+    assert (
+        totp_credentials_from_database(database_url, "duplicate-totp@example.com") == []
+    )
+
+
+def test_authmgr_update_totp_replaces_existing_credential_and_recovery_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "update-totp.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(
+            ["user", "create", "totp-update@example.com", "--password", "-", "--totp"]
+        )
+        == 0
+    )
+    old_credentials = totp_credentials_from_database(
+        database_url,
+        "totp-update@example.com",
+    )
+    capsys.readouterr()
+
+    exit_code = authmgr.main(
+        [
+            "user",
+            "update",
+            "totp-update@example.com",
+            "--totp",
+            "--json",
+            "--include-secrets",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["user"]["email"] == "totp-update@example.com"
+    assert payload["totp"]["secret"]
+    assert len(payload["totp"]["recovery_codes"]) == 10
+    credentials = totp_credentials_from_database(
+        database_url, "totp-update@example.com"
+    )
+    assert [credential.status for credential in credentials] == [
+        "disabled",
+        "active",
+    ]
+    assert credentials[0].id == old_credentials[0].id
+    assert credentials[1].id != old_credentials[0].id
+    assert len(totp_recovery_codes_from_database(database_url, credentials[1])) == 10
+
+
+def test_authmgr_update_rcodes_rotates_codes_without_replacing_totp_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "update-rcodes.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(
+            ["user", "create", "rcodes@example.com", "--password", "-", "--totp"]
+        )
+        == 0
+    )
+    [credential] = totp_credentials_from_database(database_url, "rcodes@example.com")
+    original_verifiers = {
+        code.code_verifier
+        for code in totp_recovery_codes_from_database(database_url, credential)
+    }
+    capsys.readouterr()
+
+    exit_code = authmgr.main(
+        ["user", "update", "rcodes@example.com", "--rcodes", "--json"]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "secret" not in payload["totp"]
+    assert "provisioning_uri" not in payload["totp"]
+    assert "recovery_codes" not in payload["totp"]
+    assert payload["totp"] == {"recovery_codes_generated": True}
+    [refreshed_credential] = totp_credentials_from_database(
+        database_url,
+        "rcodes@example.com",
+    )
+    assert refreshed_credential.id == credential.id
+    refreshed_verifiers = {
+        code.code_verifier
+        for code in totp_recovery_codes_from_database(
+            database_url,
+            refreshed_credential,
+        )
+    }
+    assert refreshed_verifiers
+    assert refreshed_verifiers.isdisjoint(original_verifiers)
+
+
+def test_authmgr_update_no_totp_disables_active_totp_without_secret_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "disable-totp.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(
+            ["user", "create", "disable-totp@example.com", "--password", "-", "--totp"]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    exit_code = authmgr.main(
+        ["user", "update", "disable-totp@example.com", "--no-totp"]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "updated user: disable-totp@example.com" in captured.out
+    assert "TOTP secret:" not in captured.out
+    assert "otpauth://" not in captured.out
+    assert "Recovery codes:" not in captured.out
+    assert "TOTP secret:" not in captured.err
+    assert "otpauth://" not in captured.err
+    assert "Recovery codes:" not in captured.err
+    credentials = totp_credentials_from_database(
+        database_url,
+        "disable-totp@example.com",
+    )
+    assert [credential.status for credential in credentials] == ["disabled"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_message"),
+    [
+        pytest.param(
+            ["user", "create", "person@example.com", "--rcodes"],
+            "No such option '--rcodes'",
+            id="create-rcodes",
+        ),
+        pytest.param(
+            ["user", "update", "person@example.com", "--totp", "--no-totp"],
+            "not allowed with option '--totp'",
+            id="totp-no-totp",
+        ),
+        pytest.param(
+            ["user", "update", "person@example.com", "--totp", "--rcodes"],
+            "not allowed with option '--totp'",
+            id="totp-rcodes",
+        ),
+        pytest.param(
+            ["user", "update", "person@example.com", "--no-totp", "--rcodes"],
+            "not allowed with option '--no-totp'",
+            id="no-totp-rcodes",
+        ),
+    ],
+)
+def test_authmgr_rejects_invalid_totp_option_combinations(
+    argv: list[str],
+    expected_message: str,
+) -> None:
+    result = CliRunner().invoke(authmgr.authmgr_command, argv)
+
+    assert result.exit_code == 2
+    assert expected_message in result.output
+
+
+def test_authmgr_update_rcodes_requires_active_totp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "rcodes-without-totp.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(["user", "create", "no-totp@example.com", "--password", "-"]) == 0
+    )
+    capsys.readouterr()
+
+    exit_code = authmgr.main(["user", "update", "no-totp@example.com", "--rcodes"])
+
+    assert exit_code == 1
+    assert "User does not have active TOTP." in capsys.readouterr().err
+
+
 def test_authmgr_scope_commands_manage_scope_records(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2852,6 +3264,16 @@ def test_authmgr_record_formatting_json_encodes_nested_values(
             "groups": '[{"abbrev": "admins", "scopes": ["read", "write"]}]',
         }
     ]
+
+
+def test_authmgr_totp_material_output_ignores_empty_payload(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    authmgr_runtime._print_totp_material({"user": {}})
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_authmgr_group_effective_scopes_reports_folded_scopes(

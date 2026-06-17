@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TextIO, cast
 from uuid import UUID
 
 import click
@@ -25,16 +26,19 @@ from wybra.auth.admin.management import (
     delete_group_for_management,
     delete_local_user_for_management,
     delete_scope_for_management,
+    disable_totp_for_management,
     effective_scopes_for_user_for_management,
     get_group_for_management,
     group_target_error_message,
     list_groups_for_management,
     list_local_users_for_management,
     list_scopes_for_management,
+    provision_totp_for_management,
     remove_child_group_from_group_for_management,
     remove_scope_from_group_for_management,
     remove_user_from_group_for_management,
     resolve_user_target,
+    rotate_totp_recovery_codes_for_management,
     target_error_message,
     update_group_for_management,
     update_local_user_for_management,
@@ -148,7 +152,28 @@ async def _handle_user_create(
         await session.commit()
 
     value = result.value or {}
-    print(f"created user: {value.get('email', args.email)}")
+    totp_value: dict[str, Any] | None = None
+    if args.totp:
+        totp_result = await provision_totp_for_management(
+            session,
+            settings.identity_options,
+            user=user,
+        )
+        if totp_result.is_failure():
+            return _print_failure(totp_result.error_type, totp_result.message)
+        totp_value = totp_result.value or {}
+
+    payload = _user_operation_payload(value, totp_value=totp_value)
+
+    if args.json_output:
+        _print_user_operation_json(
+            payload,
+            include_secrets=args.include_secrets,
+        )
+        return 0
+
+    print(f"created user: {payload['user'].get('email', args.email)}")
+    _print_totp_material(payload)
     return 0
 
 
@@ -181,7 +206,12 @@ async def _handle_user_update(
         if result.is_failure():
             return _print_failure(result.error_type, result.message)
     else:
-        if not (args.add_groups or args.remove_groups or args.set_groups):
+        if not (
+            args.add_groups
+            or args.remove_groups
+            or args.set_groups
+            or _user_totp_operation_requested(args)
+        ):
             return _print_failure(ERROR_NO_CHANGES, "No user changes were requested.")
         result = await _resolve_target_record(session, args.target)
         if result.is_failure():
@@ -198,7 +228,23 @@ async def _handle_user_update(
         **(result.value or {}),
         **(membership_result.value or {}),
     }
-    print(f"updated user: {value.get('email', args.target)}")
+    totp_value = await _update_user_totp_from_args(session, settings, args)
+    if totp_value.is_failure():
+        return _print_failure(totp_value.error_type, totp_value.message)
+    payload = _user_operation_payload(
+        value,
+        totp_value=totp_value.value if totp_value.value else None,
+    )
+
+    if args.json_output:
+        _print_user_operation_json(
+            payload,
+            include_secrets=args.include_secrets,
+        )
+        return 0
+
+    print(f"updated user: {payload['user'].get('email', args.target)}")
+    _print_totp_material(payload)
     return 0
 
 
@@ -691,6 +737,138 @@ def _user_metadata_update_requested(
             args.no_expires_at,
         )
     )
+
+
+def _user_totp_operation_requested(args: AuthmgrArgs) -> bool:
+    return args.totp or args.no_totp or args.rcodes
+
+
+async def _update_user_totp_from_args(
+    session: AsyncSession,
+    settings: AuthSettings,
+    args: AuthmgrArgs,
+) -> Result[dict[str, Any]]:
+    if not _user_totp_operation_requested(args):
+        return Result.ok({})
+
+    user, target_error = await resolve_user_target(session, args.target)
+    if target_error is not None:
+        return Result.failure(target_error, target_error_message(target_error))
+    if user is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+
+    if args.totp:
+        return await provision_totp_for_management(
+            session,
+            settings.identity_options,
+            user=user,
+        )
+    if args.no_totp:
+        return await disable_totp_for_management(session, user=user)
+
+    return await rotate_totp_recovery_codes_for_management(session, user=user)
+
+
+def _user_operation_payload(
+    user_record_value: dict[str, Any],
+    *,
+    totp_value: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    payload = {"user": _operation_user_record(user_record_value, totp_value)}
+    totp_material = _operation_totp_material(totp_value)
+    if totp_material is not None:
+        payload["totp"] = totp_material
+    return payload
+
+
+def _operation_user_record(
+    user_record_value: dict[str, Any],
+    totp_value: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if totp_value is None:
+        return user_record_value
+    candidate = totp_value.get("user")
+    return candidate if isinstance(candidate, dict) else user_record_value
+
+
+def _operation_totp_material(
+    totp_value: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if totp_value is None:
+        return None
+    candidate = totp_value.get("totp")
+    return candidate if isinstance(candidate, dict) else None
+
+
+def _print_user_operation_json(
+    payload: dict[str, dict[str, Any]],
+    *,
+    include_secrets: bool,
+) -> None:
+    json_payload = {"user": payload["user"]}
+    totp_material = payload.get("totp")
+    if totp_material is not None:
+        json_payload["totp"] = _totp_json_payload(
+            totp_material,
+            include_secrets=include_secrets,
+        )
+    print(json.dumps(json_payload))
+
+
+def _totp_json_payload(
+    totp_value: dict[str, Any],
+    *,
+    include_secrets: bool,
+) -> dict[str, Any]:
+    if include_secrets:
+        return totp_value
+
+    secret, provisioning_uri, recovery_codes = _totp_material_fields(totp_value)
+    payload: dict[str, Any] = {}
+    if secret is not None or provisioning_uri is not None:
+        payload["provisioned"] = True
+    if recovery_codes:
+        payload["recovery_codes_generated"] = True
+    return payload
+
+
+def _print_totp_material(
+    payload: dict[str, dict[str, Any]],
+    *,
+    stream: TextIO | None = None,
+) -> None:
+    totp_value = payload.get("totp")
+    if totp_value is None:
+        return
+    secret, provisioning_uri, recovery_codes = _totp_material_fields(totp_value)
+    if secret is None and provisioning_uri is None and not recovery_codes:
+        return
+
+    output = sys.stderr if stream is None else stream
+    print("Operator credential material. Store and transmit it securely.", file=output)
+    if secret is not None:
+        _write_credential_material(output, f"TOTP secret: {secret}")
+    if provisioning_uri is not None:
+        _write_credential_material(output, f"TOTP provisioning URI: {provisioning_uri}")
+    if recovery_codes:
+        print("Recovery codes:", file=output)
+        for recovery_code in recovery_codes:
+            _write_credential_material(output, f"- {recovery_code}")
+
+
+def _write_credential_material(output: TextIO, line: str) -> None:
+    # Intentional CLI stream output for explicitly requested one-time operator
+    # credential handoff. This is not diagnostic logging.
+    output.write(f"{line}\n")
+
+
+def _totp_material_fields(
+    totp_value: dict[str, Any],
+) -> tuple[Any, Any, tuple[Any, ...]]:
+    secret = totp_value.get("secret")
+    provisioning_uri = totp_value.get("provisioning_uri")
+    recovery_codes = tuple(totp_value.get("recovery_codes") or ())
+    return secret, provisioning_uri, recovery_codes
 
 
 async def _update_user_groups_from_args(
