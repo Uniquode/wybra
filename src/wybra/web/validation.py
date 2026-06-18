@@ -6,6 +6,7 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from wybra.assets import static_sources_from_modules
 from wybra.core.composition import CompositionError
 from wybra.core.resources import PackageResourceSource, first_existing_resource
 from wybra.tools.validation.core import ValidationCheck, ValidationResult, record_check
@@ -14,7 +15,6 @@ from wybra.web.rendering import TemplateRenderer
 from wybra.web.routes import load_module_routes, route_prefixes_from_settings
 from wybra.web.routes.discovery import (
     discover_module_surfaces,
-    static_sources_from_modules,
     template_sources_from_modules,
 )
 from wybra.web.style_contract import (

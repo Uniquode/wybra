@@ -63,7 +63,7 @@ module_config: Final = ConfigDef(
                 ),
             ),
         ),
-        "app.static": ConfigGroup(
+        "app.assets": ConfigGroup(
             fields=(
                 ConfigField(name="root", env=ENV_STATIC_ROOT),
                 ConfigField(

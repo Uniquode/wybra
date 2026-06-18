@@ -184,14 +184,14 @@ def _project_settings_kwargs(
     app_config: AppConfig,
 ) -> dict[str, Any]:
     app_values = ProjectSettings.section_values(config, "app")
-    static_values = ProjectSettings.section_values(config, "app.static")
+    static_values = ProjectSettings.section_values(config, "app.assets")
     template_values = ProjectSettings.section_values(config, "app.templates")
     media_values = ProjectSettings.section_values(config, "wybra.media")
     database_url = _configured_database_url(app_values, app_config.database_url)
     settings_kwargs: dict[str, Any] = {
         "project_root": app_config.project_root,
         "app_config": app_config,
-        "static_url_path": static_values.get("url_path", app_config.static.url_path),
+        "static_url_path": static_values.get("url_path", app_config.assets.url_path),
         "template_auto_reload": template_values.get(
             "auto_reload",
             app_config.templates.auto_reload,

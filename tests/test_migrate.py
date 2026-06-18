@@ -96,7 +96,7 @@ def _write_test_app_config(config_path: Path, modules: tuple[str, ...]) -> Path:
             auto_reload = true
             cache_size = 0
 
-            [app.static]
+            [app.assets]
             url_path = "/static/"
 
             [app.runserver]

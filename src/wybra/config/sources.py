@@ -187,12 +187,34 @@ def _app_config_sections(app_config: AppConfig) -> Mapping[str, Mapping[str, Any
         }
     )
     values.setdefault("app.routes", {}).update({"prefixes": app_config.routes.prefixes})
-    values.setdefault("app.static", {}).update(
+    values.setdefault("app.assets", {}).update(
         {
-            "url_path": app_config.static.url_path,
-            "root": app_config.static.root,
-            "export_root": app_config.static.export_root,
-            "serve": app_config.static.serve,
+            "url_path": app_config.assets.url_path,
+            "root": app_config.assets.root,
+            "export_root": app_config.assets.export_root,
+            "serve": app_config.assets.serve,
+        }
+    )
+    values.setdefault("app.assets.cors", {}).update(
+        {
+            "enabled": app_config.assets.cors.enabled,
+            "allow_origins": app_config.assets.cors.allow_origins,
+            "allow_methods": app_config.assets.cors.allow_methods,
+            "allow_headers": app_config.assets.cors.allow_headers,
+            "expose_headers": app_config.assets.cors.expose_headers,
+            "allow_credentials": app_config.assets.cors.allow_credentials,
+            "max_age": app_config.assets.cors.max_age,
+            "paths": {
+                path: {
+                    "allow_origins": policy.allow_origins,
+                    "allow_methods": policy.allow_methods,
+                    "allow_headers": policy.allow_headers,
+                    "expose_headers": policy.expose_headers,
+                    "allow_credentials": policy.allow_credentials,
+                    "max_age": policy.max_age,
+                }
+                for path, policy in app_config.assets.cors.paths.items()
+            },
         }
     )
     values.setdefault("app.templates", {}).update(

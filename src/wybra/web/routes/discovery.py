@@ -22,7 +22,6 @@ from wybra.core.conventions import (
     CONTEXT_SURFACE_MODULE,
     ROUTE_EXPORT_ATTRIBUTE,
     ROUTE_SURFACE_MODULE,
-    STATIC_RESOURCE_DIRECTORY,
     TEMPLATE_RESOURCE_DIRECTORY,
     module_surface_name,
 )
@@ -39,7 +38,6 @@ class ModuleSurface:
     module_name: str
     module_routers: ModuleRouters = field(default_factory=dict)
     template_sources: tuple[PackageResourceSource, ...] = ()
-    static_sources: tuple[PackageResourceSource, ...] = ()
     context_providers: tuple[ContextProvider, ...] = ()
 
 
@@ -74,7 +72,6 @@ def discover_module_surface(
         module_name=module_name,
         module_routers=module_routers,
         template_sources=discover_template_sources(module_name),
-        static_sources=discover_static_sources(module_name),
         context_providers=(
             discover_context_providers(module_name) if include_context else ()
         ),
@@ -134,16 +131,6 @@ def template_sources_from_modules(
     module_names: tuple[str, ...],
 ) -> tuple[PackageResourceSource, ...]:
     return _resource_sources_from_modules(module_names, discover_template_sources)
-
-
-def discover_static_sources(module_name: str) -> tuple[PackageResourceSource, ...]:
-    return _discover_resource_sources(module_name, STATIC_RESOURCE_DIRECTORY)
-
-
-def static_sources_from_modules(
-    module_names: tuple[str, ...],
-) -> tuple[PackageResourceSource, ...]:
-    return _resource_sources_from_modules(module_names, discover_static_sources)
 
 
 def discover_context_providers(module_name: str) -> tuple[ContextProvider, ...]:
@@ -240,15 +227,12 @@ __all__ = [
     "ModuleSurface",
     "ROUTE_EXPORT_ATTRIBUTE",
     "ROUTE_SURFACE_MODULE",
-    "STATIC_RESOURCE_DIRECTORY",
     "TEMPLATE_RESOURCE_DIRECTORY",
     "discover_context_providers",
     "context_providers_from_modules",
     "discover_module_routers",
     "discover_module_surface",
     "discover_module_surfaces",
-    "discover_static_sources",
     "discover_template_sources",
-    "static_sources_from_modules",
     "template_sources_from_modules",
 ]

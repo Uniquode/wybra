@@ -4,11 +4,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from wybra.core.asset_config import load_asset_cors_options
 from wybra.core.composition import (
     AppConfig,
+    AssetCorsOptions,
+    AssetOptions,
     CompositionError,
     RouteOptions,
-    StaticOptions,
     TemplateOptions,
 )
 from wybra.site import Site
@@ -18,7 +20,7 @@ def app_config_from_site(site: Site) -> AppConfig:
     app_config = _section(site, "app")
     route_config = _section(site, "app.routes")
     template_config = _section(site, "app.templates")
-    static_config = _section(site, "app.static")
+    static_config = _section(site, "app.assets")
 
     project_root = _path_value(app_config, "project_root", Path.cwd())
     return AppConfig(
@@ -31,11 +33,12 @@ def app_config_from_site(site: Site) -> AppConfig:
             cache_size=_int_value(template_config, "cache_size", 0),
             root=_optional_path_value(template_config, "root"),
         ),
-        static=StaticOptions(
+        assets=AssetOptions(
             url_path=_str_value(static_config, "url_path", "/static/"),
             root=_optional_path_value(static_config, "root"),
             export_root=_path_value(static_config, "export_root", Path("static")),
             serve=_bool_value(static_config, "serve", True),
+            cors=_asset_cors_options(_section(site, "app.assets.cors")),
         ),
         database_url=_optional_str_value(app_config, "database_url"),
         deployment_environment=_optional_str_value(
@@ -53,6 +56,14 @@ def _section(site: Site, name: str) -> Mapping[str, Any]:
     if isinstance(value, Mapping):
         return value
     raise CompositionError(f"Config section {name!r} must be a mapping.")
+
+
+def _asset_cors_options(config: Mapping[str, Any]) -> AssetCorsOptions:
+    return load_asset_cors_options(
+        config,
+        "Config section app.assets.cors",
+        error_type=CompositionError,
+    )
 
 
 def _route_prefixes(config: Mapping[str, Any]) -> dict[str, dict[str, str]]:

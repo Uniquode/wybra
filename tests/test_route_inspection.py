@@ -407,7 +407,7 @@ def test_routes_command_config_option_selects_app_config(
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "static"
         """,

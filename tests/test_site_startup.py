@@ -18,9 +18,9 @@ from wybra.core.composition import (
     APP_CONFIG_ENV,
     APP_ROOT_ENV,
     AppConfig,
+    AssetOptions,
     CompositionError,
     RouteOptions,
-    StaticOptions,
     TemplateOptions,
 )
 from wybra.core.config import ENV_APP_ENV
@@ -77,7 +77,7 @@ def _write_app_config(path: Path, *, modules: tuple[str, ...]) -> Path:
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "static"
         """,
@@ -508,9 +508,7 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
         modules=("wybra.web",),
         routes=RouteOptions(prefixes={}),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        static=StaticOptions(
-            url_path="/static/", root=None, export_root=Path("static")
-        ),
+        assets=AssetOptions(url_path="/static/", root=None, export_root=Path("static")),
     )
 
     site = await start(FastAPI(), config_source=app_config)
