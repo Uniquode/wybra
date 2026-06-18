@@ -11,8 +11,8 @@ import wybra.tools.validate as validate_module
 import wybra.web
 from wybra.core.composition import (
     AppConfig,
+    AssetOptions,
     RouteOptions,
-    StaticOptions,
     TemplateOptions,
 )
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
@@ -86,9 +86,7 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
             }
         ),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        static=StaticOptions(
-            url_path="/static/", root=None, export_root=Path("static")
-        ),
+        assets=AssetOptions(url_path="/static/", root=None, export_root=Path("static")),
     )
 
 

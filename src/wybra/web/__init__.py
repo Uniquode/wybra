@@ -1,4 +1,4 @@
-"""Reusable FastAPI, Starlette, Jinja, route, static, and form infrastructure."""
+"""Reusable FastAPI, Starlette, Jinja, route, and form infrastructure."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import Response
 
+from wybra.assets import static_app_from_config, static_sources_from_modules
 from wybra.site import Site
 from wybra.site_config import app_config_from_site
 from wybra.utils.paths import resolve_project_path
@@ -24,12 +25,10 @@ from wybra.web.rendering import TemplateRenderer
 from wybra.web.routes.contracts import API_PATH_PREFIX
 from wybra.web.routes.discovery import (
     context_providers_from_modules,
-    static_sources_from_modules,
     template_sources_from_modules,
 )
 from wybra.web.routes.registration import load_module_routes, register_module_routes
 from wybra.web.security import SecurityHeaderOptions, register_security_headers
-from wybra.web.staticfiles import static_app_from_config
 
 TEMPLATE_CONTEXT_MIDDLEWARE_STATE_ATTRIBUTE = (
     "wybra_web_template_context_middleware_registered"
@@ -38,7 +37,7 @@ TEMPLATE_CONTEXT_MIDDLEWARE_STATE_ATTRIBUTE = (
 
 async def setup_site(site: Site) -> None:
     app_config = app_config_from_site(site)
-    static_mount_path = _normalise_static_mount_path(app_config.static.url_path)
+    static_mount_path = _normalise_static_mount_path(app_config.assets.url_path)
     site.app.state.static_mount_path = static_mount_path
 
     csrf = getattr(site.app.state, "csrf", None)
@@ -77,13 +76,15 @@ async def setup_site(site: Site) -> None:
         site.app,
         options=ErrorHandlerOptions(static_mount_path=static_mount_path),
     )
-    if app_config.static.serve:
+    if app_config.assets.serve:
         site.app.mount(
             static_mount_path,
             static_app_from_config(
                 project_root=app_config.project_root,
-                static_root=app_config.static.root,
+                static_root=app_config.assets.root,
                 static_sources=static_sources_from_modules(site.modules),
+                cors=app_config.assets.cors,
+                url_path=static_mount_path,
             ),
             name="static",
         )

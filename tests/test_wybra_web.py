@@ -7,6 +7,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
+from types import MappingProxyType
+from typing import Any, cast
 
 import pytest
 from envex import Env
@@ -18,12 +20,23 @@ from fastapi.testclient import TestClient
 from jinja2 import Environment, select_autoescape
 from jinja2.exceptions import TemplateNotFound
 
+from wybra.assets import (
+    ComposedStaticFiles,
+    StaticAssetDuplicate,
+    discover_static_sources,
+    export_configured_static_assets,
+    export_static_assets,
+    static_asset_response,
+    static_sources_from_modules,
+)
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core.composition import (
     AppConfig,
+    AssetCorsOptions,
+    AssetCorsPolicy,
+    AssetOptions,
     CompositionError,
     RouteOptions,
-    StaticOptions,
     TemplateOptions,
     load_app_config,
     load_app_config_modules,
@@ -58,9 +71,7 @@ from wybra.web.routes.discovery import (
     discover_module_routers,
     discover_module_surface,
     discover_module_surfaces,
-    discover_static_sources,
     discover_template_sources,
-    static_sources_from_modules,
     template_sources_from_modules,
 )
 from wybra.web.security import (
@@ -68,13 +79,6 @@ from wybra.web.security import (
     SecurityHeaderOptions,
     cross_origin_opener_policy,
     register_security_headers,
-)
-from wybra.web.staticfiles import (
-    ComposedStaticFiles,
-    StaticAssetDuplicate,
-    export_configured_static_assets,
-    export_static_assets,
-    static_asset_response,
 )
 from wybra.web.templating import build_template_loader
 from wybra.widgets.config import WidgetsSettings
@@ -224,7 +228,7 @@ def test_load_app_config_accepts_string_static_serve_from_config_sources(
             auto_reload = true
             cache_size = 0
 
-            [app.static]
+            [app.assets]
             url_path = "/static/"
             export_root = "static"
             serve = "false"
@@ -235,7 +239,117 @@ def test_load_app_config_accepts_string_static_serve_from_config_sources(
 
     config = load_app_config(project_root=tmp_path, config_path=config_path)
 
-    assert config.static.serve is False
+    assert config.assets.serve is False
+
+
+def test_load_app_config_requires_app_assets_without_static_fallback(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        dedent(
+            """
+            [app]
+            modules = ["wybra.web"]
+
+            [app.templates]
+            auto_reload = true
+            cache_size = 0
+
+            [app.static]
+            url_path = "/static/"
+            export_root = "static"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        CompositionError,
+        match=r"App config must contain a \[app\.assets\] table\.",
+    ):
+        load_app_config(project_root=tmp_path, config_path=config_path)
+
+
+def test_load_app_config_defaults_asset_serving_to_enabled(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        dedent(
+            """
+            [app]
+            modules = ["wybra.web"]
+
+            [app.templates]
+            auto_reload = true
+            cache_size = 0
+
+            [app.assets]
+            url_path = "/static/"
+            export_root = "static"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    assert config.assets.serve is True
+
+
+def test_load_app_config_loads_asset_cors_with_path_overrides(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        dedent(
+            """
+            [app]
+            modules = ["wybra.web"]
+
+            [app.templates]
+            auto_reload = true
+            cache_size = 0
+
+            [app.assets]
+            url_path = "/static/"
+            export_root = "static"
+
+            [app.assets.cors]
+            enabled = true
+            allow_origins = ["https://example.com"]
+            allow_methods = ["GET", "HEAD"]
+            max_age = 120
+
+            [app.assets.cors.paths."/static/private/"]
+            allow_origins = ["https://admin.example.com"]
+            expose_headers = ["x-static"]
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    assert config.assets.cors == AssetCorsOptions(
+        enabled=True,
+        allow_origins=("https://example.com",),
+        allow_methods=("GET", "HEAD"),
+        max_age=120,
+        paths={
+            "/static/private/": AssetCorsPolicy(
+                allow_origins=("https://admin.example.com",),
+                allow_methods=("GET", "HEAD"),
+                expose_headers=("x-static",),
+                max_age=120,
+            )
+        },
+    )
+    assert isinstance(config.assets.cors.paths, MappingProxyType)
+    mutable_paths = cast(Any, config.assets.cors.paths)
+    with pytest.raises(TypeError):
+        mutable_paths["/static/admin/"] = AssetCorsPolicy()
 
 
 def _write_widget_page_app(tmp_path: Path, module_name: str) -> None:
@@ -400,7 +514,7 @@ async def test_wybra_web_setup_site_registers_routes_renderer_and_static(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
             }
         ),
     )
@@ -446,7 +560,7 @@ async def test_wybra_web_setup_can_disable_static_serving(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {
+                "app.assets": {
                     "url_path": "/static/",
                     "export_root": "static",
                     "serve": False,
@@ -482,7 +596,7 @@ async def test_wybra_web_setup_serves_configured_filesystem_static_root(
                 },
                 "app.routes": {"prefixes": {"wybra.web": {}}},
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {
+                "app.assets": {
                     "url_path": "/static/",
                     "root": "assets",
                     "export_root": "static",
@@ -496,6 +610,162 @@ async def test_wybra_web_setup_serves_configured_filesystem_static_root(
     )
     assert isinstance(static_route.app, StaticFiles)
     assert TestClient(app).get("/static/app.css").text == "body {}"
+
+
+@pytest.mark.anyio
+async def test_wybra_web_setup_applies_global_asset_cors(
+    tmp_path: Path,
+) -> None:
+    static_root = tmp_path / "assets"
+    static_root.mkdir()
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.web",),
+                },
+                "app.routes": {"prefixes": {"wybra.web": {}}},
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.assets": {
+                    "url_path": "/static/",
+                    "root": "assets",
+                    "export_root": "static",
+                },
+                "app.assets.cors": {
+                    "enabled": True,
+                    "allow_origins": ("https://example.com",),
+                    "allow_methods": ("GET", "HEAD"),
+                },
+            }
+        ),
+    )
+
+    response = TestClient(app).get(
+        "/static/app.css",
+        headers={"Origin": "https://example.com"},
+    )
+
+    assert response.text == "body {}"
+    assert response.headers["access-control-allow-origin"] == "https://example.com"
+
+
+@pytest.mark.anyio
+async def test_wybra_web_setup_applies_per_path_asset_cors(
+    tmp_path: Path,
+) -> None:
+    static_root = tmp_path / "assets"
+    private_root = static_root / "private"
+    private_root.mkdir(parents=True)
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    (private_root / "admin.css").write_text("admin {}", encoding="utf-8")
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.web",),
+                },
+                "app.routes": {"prefixes": {"wybra.web": {}}},
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.assets": {
+                    "url_path": "/static/",
+                    "root": "assets",
+                    "export_root": "static",
+                },
+                "app.assets.cors": {
+                    "enabled": True,
+                    "allow_origins": ("https://example.com",),
+                    "paths": {
+                        "/static/private/": {
+                            "allow_origins": ("https://admin.example.com",),
+                        },
+                    },
+                },
+            }
+        ),
+    )
+    client = TestClient(app)
+
+    public_response = client.get(
+        "/static/app.css",
+        headers={"Origin": "https://example.com"},
+    )
+    private_response = client.get(
+        "/static/private/admin.css",
+        headers={"Origin": "https://admin.example.com"},
+    )
+    rejected_private_response = client.get(
+        "/static/private/admin.css",
+        headers={"Origin": "https://example.com"},
+    )
+
+    assert public_response.headers["access-control-allow-origin"] == (
+        "https://example.com"
+    )
+    assert private_response.headers["access-control-allow-origin"] == (
+        "https://admin.example.com"
+    )
+    assert "access-control-allow-origin" not in rejected_private_response.headers
+
+
+@pytest.mark.anyio
+async def test_wybra_web_setup_uses_normalised_static_mount_path_for_asset_cors(
+    tmp_path: Path,
+) -> None:
+    static_root = tmp_path / "assets"
+    private_root = static_root / "private"
+    private_root.mkdir(parents=True)
+    (private_root / "admin.css").write_text("admin {}", encoding="utf-8")
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.web",),
+                },
+                "app.routes": {"prefixes": {"wybra.web": {}}},
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.assets": {
+                    "url_path": "static",
+                    "root": "assets",
+                    "export_root": "static",
+                },
+                "app.assets.cors": {
+                    "enabled": True,
+                    "allow_origins": ("https://example.com",),
+                    "paths": {
+                        "/static/private/": {
+                            "allow_origins": ("https://admin.example.com",),
+                        },
+                    },
+                },
+            }
+        ),
+    )
+
+    response = TestClient(app).get(
+        "/static/private/admin.css",
+        headers={"Origin": "https://admin.example.com"},
+    )
+
+    assert app.state.static_mount_path == "/static"
+    assert response.headers["access-control-allow-origin"] == (
+        "https://admin.example.com"
+    )
 
 
 @pytest.mark.anyio
@@ -549,7 +819,7 @@ async def test_wybra_widgets_publish_theme_selector_when_enabled(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
                 "wybra.widgets": {"features": ["theme"]},
             }
         ),
@@ -602,7 +872,7 @@ async def test_wybra_widgets_publish_login_button_when_auth_is_available(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
             }
         ),
     )
@@ -653,7 +923,7 @@ async def test_wybra_widgets_publish_profile_initial_and_logout_when_authenticat
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
             }
         ),
     )
@@ -706,7 +976,7 @@ async def test_wybra_widgets_use_profile_descriptor_when_profile_is_available(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
             }
         ),
     )
@@ -754,7 +1024,7 @@ async def test_wybra_widgets_do_not_publish_login_button_without_auth(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
             }
         ),
     )
@@ -800,7 +1070,7 @@ async def test_wybra_widgets_can_disable_login_button_when_auth_is_available(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
                 "wybra.widgets": {"features": ["theme"]},
             }
         ),
@@ -883,7 +1153,7 @@ async def test_wybra_widgets_can_disable_theme_selector(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
                 "wybra.widgets": {"features": []},
             }
         ),
@@ -953,7 +1223,7 @@ async def test_application_template_overrides_widget_partial(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
             }
         ),
     )
@@ -1018,7 +1288,7 @@ async def test_wybra_web_request_context_is_enabled_by_default(
                     "cache_size": 0,
                     "root": str(template_root),
                 },
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
             }
         ),
     )
@@ -1080,7 +1350,7 @@ async def test_wybra_web_request_context_can_be_disabled(
                     "cache_size": 0,
                     "root": str(template_root),
                 },
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
                 "wybra.web": {"request_context_enabled": False},
             }
         ),
@@ -1125,7 +1395,7 @@ async def test_wybra_web_registers_auth_routes_through_module_composition(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.static": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/", "export_root": "static"},
             }
         ),
     )
@@ -1144,11 +1414,11 @@ def test_wybra_web_package_exposes_expected_submodules() -> None:
         "wybra.web.routes.contracts",
         "wybra.web.routes",
         "wybra.web.security",
+        "wybra.assets",
         "wybra.core.settings",
         "wybra.web.routes",
         "wybra.web.style_contract",
         "wybra.web.routes.discovery",
-        "wybra.web.staticfiles",
         "wybra.web.templating",
         "wybra.web.views",
         "wybra.widgets",
@@ -1358,7 +1628,7 @@ def test_composed_settings_loader_builds_framework_settings(tmp_path: Path) -> N
             auto_reload = true
             cache_size = 0
 
-            [app.static]
+            [app.assets]
             url_path = "/assets/"
             export_root = "static"
             """
@@ -1438,25 +1708,21 @@ def test_module_surface_default_to_empty_optional_contributions() -> None:
     assert surface.module_name == "host_app"
     assert surface.module_routers == {}
     assert surface.template_sources == ()
-    assert surface.static_sources == ()
     assert surface.context_providers == ()
 
 
 def test_module_surface_accepts_declared_contract_contributions() -> None:
     api_router = APIRouter()
     template_source = PackageResourceSource(package="wybra.auth", directory="templates")
-    static_source = PackageResourceSource(package="wybra.auth", directory="static")
 
     surface = ModuleSurface(
         module_name="wybra.auth",
         module_routers={"api": api_router},
         template_sources=(template_source,),
-        static_sources=(static_source,),
     )
 
     assert surface.module_routers == {"api": api_router}
     assert surface.template_sources == (template_source,)
-    assert surface.static_sources == (static_source,)
 
 
 def test_discover_module_surface_treats_missing_optional_surfaces_as_empty(
@@ -1650,7 +1916,7 @@ def test_configured_module_routes_and_registration_are_wybra_web_concerns(
             modules=modules,
             routes=RouteOptions(prefixes={module_name: {"default": "/site"}}),
             templates=TemplateOptions(auto_reload=True, cache_size=0),
-            static=StaticOptions(
+            assets=AssetOptions(
                 url_path="/static/", root=None, export_root=Path("static")
             ),
         )
@@ -2209,11 +2475,10 @@ def test_discover_package_resource_sources_without_route_import(
     assert surface.template_sources == (
         PackageResourceSource(package="resource_surface_app", directory="templates"),
     )
-    assert surface.static_sources == (
+    assert discover_template_sources("resource_surface_app") == surface.template_sources
+    assert discover_static_sources("resource_surface_app") == (
         PackageResourceSource(package="resource_surface_app", directory="static"),
     )
-    assert discover_template_sources("resource_surface_app") == surface.template_sources
-    assert discover_static_sources("resource_surface_app") == surface.static_sources
 
 
 def test_template_sources_from_modules_use_configured_module_precedence(
@@ -2351,7 +2616,7 @@ def test_configured_static_export_uses_app_toml_without_route_import(
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "exported-static"
         """,
@@ -2595,7 +2860,7 @@ def test_load_app_config_reads_modules_from_app_toml(
         auto_reload = false
         cache_size = 400
 
-        [app.static]
+        [app.assets]
         url_path = "/assets/"
         export_root = "build/assets"
         """,
@@ -2614,7 +2879,7 @@ def test_load_app_config_reads_modules_from_app_toml(
         auto_reload=False,
         cache_size=400,
     )
-    assert config.static == StaticOptions(
+    assert config.assets == AssetOptions(
         url_path="/assets/",
         root=None,
         export_root=Path("build/assets"),
@@ -2638,7 +2903,7 @@ def test_load_app_config_rejects_duplicate_route_module_aliases(
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "static"
         """,
@@ -2675,7 +2940,7 @@ def test_load_app_config_rejects_route_module_aliases_with_whitespace(
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "static"
         ''',
@@ -2716,7 +2981,7 @@ def test_load_app_config_loads_auth_table(tmp_path: Path) -> None:
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
 
         [auth]
@@ -2730,7 +2995,7 @@ def test_load_app_config_loads_auth_table(tmp_path: Path) -> None:
     assert config.config_path == config_path.resolve()
     assert config.modules == ("host_app",)
     assert config.database_url == "sqlite+aiosqlite:///app.sqlite3"
-    assert config.static.export_root == Path("static")
+    assert config.assets.export_root == Path("static")
     assert config.auth == {"account_creation_policy": "public-signup"}
 
 
@@ -2748,7 +3013,7 @@ def test_load_app_config_uses_app_config_environment_override(
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "static"
         """,
@@ -2788,7 +3053,7 @@ def test_load_app_config_explicit_path_overrides_app_config_environment(
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "static"
         """,
@@ -2803,7 +3068,7 @@ def test_load_app_config_explicit_path_overrides_app_config_environment(
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "static"
         """,

@@ -10,11 +10,16 @@ from types import ModuleType
 from typing import Any, Final
 
 from wybra.config.transforms import to_bool
+from wybra.core.asset_config import (
+    AssetCorsOptions,
+    AssetCorsPolicy,
+    load_asset_cors_options,
+)
 from wybra.core.diagnostics import app_config_message, configured_module_import_message
 
 APP_ROOT_ENV: Final = "APP_ROOT"
 APP_CONFIG_ENV: Final = "APP_CONFIG"
-DEFAULT_STATIC_EXPORT_ROOT: Final = Path("static")
+DEFAULT_ASSET_EXPORT_ROOT: Final = Path("static")
 
 
 class CompositionError(Exception):
@@ -34,11 +39,12 @@ class TemplateOptions:
 
 
 @dataclass(frozen=True, slots=True)
-class StaticOptions:
+class AssetOptions:
     url_path: str
     root: Path | None
     export_root: Path
     serve: bool = True
+    cors: AssetCorsOptions = field(default_factory=AssetCorsOptions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +60,7 @@ class AppConfig:
     modules: tuple[str, ...]
     routes: RouteOptions
     templates: TemplateOptions
-    static: StaticOptions
+    assets: AssetOptions
     runserver: RunserverOptions = field(default_factory=RunserverOptions)
     database_url: str | None = None
     deployment_environment: str | None = None
@@ -102,7 +108,7 @@ def load_app_config(
             ),
         ),
         templates=_load_template_options(app_data),
-        static=_load_static_options(app_data),
+        assets=_load_asset_options(app_data),
         runserver=_load_runserver_options(app_data),
         database_url=_optional_str_or_none(app_data, "app.database_url"),
         deployment_environment=_optional_str_or_none(
@@ -216,10 +222,18 @@ def _raw_config_sections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
         sections["app"] = {
             key: value for key, value in app_data.items() if not isinstance(value, dict)
         }
-        for nested_name in ("routes", "runserver", "static", "templates"):
+        for nested_name in ("assets", "routes", "runserver", "templates"):
             nested_value = app_data.get(nested_name)
             if isinstance(nested_value, dict):
                 sections[f"app.{nested_name}"] = dict(nested_value)
+                if nested_name == "assets":
+                    cors_value = nested_value.get("cors")
+                    if isinstance(cors_value, dict):
+                        sections["app.assets.cors"] = {
+                            key: value
+                            for key, value in cors_value.items()
+                            if not isinstance(value, dict)
+                        }
 
     auth_data = data.get("auth")
     if isinstance(auth_data, dict):
@@ -381,23 +395,33 @@ def _load_template_options(data: dict[str, Any]) -> TemplateOptions:
     )
 
 
-def _load_static_options(data: dict[str, Any]) -> StaticOptions:
-    static_data = _required_table(data, "app.static")
-    return StaticOptions(
-        url_path=_required_str(static_data, "app.static.url_path"),
+def _load_asset_options(data: dict[str, Any]) -> AssetOptions:
+    asset_data = _required_table(data, "app.assets")
+    return AssetOptions(
+        url_path=_required_str(asset_data, "app.assets.url_path"),
         root=(
             Path(root)
-            if (root := _optional_str_or_none(static_data, "app.static.root"))
+            if (root := _optional_str_or_none(asset_data, "app.assets.root"))
             else None
         ),
         export_root=Path(
             _optional_str(
-                static_data,
-                "app.static.export_root",
-                DEFAULT_STATIC_EXPORT_ROOT.as_posix(),
+                asset_data,
+                "app.assets.export_root",
+                DEFAULT_ASSET_EXPORT_ROOT.as_posix(),
             )
         ),
-        serve=_bool_from_config(static_data, "app.static.serve", True),
+        serve=_bool_from_config(asset_data, "app.assets.serve", True),
+        cors=_load_asset_cors_options(asset_data),
+    )
+
+
+def _load_asset_cors_options(data: dict[str, Any]) -> AssetCorsOptions:
+    cors_data = _optional_table(data, "app.assets.cors")
+    return load_asset_cors_options(
+        cors_data,
+        "App config app.assets.cors",
+        error_type=CompositionError,
     )
 
 
@@ -424,11 +448,13 @@ __all__ = [
     "AppConfig",
     "APP_CONFIG_ENV",
     "APP_ROOT_ENV",
+    "AssetCorsOptions",
+    "AssetCorsPolicy",
+    "AssetOptions",
     "CompositionError",
-    "DEFAULT_STATIC_EXPORT_ROOT",
+    "DEFAULT_ASSET_EXPORT_ROOT",
     "RouteOptions",
     "RunserverOptions",
-    "StaticOptions",
     "TemplateOptions",
     "load_app_config",
     "load_app_config_modules",

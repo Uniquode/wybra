@@ -10,7 +10,6 @@ from wybra.web.routes.discovery import (
     CONTEXT_SURFACE_MODULE,
     ROUTE_EXPORT_ATTRIBUTE,
     ROUTE_SURFACE_MODULE,
-    STATIC_RESOURCE_DIRECTORY,
     TEMPLATE_RESOURCE_DIRECTORY,
     ModuleSurface,
     context_providers_from_modules,
@@ -18,9 +17,7 @@ from wybra.web.routes.discovery import (
     discover_module_routers,
     discover_module_surface,
     discover_module_surfaces,
-    discover_static_sources,
     discover_template_sources,
-    static_sources_from_modules,
     template_sources_from_modules,
 )
 from wybra.web.routes.inspection import (
@@ -75,7 +72,6 @@ __all__ = [
     "RouteRecord",
     "RouteSurface",
     "RouteTreeNode",
-    "STATIC_RESOURCE_DIRECTORY",
     "TEMPLATE_RESOURCE_DIRECTORY",
     "_normalise_path_prefix",
     "context_providers_from_modules",
@@ -83,7 +79,6 @@ __all__ = [
     "discover_module_routers",
     "discover_module_surface",
     "discover_module_surfaces",
-    "discover_static_sources",
     "discover_template_sources",
     "inspect_route_tree",
     "load_configured_module_routes",
@@ -100,6 +95,5 @@ __all__ = [
     "route_prefixes_from_settings",
     "route_surface",
     "route_template",
-    "static_sources_from_modules",
     "template_sources_from_modules",
 ]

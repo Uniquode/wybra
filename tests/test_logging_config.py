@@ -104,7 +104,7 @@ def test_logging_config_from_app_config_reads_log_table(tmp_path) -> None:
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
 
         [app.runserver]

@@ -79,8 +79,8 @@ from wybra.auth.settings import (
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core.composition import (
     AppConfig,
+    AssetOptions,
     RouteOptions,
-    StaticOptions,
     TemplateOptions,
     load_app_config,
 )
@@ -256,7 +256,7 @@ def write_auth_app_toml(
                 "auto_reload = true",
                 "cache_size = 0",
                 "",
-                "[app.static]",
+                "[app.assets]",
                 'url_path = "/static/"',
                 'export_root = "static"',
                 "",
@@ -821,9 +821,7 @@ def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None
         modules=("wybra.auth",),
         routes=RouteOptions(),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        static=StaticOptions(
-            url_path="/static/", root=None, export_root=Path("static")
-        ),
+        assets=AssetOptions(url_path="/static/", root=None, export_root=Path("static")),
     )
 
     with pytest.raises(ConfigurationError, match=r"\[app\]\.database_url"):

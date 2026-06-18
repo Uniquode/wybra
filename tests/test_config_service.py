@@ -26,8 +26,10 @@ from wybra.config import (
 )
 from wybra.core.composition import (
     AppConfig,
+    AssetCorsOptions,
+    AssetCorsPolicy,
+    AssetOptions,
     RouteOptions,
-    StaticOptions,
     TemplateOptions,
 )
 from wybra.core.settings import EnvironmentSetting, EnvironmentValueType
@@ -273,7 +275,7 @@ database_url = "sqlite+aiosqlite:///app.sqlite3"
 auto_reload = true
 cache_size = 0
 
-[app.static]
+[app.assets]
 url_path = "/static"
 export_root = "static"
 
@@ -288,7 +290,7 @@ account_creation_policy = "closed"
     app_section = service.get_config("app")
     assert app_section is not None
     assert app_section["database_url"] == "sqlite+aiosqlite:///app.sqlite3"
-    assert service.get_config("app.static") == {
+    assert service.get_config("app.assets") == {
         "url_path": "/static",
         "export_root": Path("static"),
         "root": None,
@@ -330,7 +332,7 @@ def test_optional_file_source_diagnostic_includes_source_location(
 def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
     config_def = ConfigDef(
         {
-            "app.static": ConfigGroup(
+            "app.assets": ConfigGroup(
                 fields=(
                     ConfigField(name="url_path", default="/static/"),
                     ConfigField(
@@ -348,12 +350,12 @@ def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
         environ={"APP_STATIC_EXPORT": "public-static"},
     )
 
-    assert service.get_config("app.static") == {
+    assert service.get_config("app.assets") == {
         "url_path": "/static/",
         "export_root": "public-static",
     }
-    assert service.config.sources["app.static.url_path"] == "default"
-    assert service.config.sources["app.static.export_root"] == "environment"
+    assert service.config.sources["app.assets.url_path"] == "default"
+    assert service.config.sources["app.assets.export_root"] == "environment"
 
 
 def test_config_def_field_without_transform_preserves_raw_value() -> None:
@@ -398,7 +400,7 @@ def test_config_def_field_transform_applies_to_resolved_value() -> None:
 def test_config_def_field_transform_can_normalise_paths() -> None:
     config_def = ConfigDef(
         {
-            "app.static": ConfigGroup(
+            "app.assets": ConfigGroup(
                 fields=(
                     ConfigField(
                         name="root",
@@ -412,7 +414,7 @@ def test_config_def_field_transform_can_normalise_paths() -> None:
 
     service = ConfigService(config_defs=(config_def,))
 
-    config = service.get_config("app.static")
+    config = service.get_config("app.assets")
     assert config is not None
     assert config["root"] == (Path.cwd() / "static").resolve()
 
@@ -867,8 +869,19 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
         modules=("app",),
         routes=RouteOptions(prefixes={"app": {"default": ""}}),
         templates=TemplateOptions(auto_reload=True, cache_size=12),
-        static=StaticOptions(
-            url_path="/assets/", root=None, export_root=Path("static")
+        assets=AssetOptions(
+            url_path="/assets/",
+            root=None,
+            export_root=Path("static"),
+            cors=AssetCorsOptions(
+                enabled=True,
+                allow_origins=("https://example.com",),
+                paths={
+                    "/assets/private/": AssetCorsPolicy(
+                        allow_origins=("https://admin.example.com",),
+                    )
+                },
+            ),
         ),
         database_url="sqlite+aiosqlite:///app.sqlite3",
         auth={"account_creation_policy": "closed"},
@@ -884,12 +897,32 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
         "deployment_environment": None,
     }
     assert service.get_config("app.routes") == {"prefixes": {"app": {"default": ""}}}
-    assert service.get_config("app.static") == {
+    assert service.get_config("app.assets") == {
         "url_path": "/assets/",
         "root": None,
         "export_root": Path("static"),
         "serve": True,
     }
+    assert service.get_config("app.assets.cors") == {
+        "enabled": True,
+        "allow_origins": ("https://example.com",),
+        "allow_methods": ("GET", "HEAD"),
+        "allow_headers": (),
+        "expose_headers": (),
+        "allow_credentials": False,
+        "max_age": 600,
+        "paths": {
+            "/assets/private/": {
+                "allow_origins": ("https://admin.example.com",),
+                "allow_methods": ("GET", "HEAD"),
+                "allow_headers": (),
+                "expose_headers": (),
+                "allow_credentials": False,
+                "max_age": 600,
+            }
+        },
+    }
+    assert service.get_config("app.assets.cors.paths./assets/private/") is None
     assert service.get_config("app.templates") == {
         "auto_reload": True,
         "cache_size": 12,

@@ -34,7 +34,7 @@ def _write_app_config(
         auto_reload = true
         cache_size = 0
 
-        [app.static]
+        [app.assets]
         url_path = "/static/"
         export_root = "static"
         """,

@@ -81,7 +81,7 @@ def load_composed_settings(  # noqa: UP047
     if app_config is not None:
         settings_kwargs.setdefault("project_root", app_config.project_root)
         settings_kwargs["app_config"] = app_config
-        settings_kwargs["static_url_path"] = app_config.static.url_path
+        settings_kwargs["static_url_path"] = app_config.assets.url_path
         settings_kwargs["template_auto_reload"] = app_config.templates.auto_reload
         settings_kwargs["template_cache_size"] = app_config.templates.cache_size
         for value_loader in app_config_value_loaders:
