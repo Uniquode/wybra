@@ -7,6 +7,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
+from types import MappingProxyType
+from typing import Any, cast
 
 import pytest
 from envex import Env
@@ -344,6 +346,10 @@ def test_load_app_config_loads_asset_cors_with_path_overrides(
             )
         },
     )
+    assert isinstance(config.assets.cors.paths, MappingProxyType)
+    mutable_paths = cast(Any, config.assets.cors.paths)
+    with pytest.raises(TypeError):
+        mutable_paths["/static/admin/"] = AssetCorsPolicy()
 
 
 def _write_widget_page_app(tmp_path: Path, module_name: str) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from wybra.config.transforms import to_bool
@@ -22,7 +23,10 @@ class AssetCorsPolicy:
 @dataclass(frozen=True, slots=True)
 class AssetCorsOptions(AssetCorsPolicy):
     enabled: bool = False
-    paths: dict[str, AssetCorsPolicy] = field(default_factory=dict)
+    paths: Mapping[str, AssetCorsPolicy] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "paths", MappingProxyType(dict(self.paths)))
 
 
 def load_asset_cors_options(
@@ -112,6 +116,7 @@ def load_asset_cors_policy(
 
 
 def normalise_url_path_prefix(path: str) -> str:
+    """Normalise a configured URL prefix and retain a trailing slash."""
     return f"/{path.strip('/')}/" if path.strip("/") else "/"
 
 

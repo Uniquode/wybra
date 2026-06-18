@@ -369,6 +369,7 @@ def _path_matches_prefix(path: str, prefix: str) -> bool:
 
 
 def _normalise_url_path(path: str) -> str:
+    """Normalise a request URL path without forcing a trailing slash."""
     return f"/{path.strip('/')}" if path.strip("/") else "/"
 
 
