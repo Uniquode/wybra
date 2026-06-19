@@ -141,6 +141,8 @@ def _email_initial(email: str) -> str | None:
 
 
 def profile_picture_storage_key(user_id: uuid.UUID, extension: str) -> str:
+    if not isinstance(extension, str):
+        raise ProfileInputError("Profile picture extension must be text.")
     raw_suffix = extension.strip()
     if not raw_suffix:
         raise ProfileInputError("Profile picture extension must not be blank.")

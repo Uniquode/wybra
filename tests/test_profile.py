@@ -23,6 +23,7 @@ from wybra.media import (
 )
 from wybra.profile import (
     ProfileCapability,
+    ProfileCapabilityError,
     ProfileInputError,
     SiteProfileCapability,
     profile_picture_storage_key,
@@ -260,12 +261,13 @@ def test_profile_picture_storage_key_uses_profile_category_and_buckets() -> None
     )
 
 
-@pytest.mark.parametrize("extension", (" ", ".png", "avatar.png", "profile/png"))
+@pytest.mark.parametrize("extension", (" ", ".png", "avatar.png", "profile/png", None))
 def test_profile_picture_storage_key_rejects_invalid_extensions(
-    extension: str,
+    extension: object,
 ) -> None:
     with pytest.raises(InputValidationError) as excinfo:
-        profile_picture_storage_key(uuid.uuid4(), extension)
+        profile_picture_storage_key(uuid.uuid4(), extension)  # type: ignore[arg-type]
 
     assert "Profile picture extension" in str(excinfo.value)
     assert isinstance(excinfo.value, ProfileInputError)
+    assert not isinstance(excinfo.value, ProfileCapabilityError)
