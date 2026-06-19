@@ -327,16 +327,20 @@ def _read_collection_manifest(root: Path) -> frozenset[str]:
         )
 
     logical_paths: set[str] = set()
-    for asset in assets:
+    for index, asset in enumerate(assets):
         if not isinstance(asset, str):
             raise StaticCollectionError(
-                f"static collect manifest {manifest_path} contains a non-text path."
+                "static collect manifest "
+                f"{manifest_path} contains a non-text path at index {index}: "
+                f"{asset!r}"
             )
         try:
             logical_paths.add(normalise_logical_asset_path(asset))
         except InputValidationError as exc:
             raise StaticCollectionError(
-                f"static collect manifest {manifest_path} contains an invalid path."
+                "static collect manifest "
+                f"{manifest_path} contains an invalid path at index {index}: "
+                f"{asset!r}"
             ) from exc
 
     return frozenset(logical_paths)

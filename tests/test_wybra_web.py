@@ -2670,6 +2670,12 @@ def test_normal_static_asset_storage_resolves_logical_path_to_static_url() -> No
     assert asset_url("styles/app.css", url_path="assets") == "/assets/styles/app.css"
 
 
+def test_asset_url_normalises_dot_segments_in_logical_path() -> None:
+    assert (
+        asset_url("./styles/./app.css", url_path="/static/") == "/static/styles/app.css"
+    )
+
+
 def test_asset_url_rejects_absolute_logical_paths() -> None:
     with pytest.raises(InputValidationError) as excinfo:
         asset_url("/styles/app.css", url_path="/static/")
@@ -2759,6 +2765,33 @@ async def test_asset_url_is_available_in_template_context(
     )
 
 
+def test_template_renderer_uses_default_static_storage_for_missing_app_state() -> None:
+    renderer = TemplateRenderer()
+
+    class AppWithoutState:
+        pass
+
+    request = Request({"type": "http", "app": AppWithoutState()})
+    asset_url_helper = renderer._resolve_asset_url(request)
+
+    assert asset_url_helper("styles/main.css") == "/static/styles/main.css"
+
+
+@pytest.mark.parametrize("static_asset_storage", (None, object()))
+def test_template_renderer_uses_default_static_storage_for_missing_storage(
+    static_asset_storage: object | None,
+) -> None:
+    renderer = TemplateRenderer()
+    app = FastAPI()
+    app.state.static_mount_path = "/assets"
+    if static_asset_storage is not None:
+        app.state.static_asset_storage = static_asset_storage
+    request = Request({"type": "http", "app": app})
+    asset_url_helper = renderer._resolve_asset_url(request)
+
+    assert asset_url_helper("styles/main.css") == "/assets/styles/main.css"
+
+
 def test_wybra_owned_templates_use_asset_url_for_static_references() -> None:
     template_paths = (
         Path(__file__).resolve().parents[1]
@@ -2846,6 +2879,34 @@ def test_static_collect_skips_reserved_manifest_asset(
         ".wybra-static-collect.json",
     )
     assert tuple(asset.reason for asset in result.skipped_assets) == ("reserved",)
+
+
+@pytest.mark.parametrize(
+    ("manifest_assets", "expected_message"),
+    (
+        ("[42]", "contains a non-text path at index 0: 42"),
+        (
+            '["../styles/app.css"]',
+            "contains an invalid path at index 0: '../styles/app.css'",
+        ),
+    ),
+)
+def test_static_collect_reports_invalid_manifest_entry(
+    tmp_path: Path,
+    manifest_assets: str,
+    expected_message: str,
+) -> None:
+    collected_root = tmp_path / "collected"
+    collected_root.mkdir()
+    (collected_root / ".wybra-static-collect.json").write_text(
+        f'{{"version": 1, "assets": {manifest_assets}}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StaticCollectionError) as excinfo:
+        collect_static_assets((), root=collected_root)
+
+    assert expected_message in str(excinfo.value)
 
 
 def test_configured_static_collect_uses_app_toml_without_route_import(
