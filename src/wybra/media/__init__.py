@@ -11,6 +11,7 @@ from wybra.media.capabilities import (
     FilesystemMediaCapability,
     MediaCapability,
     MediaCapabilityError,
+    MediaInputError,
 )
 from wybra.media.config import MediaSettings, module_config
 from wybra.media.validation import MediaValidationSettings, validate_media
@@ -57,6 +58,7 @@ __all__ = (
     "FilesystemMediaCapability",
     "MediaCapability",
     "MediaCapabilityError",
+    "MediaInputError",
     "MediaSettings",
     "MediaValidationSettings",
     "module_config",

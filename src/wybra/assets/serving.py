@@ -18,7 +18,7 @@ from wybra.assets.config import AssetCorsOptions, AssetCorsPolicy
 from wybra.core.composition import CompositionError
 from wybra.core.conventions import STATIC_RESOURCE_DIRECTORY
 from wybra.core.diagnostics import configured_module_message
-from wybra.core.exceptions import ConfigurationError
+from wybra.core.exceptions import ConfigurationError, InputValidationError
 from wybra.core.resources import (
     PackageResourceSource,
     ResourcePathError,
@@ -32,7 +32,7 @@ class ComposedStaticFiles:
 
     def __init__(self, sources: tuple[PackageResourceSource, ...]) -> None:
         if not sources:
-            raise ValueError("At least one static source is required.")
+            raise InputValidationError("At least one static source is required.")
 
         self.sources = sources
 

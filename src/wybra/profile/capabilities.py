@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from wybra.core import InputValidationError
 from wybra.media import MediaCapability, MediaCapabilityError
 from wybra.profile.models import UserProfile
 from wybra.site import SiteCapabilityError, SiteCapabilityProxy
@@ -15,6 +16,10 @@ from wybra.site import SiteCapabilityError, SiteCapabilityProxy
 
 class ProfileCapabilityError(RuntimeError):
     """Raised when a profile capability operation cannot be completed."""
+
+
+class ProfileInputError(InputValidationError):
+    """Raised when caller-provided profile input is invalid."""
 
 
 logger = logging.getLogger(__name__)
@@ -138,18 +143,16 @@ def _email_initial(email: str) -> str | None:
 def profile_picture_storage_key(user_id: uuid.UUID, extension: str) -> str:
     raw_suffix = extension.strip()
     if not raw_suffix:
-        raise ProfileCapabilityError("Profile picture extension must not be blank.")
+        raise ProfileInputError("Profile picture extension must not be blank.")
     if raw_suffix.startswith("."):
-        raise ProfileCapabilityError(
-            "Profile picture extension must not start with a dot."
-        )
+        raise ProfileInputError("Profile picture extension must not start with a dot.")
     if "." in raw_suffix:
-        raise ProfileCapabilityError(
+        raise ProfileInputError(
             "Profile picture extension must not contain additional dots."
         )
     suffix = raw_suffix.lower()
     if "/" in suffix or "\\" in suffix:
-        raise ProfileCapabilityError(
+        raise ProfileInputError(
             "Profile picture extension must not contain path separators."
         )
     user_key = user_id.hex
@@ -160,6 +163,7 @@ __all__ = (
     "ProfileCapability",
     "ProfileCapabilityError",
     "ProfileImage",
+    "ProfileInputError",
     "ProfileUser",
     "SiteProfileCapability",
     "profile_picture_storage_key",

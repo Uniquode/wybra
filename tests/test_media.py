@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from wybra.auth import models as auth_models  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
+from wybra.core import InputValidationError
 from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
 from wybra.db.models import metadata
 from wybra.db.persistence import create_database
@@ -17,6 +19,7 @@ from wybra.media import (
     FilesystemMediaCapability,
     MediaCapability,
     MediaCapabilityError,
+    MediaInputError,
     MediaSettings,
 )
 from wybra.media.models import MediaItem
@@ -148,8 +151,68 @@ def test_media_capability_resolves_safe_key_paths(tmp_path: Path) -> None:
 def test_media_capability_rejects_unsafe_paths(tmp_path: Path, key: str) -> None:
     capability = _capability(tmp_path)
 
-    with pytest.raises(MediaCapabilityError):
+    with pytest.raises(InputValidationError) as excinfo:
         capability.path_for_key(key)
+
+    assert isinstance(excinfo.value, MediaInputError)
+    assert not isinstance(excinfo.value, MediaCapabilityError)
+
+
+@pytest.mark.parametrize(
+    ("category", "message"),
+    (
+        (" ", "Media category must not be blank."),
+        ("profile/avatar", "Media category must not contain path separators."),
+    ),
+)
+@pytest.mark.anyio
+async def test_media_capability_rejects_invalid_categories(
+    tmp_path: Path,
+    category: str,
+    message: str,
+) -> None:
+    capability = _capability(tmp_path)
+
+    with pytest.raises(InputValidationError, match=re.escape(message)) as excinfo:
+        await capability.register(category=category, storage_key="profiles/avatar.png")
+
+    assert isinstance(excinfo.value, MediaInputError)
+    assert not isinstance(excinfo.value, MediaCapabilityError)
+
+
+@pytest.mark.anyio
+async def test_media_capability_rejects_negative_media_size(tmp_path: Path) -> None:
+    capability = _capability(tmp_path)
+
+    with pytest.raises(
+        InputValidationError, match="Media size must not be negative"
+    ) as excinfo:
+        await capability.register(
+            category="profile",
+            storage_key="profiles/avatar.png",
+            size=-1,
+        )
+    assert isinstance(excinfo.value, MediaInputError)
+
+
+@pytest.mark.parametrize("resource_key", (42, " "))
+@pytest.mark.anyio
+async def test_media_capability_rejects_invalid_resource_keys(
+    tmp_path: Path,
+    resource_key: object,
+) -> None:
+    capability = _capability(tmp_path)
+
+    with pytest.raises(InputValidationError) as excinfo:
+        await capability.register(
+            category="profile",
+            storage_key="profiles/avatar.png",
+            resource_key=resource_key,  # type: ignore[arg-type]
+        )
+
+    assert "Media resource key" in str(excinfo.value)
+    assert isinstance(excinfo.value, MediaInputError)
+    assert not isinstance(excinfo.value, MediaCapabilityError)
 
 
 def test_media_capability_validates_writable_root(tmp_path: Path) -> None:
@@ -293,13 +356,14 @@ async def test_media_capability_rejects_invalid_upload_chunk_size(
 ) -> None:
     capability = _capability(tmp_path)
 
-    with pytest.raises(MediaCapabilityError, match="chunk size"):
+    with pytest.raises(InputValidationError, match="chunk size") as excinfo:
         await capability.store(
             category="profile",
             storage_key="profile/ab/cd/user.png",
             upload=FakeUpload((b"avatar",), "image/png"),
             chunk_size=0,
         )
+    assert isinstance(excinfo.value, MediaInputError)
 
 
 @pytest.mark.anyio
