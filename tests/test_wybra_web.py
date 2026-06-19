@@ -2665,6 +2665,11 @@ def test_static_response_uses_plain_not_found_for_missing_assets() -> None:
     assert response.media_type == "text/plain"
 
 
+def test_composed_static_files_rejects_empty_sources() -> None:
+    with pytest.raises(InputValidationError, match="At least one static source"):
+        ComposedStaticFiles(())
+
+
 def test_normal_static_asset_storage_resolves_logical_path_to_static_url() -> None:
     assert asset_url("styles/app.css", url_path="/static/") == "/static/styles/app.css"
     assert asset_url("styles/app.css", url_path="assets") == "/assets/styles/app.css"

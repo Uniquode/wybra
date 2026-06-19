@@ -15,6 +15,7 @@ from fastapi.routing import APIRoute
 from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
+from wybra.core import InputValidationError
 from wybra.web.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 
 ROUTE_ORIGINS_STATE_KEY = "_wybra_route_origins"
@@ -114,7 +115,7 @@ def route_template(
     """Attach explicit template metadata to an endpoint for route inspection."""
 
     if not isinstance(template_name, str) or not template_name.strip():
-        raise ValueError("Route template name must be a non-blank string.")
+        raise InputValidationError("Route template name must be a non-blank string.")
 
     def decorator(endpoint: Callable[..., Any]) -> Callable[..., Any]:
         setattr(endpoint, ROUTE_TEMPLATE_ATTRIBUTE, template_name.strip())

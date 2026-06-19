@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from wybra.auth import models as auth_models  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
+from wybra.core import InputValidationError
 from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
 from wybra.db.models import metadata
 from wybra.db.persistence import create_database
@@ -22,6 +23,8 @@ from wybra.media import (
 )
 from wybra.profile import (
     ProfileCapability,
+    ProfileCapabilityError,
+    ProfileInputError,
     SiteProfileCapability,
     profile_picture_storage_key,
 )
@@ -256,3 +259,15 @@ def test_profile_picture_storage_key_uses_profile_category_and_buckets() -> None
         profile_picture_storage_key(user_id, "png")
         == "profile/8e/f0/8ef0c57e000040008000000000000001.png"
     )
+
+
+@pytest.mark.parametrize("extension", (" ", ".png", "avatar.png", "profile/png", None))
+def test_profile_picture_storage_key_rejects_invalid_extensions(
+    extension: object,
+) -> None:
+    with pytest.raises(InputValidationError) as excinfo:
+        profile_picture_storage_key(uuid.uuid4(), extension)  # type: ignore[arg-type]
+
+    assert "Profile picture extension" in str(excinfo.value)
+    assert isinstance(excinfo.value, ProfileInputError)
+    assert not isinstance(excinfo.value, ProfileCapabilityError)

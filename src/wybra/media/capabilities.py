@@ -9,6 +9,7 @@ from typing import Protocol, runtime_checkable
 import anyio
 from sqlalchemy import select
 
+from wybra.core import InputValidationError
 from wybra.db import DatabaseCapability
 from wybra.media.config import MediaSettings
 from wybra.media.models import MediaItem, MediaResourceKey
@@ -17,6 +18,10 @@ from wybra.site import SiteCapabilityProxy
 
 class MediaCapabilityError(RuntimeError):
     """Raised when a media capability operation cannot be completed."""
+
+
+class MediaInputError(InputValidationError):
+    """Raised when caller-provided media input is invalid."""
 
 
 @runtime_checkable
@@ -145,7 +150,7 @@ class FilesystemMediaCapability:
         resource_key: str | None = None,
     ) -> MediaItem:
         if chunk_size <= 0:
-            raise MediaCapabilityError("Media upload chunk size must be positive.")
+            raise MediaInputError("Media upload chunk size must be positive.")
         media_category = _category_value(category)
         media_key = _storage_key(storage_key)
         self.validate_writable()
@@ -282,11 +287,11 @@ class FilesystemMediaCapability:
 def _key_path(key: str | Path) -> Path:
     key_path = Path(key)
     if key_path.is_absolute():
-        raise MediaCapabilityError(f"Media key must be relative: key={key!s}.")
+        raise MediaInputError(f"Media key must be relative: key={key!s}.")
     if not key_path.parts:
-        raise MediaCapabilityError("Media key must not be blank.")
+        raise MediaInputError("Media key must not be blank.")
     if any(part in {"", ".", ".."} for part in key_path.parts):
-        raise MediaCapabilityError(f"Media key is invalid: key={key!s}.")
+        raise MediaInputError(f"Media key is invalid: key={key!s}.")
     return key_path
 
 
@@ -296,15 +301,15 @@ def _storage_key(value: str | Path) -> str:
 
 def _category_value(value: str) -> str:
     if not value.strip():
-        raise MediaCapabilityError("Media category must not be blank.")
+        raise MediaInputError("Media category must not be blank.")
     if "/" in value or "\\" in value:
-        raise MediaCapabilityError("Media category must not contain path separators.")
+        raise MediaInputError("Media category must not contain path separators.")
     return value.strip()
 
 
 def _size_value(value: int) -> int:
     if value < 0:
-        raise MediaCapabilityError("Media size must not be negative.")
+        raise MediaInputError("Media size must not be negative.")
     return value
 
 
@@ -312,10 +317,10 @@ def _resource_key_value(value: str | None) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise MediaCapabilityError("Media resource key must be text.")
+        raise MediaInputError("Media resource key must be text.")
     resource_key = value.strip()
     if not resource_key:
-        raise MediaCapabilityError("Media resource key must not be blank.")
+        raise MediaInputError("Media resource key must not be blank.")
     return resource_key
 
 
@@ -323,5 +328,6 @@ __all__ = (
     "FilesystemMediaCapability",
     "MediaCapability",
     "MediaCapabilityError",
+    "MediaInputError",
     "MediaUpload",
 )

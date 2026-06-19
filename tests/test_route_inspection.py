@@ -11,6 +11,7 @@ from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
 import wybra.tools.routes as routes_tool
+from wybra.core import InputValidationError
 from wybra.tools.project import ProjectToolConfigurationError
 from wybra.web.routes import (
     ConfiguredModuleRouter,
@@ -58,6 +59,12 @@ class _AppWithRoutes:
 class _BrokenRouteIterable:
     def __iter__(self):
         raise TypeError("route iterator failed")
+
+
+@pytest.mark.parametrize("template_name", ("", " "))
+def test_route_template_rejects_invalid_template_name(template_name: str) -> None:
+    with pytest.raises(InputValidationError, match="Route template name"):
+        route_template(template_name)
 
 
 def test_inspect_route_tree_reports_installed_routes_and_endpoint_shape(
