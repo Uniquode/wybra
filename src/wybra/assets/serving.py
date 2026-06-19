@@ -1,9 +1,9 @@
-"""Static asset discovery, serving, and export support."""
+"""Runtime static asset discovery and ASGI serving."""
 
 from __future__ import annotations
 
 import mimetypes
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import resources
 from importlib.util import find_spec
@@ -14,44 +14,17 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import PlainTextResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from wybra.core.composition import (
-    AppConfig,
-    AssetCorsOptions,
-    AssetCorsPolicy,
-    CompositionError,
-    load_app_config,
-)
+from wybra.assets.config import AssetCorsOptions, AssetCorsPolicy
+from wybra.core.composition import CompositionError
 from wybra.core.conventions import STATIC_RESOURCE_DIRECTORY
 from wybra.core.diagnostics import configured_module_message
+from wybra.core.exceptions import ConfigurationError
 from wybra.core.resources import (
-    PackageResourceFile,
     PackageResourceSource,
     ResourcePathError,
     first_existing_resource,
-    iter_package_resource_files,
 )
 from wybra.utils.paths import resolve_project_path
-
-
-@dataclass(frozen=True, slots=True)
-class StaticExportedAsset:
-    logical_path: str
-    source: PackageResourceSource
-    destination: Path
-
-
-@dataclass(frozen=True, slots=True)
-class StaticAssetDuplicate:
-    logical_path: str
-    winner: PackageResourceSource
-    shadowed: PackageResourceSource
-
-
-@dataclass(frozen=True, slots=True)
-class StaticExportResult:
-    export_root: Path
-    exported_assets: tuple[StaticExportedAsset, ...]
-    duplicates: tuple[StaticAssetDuplicate, ...]
 
 
 class ComposedStaticFiles:
@@ -130,8 +103,9 @@ def static_app_from_config(
 ) -> ASGIApp:
     """Build the runtime static ASGI app.
 
-    A configured filesystem static root takes precedence over module static
-    assets. Module assets are served only when no filesystem root is configured.
+    A directly supplied filesystem static root takes precedence over module
+    static assets. Site startup passes no filesystem root so app-served runtime
+    static files come from configured module static sources.
     """
     resolved_static_root = _resolve_static_root(project_root, static_root)
     if resolved_static_root is not None:
@@ -162,67 +136,6 @@ def static_asset_response(
     return Response(
         content,
         media_type=media_type or "application/octet-stream",
-    )
-
-
-def export_configured_static_assets(
-    *,
-    project_root: Path | None = None,
-    config_path: Path | None = None,
-    environ: Mapping[str, str] | None = None,
-    export_root: Path | None = None,
-) -> StaticExportResult:
-    config = load_app_config(
-        project_root=project_root,
-        config_path=config_path,
-        environ=environ,
-    )
-    return export_static_assets(
-        static_sources_from_modules(config.modules),
-        export_root=_resolve_export_root(config, export_root),
-    )
-
-
-def export_static_assets(
-    sources: tuple[PackageResourceSource, ...],
-    *,
-    export_root: Path,
-) -> StaticExportResult:
-    resolved_export_root = export_root.resolve()
-    resolved_export_root.mkdir(parents=True, exist_ok=True)
-    winners: dict[str, PackageResourceFile] = {}
-    exported_assets: list[StaticExportedAsset] = []
-    duplicates: list[StaticAssetDuplicate] = []
-
-    for source in sources:
-        for asset in iter_package_resource_files(source):
-            winner = winners.get(asset.logical_path)
-            if winner is not None:
-                duplicates.append(
-                    StaticAssetDuplicate(
-                        logical_path=asset.logical_path,
-                        winner=winner.source,
-                        shadowed=asset.source,
-                    )
-                )
-                continue
-
-            winners[asset.logical_path] = asset
-            destination = resolved_export_root / asset.logical_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(asset.resource.read_bytes())
-            exported_assets.append(
-                StaticExportedAsset(
-                    logical_path=asset.logical_path,
-                    source=asset.source,
-                    destination=destination,
-                )
-            )
-
-    return StaticExportResult(
-        export_root=resolved_export_root,
-        exported_assets=tuple(exported_assets),
-        duplicates=tuple(duplicates),
     )
 
 
@@ -272,15 +185,18 @@ def _require_configured_module(module_name: str) -> None:
 
 
 def _resolve_static_root(project_root: Path, static_root: Path | None) -> Path | None:
-    return resolve_project_path(project_root, static_root)
-
-
-def _resolve_export_root(config: AppConfig, export_root: Path | None) -> Path:
-    path = export_root if export_root is not None else config.assets.export_root
-    if not path.is_absolute():
-        path = config.project_root / path
-
-    return path
+    resolved = resolve_project_path(project_root, static_root)
+    if resolved is None:
+        return None
+    if not resolved.exists():
+        raise ConfigurationError(
+            f"Configured static asset root does not exist: {resolved}"
+        )
+    if not resolved.is_dir():
+        raise ConfigurationError(
+            f"Configured static asset root is not a directory: {resolved}"
+        )
+    return resolved
 
 
 def _asset_cors_app(
@@ -377,12 +293,7 @@ __all__ = [
     "ComposedStaticFiles",
     "NoStaticFiles",
     "PathCorsStaticFiles",
-    "StaticAssetDuplicate",
-    "StaticExportResult",
-    "StaticExportedAsset",
     "discover_static_sources",
-    "export_configured_static_assets",
-    "export_static_assets",
     "static_app_from_config",
     "static_asset_response",
     "static_sources_from_modules",

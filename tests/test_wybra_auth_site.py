@@ -29,7 +29,7 @@ def _site_config_source(
                 }
             },
             "app.templates": {"auto_reload": True, "cache_size": 0},
-            "app.assets": {"url_path": "/static/", "export_root": Path("static")},
+            "app.assets": {"url_path": "/static/", "root": Path("static")},
         }
     )
 

@@ -28,6 +28,7 @@ from wybra.core.composition import (
     AppConfig,
     AssetCorsOptions,
     AssetCorsPolicy,
+    AssetExportMode,
     AssetOptions,
     RouteOptions,
     TemplateOptions,
@@ -277,7 +278,7 @@ cache_size = 0
 
 [app.assets]
 url_path = "/static"
-export_root = "static"
+root = "static"
 
 [auth]
 account_creation_policy = "closed"
@@ -292,8 +293,9 @@ account_creation_policy = "closed"
     assert app_section["database_url"] == "sqlite+aiosqlite:///app.sqlite3"
     assert service.get_config("app.assets") == {
         "url_path": "/static",
-        "export_root": Path("static"),
-        "root": None,
+        "root": Path("static"),
+        "root_configured": True,
+        "export_mode": "normal",
         "serve": True,
     }
     assert service.get_config("app.templates") == {
@@ -336,7 +338,7 @@ def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
                 fields=(
                     ConfigField(name="url_path", default="/static/"),
                     ConfigField(
-                        name="export_root",
+                        name="root",
                         default="static",
                         env="APP_STATIC_EXPORT",
                     ),
@@ -352,10 +354,10 @@ def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
 
     assert service.get_config("app.assets") == {
         "url_path": "/static/",
-        "export_root": "public-static",
+        "root": "public-static",
     }
     assert service.config.sources["app.assets.url_path"] == "default"
-    assert service.config.sources["app.assets.export_root"] == "environment"
+    assert service.config.sources["app.assets.root"] == "environment"
 
 
 def test_config_def_field_without_transform_preserves_raw_value() -> None:
@@ -871,8 +873,8 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
         templates=TemplateOptions(auto_reload=True, cache_size=12),
         assets=AssetOptions(
             url_path="/assets/",
-            root=None,
-            export_root=Path("static"),
+            root=Path("static"),
+            export_mode=AssetExportMode.NORMAL,
             cors=AssetCorsOptions(
                 enabled=True,
                 allow_origins=("https://example.com",),
@@ -899,8 +901,9 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
     assert service.get_config("app.routes") == {"prefixes": {"app": {"default": ""}}}
     assert service.get_config("app.assets") == {
         "url_path": "/assets/",
-        "root": None,
-        "export_root": Path("static"),
+        "root": Path("static"),
+        "root_configured": False,
+        "export_mode": "normal",
         "serve": True,
     }
     assert service.get_config("app.assets.cors") == {

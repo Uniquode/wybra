@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -6,10 +7,13 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, select_autoescape
 
+from wybra.assets import NormalStaticAssetStorage, StaticAssetStorage
 from wybra.core.resources import PackageResourceSource
 from wybra.web.context import TemplateContext, get_request_context
 from wybra.web.forms.csrf import CsrfProtector
 from wybra.web.templating import build_template_loader
+
+_DEFAULT_STATIC_ASSET_STORAGE = NormalStaticAssetStorage()
 
 
 @dataclass(slots=True)
@@ -58,6 +62,7 @@ class TemplateRenderer:
         framework_context: dict[str, Any] = {
             "route_name": self._resolve_route_name(request),
             "static_mount_path": self._resolve_static_mount_path(request),
+            "asset_url": self._resolve_asset_url(request),
         }
         if self.include_request_context:
             framework_context["request"] = request
@@ -91,6 +96,30 @@ class TemplateRenderer:
             return settings_static_mount_path.rstrip("/")
 
         return "/static"
+
+    @classmethod
+    def _resolve_asset_url(cls, request: Request) -> Callable[[str], str]:
+        """Build the template helper for resolving logical static asset paths."""
+        static_mount_path = cls._resolve_static_mount_path(request)
+        storage = cls._resolve_static_asset_storage(request)
+
+        def asset_url(logical_path: str) -> str:
+            return storage.url(logical_path, url_path=static_mount_path)
+
+        return asset_url
+
+    @staticmethod
+    def _resolve_static_asset_storage(request: Request) -> StaticAssetStorage:
+        try:
+            app_state = request.app.state
+        except AttributeError:
+            return _DEFAULT_STATIC_ASSET_STORAGE
+
+        storage = getattr(app_state, "static_asset_storage", None)
+        if isinstance(storage, StaticAssetStorage):
+            return storage
+
+        return _DEFAULT_STATIC_ASSET_STORAGE
 
     def render_page(
         self,

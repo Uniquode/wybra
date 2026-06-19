@@ -28,6 +28,7 @@ dependencies = [
 
 [project.scripts]
 wybra-authmgr = "wybra.auth.cli.authmgr:main"
+wybra-collect = "wybra.tools.collect:main"
 wybra-migrate = "wybra.tools.migrate:main"
 wybra-routes = "wybra.tools.routes:main"
 wybra-runserver = "wybra.tools.runserver:main"

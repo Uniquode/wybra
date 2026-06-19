@@ -9,17 +9,19 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
-from wybra.config.transforms import to_bool
-from wybra.core.asset_config import (
+from wybra.assets.config import (
     AssetCorsOptions,
     AssetCorsPolicy,
+    AssetExportMode,
     load_asset_cors_options,
+    parse_asset_export_mode,
 )
+from wybra.config.transforms import to_bool
 from wybra.core.diagnostics import app_config_message, configured_module_import_message
 
 APP_ROOT_ENV: Final = "APP_ROOT"
 APP_CONFIG_ENV: Final = "APP_CONFIG"
-DEFAULT_ASSET_EXPORT_ROOT: Final = Path("static")
+DEFAULT_ASSET_ROOT: Final = Path("static")
 
 
 class CompositionError(Exception):
@@ -41,8 +43,9 @@ class TemplateOptions:
 @dataclass(frozen=True, slots=True)
 class AssetOptions:
     url_path: str
-    root: Path | None
-    export_root: Path
+    root: Path = DEFAULT_ASSET_ROOT
+    root_configured: bool = False
+    export_mode: AssetExportMode = AssetExportMode.NORMAL
     serve: bool = True
     cors: AssetCorsOptions = field(default_factory=AssetCorsOptions)
 
@@ -399,21 +402,26 @@ def _load_asset_options(data: dict[str, Any]) -> AssetOptions:
     asset_data = _required_table(data, "app.assets")
     return AssetOptions(
         url_path=_required_str(asset_data, "app.assets.url_path"),
-        root=(
-            Path(root)
-            if (root := _optional_str_or_none(asset_data, "app.assets.root"))
-            else None
-        ),
-        export_root=Path(
+        root=Path(
             _optional_str(
                 asset_data,
-                "app.assets.export_root",
-                DEFAULT_ASSET_EXPORT_ROOT.as_posix(),
+                "app.assets.root",
+                DEFAULT_ASSET_ROOT.as_posix(),
             )
         ),
+        root_configured="root" in asset_data,
+        export_mode=_asset_export_mode(asset_data),
         serve=_bool_from_config(asset_data, "app.assets.serve", True),
         cors=_load_asset_cors_options(asset_data),
     )
+
+
+def _asset_export_mode(data: dict[str, Any]) -> AssetExportMode:
+    value = _optional_str(data, "app.assets.export_mode", AssetExportMode.NORMAL.value)
+    try:
+        return parse_asset_export_mode(value)
+    except ValueError as exc:
+        raise CompositionError(f"App config {exc}") from exc
 
 
 def _load_asset_cors_options(data: dict[str, Any]) -> AssetCorsOptions:
@@ -452,7 +460,7 @@ __all__ = [
     "AssetCorsPolicy",
     "AssetOptions",
     "CompositionError",
-    "DEFAULT_ASSET_EXPORT_ROOT",
+    "DEFAULT_ASSET_ROOT",
     "RouteOptions",
     "RunserverOptions",
     "TemplateOptions",

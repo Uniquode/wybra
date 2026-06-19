@@ -2,6 +2,7 @@ import ast
 import asyncio
 import importlib
 import logging
+import os
 import re
 import tomllib
 from dataclasses import dataclass
@@ -10,9 +11,10 @@ from textwrap import dedent
 from types import MappingProxyType
 from typing import Any, cast
 
+import click
 import pytest
 from envex import Env
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import Response
 from fastapi.routing import APIRoute, APIRouter
 from fastapi.staticfiles import StaticFiles
@@ -23,9 +25,13 @@ from jinja2.exceptions import TemplateNotFound
 from wybra.assets import (
     ComposedStaticFiles,
     StaticAssetDuplicate,
+    StaticCollectionError,
+    StaticCollectionStatus,
+    asset_url,
+    collect_configured_static_assets,
+    collect_static_assets,
     discover_static_sources,
-    export_configured_static_assets,
-    export_static_assets,
+    static_app_from_config,
     static_asset_response,
     static_sources_from_modules,
 )
@@ -34,6 +40,7 @@ from wybra.core.composition import (
     AppConfig,
     AssetCorsOptions,
     AssetCorsPolicy,
+    AssetExportMode,
     AssetOptions,
     CompositionError,
     RouteOptions,
@@ -42,6 +49,7 @@ from wybra.core.composition import (
     load_app_config_modules,
     load_modules,
 )
+from wybra.core.exceptions import ConfigurationError, InputValidationError
 from wybra.core.resources import PackageResourceSource, read_text_resource
 from wybra.core.settings import (
     EnvironmentSetting,
@@ -50,12 +58,13 @@ from wybra.core.settings import (
     values_from_env_settings,
 )
 from wybra.site import start
+from wybra.tools import collect as collect_tool
 from wybra.web.context import (
     TemplateContext,
     resolve_context_providers,
 )
 from wybra.web.forms.csrf import CsrfProtector
-from wybra.web.rendering import TemplateRenderer
+from wybra.web.rendering import TemplateRenderer, render_page
 from wybra.web.routes import (
     ConfiguredModuleRouter,
     RouteCompositionError,
@@ -230,7 +239,7 @@ def test_load_app_config_accepts_string_static_serve_from_config_sources(
 
             [app.assets]
             url_path = "/static/"
-            export_root = "static"
+            root = "static"
             serve = "false"
             """
         ),
@@ -258,7 +267,7 @@ def test_load_app_config_requires_app_assets_without_static_fallback(
 
             [app.static]
             url_path = "/static/"
-            export_root = "static"
+            root = "static"
             """
         ),
         encoding="utf-8",
@@ -287,7 +296,7 @@ def test_load_app_config_defaults_asset_serving_to_enabled(
 
             [app.assets]
             url_path = "/static/"
-            export_root = "static"
+            root = "static"
             """
         ),
         encoding="utf-8",
@@ -296,6 +305,65 @@ def test_load_app_config_defaults_asset_serving_to_enabled(
     config = load_app_config(project_root=tmp_path, config_path=config_path)
 
     assert config.assets.serve is True
+    assert config.assets.export_mode is AssetExportMode.NORMAL
+
+
+def test_load_app_config_loads_supported_asset_export_mode(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        dedent(
+            """
+            [app]
+            modules = ["wybra.web"]
+
+            [app.templates]
+            auto_reload = true
+            cache_size = 0
+
+            [app.assets]
+            url_path = "/static/"
+            root = "static"
+            export_mode = "normal"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    assert config.assets.export_mode is AssetExportMode.NORMAL
+
+
+def test_load_app_config_rejects_unknown_asset_export_mode(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        dedent(
+            """
+            [app]
+            modules = ["wybra.web"]
+
+            [app.templates]
+            auto_reload = true
+            cache_size = 0
+
+            [app.assets]
+            url_path = "/static/"
+            root = "static"
+            export_mode = "cloud"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        CompositionError,
+        match="app.assets.export_mode must be one of",
+    ):
+        load_app_config(project_root=tmp_path, config_path=config_path)
 
 
 def test_load_app_config_loads_asset_cors_with_path_overrides(
@@ -314,7 +382,7 @@ def test_load_app_config_loads_asset_cors_with_path_overrides(
 
             [app.assets]
             url_path = "/static/"
-            export_root = "static"
+            root = "static"
 
             [app.assets.cors]
             enabled = true
@@ -514,7 +582,7 @@ async def test_wybra_web_setup_site_registers_routes_renderer_and_static(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
             }
         ),
     )
@@ -562,7 +630,6 @@ async def test_wybra_web_setup_can_disable_static_serving(
                 "app.templates": {"auto_reload": True, "cache_size": 0},
                 "app.assets": {
                     "url_path": "/static/",
-                    "export_root": "static",
                     "serve": False,
                 },
             }
@@ -577,12 +644,20 @@ async def test_wybra_web_setup_can_disable_static_serving(
 
 
 @pytest.mark.anyio
-async def test_wybra_web_setup_serves_configured_filesystem_static_root(
+async def test_wybra_web_setup_serves_module_static_sources_not_collection_root(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    static_root = tmp_path / "assets"
-    static_root.mkdir()
-    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    package_root = tmp_path / "source_static_app"
+    source_root = package_root / "static"
+    source_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (source_root / "app.css").write_text("source {}", encoding="utf-8")
+    collection_root = tmp_path / "assets"
+    collection_root.mkdir()
+    (collection_root / "app.css").write_text("collected {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
     app = FastAPI()
 
     await start(
@@ -592,14 +667,13 @@ async def test_wybra_web_setup_serves_configured_filesystem_static_root(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("wybra.web",),
+                    "modules": ("source_static_app", "wybra.web"),
                 },
-                "app.routes": {"prefixes": {"wybra.web": {}}},
+                "app.routes": {"prefixes": {"source_static_app": {}, "wybra.web": {}}},
                 "app.templates": {"auto_reload": True, "cache_size": 0},
                 "app.assets": {
                     "url_path": "/static/",
                     "root": "assets",
-                    "export_root": "static",
                 },
             }
         ),
@@ -608,17 +682,47 @@ async def test_wybra_web_setup_serves_configured_filesystem_static_root(
     static_route = next(
         route for route in app.routes if getattr(route, "name", None) == "static"
     )
-    assert isinstance(static_route.app, StaticFiles)
-    assert TestClient(app).get("/static/app.css").text == "body {}"
+    assert not isinstance(static_route.app, StaticFiles)
+    assert TestClient(app).get("/static/app.css").text == "source {}"
+
+
+def test_static_app_from_config_rejects_missing_configured_static_root(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ConfigurationError, match="does not exist"):
+        static_app_from_config(
+            project_root=tmp_path,
+            static_root=Path("missing-static"),
+            static_sources=(),
+        )
+
+
+def test_static_app_from_config_uses_module_assets_when_static_root_absent(
+    tmp_path: Path,
+) -> None:
+    app = static_app_from_config(
+        project_root=tmp_path,
+        static_root=None,
+        static_sources=(
+            PackageResourceSource(package="wybra.web", directory="static"),
+        ),
+    )
+
+    assert isinstance(app, ComposedStaticFiles)
 
 
 @pytest.mark.anyio
 async def test_wybra_web_setup_applies_global_asset_cors(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    static_root = tmp_path / "assets"
-    static_root.mkdir()
+    package_root = tmp_path / "cors_static_app"
+    static_root = package_root / "static"
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
     (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
     app = FastAPI()
 
     await start(
@@ -628,14 +732,13 @@ async def test_wybra_web_setup_applies_global_asset_cors(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("wybra.web",),
+                    "modules": ("cors_static_app", "wybra.web"),
                 },
-                "app.routes": {"prefixes": {"wybra.web": {}}},
+                "app.routes": {"prefixes": {"cors_static_app": {}, "wybra.web": {}}},
                 "app.templates": {"auto_reload": True, "cache_size": 0},
                 "app.assets": {
                     "url_path": "/static/",
                     "root": "assets",
-                    "export_root": "static",
                 },
                 "app.assets.cors": {
                     "enabled": True,
@@ -658,12 +761,17 @@ async def test_wybra_web_setup_applies_global_asset_cors(
 @pytest.mark.anyio
 async def test_wybra_web_setup_applies_per_path_asset_cors(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    static_root = tmp_path / "assets"
+    package_root = tmp_path / "path_cors_static_app"
+    static_root = package_root / "static"
     private_root = static_root / "private"
     private_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
     (static_root / "app.css").write_text("body {}", encoding="utf-8")
     (private_root / "admin.css").write_text("admin {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
     app = FastAPI()
 
     await start(
@@ -673,14 +781,15 @@ async def test_wybra_web_setup_applies_per_path_asset_cors(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("wybra.web",),
+                    "modules": ("path_cors_static_app", "wybra.web"),
                 },
-                "app.routes": {"prefixes": {"wybra.web": {}}},
+                "app.routes": {
+                    "prefixes": {"path_cors_static_app": {}, "wybra.web": {}}
+                },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
                 "app.assets": {
                     "url_path": "/static/",
                     "root": "assets",
-                    "export_root": "static",
                 },
                 "app.assets.cors": {
                     "enabled": True,
@@ -721,11 +830,16 @@ async def test_wybra_web_setup_applies_per_path_asset_cors(
 @pytest.mark.anyio
 async def test_wybra_web_setup_uses_normalised_static_mount_path_for_asset_cors(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    static_root = tmp_path / "assets"
+    package_root = tmp_path / "normalised_cors_static_app"
+    static_root = package_root / "static"
     private_root = static_root / "private"
     private_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
     (private_root / "admin.css").write_text("admin {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
     app = FastAPI()
 
     await start(
@@ -735,14 +849,15 @@ async def test_wybra_web_setup_uses_normalised_static_mount_path_for_asset_cors(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("wybra.web",),
+                    "modules": ("normalised_cors_static_app", "wybra.web"),
                 },
-                "app.routes": {"prefixes": {"wybra.web": {}}},
+                "app.routes": {
+                    "prefixes": {"normalised_cors_static_app": {}, "wybra.web": {}}
+                },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
                 "app.assets": {
                     "url_path": "static",
                     "root": "assets",
-                    "export_root": "static",
                 },
                 "app.assets.cors": {
                     "enabled": True,
@@ -819,7 +934,7 @@ async def test_wybra_widgets_publish_theme_selector_when_enabled(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
                 "wybra.widgets": {"features": ["theme"]},
             }
         ),
@@ -872,7 +987,7 @@ async def test_wybra_widgets_publish_login_button_when_auth_is_available(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
             }
         ),
     )
@@ -923,7 +1038,7 @@ async def test_wybra_widgets_publish_profile_initial_and_logout_when_authenticat
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
             }
         ),
     )
@@ -976,7 +1091,7 @@ async def test_wybra_widgets_use_profile_descriptor_when_profile_is_available(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
             }
         ),
     )
@@ -1024,7 +1139,7 @@ async def test_wybra_widgets_do_not_publish_login_button_without_auth(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
             }
         ),
     )
@@ -1070,7 +1185,7 @@ async def test_wybra_widgets_can_disable_login_button_when_auth_is_available(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
                 "wybra.widgets": {"features": ["theme"]},
             }
         ),
@@ -1153,7 +1268,7 @@ async def test_wybra_widgets_can_disable_theme_selector(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
                 "wybra.widgets": {"features": []},
             }
         ),
@@ -1223,7 +1338,7 @@ async def test_application_template_overrides_widget_partial(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
             }
         ),
     )
@@ -1288,7 +1403,7 @@ async def test_wybra_web_request_context_is_enabled_by_default(
                     "cache_size": 0,
                     "root": str(template_root),
                 },
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
             }
         ),
     )
@@ -1350,7 +1465,7 @@ async def test_wybra_web_request_context_can_be_disabled(
                     "cache_size": 0,
                     "root": str(template_root),
                 },
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
                 "wybra.web": {"request_context_enabled": False},
             }
         ),
@@ -1395,7 +1510,7 @@ async def test_wybra_web_registers_auth_routes_through_module_composition(
                     }
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
-                "app.assets": {"url_path": "/static/", "export_root": "static"},
+                "app.assets": {"url_path": "/static/"},
             }
         ),
     )
@@ -1630,7 +1745,7 @@ def test_composed_settings_loader_builds_framework_settings(tmp_path: Path) -> N
 
             [app.assets]
             url_path = "/assets/"
-            export_root = "static"
+            root = "static"
             """
         ),
         encoding="utf-8",
@@ -1793,7 +1908,7 @@ def test_discover_module_routers_reads_module_routers_export(
     assert isinstance(routers["default"], APIRouter)
 
 
-def test_discover_module_routers_accepts_mapping_export(
+def test_discover_module_routers_accepts_mapping_static_collect(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1916,9 +2031,7 @@ def test_configured_module_routes_and_registration_are_wybra_web_concerns(
             modules=modules,
             routes=RouteOptions(prefixes={module_name: {"default": "/site"}}),
             templates=TemplateOptions(auto_reload=True, cache_size=0),
-            assets=AssetOptions(
-                url_path="/static/", root=None, export_root=Path("static")
-            ),
+            assets=AssetOptions(url_path="/static/"),
         )
 
     route_set = load_configured_module_routes(Settings())
@@ -2552,13 +2665,156 @@ def test_static_response_uses_plain_not_found_for_missing_assets() -> None:
     assert response.media_type == "text/plain"
 
 
-def test_static_export_writes_winning_assets_and_reports_duplicates(
+def test_normal_static_asset_storage_resolves_logical_path_to_static_url() -> None:
+    assert asset_url("styles/app.css", url_path="/static/") == "/static/styles/app.css"
+    assert asset_url("styles/app.css", url_path="assets") == "/assets/styles/app.css"
+
+
+def test_asset_url_normalises_dot_segments_in_logical_path() -> None:
+    assert (
+        asset_url("./styles/./app.css", url_path="/static/") == "/static/styles/app.css"
+    )
+
+
+def test_asset_url_rejects_absolute_logical_paths() -> None:
+    with pytest.raises(InputValidationError) as excinfo:
+        asset_url("/styles/app.css", url_path="/static/")
+
+    assert str(excinfo.value) == (
+        "Logical asset paths must be relative and cannot start with '/'."
+    )
+
+
+@pytest.mark.parametrize(
+    "logical_path",
+    (" styles/app.css", "styles/app.css "),
+)
+def test_asset_url_rejects_logical_paths_with_surrounding_whitespace(
+    logical_path: str,
+) -> None:
+    with pytest.raises(InputValidationError) as excinfo:
+        asset_url(logical_path, url_path="/static/")
+
+    assert str(excinfo.value) == (
+        "Logical asset paths must not have leading or trailing whitespace."
+    )
+
+
+@pytest.mark.parametrize(
+    "logical_path",
+    ("../styles/app.css", "./../styles/app.css"),
+)
+def test_asset_url_rejects_parent_directory_logical_paths(
+    logical_path: str,
+) -> None:
+    with pytest.raises(InputValidationError) as excinfo:
+        asset_url(logical_path, url_path="/static/")
+
+    assert str(excinfo.value) == (
+        "Logical asset paths must not contain '..' segments that escape the namespace."
+    )
+
+
+@pytest.mark.anyio
+async def test_asset_url_is_available_in_template_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "asset_url_template_app"
+    template_root = package_root / "templates"
+    static_root = package_root / "static" / "styles"
+    template_root.mkdir(parents=True)
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "page.html").write_text(
+        '<link href="{{ asset_url("styles/app.css") }}" rel="stylesheet">',
+        encoding="utf-8",
+    )
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("asset_url_template_app", "wybra.web"),
+                },
+                "app.routes": {
+                    "prefixes": {
+                        "asset_url_template_app": {"default": ""},
+                        "wybra.web": {},
+                    }
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+                "app.assets": {"url_path": "/assets/"},
+            }
+        ),
+    )
+
+    @app.get("/")
+    async def home(request: Request) -> Response:
+        return render_page(request, "page.html")
+
+    assert TestClient(app).get("/").text == (
+        '<link href="/assets/styles/app.css" rel="stylesheet">'
+    )
+
+
+def test_template_renderer_uses_default_static_storage_for_missing_app_state() -> None:
+    renderer = TemplateRenderer()
+
+    class AppWithoutState:
+        pass
+
+    request = Request({"type": "http", "app": AppWithoutState()})
+    asset_url_helper = renderer._resolve_asset_url(request)
+
+    assert asset_url_helper("styles/main.css") == "/static/styles/main.css"
+
+
+@pytest.mark.parametrize("static_asset_storage", (None, object()))
+def test_template_renderer_uses_default_static_storage_for_missing_storage(
+    static_asset_storage: object | None,
+) -> None:
+    renderer = TemplateRenderer()
+    app = FastAPI()
+    app.state.static_mount_path = "/assets"
+    if static_asset_storage is not None:
+        app.state.static_asset_storage = static_asset_storage
+    request = Request({"type": "http", "app": app})
+    asset_url_helper = renderer._resolve_asset_url(request)
+
+    assert asset_url_helper("styles/main.css") == "/assets/styles/main.css"
+
+
+def test_wybra_owned_templates_use_asset_url_for_static_references() -> None:
+    template_paths = (
+        Path(__file__).resolve().parents[1]
+        / "src/wybra/web/templates/layouts/page.html",
+        Path(__file__).resolve().parents[1]
+        / "src/wybra/web/templates/errors/base.html",
+        Path(__file__).resolve().parents[1]
+        / "src/wybra/widgets/templates/layouts/page.html",
+    )
+
+    for template_path in template_paths:
+        template = template_path.read_text(encoding="utf-8")
+        assert "asset_url(" in template
+        assert "static_mount_path }}/" not in template
+
+
+def test_static_collect_writes_winning_assets_and_reports_duplicates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for package_name, content in (
-        ("base_export_static_app", "base"),
-        ("application_export_static_app", "application"),
+        ("base_collect_static_app", "base"),
+        ("application_collect_static_app", "application"),
     ):
         package_root = tmp_path / package_name
         static_root = package_root / "static" / "styles"
@@ -2569,35 +2825,95 @@ def test_static_export_writes_winning_assets_and_reports_duplicates(
     importlib.invalidate_caches()
 
     sources = static_sources_from_modules(
-        ("application_export_static_app", "base_export_static_app")
+        ("application_collect_static_app", "base_collect_static_app")
     )
-    result = export_static_assets(sources, export_root=tmp_path / "collected")
+    result = collect_static_assets(sources, root=tmp_path / "collected")
 
-    exported_asset = tmp_path / "collected" / "styles" / "app.css"
-    assert exported_asset.read_text(encoding="utf-8") == "application"
-    assert tuple(asset.logical_path for asset in result.exported_assets) == (
+    collected_asset = tmp_path / "collected" / "styles" / "app.css"
+    assert collected_asset.read_text(encoding="utf-8") == "application"
+    assert tuple(asset.logical_path for asset in result.collected_assets) == (
         "styles/app.css",
     )
     assert result.duplicates == (
         StaticAssetDuplicate(
             logical_path="styles/app.css",
             winner=PackageResourceSource(
-                package="application_export_static_app",
+                package="application_collect_static_app",
                 directory="static",
             ),
             shadowed=PackageResourceSource(
-                package="base_export_static_app",
+                package="base_collect_static_app",
                 directory="static",
             ),
         ),
     )
 
 
-def test_configured_static_export_uses_app_toml_without_route_import(
+def test_static_collect_skips_reserved_manifest_asset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    package_root = tmp_path / "configured_export_static_app"
+    package_root = tmp_path / "manifest_collision_collect_app"
+    static_root = package_root / "static"
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (static_root / ".wybra-static-collect.json").write_text(
+        "not a collect manifest",
+        encoding="utf-8",
+    )
+    (static_root / "styles.css").write_text("body {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    result = collect_static_assets(
+        static_sources_from_modules(("manifest_collision_collect_app",)),
+        root=tmp_path / "collected",
+    )
+
+    manifest = tmp_path / "collected" / ".wybra-static-collect.json"
+    assert '"assets": [' in manifest.read_text(encoding="utf-8")
+    assert tuple(asset.logical_path for asset in result.collected_assets) == (
+        "styles.css",
+    )
+    assert tuple(asset.logical_path for asset in result.skipped_assets) == (
+        ".wybra-static-collect.json",
+    )
+    assert tuple(asset.reason for asset in result.skipped_assets) == ("reserved",)
+
+
+@pytest.mark.parametrize(
+    ("manifest_assets", "expected_message"),
+    (
+        ("[42]", "contains a non-text path at index 0: 42"),
+        (
+            '["../styles/app.css"]',
+            "contains an invalid path at index 0: '../styles/app.css'",
+        ),
+    ),
+)
+def test_static_collect_reports_invalid_manifest_entry(
+    tmp_path: Path,
+    manifest_assets: str,
+    expected_message: str,
+) -> None:
+    collected_root = tmp_path / "collected"
+    collected_root.mkdir()
+    (collected_root / ".wybra-static-collect.json").write_text(
+        f'{{"version": 1, "assets": {manifest_assets}}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StaticCollectionError) as excinfo:
+        collect_static_assets((), root=collected_root)
+
+    assert expected_message in str(excinfo.value)
+
+
+def test_configured_static_collect_uses_app_toml_without_route_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "configured_collect_static_app"
     static_root = package_root / "static" / "styles"
     static_root.mkdir(parents=True)
     (package_root / "__init__.py").write_text("", encoding="utf-8")
@@ -2610,7 +2926,7 @@ def test_configured_static_export_uses_app_toml_without_route_import(
     config_path.write_text(
         """
         [app]
-        modules = ["configured_export_static_app"]
+        modules = ["configured_collect_static_app"]
 
         [app.templates]
         auto_reload = true
@@ -2618,22 +2934,405 @@ def test_configured_static_export_uses_app_toml_without_route_import(
 
         [app.assets]
         url_path = "/static/"
-        export_root = "exported-static"
+        root = "collected-static"
         """,
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
 
-    result = export_configured_static_assets(
+    result = collect_configured_static_assets(
         project_root=tmp_path,
         config_path=config_path,
     )
 
-    exported_asset = tmp_path / "exported-static" / "styles" / "app.css"
-    assert result.export_root == (tmp_path / "exported-static").resolve()
-    assert exported_asset.read_text(encoding="utf-8") == ":root {}"
+    collected_asset = tmp_path / "collected-static" / "styles" / "app.css"
+    assert result.root == (tmp_path / "collected-static").resolve()
+    assert collected_asset.read_text(encoding="utf-8") == ":root {}"
     assert result.duplicates == ()
+
+
+def test_static_collect_skips_unchanged_assets_and_updates_changed_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "incremental_collect_app"
+    static_root = package_root / "static" / "styles"
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    source_asset = static_root / "app.css"
+    source_asset.write_text("body {}", encoding="utf-8")
+    source_mtime = 1_700_000_000
+    os.utime(source_asset, (source_mtime, source_mtime))
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    sources = static_sources_from_modules(("incremental_collect_app",))
+
+    first_result = collect_static_assets(sources, root=tmp_path / "collected")
+    destination = tmp_path / "collected" / "styles" / "app.css"
+    manifest = tmp_path / "collected" / ".wybra-static-collect.json"
+    first_destination_mtime = destination.stat().st_mtime_ns
+    first_manifest_mtime = manifest.stat().st_mtime_ns
+
+    second_result = collect_static_assets(sources, root=tmp_path / "collected")
+
+    assert tuple(asset.status for asset in first_result.collected_assets) == (
+        StaticCollectionStatus.COPIED,
+    )
+    assert tuple(asset.status for asset in second_result.collected_assets) == (
+        StaticCollectionStatus.UNCHANGED,
+    )
+    assert destination.stat().st_mtime_ns == first_destination_mtime
+    assert manifest.stat().st_mtime_ns == first_manifest_mtime
+
+    source_asset.write_text("body { color: red; }", encoding="utf-8")
+    updated_mtime = source_mtime + 60
+    os.utime(source_asset, (updated_mtime, updated_mtime))
+
+    third_result = collect_static_assets(sources, root=tmp_path / "collected")
+
+    assert destination.read_text(encoding="utf-8") == "body { color: red; }"
+    assert tuple(asset.status for asset in third_result.collected_assets) == (
+        StaticCollectionStatus.UPDATED,
+    )
+    assert int(destination.stat().st_mtime) == updated_mtime
+
+
+def test_static_collect_updates_same_device_same_metadata_different_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_mtime = 1_700_000_000
+    for package_name, content in (
+        ("metadata_collect_app_a", "body{a}"),
+        ("metadata_collect_app_b", "body{b}"),
+    ):
+        package_root = tmp_path / package_name
+        static_root = package_root / "static" / "styles"
+        static_root.mkdir(parents=True)
+        (package_root / "__init__.py").write_text("", encoding="utf-8")
+        source_asset = static_root / "app.css"
+        source_asset.write_text(content, encoding="utf-8")
+        os.utime(source_asset, (source_mtime, source_mtime))
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    destination_root = tmp_path / "collected"
+
+    collect_static_assets(
+        static_sources_from_modules(("metadata_collect_app_a",)),
+        root=destination_root,
+    )
+    destination = destination_root / "styles" / "app.css"
+
+    result = collect_static_assets(
+        static_sources_from_modules(("metadata_collect_app_b",)),
+        root=destination_root,
+    )
+
+    assert destination.read_text(encoding="utf-8") == "body{b}"
+    assert tuple(asset.status for asset in result.collected_assets) == (
+        StaticCollectionStatus.UPDATED,
+    )
+
+
+def test_static_collect_deletes_stale_assets_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "stale_collect_app"
+    static_root = package_root / "static" / "styles"
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    stale_source = static_root / "old.css"
+    stale_source.write_text("old", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    destination_root = tmp_path / "collected"
+
+    collect_static_assets(
+        static_sources_from_modules(("stale_collect_app",)),
+        root=destination_root,
+    )
+    stale_source.unlink()
+    stale_asset = destination_root / "styles" / "old.css"
+    unmanaged_asset = destination_root / "uploads" / "user.txt"
+    unmanaged_asset.parent.mkdir(parents=True)
+    unmanaged_asset.write_text("user data", encoding="utf-8")
+    result = collect_static_assets(
+        static_sources_from_modules(("stale_collect_app",)),
+        root=destination_root,
+    )
+
+    assert not stale_asset.exists()
+    assert unmanaged_asset.exists()
+    assert tuple(asset.logical_path for asset in result.deleted_assets) == (
+        "styles/old.css",
+    )
+
+
+def test_static_collect_can_leave_stale_assets_in_place(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "no_delete_collect_app"
+    static_root = package_root / "static" / "styles"
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    stale_source = static_root / "old.css"
+    stale_source.write_text("old", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    destination_root = tmp_path / "collected"
+
+    collect_static_assets(
+        static_sources_from_modules(("no_delete_collect_app",)),
+        root=destination_root,
+    )
+    stale_source.unlink()
+    stale_asset = destination_root / "styles" / "old.css"
+    result = collect_static_assets(
+        static_sources_from_modules(("no_delete_collect_app",)),
+        root=destination_root,
+        delete=False,
+    )
+
+    assert stale_asset.exists()
+    assert result.deleted_assets == ()
+
+
+def test_static_collect_command_config_overrides_ambient_app_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_static_collect_app(tmp_path, "ambient_collect_app", "ambient")
+    _write_static_collect_app(tmp_path, "selected_collect_app", "selected")
+    ambient_config = _write_static_collect_config(
+        tmp_path,
+        "ambient.toml",
+        module_name="ambient_collect_app",
+        root="ambient-assets",
+    )
+    selected_config = _write_static_collect_config(
+        tmp_path,
+        "selected.toml",
+        module_name="selected_collect_app",
+        root="selected-assets",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("APP_CONFIG", ambient_config.as_posix())
+    monkeypatch.setattr(collect_tool, "runtime_project_root", lambda: tmp_path)
+    importlib.invalidate_caches()
+
+    exit_code = collect_tool.main(["--config", selected_config.as_posix()])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "static collection: ok" in captured.out
+    assert (tmp_path / "selected-assets" / "styles" / "app.css").read_text(
+        encoding="utf-8"
+    ) == "selected"
+    assert not (tmp_path / "ambient-assets" / "styles" / "app.css").exists()
+
+
+def test_static_collect_command_dest_overrides_app_assets_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_static_collect_app(tmp_path, "dest_collect_app", "body {}")
+    config_path = _write_static_collect_config(
+        tmp_path,
+        "app.toml",
+        module_name="dest_collect_app",
+        root="configured-assets",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(collect_tool, "runtime_project_root", lambda: tmp_path)
+    importlib.invalidate_caches()
+
+    exit_code = collect_tool.main(
+        [
+            "--config",
+            config_path.as_posix(),
+            "--dest",
+            (tmp_path / "override-assets").as_posix(),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert f"- root: {(tmp_path / 'override-assets').resolve()}" in captured.out
+    assert (tmp_path / "override-assets" / "styles" / "app.css").read_text(
+        encoding="utf-8"
+    ) == "body {}"
+    assert not (tmp_path / "configured-assets" / "styles" / "app.css").exists()
+
+
+def test_static_collect_command_no_delete_preserves_stale_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_static_collect_app(tmp_path, "cli_no_delete_collect_app", "body {}")
+    config_path = _write_static_collect_config(
+        tmp_path,
+        "app.toml",
+        module_name="cli_no_delete_collect_app",
+        root="collected-assets",
+    )
+    stale_asset = tmp_path / "collected-assets" / "styles" / "old.css"
+    stale_asset.parent.mkdir(parents=True)
+    stale_asset.write_text("old", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(collect_tool, "runtime_project_root", lambda: tmp_path)
+    importlib.invalidate_caches()
+
+    exit_code = collect_tool.main(["--config", config_path.as_posix(), "--no-delete"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "- deleted: 0" in captured.out
+    assert stale_asset.exists()
+
+
+def test_static_collect_command_rejects_unimplemented_manifest_export_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_static_collect_app(tmp_path, "manifest_collect_app", "body {}")
+    config_path = _write_static_collect_config(
+        tmp_path,
+        "app.toml",
+        module_name="manifest_collect_app",
+        root="collected-assets",
+        export_mode="manifest",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(collect_tool, "runtime_project_root", lambda: tmp_path)
+    importlib.invalidate_caches()
+
+    exit_code = collect_tool.main(["--config", config_path.as_posix()])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "configuration: failed" in captured.err
+    assert "app.assets.export_mode must be one of: 'normal'" in captured.err
+
+
+def test_static_collect_command_reports_destination_creation_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_static_collect_app(tmp_path, "root_failure_collect_app", "body {}")
+    config_path = _write_static_collect_config(
+        tmp_path,
+        "app.toml",
+        module_name="root_failure_collect_app",
+        root="collected-assets",
+    )
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("file", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(collect_tool, "runtime_project_root", lambda: tmp_path)
+    importlib.invalidate_caches()
+
+    exit_code = collect_tool.main(
+        [
+            "--config",
+            config_path.as_posix(),
+            "--dest",
+            (blocked_parent / "static").as_posix(),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "static collection: failed" in captured.err
+    assert "create failed for static collection root" in captured.err
+
+
+def test_static_collect_main_handles_click_abort_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def aborting_main(**_kwargs: object) -> int:
+        raise click.exceptions.Abort()
+
+    monkeypatch.setattr(collect_tool.collect_command, "main", aborting_main)
+
+    exit_code = collect_tool.main(["--config", "app.toml"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err == "Aborted!\n"
+
+
+def _write_static_collect_app(tmp_path: Path, package_name: str, content: str) -> None:
+    package_root = tmp_path / package_name
+    static_root = package_root / "static" / "styles"
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (static_root / "app.css").write_text(content, encoding="utf-8")
+
+
+def _write_static_collect_config(
+    tmp_path: Path,
+    file_name: str,
+    *,
+    module_name: str,
+    root: str,
+    export_mode: str = "normal",
+) -> Path:
+    config_path = tmp_path / file_name
+    config_path.write_text(
+        dedent(
+            f"""
+            [app]
+            modules = ["{module_name}"]
+
+            [app.templates]
+            auto_reload = true
+            cache_size = 0
+
+            [app.assets]
+            url_path = "/static/"
+            root = "{root}"
+            export_mode = "{export_mode}"
+            """
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_static_collect_reports_asset_path_for_copy_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "failed_collect_app"
+    static_root = package_root / "static" / "styles"
+    static_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (static_root / "app.css").write_text("body {}", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    destination_root = tmp_path / "collected"
+    destination_root.mkdir()
+    (destination_root / "styles").write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(
+        StaticCollectionError,
+        match="copy failed for static asset 'styles/app.css'",
+    ):
+        collect_static_assets(
+            static_sources_from_modules(("failed_collect_app",)),
+            root=destination_root,
+        )
 
 
 def test_composed_template_loader_uses_standard_missing_template_behaviour(
@@ -2862,7 +3561,7 @@ def test_load_app_config_reads_modules_from_app_toml(
 
         [app.assets]
         url_path = "/assets/"
-        export_root = "build/assets"
+        root = "build/assets"
         """,
         encoding="utf-8",
     )
@@ -2881,8 +3580,8 @@ def test_load_app_config_reads_modules_from_app_toml(
     )
     assert config.assets == AssetOptions(
         url_path="/assets/",
-        root=None,
-        export_root=Path("build/assets"),
+        root=Path("build/assets"),
+        root_configured=True,
     )
 
 
@@ -2905,7 +3604,7 @@ def test_load_app_config_rejects_duplicate_route_module_aliases(
 
         [app.assets]
         url_path = "/static/"
-        export_root = "static"
+        root = "static"
         """,
         encoding="utf-8",
     )
@@ -2942,7 +3641,7 @@ def test_load_app_config_rejects_route_module_aliases_with_whitespace(
 
         [app.assets]
         url_path = "/static/"
-        export_root = "static"
+        root = "static"
         ''',
         encoding="utf-8",
     )
@@ -2995,7 +3694,7 @@ def test_load_app_config_loads_auth_table(tmp_path: Path) -> None:
     assert config.config_path == config_path.resolve()
     assert config.modules == ("host_app",)
     assert config.database_url == "sqlite+aiosqlite:///app.sqlite3"
-    assert config.assets.export_root == Path("static")
+    assert config.assets.root == Path("static")
     assert config.auth == {"account_creation_policy": "public-signup"}
 
 
@@ -3015,7 +3714,7 @@ def test_load_app_config_uses_app_config_environment_override(
 
         [app.assets]
         url_path = "/static/"
-        export_root = "static"
+        root = "static"
         """,
         encoding="utf-8",
     )
@@ -3055,7 +3754,7 @@ def test_load_app_config_explicit_path_overrides_app_config_environment(
 
         [app.assets]
         url_path = "/static/"
-        export_root = "static"
+        root = "static"
         """,
         encoding="utf-8",
     )
@@ -3070,7 +3769,7 @@ def test_load_app_config_explicit_path_overrides_app_config_environment(
 
         [app.assets]
         url_path = "/static/"
-        export_root = "static"
+        root = "static"
         """,
         encoding="utf-8",
     )

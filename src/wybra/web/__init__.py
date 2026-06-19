@@ -8,7 +8,11 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import Response
 
-from wybra.assets import static_app_from_config, static_sources_from_modules
+from wybra.assets import (
+    static_app_from_config,
+    static_asset_storage,
+    static_sources_from_modules,
+)
 from wybra.site import Site
 from wybra.site_config import app_config_from_site
 from wybra.utils.paths import resolve_project_path
@@ -39,6 +43,9 @@ async def setup_site(site: Site) -> None:
     app_config = app_config_from_site(site)
     static_mount_path = _normalise_static_mount_path(app_config.assets.url_path)
     site.app.state.static_mount_path = static_mount_path
+    site.app.state.static_asset_storage = static_asset_storage(
+        app_config.assets.export_mode
+    )
 
     csrf = getattr(site.app.state, "csrf", None)
     if csrf is None:
@@ -81,7 +88,7 @@ async def setup_site(site: Site) -> None:
             static_mount_path,
             static_app_from_config(
                 project_root=app_config.project_root,
-                static_root=app_config.assets.root,
+                static_root=None,
                 static_sources=static_sources_from_modules(site.modules),
                 cors=app_config.assets.cors,
                 url_path=static_mount_path,

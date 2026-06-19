@@ -117,6 +117,7 @@ application or environment-specific tooling:
 
 - `wybra-runserver`: start the configured ASGI application with Uvicorn.
 - `wybra-migrate`: run Alembic migrations for the configured application.
+- `wybra-collect`: collect configured module static assets for deployment.
 - `wybra-routes`: inspect the configured application's installed route tree.
 - `wybra-validate`: run configured project validation targets.
 - `wybra-authmgr`: manage local identity users, scopes, and groups.
@@ -149,6 +150,62 @@ effective project root.
 asgi_app = "example_app.asgi:app"
 reload_env = "APP_RELOAD"
 ```
+
+## Static Asset Collection
+
+Wybra can collect the static assets for the configured application into the
+filesystem tree configured by `[app.assets].root`. Collection output is
+deployment/export output; it does not become the runtime source of app-served
+static files:
+
+```sh
+uv run wybra-collect --config config/app.toml
+```
+
+Collection uses the same configured module order and static asset precedence as
+runtime serving. Runtime app-served static handling still serves the configured
+module static sources directly, so local development sees the source assets
+rather than a previously collected tree. Unchanged files are skipped, copied
+files preserve metadata, and Wybra-managed stale files under the asset root are
+deleted by default so the collected tree matches the configured asset set.
+
+Use `--dest` for a one-off collection destination:
+
+```sh
+uv run wybra-collect --config config/app.toml --dest build/static
+```
+
+Use `--no-delete` when stale files should be retained for a diagnostic or
+staged deployment run:
+
+```sh
+uv run wybra-collect --config config/app.toml --no-delete
+```
+
+During local development, keep app-served static handling enabled so Wybra
+serves the configured module static sources:
+
+```toml
+[app.assets]
+url_path = "/static/"
+root = "static"
+export_mode = "normal"
+serve = true
+```
+
+For deployments where nginx or another front end serves collected assets
+directly, keep the URL path aligned and disable the ASGI static mount:
+
+```toml
+[app.assets]
+url_path = "/static/"
+root = "static"
+export_mode = "normal"
+serve = false
+```
+
+`export_mode = "normal"` is the default and performs a direct collection to the
+configured asset root. Manifest collection is a separate mode and backend.
 
 ## Migration Workflow
 
@@ -226,9 +283,9 @@ modules = ["wybra.web", "wybra.auth"]
 auto_reload = true
 cache_size = 0
 
-[app.static]
+[app.assets]
 url_path = "/static/"
-export_root = "static"
+root = "static"
 
 [auth]
 session_cookie_force_secure = false

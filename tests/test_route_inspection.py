@@ -38,6 +38,7 @@ def test_wybra_package_command_scripts_are_prefixed() -> None:
 
     assert data["project"]["scripts"] == {
         "wybra-authmgr": "wybra.auth.cli.authmgr:main",
+        "wybra-collect": "wybra.tools.collect:main",
         "wybra-migrate": "wybra.tools.migrate:main",
         "wybra-routes": "wybra.tools.routes:main",
         "wybra-runserver": "wybra.tools.runserver:main",
@@ -409,7 +410,7 @@ def test_routes_command_config_option_selects_app_config(
 
         [app.assets]
         url_path = "/static/"
-        export_root = "static"
+        root = "static"
         """,
         encoding="utf-8",
     )
