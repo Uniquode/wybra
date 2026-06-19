@@ -11,7 +11,7 @@
       href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
       rel="stylesheet"
     >
-    <link href="{{ static_mount_path }}/styles/app.css" rel="stylesheet">
+    <link href="{{ asset_url('styles/app.css') }}" rel="stylesheet">
     {% block styles %}{% endblock %}
     <script defer src="https://unpkg.com/htmx.org@2.0.7"></script>
   </head>

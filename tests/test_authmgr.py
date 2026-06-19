@@ -258,7 +258,7 @@ def write_auth_app_toml(
                 "",
                 "[app.assets]",
                 'url_path = "/static/"',
-                'export_root = "static"',
+                'root = "static"',
                 "",
                 "[auth]",
                 *auth_lines,
@@ -821,7 +821,7 @@ def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None
         modules=("wybra.auth",),
         routes=RouteOptions(),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        assets=AssetOptions(url_path="/static/", root=None, export_root=Path("static")),
+        assets=AssetOptions(url_path="/static/"),
     )
 
     with pytest.raises(ConfigurationError, match=r"\[app\]\.database_url"):

@@ -191,7 +191,8 @@ def _app_config_sections(app_config: AppConfig) -> Mapping[str, Mapping[str, Any
         {
             "url_path": app_config.assets.url_path,
             "root": app_config.assets.root,
-            "export_root": app_config.assets.export_root,
+            "root_configured": app_config.assets.root_configured,
+            "export_mode": app_config.assets.export_mode.value,
             "serve": app_config.assets.serve,
         }
     )

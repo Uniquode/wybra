@@ -4,10 +4,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from wybra.core.asset_config import load_asset_cors_options
+from wybra.assets.config import (
+    AssetCorsOptions,
+    AssetExportMode,
+    load_asset_cors_options,
+    parse_asset_export_mode,
+)
 from wybra.core.composition import (
     AppConfig,
-    AssetCorsOptions,
     AssetOptions,
     CompositionError,
     RouteOptions,
@@ -35,8 +39,13 @@ def app_config_from_site(site: Site) -> AppConfig:
         ),
         assets=AssetOptions(
             url_path=_str_value(static_config, "url_path", "/static/"),
-            root=_optional_path_value(static_config, "root"),
-            export_root=_path_value(static_config, "export_root", Path("static")),
+            root=_path_value(static_config, "root", Path("static")),
+            root_configured=_bool_value(
+                static_config,
+                "root_configured",
+                "root" in static_config,
+            ),
+            export_mode=_asset_export_mode(static_config),
             serve=_bool_value(static_config, "serve", True),
             cors=_asset_cors_options(_section(site, "app.assets.cors")),
         ),
@@ -64,6 +73,16 @@ def _asset_cors_options(config: Mapping[str, Any]) -> AssetCorsOptions:
         "Config section app.assets.cors",
         error_type=CompositionError,
     )
+
+
+def _asset_export_mode(config: Mapping[str, Any]) -> AssetExportMode:
+    value = config.get("export_mode", AssetExportMode.NORMAL)
+    try:
+        return parse_asset_export_mode(
+            value, name="Config section app.assets.export_mode"
+        )
+    except ValueError as exc:
+        raise CompositionError(str(exc)) from exc
 
 
 def _route_prefixes(config: Mapping[str, Any]) -> dict[str, dict[str, str]]:

@@ -8,7 +8,7 @@
       href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
       rel="stylesheet"
     >
-    <link href="{{ static_mount_path }}/styles/app.css" rel="stylesheet">
+    <link href="{{ asset_url('styles/app.css') }}" rel="stylesheet">
   </head>
   <body data-route-name="{{ route_name if route_name is defined else 'error' }}">
     <main class="container surface-panel">

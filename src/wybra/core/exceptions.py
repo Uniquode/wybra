@@ -3,3 +3,7 @@
 
 class ConfigurationError(ValueError):
     """Raised when runtime or module configuration is invalid."""
+
+
+class InputValidationError(ValueError):
+    """Raised when caller-provided input is invalid."""

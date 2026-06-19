@@ -64,7 +64,13 @@ class SyncClosingCapability:
         pass
 
 
-def _write_app_config(path: Path, *, modules: tuple[str, ...]) -> Path:
+def _write_app_config(
+    path: Path,
+    *,
+    modules: tuple[str, ...],
+    asset_root: str | None = None,
+) -> Path:
+    asset_root_config = f'        root = "{asset_root}"\n' if asset_root else ""
     path.write_text(
         f"""
         [app]
@@ -79,7 +85,7 @@ def _write_app_config(path: Path, *, modules: tuple[str, ...]) -> Path:
 
         [app.assets]
         url_path = "/static/"
-        export_root = "static"
+{asset_root_config.rstrip()}
         """,
         encoding="utf-8",
     )
@@ -508,7 +514,7 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
         modules=("wybra.web",),
         routes=RouteOptions(prefixes={}),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        assets=AssetOptions(url_path="/static/", root=None, export_root=Path("static")),
+        assets=AssetOptions(url_path="/static/"),
     )
 
     site = await start(FastAPI(), config_source=app_config)

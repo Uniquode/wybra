@@ -86,7 +86,7 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
             }
         ),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
-        assets=AssetOptions(url_path="/static/", root=None, export_root=Path("static")),
+        assets=AssetOptions(url_path="/static/"),
     )
 
 

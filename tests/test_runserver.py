@@ -36,7 +36,7 @@ def _write_app_config(
 
         [app.assets]
         url_path = "/static/"
-        export_root = "static"
+        root = "static"
         """,
         encoding="utf-8",
     )

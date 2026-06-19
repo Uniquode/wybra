@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
 from wybra.config.transforms import to_bool
+
+
+class AssetExportMode(StrEnum):
+    NORMAL = "normal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +125,27 @@ def normalise_url_path_prefix(path: str) -> str:
     return f"/{path.strip('/')}/" if path.strip("/") else "/"
 
 
+def parse_asset_export_mode(
+    value: AssetExportMode | str,
+    *,
+    name: str = "app.assets.export_mode",
+) -> AssetExportMode:
+    if isinstance(value, AssetExportMode):
+        return value
+    if isinstance(value, str):
+        try:
+            return AssetExportMode(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"{name} must be one of: {asset_export_mode_choices()}."
+            ) from exc
+    raise ValueError(f"{name} must be a string.")
+
+
+def asset_export_mode_choices() -> str:
+    return ", ".join(repr(mode.value) for mode in AssetExportMode)
+
+
 def _optional_mapping(
     data: Mapping[str, Any],
     name: str,
@@ -193,7 +219,10 @@ def _optional_str_list(
 __all__ = [
     "AssetCorsOptions",
     "AssetCorsPolicy",
+    "AssetExportMode",
+    "asset_export_mode_choices",
     "load_asset_cors_options",
     "load_asset_cors_policy",
     "normalise_url_path_prefix",
+    "parse_asset_export_mode",
 ]
