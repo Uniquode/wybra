@@ -27,8 +27,10 @@ Repository: <https://github.com/Uniquode/wybra>
   diagnostics, and shared conventions.
 - `wybra.assets`: static asset settings, source discovery, runtime serving,
   URL resolution, collection, and validation.
-- `wybra.web`: route composition, template rendering, CSRF, theme defaults,
-  error handling, views, and web validation.
+- `wybra.template`: template settings, source discovery, rendering capability,
+  context construction, and template validation.
+- `wybra.web`: route composition, CSRF, theme defaults, error handling, views,
+  and web validation.
 - `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
 - `wybra.tools`: generic project command adapters and validation target
@@ -210,6 +212,20 @@ serve = false
 `export_mode = "normal"` is the default and performs a direct collection to the
 configured asset root. Manifest collection is a separate mode and backend.
 
+## Template Context
+
+`wybra.template` composes template context as read-only mapping layers. Adding
+context creates a newer layer in front of existing parents; lookup uses the
+first matching key from newest to oldest, and parent mappings are not mutated.
+At the render boundary Wybra flattens the layered context to a plain mapping for
+the configured template engine.
+
+Ordinary caller context can override request or provider context by occupying a
+newer ordinary layer. Framework-owned render values are applied as a protected
+final layer so page data cannot shadow runtime helpers. Reserved render names
+are `asset_url`, `request`, `route_name`, `csrf_field_name`,
+`csrf_header_name`, and `csrf_token`.
+
 ## Migration Workflow
 
 Provision a first-time managed database and initialise Alembic state
@@ -280,7 +296,7 @@ other package-owned project commands, then reads `[auth]` from that file. Use
 ```toml
 [app]
 database_url = "sqlite+aiosqlite:///app.sqlite3"
-modules = ["wybra.assets", "wybra.web", "wybra.auth"]
+modules = ["wybra.assets", "wybra.template", "wybra.web", "wybra.auth"]
 
 [app.templates]
 auto_reload = true

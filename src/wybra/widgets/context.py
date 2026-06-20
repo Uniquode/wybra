@@ -4,7 +4,11 @@ from typing import Any
 
 from starlette.routing import NoMatchFound
 
-from wybra.web.context import TemplateContext, add_to_context, clear_context_providers
+from wybra.template.context import (
+    TemplateContext,
+    add_to_context,
+    clear_context_providers,
+)
 from wybra.widgets.config import LOGIN_FEATURE, THEME_FEATURE
 from wybra.widgets.login import login_widget_state
 from wybra.widgets.theme import THEME_MODE_ROUTE_NAME, theme_template_context
@@ -18,9 +22,9 @@ def widgets_theme_context(
     try:
         theme_update_path = str(request.url_for(THEME_MODE_ROUTE_NAME))
     except NoMatchFound:
-        return context.merge(values)
+        return context.with_layer(values)
 
-    return context.merge(
+    return context.with_layer(
         values
         | {
             "theme_update_path": theme_update_path,

@@ -1,4 +1,4 @@
-"""Jinja template loading for composed module package sources."""
+"""Template loading for composed module package sources."""
 
 from __future__ import annotations
 
@@ -23,10 +23,8 @@ def build_template_loader(
     )
     if not loaders:
         return DictLoader({})
-
     if len(loaders) == 1:
         return loaders[0]
-
     return ChoiceLoader(loaders)
 
 

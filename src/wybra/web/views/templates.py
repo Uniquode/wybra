@@ -8,7 +8,7 @@ from typing import Any, cast
 from fastapi import Request
 from fastapi.responses import Response
 
-from wybra.web.rendering import TemplateRenderer
+from wybra.template import TemplateCapability
 
 type ContextBuilder = Callable[[Request], dict[str, Any] | Awaitable[dict[str, Any]]]
 
@@ -31,9 +31,9 @@ class TemplateView:
     template_name: str
     context_builder: ContextBuilder | None = None
 
-    async def render(self, request: Request, renderer: TemplateRenderer) -> Response:
+    async def render(self, request: Request, renderer: TemplateCapability) -> Response:
         context = await resolve_context(self.context_builder, request)
-        return renderer.render_page(self.template_name, request, context)
+        return renderer.render_page(request, self.template_name, context)
 
 
 __all__ = [

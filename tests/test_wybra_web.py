@@ -8,7 +8,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, cast
 
 import click
@@ -22,8 +22,8 @@ from fastapi.testclient import TestClient
 from jinja2 import Environment, select_autoescape
 from jinja2.exceptions import TemplateNotFound
 
+import wybra.template.capabilities as template_capabilities_module
 import wybra.web as web_module
-import wybra.web.rendering as rendering_module
 from wybra.assets import (
     ComposedStaticFiles,
     StaticAssetCapability,
@@ -62,13 +62,26 @@ from wybra.core.settings import (
     values_from_env_settings,
 )
 from wybra.site import Site, SiteCapabilityError, start
-from wybra.tools import collect as collect_tool
-from wybra.web.context import (
+from wybra.template import (
+    DefaultTemplateCapability,
+    TemplateCapability,
+    TemplateSettings,
+    build_template_loader,
+    render_page,
+)
+from wybra.template.context import (
     TemplateContext,
     resolve_context_providers,
+    set_request_context,
 )
+from wybra.template.discovery import (
+    context_providers_from_modules,
+    discover_context_providers,
+    discover_template_sources,
+    template_sources_from_modules,
+)
+from wybra.tools import collect as collect_tool
 from wybra.web.forms.csrf import CsrfProtector
-from wybra.web.rendering import TemplateRenderer, render_page
 from wybra.web.routes import (
     ConfiguredModuleRouter,
     RouteCompositionError,
@@ -79,13 +92,9 @@ from wybra.web.routes import (
 )
 from wybra.web.routes.discovery import (
     ModuleSurface,
-    context_providers_from_modules,
-    discover_context_providers,
     discover_module_routers,
     discover_module_surface,
     discover_module_surfaces,
-    discover_template_sources,
-    template_sources_from_modules,
 )
 from wybra.web.security import (
     COOP_HEADER_NAME,
@@ -93,7 +102,6 @@ from wybra.web.security import (
     cross_origin_opener_policy,
     register_security_headers,
 )
-from wybra.web.templating import build_template_loader
 from wybra.widgets.config import WidgetsSettings
 
 
@@ -107,6 +115,244 @@ def test_wybra_widgets_package_imports() -> None:
     package = importlib.import_module("wybra.widgets")
 
     assert package.__name__ == "wybra.widgets"
+
+
+def test_wybra_template_package_imports() -> None:
+    package = importlib.import_module("wybra.template")
+
+    assert package.__name__ == "wybra.template"
+
+
+def test_template_settings_load_from_config_service(tmp_path: Path) -> None:
+    service = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "project_root": tmp_path,
+                        "modules": ("wybra.template",),
+                    },
+                    "app.templates": {
+                        "root": "templates",
+                        "auto_reload": True,
+                        "cache_size": 0,
+                    },
+                }
+            )
+        ]
+    )
+
+    settings = TemplateSettings.load_settings(service)
+
+    assert settings.project_root == tmp_path.resolve()
+    assert settings.root == (tmp_path / "templates").resolve()
+    assert settings.auto_reload is True
+    assert settings.cache_size == 0
+
+
+@pytest.mark.anyio
+async def test_wybra_template_setup_provides_template_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "template_capability_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "page.html").write_text(
+        "<main>{{ title }}</main>",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("template_capability_app", "wybra.template"),
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+            }
+        ),
+    )
+
+    capability = site.require_capability(TemplateCapability)
+    request = Request({"type": "http", "app": app, "headers": []})
+    response = capability.render_page(request, "page.html", {"title": "Hello"})
+
+    assert response.body == b"<main>Hello</main>"
+
+
+@pytest.mark.anyio
+async def test_wybra_template_renders_without_assets_when_asset_url_unused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "template_without_assets_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "page.html").write_text("<main>plain</main>", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("template_without_assets_app", "wybra.template"),
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+            }
+        ),
+    )
+
+    capability = site.require_capability(TemplateCapability)
+    request = Request({"type": "http", "app": app, "headers": []})
+
+    assert (
+        capability.render_page(request, "page.html", {}).body == b"<main>plain</main>"
+    )
+
+
+@pytest.mark.anyio
+async def test_wybra_template_asset_url_fails_lazily_without_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "template_missing_assets_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "page.html").write_text(
+        "{{ asset_url('styles/app.css') }}",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    app = FastAPI()
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("template_missing_assets_app", "wybra.template"),
+                },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
+            }
+        ),
+    )
+
+    capability = site.require_capability(TemplateCapability)
+    request = Request({"type": "http", "app": app, "headers": []})
+    with pytest.raises(SiteCapabilityError, match="Missing static asset capability"):
+        capability.render_page(request, "page.html", {})
+
+
+def test_template_render_context_protects_framework_values(
+    tmp_path: Path,
+) -> None:
+    template_root = tmp_path / "templates"
+    template_root.mkdir()
+    renderer = DefaultTemplateCapability(
+        template_root=template_root,
+        csrf=FixedTemplateCsrfProtector(),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "app": FastAPI(),
+            "headers": [],
+            "route": SimpleNamespace(name="framework_route"),
+        }
+    )
+    set_request_context(
+        request,
+        TemplateContext.from_mapping(
+            {
+                "asset_url": "provider_asset_url",
+                "csrf_field_name": "provider_csrf_field_name",
+                "csrf_header_name": "provider_csrf_header_name",
+                "csrf_token": "provider_csrf_token",
+                "request": "provider_request",
+                "route_name": "provider_route",
+            }
+        ),
+    )
+
+    context = renderer._template_context(
+        request,
+        {
+            "asset_url": "caller_asset_url",
+            "csrf_field_name": "caller_csrf_field_name",
+            "csrf_header_name": "caller_csrf_header_name",
+            "csrf_token": "caller_csrf_token",
+            "request": "caller_request",
+            "route_name": "caller_route",
+        },
+    )
+
+    assert callable(context["asset_url"])
+    assert context["csrf_field_name"] == "csrf_token"
+    assert context["csrf_header_name"] == "x-csrf-token"
+    assert context["csrf_token"] == "framework_csrf_token"
+    assert context["request"] is request
+    assert context["route_name"] == "framework_route"
+
+
+class FixedTemplateCsrfProtector:
+    def token_context(self, request: Request) -> dict[str, Any]:
+        del request
+        return {
+            "csrf_field_name": "csrf_token",
+            "csrf_header_name": "x-csrf-token",
+            "csrf_token": "framework_csrf_token",
+        }
+
+    def set_cookie(self, request: Request, response: Response) -> None:
+        del request, response
+
+
+def test_template_partial_rendering_does_not_set_csrf_cookie(tmp_path: Path) -> None:
+    template_root = tmp_path / "templates"
+    template_root.mkdir()
+    (template_root / "fragment.html").write_text("<span>ok</span>", encoding="utf-8")
+
+    class CountingCsrfProtector:
+        cookie_sets = 0
+
+        def token_context(self, request: Request) -> dict[str, Any]:
+            del request
+            return {}
+
+        def set_cookie(self, request: Request, response: Response) -> None:
+            del request, response
+            self.cookie_sets += 1
+
+    csrf = CountingCsrfProtector()
+    renderer = DefaultTemplateCapability(template_root=template_root, csrf=csrf)
+    request = Request({"type": "http", "app": FastAPI(), "headers": []})
+
+    partial_response = renderer.render_partial(request, "fragment.html", {})
+
+    assert partial_response.body == b"<span>ok</span>"
+    assert csrf.cookie_sets == 0
+
+    renderer.render_page(request, "fragment.html", {})
+
+    assert csrf.cookie_sets == 1
 
 
 def test_wybra_widgets_config_defaults_to_theme_and_login_features() -> None:
@@ -194,7 +440,7 @@ async def test_wybra_web_setup_loads_csrf_settings_class(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import wybra.web as web_module
+    import wybra.template.setup as template_setup_module
 
     protector = CsrfProtector("test-secret")
     observed: list[ConfigService] = []
@@ -207,7 +453,11 @@ async def test_wybra_web_setup_loads_csrf_settings_class(
         observed.append(config)
         return StubCsrfSettings()
 
-    monkeypatch.setattr(web_module.CsrfSettings, "load_settings", load_settings)
+    monkeypatch.setattr(
+        template_setup_module.CsrfSettings,
+        "load_settings",
+        load_settings,
+    )
     app = FastAPI()
 
     site = await start(
@@ -219,6 +469,7 @@ async def test_wybra_web_setup_loads_csrf_settings_class(
                     "project_root": tmp_path,
                     "modules": (
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -446,7 +697,7 @@ def _write_widget_page_app(tmp_path: Path, module_name: str) -> None:
         dedent(
             """
             from fastapi import APIRouter, Request
-            from wybra.web.rendering import render_page
+            from wybra.template import render_page
 
             router = APIRouter()
 
@@ -590,7 +841,12 @@ async def test_wybra_web_setup_site_registers_routes_renderer_and_static(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("configured_web_app", "wybra.assets", "wybra.web"),
+                    "modules": (
+                        "configured_web_app",
+                        "wybra.assets",
+                        "wybra.template",
+                        "wybra.web",
+                    ),
                 },
                 "app.routes": {
                     "prefixes": {
@@ -605,8 +861,9 @@ async def test_wybra_web_setup_site_registers_routes_renderer_and_static(
     )
 
     assert site.app is app
-    assert isinstance(app.state.renderer, TemplateRenderer)
-    assert app.state.renderer.render_template("page.html", {}) == "page"
+    templates = site.require_capability(TemplateCapability)
+    request = Request({"type": "http", "app": app, "headers": []})
+    assert templates.render_page(request, "page.html", {}).body == b"page"
     static_route = next(
         route for route in app.routes if getattr(route, "name", None) == "static"
     )
@@ -726,7 +983,7 @@ async def test_wybra_web_setup_without_static_asset_capability_is_valid(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("plain_web_app", "wybra.web"),
+                    "modules": ("plain_web_app", "wybra.template", "wybra.web"),
                 },
                 "app.routes": {"prefixes": {"plain_web_app": {}, "wybra.web": {}}},
                 "app.templates": {"auto_reload": True, "cache_size": 0},
@@ -998,7 +1255,7 @@ async def test_wybra_widgets_publish_theme_selector_when_enabled(
         dedent(
             """
             from fastapi import APIRouter, Request
-            from wybra.web.rendering import render_page
+            from wybra.template import render_page
 
             router = APIRouter()
 
@@ -1030,6 +1287,7 @@ async def test_wybra_widgets_publish_theme_selector_when_enabled(
                         "widget_page_app",
                         "wybra.widgets",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1083,6 +1341,7 @@ async def test_wybra_widgets_publish_login_button_when_auth_is_available(
                         "login_widget_auth",
                         "wybra.widgets",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1135,6 +1394,7 @@ async def test_wybra_widgets_publish_profile_initial_and_logout_when_authenticat
                         "authenticated_widget_auth",
                         "wybra.widgets",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1188,6 +1448,7 @@ async def test_wybra_widgets_use_profile_descriptor_when_profile_is_available(
                         "wybra.widgets",
                         "wybra.profile",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1239,6 +1500,7 @@ async def test_wybra_widgets_do_not_publish_login_button_without_auth(
                         "no_auth_widget_page_app",
                         "wybra.widgets",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1285,6 +1547,7 @@ async def test_wybra_widgets_can_disable_login_button_when_auth_is_available(
                         "disabled_login_widget_auth",
                         "wybra.widgets",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1316,7 +1579,7 @@ def test_wybra_widgets_css_defines_login_and_mobile_semantics() -> None:
         "styles/widgets.css",
     )
     web_css = read_text_resource(
-        (PackageResourceSource(package="wybra.web", directory="static"),),
+        (PackageResourceSource(package="wybra.template", directory="static"),),
         "styles/app.css",
     )
 
@@ -1339,7 +1602,7 @@ async def test_wybra_widgets_can_disable_theme_selector(
         dedent(
             """
             from fastapi import APIRouter, Request
-            from wybra.web.rendering import render_page
+            from wybra.template import render_page
 
             router = APIRouter()
 
@@ -1371,6 +1634,7 @@ async def test_wybra_widgets_can_disable_theme_selector(
                         "disabled_widget_page_app",
                         "wybra.widgets",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1409,7 +1673,7 @@ async def test_application_template_overrides_widget_partial(
         dedent(
             """
             from fastapi import APIRouter, Request
-            from wybra.web.rendering import render_page
+            from wybra.template import render_page
 
             router = APIRouter()
 
@@ -1445,6 +1709,7 @@ async def test_application_template_overrides_widget_partial(
                         "widget_override_app",
                         "wybra.widgets",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1480,7 +1745,7 @@ async def test_wybra_web_request_context_is_enabled_by_default(
         dedent(
             """
             from fastapi import APIRouter, Request
-            from wybra.web.rendering import render_page
+            from wybra.template import render_page
 
             router = APIRouter()
 
@@ -1508,7 +1773,12 @@ async def test_wybra_web_request_context_is_enabled_by_default(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("request_context_app", "wybra.assets", "wybra.web"),
+                    "modules": (
+                        "request_context_app",
+                        "wybra.assets",
+                        "wybra.template",
+                        "wybra.web",
+                    ),
                 },
                 "app.routes": {
                     "prefixes": {
@@ -1542,7 +1812,7 @@ async def test_wybra_web_request_context_can_be_disabled(
         dedent(
             """
             from fastapi import APIRouter, Request
-            from wybra.web.rendering import render_page
+            from wybra.template import render_page
 
             router = APIRouter()
 
@@ -1573,6 +1843,7 @@ async def test_wybra_web_request_context_can_be_disabled(
                     "modules": (
                         "disabled_request_context_app",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -1586,9 +1857,9 @@ async def test_wybra_web_request_context_can_be_disabled(
                     "auto_reload": True,
                     "cache_size": 0,
                     "root": str(template_root),
+                    "request_context_enabled": False,
                 },
                 "app.assets": {"url_path": "/static/"},
-                "wybra.web": {"request_context_enabled": False},
             }
         ),
     )
@@ -1622,7 +1893,13 @@ async def test_wybra_web_registers_auth_routes_through_module_composition(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("wybra.assets", "wybra.web", "wybra.db", "wybra.auth"),
+                    "modules": (
+                        "wybra.assets",
+                        "wybra.template",
+                        "wybra.web",
+                        "wybra.db",
+                        "wybra.auth",
+                    ),
                     "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
                 },
                 "app.routes": {
@@ -1643,7 +1920,7 @@ async def test_wybra_web_registers_auth_routes_through_module_composition(
 def test_wybra_web_package_exposes_expected_submodules() -> None:
     for module_name in (
         "wybra.core.composition",
-        "wybra.web.context",
+        "wybra.template.context",
         "wybra.web.forms.csrf",
         "wybra.web.errors",
         "wybra.web.forms.security",
@@ -1654,9 +1931,8 @@ def test_wybra_web_package_exposes_expected_submodules() -> None:
         "wybra.assets",
         "wybra.core.settings",
         "wybra.web.routes",
-        "wybra.web.style_contract",
         "wybra.web.routes.discovery",
-        "wybra.web.templating",
+        "wybra.template",
         "wybra.web.views",
         "wybra.widgets",
         "wybra.widgets.config",
@@ -1944,22 +2220,17 @@ def test_module_surface_default_to_empty_optional_contributions() -> None:
 
     assert surface.module_name == "host_app"
     assert surface.module_routers == {}
-    assert surface.template_sources == ()
-    assert surface.context_providers == ()
 
 
 def test_module_surface_accepts_declared_contract_contributions() -> None:
     api_router = APIRouter()
-    template_source = PackageResourceSource(package="wybra.auth", directory="templates")
 
     surface = ModuleSurface(
         module_name="wybra.auth",
         module_routers={"api": api_router},
-        template_sources=(template_source,),
     )
 
     assert surface.module_routers == {"api": api_router}
-    assert surface.template_sources == (template_source,)
 
 
 def test_discover_module_surface_treats_missing_optional_surfaces_as_empty(
@@ -1975,7 +2246,6 @@ def test_discover_module_surface_treats_missing_optional_surfaces_as_empty(
     surface = discover_module_surface(
         "empty_surface_app",
         include_routes=True,
-        include_context=True,
     )
 
     assert surface == ModuleSurface(module_name="empty_surface_app")
@@ -2707,10 +2977,10 @@ def test_discover_package_resource_sources_without_route_import(
 
     surface = discover_module_surface("resource_surface_app")
 
-    assert surface.template_sources == (
+    assert surface.module_routers == {}
+    assert discover_template_sources("resource_surface_app") == (
         PackageResourceSource(package="resource_surface_app", directory="templates"),
     )
-    assert discover_template_sources("resource_surface_app") == surface.template_sources
     assert discover_static_sources("resource_surface_app") == (
         PackageResourceSource(package="resource_surface_app", directory="static"),
     )
@@ -2869,7 +3139,12 @@ async def test_asset_url_is_available_in_template_context(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("asset_url_template_app", "wybra.assets", "wybra.web"),
+                    "modules": (
+                        "asset_url_template_app",
+                        "wybra.assets",
+                        "wybra.template",
+                        "wybra.web",
+                    ),
                 },
                 "app.routes": {
                     "prefixes": {
@@ -2919,6 +3194,7 @@ async def test_template_context_does_not_expose_static_mount_path(
                     "modules": (
                         "no_static_mount_context_app",
                         "wybra.assets",
+                        "wybra.template",
                         "wybra.web",
                     ),
                 },
@@ -2940,26 +3216,28 @@ async def test_template_context_does_not_expose_static_mount_path(
     assert TestClient(app).get("/").text == "False"
 
 
-def test_template_renderer_requires_site_for_asset_url() -> None:
-    renderer = TemplateRenderer()
-
+def test_template_rendering_requires_site_for_render_page() -> None:
     class AppWithoutState:
         pass
 
     request = Request({"type": "http", "app": AppWithoutState()})
-    with pytest.raises(SiteCapabilityError, match="attribute=state"):
-        renderer._resolve_asset_url(request)
+    with pytest.raises(
+        SiteCapabilityError,
+        match="Missing template capability provider",
+    ):
+        render_page(request, "page.html")
 
 
 def test_template_renderer_requires_static_asset_capability() -> None:
-    renderer = TemplateRenderer()
     site = Site(
         app=FastAPI(),
         config=ConfigService([MappingConfigSource({"app": {"modules": ()}})]),
     )
     site.app.state.site = site
-    request = Request({"type": "http", "app": site.app})
-    asset_url_helper = renderer._resolve_asset_url(request)
+    renderer = DefaultTemplateCapability(
+        assets=site.capability_proxy(StaticAssetCapability),
+    )
+    asset_url_helper = renderer._resolve_asset_url()
 
     with pytest.raises(SiteCapabilityError, match="Missing static asset capability"):
         asset_url_helper("styles/main.css")
@@ -2968,7 +3246,6 @@ def test_template_renderer_requires_static_asset_capability() -> None:
 def test_template_asset_url_helper_resolves_capability_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    renderer = TemplateRenderer()
     site = Site(
         app=FastAPI(),
         config=ConfigService([MappingConfigSource({"app": {"modules": ()}})]),
@@ -2988,8 +3265,11 @@ def test_template_asset_url_helper_resolves_capability_once(
 
     capability = CountingStaticAssetCapability()
     site.provide_capability(StaticAssetCapability, capability)
+    renderer = DefaultTemplateCapability(
+        assets=site.capability_proxy(StaticAssetCapability),
+    )
     require_calls = 0
-    original_require = rendering_module.require_static_asset_capability
+    original_require = template_capabilities_module.require_static_asset_capability
 
     def count_require(proxy):
         nonlocal require_calls
@@ -2997,12 +3277,11 @@ def test_template_asset_url_helper_resolves_capability_once(
         return original_require(proxy)
 
     monkeypatch.setattr(
-        rendering_module,
+        template_capabilities_module,
         "require_static_asset_capability",
         count_require,
     )
-    request = Request({"type": "http", "app": site.app})
-    asset_url_helper = renderer._resolve_asset_url(request)
+    asset_url_helper = renderer._resolve_asset_url()
 
     assert asset_url_helper("styles/one.css") == "/assets/styles/one.css"
     assert asset_url_helper("styles/two.css") == "/assets/styles/two.css"
@@ -3039,9 +3318,9 @@ def test_optional_static_mount_path_normalises_capability_url_path() -> None:
 def test_wybra_owned_templates_use_asset_url_for_static_references() -> None:
     template_paths = (
         Path(__file__).resolve().parents[1]
-        / "src/wybra/web/templates/layouts/page.html",
+        / "src/wybra/template/templates/layouts/page.html",
         Path(__file__).resolve().parents[1]
-        / "src/wybra/web/templates/errors/base.html",
+        / "src/wybra/template/templates/errors/base.html",
         Path(__file__).resolve().parents[1]
         / "src/wybra/widgets/templates/layouts/page.html",
     )
@@ -3607,7 +3886,7 @@ def test_discover_context_providers_imports_context_registration_module(
     package_root.mkdir()
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (package_root / "context.py").write_text(
-        "from wybra.web.context import add_to_context\n"
+        "from wybra.template.context import add_to_context\n"
         "\n"
         "def site_context(request, context):\n"
         "    del request\n"
@@ -3629,6 +3908,41 @@ def test_discover_context_providers_imports_context_registration_module(
     }
 
 
+def test_add_to_context_registers_callable_provider_module_through_wrapper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "wrapped_context_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "helpers.py").write_text(
+        "from wybra.template.context import add_to_context\n"
+        "\n"
+        "def register_provider(provider):\n"
+        "    return add_to_context(provider)\n",
+        encoding="utf-8",
+    )
+    (package_root / "context.py").write_text(
+        "from wrapped_context_app.helpers import register_provider\n"
+        "\n"
+        "def site_context(request, context):\n"
+        "    del request\n"
+        "    return context.with_values(site_name='Wrapped app')\n"
+        "\n"
+        "register_provider(site_context)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    providers = discover_context_providers("wrapped_context_app")
+
+    assert len(providers) == 1
+    assert providers[0](object(), TemplateContext()).as_dict() == {
+        "site_name": "Wrapped app"
+    }
+
+
 def test_context_providers_from_modules_preserves_configured_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3641,7 +3955,7 @@ def test_context_providers_from_modules_preserves_configured_order(
         package_root.mkdir()
         (package_root / "__init__.py").write_text("", encoding="utf-8")
         (package_root / "context.py").write_text(
-            "from wybra.web.context import add_to_context\n"
+            "from wybra.template.context import add_to_context\n"
             f"add_to_context({{{key!r}: True}})\n",
             encoding="utf-8",
         )
@@ -3719,34 +4033,19 @@ def test_resolve_context_providers_preserves_empty_initial_context() -> None:
     assert context.as_dict() == {"app_name": "wybra"}
 
 
-def test_resolve_context_providers_warns_and_preserves_seeded_keys(
-    caplog,
-) -> None:
+def test_template_context_layer_overrides_parent_without_mutating_parent() -> None:
     original_request = object()
+    provider_request = object()
+    parent = TemplateContext.from_mapping({"request": original_request})
 
-    def provider(
-        request: object,
-        context: TemplateContext,
-    ) -> TemplateContext:
-        del request
-        return context.with_values(request=object())
+    context = parent.with_values(request=provider_request)
 
-    with caplog.at_level(logging.WARNING, logger="wybra.web.context"):
-        context = asyncio.run(
-            resolve_context_providers(
-                (provider,),
-                object(),
-                initial_context=TemplateContext.from_mapping(
-                    {"request": original_request}
-                ),
-            )
-        )
-
-    assert context.as_dict() == {"request": original_request}
-    assert "Ignored template context key overwrite" in caplog.text
+    assert context.as_dict() == {"request": provider_request}
+    assert parent.as_dict() == {"request": original_request}
+    assert context.as_dict()["request"] is not original_request
 
 
-def test_resolve_context_providers_warns_and_preserves_existing_keys(caplog) -> None:
+def test_resolve_context_providers_layers_existing_keys_newest_first() -> None:
     def first_provider(
         request: object,
         context: TemplateContext,
@@ -3761,13 +4060,37 @@ def test_resolve_context_providers_warns_and_preserves_existing_keys(caplog) -> 
         del request
         return context.with_values(shared="second")
 
-    with caplog.at_level(logging.WARNING, logger="wybra.web.context"):
-        context = asyncio.run(
-            resolve_context_providers((first_provider, second_provider), object())
-        )
+    context = asyncio.run(
+        resolve_context_providers((first_provider, second_provider), object())
+    )
 
-    assert context.as_dict() == {"shared": "first"}
-    assert "Ignored template context key overwrite" in caplog.text
+    assert context.as_dict() == {"shared": "second"}
+
+
+def test_template_context_resolves_unmatched_keys_from_parent_layers() -> None:
+    context = TemplateContext.from_mapping({"page_title": "Parent"})
+    child_context = context.with_values(section_title="Child")
+
+    assert child_context["page_title"] == "Parent"
+    assert child_context["section_title"] == "Child"
+    assert child_context.as_dict() == {
+        "page_title": "Parent",
+        "section_title": "Child",
+    }
+
+
+def test_template_context_can_be_constructed_from_multiple_layers() -> None:
+    context = TemplateContext.from_layers(
+        {"page_title": "Child"},
+        {"page_title": "Parent", "section_title": "Section"},
+    )
+
+    assert context["page_title"] == "Child"
+    assert context["section_title"] == "Section"
+    assert context.as_dict() == {
+        "page_title": "Child",
+        "section_title": "Section",
+    }
 
 
 def test_load_modules_imports_explicit_modules_in_configured_order() -> None:

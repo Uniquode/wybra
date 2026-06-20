@@ -15,11 +15,10 @@ from fastapi.routing import APIRoute
 from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
-from wybra.core import InputValidationError
+from wybra.template.metadata import ROUTE_TEMPLATE_ATTRIBUTE
 from wybra.web.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 
 ROUTE_ORIGINS_STATE_KEY = "_wybra_route_origins"
-ROUTE_TEMPLATE_ATTRIBUTE = "__wybra_template_name__"
 ROUTE_SURFACE_ATTRIBUTE = "__wybra_route_surface__"
 PATH_PARAMETER_PATTERN = re.compile(r"{([^}:]+)(?::[^}]+)?}")
 
@@ -107,21 +106,6 @@ class RouteInspection:
     routes: tuple[RouteRecord, ...]
     problems: tuple[RouteProblem, ...] = ()
     warnings: tuple[str, ...] = ()
-
-
-def route_template(
-    template_name: str,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Attach explicit template metadata to an endpoint for route inspection."""
-
-    if not isinstance(template_name, str) or not template_name.strip():
-        raise InputValidationError("Route template name must be a non-blank string.")
-
-    def decorator(endpoint: Callable[..., Any]) -> Callable[..., Any]:
-        setattr(endpoint, ROUTE_TEMPLATE_ATTRIBUTE, template_name.strip())
-        return endpoint
-
-    return decorator
 
 
 def route_surface(
@@ -977,5 +961,4 @@ __all__ = [
     "render_mermaid",
     "render_succinct",
     "route_surface",
-    "route_template",
 ]

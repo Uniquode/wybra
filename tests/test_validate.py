@@ -8,6 +8,7 @@ import click
 import pytest
 
 import wybra.assets.validation as asset_validation
+import wybra.template.validation as template_validation
 import wybra.tools.validate as validate_module
 import wybra.web
 from wybra.assets.validation import validate_assets
@@ -18,6 +19,7 @@ from wybra.core.composition import (
     RouteOptions,
     TemplateOptions,
 )
+from wybra.template.validation import _contains_post_form, validate_template
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 from wybra.tools.settings import ProjectSettings
 from wybra.tools.validate import main as validate_main
@@ -27,7 +29,7 @@ from wybra.tools.validation.registry import (
     discover_validation_target_details,
     discover_validation_targets,
 )
-from wybra.web.validation import _contains_post_form, validate_web
+from wybra.web.validation import validate_web
 from wybra.widgets.validation import validate_widgets
 
 
@@ -383,7 +385,7 @@ def test_validate_command_runs_discovered_module_targets(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out == "assets: ok\ncommand-target: ok\n"
+    assert captured.out == "assets: ok\ntemplate: ok\ncommand-target: ok\n"
     assert captured.err == ""
 
 
@@ -499,8 +501,7 @@ def test_validate_web_omitting_wybra_web_does_not_use_default_static_root(
 
     result = validate_web(_web_settings(tmp_path, ("staticless_app",)))
 
-    assert not result.is_ok
-    assert "Missing static asset: styles/app.css" in result.errors
+    assert result.is_ok
 
 
 def test_project_settings_do_not_treat_asset_root_as_runtime_static_root(
@@ -679,7 +680,7 @@ def test_validate_post_form_detection_accepts_html_attribute_variants() -> None:
     assert not _contains_post_form("<form></form>")
 
 
-def test_validate_web_rejects_post_form_missing_csrf_field(
+def test_validate_template_rejects_post_form_missing_csrf_field_from_module_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -693,30 +694,125 @@ def test_validate_web_rejects_post_form_missing_csrf_field(
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    result = validate_web(_web_settings(tmp_path, ("csrf_missing_app", "wybra.web")))
+    result = validate_template(
+        _web_settings(tmp_path, ("csrf_missing_app", "wybra.template"))
+    )
 
     assert not result.is_ok
+    assert result.name == "template"
     assert "POST form template must include CSRF field: missing_csrf.html" in (
         result.errors
     )
 
 
-def test_validate_web_rejects_stylesheet_missing_theme_contract(
+def test_validate_template_rejects_post_form_missing_csrf_field(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    package_root = tmp_path / "theme_contract_app"
-    stylesheet_root = package_root / "static/styles"
-    stylesheet_root.mkdir(parents=True)
+    package_root = tmp_path / "template_csrf_missing_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
     (package_root / "__init__.py").write_text("", encoding="utf-8")
-    (stylesheet_root / "app.css").write_text(":root {}", encoding="utf-8")
+    (template_root / "missing_csrf.html").write_text(
+        '<form method="post"></form>',
+        encoding="utf-8",
+    )
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    result = validate_web(_web_settings(tmp_path, ("theme_contract_app",)))
+    result = validate_template(
+        _web_settings(tmp_path, ("template_csrf_missing_app", "wybra.template"))
+    )
 
     assert not result.is_ok
-    assert any("Missing theme token" in error for error in result.errors)
-    assert not any("Missing theme selector" in error for error in result.errors)
+    assert result.name == "template"
+    assert "POST form template must include CSRF field: missing_csrf.html" in (
+        result.errors
+    )
+
+
+def test_validate_template_accepts_omitted_template_provider(
+    tmp_path: Path,
+) -> None:
+    result = validate_template(_web_settings(tmp_path, ("wybra.web",)))
+
+    assert result.is_ok
+    assert result.name == "template"
+
+
+def test_validate_template_accepts_replacement_template_provider_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "replacement_template_provider"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "page.html").write_text("<main>ok</main>", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = validate_template(
+        _web_settings(tmp_path, ("replacement_template_provider",))
+    )
+
+    assert result.is_ok
+    assert any(
+        check.description == "template loads: page.html" for check in result.checks
+    )
+
+
+def test_validate_template_reuses_renderer_for_all_template_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "multi_template_provider"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "first.html").write_text("<main>first</main>", encoding="utf-8")
+    (template_root / "second.html").write_text("<main>second</main>", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    original_template_renderer = template_validation._template_renderer
+    renderer_calls = 0
+
+    def count_template_renderer(settings, template_sources):
+        nonlocal renderer_calls
+        renderer_calls += 1
+        return original_template_renderer(settings, template_sources)
+
+    monkeypatch.setattr(
+        template_validation,
+        "_template_renderer",
+        count_template_renderer,
+    )
+
+    result = validate_template(_web_settings(tmp_path, ("multi_template_provider",)))
+
+    assert result.is_ok
+    assert renderer_calls == 1
+    assert any(
+        check.description == "template loads: first.html" for check in result.checks
+    )
+    assert any(
+        check.description == "template loads: second.html" for check in result.checks
+    )
+
+
+def test_validate_template_does_not_require_framework_stylesheet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "unstyled_template_app"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "page.html").write_text("<main>ok</main>", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = validate_template(_web_settings(tmp_path, ("unstyled_template_app",)))
+
+    assert result.is_ok
+    assert not any("styles/app.css" in error for error in result.errors)
+    assert not any("styles/app.css" in check.description for check in result.checks)
 
 
 def test_validate_widgets_checks_theme_resources(tmp_path: Path) -> None:

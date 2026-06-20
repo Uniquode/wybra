@@ -12,6 +12,7 @@ from starlette.staticfiles import StaticFiles
 
 import wybra.tools.routes as routes_tool
 from wybra.core import InputValidationError
+from wybra.template import route_template
 from wybra.tools.project import ProjectToolConfigurationError
 from wybra.web.routes import (
     ConfiguredModuleRouter,
@@ -27,7 +28,6 @@ from wybra.web.routes import (
     render_mermaid,
     render_succinct,
     route_surface,
-    route_template,
 )
 
 
