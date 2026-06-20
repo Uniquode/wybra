@@ -45,6 +45,15 @@ class WebSettings:
     uses_filesystem_static_root: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class AssetValidationOnlySettings:
+    project_root: Path
+    modules: tuple[str, ...]
+    static_root: Path | None
+    app_config: AppConfig | None
+    uses_filesystem_static_root: bool = False
+
+
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported_modules = {
@@ -522,6 +531,45 @@ def test_validate_assets_accepts_missing_creatable_default_asset_root(
         and check.passed
         for check in result.checks
     )
+
+
+def test_validate_assets_reads_static_url_path_from_app_config(
+    tmp_path: Path,
+) -> None:
+    settings = AssetValidationOnlySettings(
+        project_root=tmp_path,
+        modules=("wybra.assets",),
+        static_root=None,
+        app_config=_app_config(tmp_path, ("wybra.assets",)),
+    )
+
+    result = validate_assets(settings)
+
+    assert result.is_ok
+    assert any(
+        check.description == "static URL path is configured: /static/" and check.passed
+        for check in result.checks
+    )
+
+
+def test_validate_assets_reports_blank_app_config_static_url_path(
+    tmp_path: Path,
+) -> None:
+    app_config = replace(
+        _app_config(tmp_path, ("wybra.assets",)),
+        assets=AssetOptions(url_path=""),
+    )
+    settings = AssetValidationOnlySettings(
+        project_root=tmp_path,
+        modules=("wybra.assets",),
+        static_root=None,
+        app_config=app_config,
+    )
+
+    result = validate_assets(settings)
+
+    assert not result.is_ok
+    assert "Static URL path must not be empty." in result.errors
 
 
 def test_validate_assets_reports_asset_root_createability_failure(

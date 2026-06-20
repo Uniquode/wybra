@@ -60,16 +60,17 @@ def record_asset_collection_root_check(
 def validate_assets(settings: AssetValidationSettings) -> ValidationResult:
     errors: list[str] = []
     checks: list[ValidationCheck] = []
-    static_url_path = getattr(settings, "static_url_path", None)
+    static_url_path = static_url_path_for_validation(settings)
 
     record_static_asset_provider_check(settings, checks, errors)
-    record_check(
-        checks,
-        errors,
-        passed=isinstance(static_url_path, str) and bool(static_url_path.strip()),
-        description=f"static URL path is configured: {static_url_path}",
-        error="Static URL path must not be empty.",
-    )
+    if static_url_path is not None:
+        record_check(
+            checks,
+            errors,
+            passed=bool(static_url_path.strip()),
+            description=f"static URL path is configured: {static_url_path}",
+            error="Static URL path must not be empty.",
+        )
     record_asset_collection_root_check(settings, checks, errors)
 
     try:
@@ -108,8 +109,7 @@ def record_static_asset_provider_check(
     errors: list[str],
 ) -> None:
     modules = settings.modules
-    provider_index = _static_asset_provider_index(modules)
-    if provider_index is None:
+    if not _has_static_asset_provider(modules):
         record_check(
             checks,
             errors,
@@ -124,6 +124,13 @@ def record_static_asset_provider_check(
         passed=True,
         description="static asset capability provider is configured",
     )
+
+
+def static_url_path_for_validation(settings: AssetValidationSettings) -> str | None:
+    app_config = settings.app_config
+    if app_config is None:
+        return None
+    return app_config.assets.url_path
 
 
 def asset_collection_root(settings: AssetValidationSettings) -> Path | None:
@@ -188,13 +195,13 @@ def _collection_root_problem(root: Path) -> str | None:
     return None
 
 
-def _static_asset_provider_index(modules: tuple[str, ...]) -> int | None:
-    for index, module_name in enumerate(modules):
+def _has_static_asset_provider(modules: tuple[str, ...]) -> bool:
+    for module_name in modules:
         if module_name == "wybra.assets":
-            return index
+            return True
         if _declares_static_asset_capability_provider(module_name):
-            return index
-    return None
+            return True
+    return False
 
 
 def _declares_static_asset_capability_provider(module_name: str) -> bool:
@@ -224,6 +231,7 @@ __all__ = (
     "static_location_for_validation",
     "static_resource_for_validation",
     "static_sources_for_validation",
+    "static_url_path_for_validation",
     "validate_assets",
     "validation_targets",
 )

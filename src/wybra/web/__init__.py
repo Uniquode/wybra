@@ -9,6 +9,7 @@ from fastapi import Request
 from fastapi.responses import Response
 
 from wybra.assets import StaticAssetCapability
+from wybra.config.transforms import to_url_path
 from wybra.site import Site, SiteCapabilityProxy, get_site
 from wybra.site_config import app_config_from_site
 from wybra.utils.paths import resolve_project_path
@@ -140,11 +141,7 @@ def _optional_static_mount_path(
     capability = proxy.optional()
     if capability is None:
         return None
-    return _normalise_static_mount_path(capability.url_path)
-
-
-def _normalise_static_mount_path(url_path: str) -> str:
-    return "/" + url_path.strip("/")
+    return to_url_path(capability.url_path, name="StaticAssetCapability.url_path")
 
 
 __all__ = [
