@@ -100,6 +100,8 @@ def validate_template(settings: TemplateValidationSettings) -> ValidationResult:
             checks=tuple(checks),
         )
 
+    renderer = _template_renderer(settings, template_sources)
+
     for template_name in _template_names(settings, template_sources):
         template_resource = _template_resource(
             settings,
@@ -138,9 +140,7 @@ def validate_template(settings: TemplateValidationSettings) -> ValidationResult:
             )
 
         try:
-            _template_renderer(settings, template_sources).environment.get_template(
-                template_name
-            )
+            renderer.environment.get_template(template_name)
         except Exception as exc:  # pragma: no cover - defensive guard
             record_check(
                 checks,

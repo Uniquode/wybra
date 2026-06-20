@@ -8,6 +8,7 @@ import click
 import pytest
 
 import wybra.assets.validation as asset_validation
+import wybra.template.validation as template_validation
 import wybra.tools.validate as validate_module
 import wybra.web
 from wybra.assets.validation import validate_assets
@@ -756,6 +757,43 @@ def test_validate_template_accepts_replacement_template_provider_sources(
     assert result.is_ok
     assert any(
         check.description == "template loads: page.html" for check in result.checks
+    )
+
+
+def test_validate_template_reuses_renderer_for_all_template_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "multi_template_provider"
+    template_root = package_root / "templates"
+    template_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (template_root / "first.html").write_text("<main>first</main>", encoding="utf-8")
+    (template_root / "second.html").write_text("<main>second</main>", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    original_template_renderer = template_validation._template_renderer
+    renderer_calls = 0
+
+    def count_template_renderer(settings, template_sources):
+        nonlocal renderer_calls
+        renderer_calls += 1
+        return original_template_renderer(settings, template_sources)
+
+    monkeypatch.setattr(
+        template_validation,
+        "_template_renderer",
+        count_template_renderer,
+    )
+
+    result = validate_template(_web_settings(tmp_path, ("multi_template_provider",)))
+
+    assert result.is_ok
+    assert renderer_calls == 1
+    assert any(
+        check.description == "template loads: first.html" for check in result.checks
+    )
+    assert any(
+        check.description == "template loads: second.html" for check in result.checks
     )
 
 
