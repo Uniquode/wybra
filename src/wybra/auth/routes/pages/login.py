@@ -37,8 +37,8 @@ from wybra.auth.sessions import (
     set_session_cookie,
 )
 from wybra.auth.timestamps import current_timestamp
+from wybra.template import render_page
 from wybra.web.forms.csrf import request_form_data
-from wybra.web.rendering import render_page
 
 from .shared import (
     _complete_login_ceremony,

@@ -5,7 +5,7 @@ from fastapi import Request
 from sqlalchemy.exc import SQLAlchemyError
 
 from wybra.auth.sessions import mark_session_cookie_for_clearing, resolve_current_user
-from wybra.web.context import TemplateContext, add_to_context
+from wybra.template.context import TemplateContext, add_to_context
 
 logger = logging.getLogger(__name__)
 

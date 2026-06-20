@@ -7,18 +7,12 @@ from wybra.web.routes.contracts import (
     _normalise_path_prefix,
 )
 from wybra.web.routes.discovery import (
-    CONTEXT_SURFACE_MODULE,
     ROUTE_EXPORT_ATTRIBUTE,
     ROUTE_SURFACE_MODULE,
-    TEMPLATE_RESOURCE_DIRECTORY,
     ModuleSurface,
-    context_providers_from_modules,
-    discover_context_providers,
     discover_module_routers,
     discover_module_surface,
     discover_module_surfaces,
-    discover_template_sources,
-    template_sources_from_modules,
 )
 from wybra.web.routes.inspection import (
     EndpointShape,
@@ -37,7 +31,6 @@ from wybra.web.routes.inspection import (
     render_mermaid,
     render_succinct,
     route_surface,
-    route_template,
 )
 from wybra.web.routes.registration import (
     ConfiguredModuleRouter,
@@ -54,7 +47,6 @@ from wybra.web.routes.registration import (
 
 __all__ = [
     "API_PATH_PREFIX",
-    "CONTEXT_SURFACE_MODULE",
     "ConfiguredModuleRouter",
     "ConfiguredRouteSettings",
     "EndpointShape",
@@ -72,14 +64,10 @@ __all__ = [
     "RouteRecord",
     "RouteSurface",
     "RouteTreeNode",
-    "TEMPLATE_RESOURCE_DIRECTORY",
     "_normalise_path_prefix",
-    "context_providers_from_modules",
-    "discover_context_providers",
     "discover_module_routers",
     "discover_module_surface",
     "discover_module_surfaces",
-    "discover_template_sources",
     "inspect_route_tree",
     "load_configured_module_routes",
     "load_module_routes",
@@ -94,6 +82,4 @@ __all__ = [
     "route_prefixes_from_app_config",
     "route_prefixes_from_settings",
     "route_surface",
-    "route_template",
-    "template_sources_from_modules",
 ]

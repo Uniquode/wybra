@@ -102,7 +102,7 @@ from wybra.services.crypto import (
     SecretEnvelopeService,
     SecretMaterialMissingError,
 )
-from wybra.web.context import TemplateContext
+from wybra.template.context import TemplateContext
 
 
 def sqlite_file_url(path: Path) -> str:

@@ -1,96 +1,31 @@
 from __future__ import annotations
 
-from html.parser import HTMLParser
-from importlib import resources
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from wybra.assets.validation import (
-    static_location_for_validation,
-    static_resource_for_validation,
-    static_sources_for_validation,
-)
 from wybra.core.composition import CompositionError
-from wybra.core.resources import PackageResourceSource, first_existing_resource
 from wybra.tools.validation.core import ValidationCheck, ValidationResult, record_check
-from wybra.web.context import validate_context_providers
-from wybra.web.rendering import TemplateRenderer
 from wybra.web.routes import load_module_routes, route_prefixes_from_settings
-from wybra.web.routes.discovery import (
-    discover_module_surfaces,
-    template_sources_from_modules,
-)
-from wybra.web.style_contract import (
-    REQUIRED_STATIC_ASSETS,
-    REQUIRED_THEME_TOKENS,
-)
+from wybra.web.routes.discovery import discover_module_surfaces
 
 if TYPE_CHECKING:
     from wybra.core.composition import AppConfig
 
-ResourceForValidation = Traversable | Path
-
 
 class WebValidationSettings(Protocol):
-    """Settings shape required by reusable web validation.
-
-    This extends the route-composition shape with optional filesystem override
-    roots and renderer policy. Concrete applications may expose these fields
-    through a dataclass, settings object, or test double.
-    """
+    """Settings shape required by reusable web validation."""
 
     project_root: Path
-    template_root: Path | None
-    static_root: Path | None
     static_url_path: str
-    template_auto_reload: bool | None
-    template_cache_size: int
     app_config: AppConfig | None
 
     @property
     def modules(self) -> tuple[str, ...]: ...
 
-    @property
-    def uses_filesystem_template_root(self) -> bool: ...
-
-    @property
-    def uses_filesystem_static_root(self) -> bool: ...
-
-
-class PostFormParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.contains_post_form = False
-
-    def handle_starttag(
-        self,
-        tag: str,
-        attrs: list[tuple[str, str | None]],
-    ) -> None:
-        if tag.lower() != "form":
-            return
-
-        for name, value in attrs:
-            if name.lower() == "method" and value is not None:
-                if value.strip().lower() == "post":
-                    self.contains_post_form = True
-                return
-
 
 def validate_web(settings: WebValidationSettings) -> ValidationResult:
     errors: list[str] = []
     checks: list[ValidationCheck] = []
-
-    if _uses_filesystem_template_root(settings):
-        template_root = settings.template_root
-        record_check(
-            checks,
-            errors,
-            passed=template_root is not None and template_root.is_dir(),
-            description=f"template root exists: {template_root}",
-            error=f"Missing template root: {template_root}",
-        )
 
     record_check(
         checks,
@@ -101,15 +36,9 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
     )
 
     try:
-        module_surfaces = discover_module_surfaces(
+        discover_module_surfaces(
             settings.modules,
             include_routes=True,
-            include_context=True,
-        )
-        validate_context_providers(
-            provider
-            for surface in module_surfaces
-            for provider in surface.context_providers
         )
     except CompositionError as exc:
         record_check(
@@ -126,12 +55,6 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
         errors,
         passed=True,
         description=("configured module surfaces load: " + ", ".join(settings.modules)),
-    )
-    record_check(
-        checks,
-        errors,
-        passed=True,
-        description="template context providers validate",
     )
 
     try:
@@ -160,256 +83,14 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
             )
         ),
     )
-    template_sources = _template_sources(settings)
-    renderer: TemplateRenderer | None = None
-
-    for template_name in _template_names(settings, template_sources):
-        template_resource = _template_resource(
-            settings,
-            template_sources,
-            template_name,
-        )
-        if not record_check(
-            checks,
-            errors,
-            passed=template_resource is not None,
-            description=f"template exists: {template_name}",
-            error=f"Missing template: {_template_location(settings, template_name)}",
-        ):
-            continue
-
-        assert template_resource is not None
-        template_content = _read_template_content(
-            template_resource,
-            checks,
-            errors,
-            description=f"template reads as UTF-8: {template_name}",
-        )
-        if template_content is None:
-            continue
-
-        if _contains_post_form(template_content):
-            record_check(
-                checks,
-                errors,
-                passed='name="{{ csrf_field_name }}"' in template_content,
-                description=f"POST form CSRF field exists: {template_name}",
-                error=(
-                    "POST form template must include CSRF field: "
-                    f"{_template_location(settings, template_name)}"
-                ),
-            )
-
-        try:
-            if renderer is None:
-                renderer = _template_renderer(settings, template_sources)
-            renderer.environment.get_template(template_name)
-        except Exception as exc:  # pragma: no cover - defensive guard
-            record_check(
-                checks,
-                errors,
-                passed=False,
-                description=f"template loads: {template_name}",
-                error=f"Template load failed for {template_name}: {exc}",
-            )
-        else:
-            record_check(
-                checks,
-                errors,
-                passed=True,
-                description=f"template loads: {template_name}",
-            )
-
-    static_sources = static_sources_for_validation(settings)
-    for asset in REQUIRED_STATIC_ASSETS:
-        asset_resource = static_resource_for_validation(settings, static_sources, asset)
-        if not record_check(
-            checks,
-            errors,
-            passed=asset_resource is not None,
-            description=f"static asset exists: {asset}",
-            error=(
-                "Missing static asset: "
-                f"{static_location_for_validation(settings, asset)}"
-            ),
-        ):
-            continue
-
-        if asset != "styles/app.css":
-            continue
-
-        assert asset_resource is not None
-        stylesheet_content = _read_resource_content(
-            asset_resource,
-            checks,
-            errors,
-            description=f"static asset reads as UTF-8: {asset}",
-        )
-        if stylesheet_content is None:
-            continue
-
-        for token in REQUIRED_THEME_TOKENS:
-            record_check(
-                checks,
-                errors,
-                passed=token in stylesheet_content,
-                description=f"theme token present: {token}",
-                error=f"Missing theme token: {token}",
-            )
 
     return ValidationResult(name="web", errors=tuple(errors), checks=tuple(checks))
-
-
-def _contains_post_form(template_content: str) -> bool:
-    parser = PostFormParser()
-    parser.feed(template_content)
-    parser.close()
-    return parser.contains_post_form
-
-
-def _template_sources(
-    settings: WebValidationSettings,
-) -> tuple[PackageResourceSource, ...]:
-    return template_sources_from_modules(settings.modules)
-
-
-def _template_renderer(
-    settings: WebValidationSettings,
-    template_sources: tuple[PackageResourceSource, ...],
-) -> TemplateRenderer:
-    return TemplateRenderer(
-        template_root=(
-            settings.template_root if _uses_filesystem_template_root(settings) else None
-        ),
-        template_sources=template_sources,
-        auto_reload=settings.template_auto_reload,
-        cache_size=settings.template_cache_size,
-    )
-
-
-def _template_names(
-    settings: WebValidationSettings,
-    template_sources: tuple[PackageResourceSource, ...],
-) -> tuple[str, ...]:
-    template_names: list[str] = []
-    seen: set[str] = set()
-    for template_name in _filesystem_template_names(settings):
-        if template_name not in seen:
-            seen.add(template_name)
-            template_names.append(template_name)
-
-    for source in template_sources:
-        for template_name in _package_template_names(source):
-            if template_name not in seen:
-                seen.add(template_name)
-                template_names.append(template_name)
-
-    return tuple(template_names)
-
-
-def _filesystem_template_names(settings: WebValidationSettings) -> tuple[str, ...]:
-    if not _uses_filesystem_template_root(settings) or settings.template_root is None:
-        return ()
-
-    root = settings.template_root
-    return tuple(
-        path.relative_to(root).as_posix()
-        for path in sorted(root.rglob("*.html"))
-        if path.is_file()
-    )
-
-
-def _package_template_names(source: PackageResourceSource) -> tuple[str, ...]:
-    try:
-        root = resources.files(source.package).joinpath(source.directory)
-    except (ModuleNotFoundError, TypeError):
-        return ()
-    if not root.is_dir():
-        return ()
-
-    return tuple(_traversable_template_names(root))
-
-
-def _traversable_template_names(
-    root: Traversable,
-    prefix: str = "",
-) -> tuple[str, ...]:
-    template_names: list[str] = []
-    for child in sorted(root.iterdir(), key=lambda item: item.name):
-        child_name = f"{prefix}/{child.name}" if prefix else child.name
-        if child.is_dir():
-            template_names.extend(_traversable_template_names(child, child_name))
-        elif child.name.endswith(".html"):
-            template_names.append(child_name)
-
-    return tuple(template_names)
-
-
-def _template_resource(
-    settings: WebValidationSettings,
-    template_sources: tuple[PackageResourceSource, ...],
-    template_name: str,
-) -> ResourceForValidation | None:
-    if _uses_filesystem_template_root(settings) and settings.template_root is not None:
-        template_path = settings.template_root / template_name
-        if template_path.is_file():
-            return template_path
-
-    return first_existing_resource(template_sources, template_name)
-
-
-def _read_template_content(
-    template_resource: ResourceForValidation,
-    checks: list[ValidationCheck],
-    errors: list[str],
-    *,
-    description: str,
-) -> str | None:
-    return _read_resource_content(
-        template_resource,
-        checks,
-        errors,
-        description=description,
-    )
-
-
-def _read_resource_content(
-    resource: ResourceForValidation,
-    checks: list[ValidationCheck],
-    errors: list[str],
-    *,
-    description: str,
-) -> str | None:
-    try:
-        return resource.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        record_check(
-            checks,
-            errors,
-            passed=False,
-            description=description,
-            error=f"Unable to read {resource}: {exc}",
-        )
-        return None
-
-
-def _template_location(settings: WebValidationSettings, template_name: str) -> str:
-    if _uses_filesystem_template_root(settings) and settings.template_root is not None:
-        return str(settings.template_root / template_name)
-
-    return template_name
-
-
-def _uses_filesystem_template_root(settings: WebValidationSettings) -> bool:
-    return settings.uses_filesystem_template_root
 
 
 validation_targets = {"web": validate_web}
 
 __all__ = (
-    "PostFormParser",
     "WebValidationSettings",
-    "_contains_post_form",
     "validate_web",
     "validation_targets",
 )

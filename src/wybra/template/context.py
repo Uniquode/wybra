@@ -3,56 +3,53 @@
 from __future__ import annotations
 
 import inspect
-import logging
+from collections import ChainMap
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from wybra.core.composition import CompositionError
 from wybra.core.diagnostics import diagnostic_message
 
-logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True, slots=True)
-class TemplateContext(Mapping[str, Any]):
-    values: Mapping[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+class TemplateContext(ChainMap[str, Any]):
+    def __init__(self, *maps: Mapping[str, Any]) -> None:
+        layers = maps or ({},)
+        super().__init__(*(_readonly_layer(mapping) for mapping in layers))
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> TemplateContext:
-        return cls(values=dict(values))
+        return cls.from_layers(values)
+
+    @classmethod
+    def from_layers(cls, *layers: Mapping[str, Any]) -> TemplateContext:
+        return cls(*layers)
 
     def with_values(self, **kwargs: Any) -> TemplateContext:
-        return self.merge(kwargs)
+        return self.with_layer(kwargs)
 
-    def merge(self, values: Mapping[str, Any]) -> TemplateContext:
-        context_values = dict(self.values)
-        ignored_keys = tuple(sorted(set(context_values) & set(values)))
-        if ignored_keys:
-            logger.warning(
-                "Ignored template context key overwrite.",
-                extra={"template_context_keys": ignored_keys},
-            )
-        context_values.update(
-            {key: value for key, value in values.items() if key not in context_values}
-        )
-        return TemplateContext.from_mapping(context_values)
+    def with_layer(self, values: Mapping[str, Any]) -> TemplateContext:
+        return TemplateContext(values, *self.maps)
 
     def as_dict(self) -> dict[str, Any]:
-        return dict(self.values)
+        values: dict[str, Any] = {}
+        for mapping in reversed(self.maps):
+            values.update(mapping)
+        return values
 
     def __getitem__(self, key: str) -> Any:
-        return self.values[key]
+        return super().__getitem__(key)
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.values)
+        seen: set[str] = set()
+        for mapping in self.maps:
+            for key in mapping:
+                if key not in seen:
+                    seen.add(key)
+                    yield key
 
     def __len__(self) -> int:
-        return len(self.values)
+        return len(set().union(*self.maps))
 
 
 type ContextResult = TemplateContext | Awaitable[TemplateContext]
@@ -67,11 +64,19 @@ class ContextProviderError(CompositionError):
     """Raised when a context provider cannot be registered."""
 
 
-def add_to_context(provider: ContextProviderRegistration) -> ContextProvider:
+def add_to_context(
+    provider: ContextProviderRegistration,
+    *,
+    module_name: str | None = None,
+) -> ContextProvider:
     """Register a provider for the context module that calls this function."""
     registered_provider = _normalise_provider(provider)
-    module_name = _calling_module_name()
-    _CONTEXT_PROVIDERS.setdefault(module_name, []).append(registered_provider)
+    provider_module_name = (
+        module_name
+        if module_name is not None
+        else _provider_module_name(provider, registered_provider)
+    )
+    _CONTEXT_PROVIDERS.setdefault(provider_module_name, []).append(registered_provider)
     return registered_provider
 
 
@@ -80,7 +85,7 @@ def _normalise_provider(provider: ContextProviderRegistration) -> ContextProvide
         context_values = dict(provider)
 
         def static_context(_request: Any, context: TemplateContext) -> TemplateContext:
-            return context.merge(context_values)
+            return context.with_layer(context_values)
 
         return static_context
 
@@ -143,10 +148,11 @@ def clear_context_providers(module_name: str | None = None) -> None:
     _CONTEXT_PROVIDERS.pop(module_name, None)
 
 
-def _calling_module_name() -> str:
+def _calling_module_name(frame_depth: int = 2) -> str:
     frame = inspect.currentframe()
-    calling_frame = frame.f_back if frame is not None else None
-    provider_frame = calling_frame.f_back if calling_frame is not None else None
+    provider_frame = frame
+    for _ in range(frame_depth):
+        provider_frame = provider_frame.f_back if provider_frame is not None else None
     module_name = (
         provider_frame.f_globals.get("__name__") if provider_frame is not None else None
     )
@@ -154,6 +160,25 @@ def _calling_module_name() -> str:
         raise ContextProviderError("Context provider module could not be resolved.")
 
     return module_name
+
+
+def _provider_module_name(
+    provider: ContextProviderRegistration,
+    registered_provider: ContextProvider,
+) -> str:
+    if isinstance(provider, Mapping):
+        return _calling_module_name(frame_depth=3)
+
+    if not isinstance(provider, Mapping):
+        module_name = getattr(provider, "__module__", None)
+        if isinstance(module_name, str) and module_name:
+            return module_name
+
+    module_name = getattr(registered_provider, "__module__", None)
+    if isinstance(module_name, str) and module_name != __name__:
+        return module_name
+
+    return _calling_module_name(frame_depth=3)
 
 
 async def _call_provider(
@@ -191,6 +216,10 @@ def _provider_name(provider: ContextProvider) -> str:
         return f"{provider_module}.{provider_name}"
 
     return str(provider_name)
+
+
+def _readonly_layer(values: Mapping[str, Any]) -> dict[str, Any]:
+    return cast(dict[str, Any], MappingProxyType(dict(values)))
 
 
 __all__ = [

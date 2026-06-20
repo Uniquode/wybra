@@ -6,8 +6,8 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 from starlette.datastructures import FormData
 
+from wybra.template import render_partial
 from wybra.web.forms.csrf import request_form_data
-from wybra.web.rendering import render_partial
 
 ThemeMode = Literal["auto", "light", "dark"]
 THEME_MODES: tuple[ThemeMode, ...] = ("auto", "light", "dark")

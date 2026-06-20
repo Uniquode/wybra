@@ -38,7 +38,7 @@ from wybra.auth.result import (
 from wybra.auth.sessions import session_cookie_secure_for_request
 from wybra.auth.settings import auth_settings_from_state, identity_options_from_state
 from wybra.auth.timestamps import current_timestamp
-from wybra.web.rendering import render_page
+from wybra.template import render_page
 
 TOTP_SETUP_BYPASS_TOKEN: Final[str] = "bypass_totp_setup"
 TOTP_SETUP_CHALLENGE_FLAG: Final[str] = "totp_setup"

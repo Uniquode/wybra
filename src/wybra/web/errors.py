@@ -10,7 +10,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from jinja2.exceptions import TemplateNotFound
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from wybra.web.rendering import TemplateRenderer
+from wybra.core.url_paths import matches_path_prefix
+from wybra.site import SiteCapabilityError
+from wybra.template.rendering import template_capability_from
 from wybra.web.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 
 RouteSurface = Literal["page", "partial", "api", "static"]
@@ -123,8 +125,9 @@ def _build_error_response(
         _apply_headers(response, headers)
         return response
 
-    renderer = getattr(request.app.state, "renderer", None)
-    if not isinstance(renderer, TemplateRenderer):  # pragma: no cover - defensive
+    try:
+        templates = template_capability_from(request)
+    except SiteCapabilityError:
         return _fallback_error_response(surface, presentation, headers=headers)
 
     context = {
@@ -137,16 +140,16 @@ def _build_error_response(
 
     try:
         if surface == "partial":
-            response = renderer.render_partial(
-                _error_options(request).partial_template,
+            response = templates.render_partial(
                 request,
+                _error_options(request).partial_template,
                 context,
                 status_code=presentation.status_code,
             )
         else:
-            response = renderer.render_page(
-                _error_options(request).page_template,
+            response = templates.render_page(
                 request,
+                _error_options(request).page_template,
                 context,
                 status_code=presentation.status_code,
             )
@@ -256,8 +259,7 @@ def _build_api_error_payload(
 
 
 def _matches_path_prefix(path: str, prefix: str) -> bool:
-    normalised_prefix = prefix.rstrip("/") or "/"
-    return path == normalised_prefix or path.startswith(f"{normalised_prefix}/")
+    return matches_path_prefix(path, prefix)
 
 
 def _summarise_validation_errors(
