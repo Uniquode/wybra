@@ -6,7 +6,11 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from wybra.assets import static_sources_from_modules
+from wybra.assets.validation import (
+    static_location_for_validation,
+    static_resource_for_validation,
+    static_sources_for_validation,
+)
 from wybra.core.composition import CompositionError
 from wybra.core.resources import PackageResourceSource, first_existing_resource
 from wybra.tools.validation.core import ValidationCheck, ValidationResult, record_check
@@ -36,6 +40,7 @@ class WebValidationSettings(Protocol):
     through a dataclass, settings object, or test double.
     """
 
+    project_root: Path
     template_root: Path | None
     static_root: Path | None
     static_url_path: str
@@ -85,16 +90,6 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
             passed=template_root is not None and template_root.is_dir(),
             description=f"template root exists: {template_root}",
             error=f"Missing template root: {template_root}",
-        )
-
-    if _uses_filesystem_static_root(settings):
-        static_root = settings.static_root
-        record_check(
-            checks,
-            errors,
-            passed=static_root is not None and static_root.is_dir(),
-            description=f"static root exists: {static_root}",
-            error=f"Missing static root: {static_root}",
         )
 
     record_check(
@@ -225,15 +220,18 @@ def validate_web(settings: WebValidationSettings) -> ValidationResult:
                 description=f"template loads: {template_name}",
             )
 
-    static_sources = _static_sources(settings)
+    static_sources = static_sources_for_validation(settings)
     for asset in REQUIRED_STATIC_ASSETS:
-        asset_resource = _static_resource(settings, static_sources, asset)
+        asset_resource = static_resource_for_validation(settings, static_sources, asset)
         if not record_check(
             checks,
             errors,
             passed=asset_resource is not None,
             description=f"static asset exists: {asset}",
-            error=f"Missing static asset: {_static_location(settings, asset)}",
+            error=(
+                "Missing static asset: "
+                f"{static_location_for_validation(settings, asset)}"
+            ),
         ):
             continue
 
@@ -360,32 +358,6 @@ def _template_resource(
     return first_existing_resource(template_sources, template_name)
 
 
-def _static_sources(
-    settings: WebValidationSettings,
-) -> tuple[PackageResourceSource, ...]:
-    if _uses_filesystem_static_root(settings):
-        return ()
-
-    return static_sources_from_modules(settings.modules)
-
-
-def _static_resource(
-    settings: WebValidationSettings,
-    static_sources: tuple[PackageResourceSource, ...],
-    asset: str,
-) -> ResourceForValidation | None:
-    if static_sources:
-        return first_existing_resource(static_sources, asset)
-    if not _uses_filesystem_static_root(settings):
-        return None
-
-    if settings.static_root is None:
-        return None
-
-    asset_path = settings.static_root / asset
-    return asset_path if asset_path.is_file() else None
-
-
 def _read_template_content(
     template_resource: ResourceForValidation,
     checks: list[ValidationCheck],
@@ -428,19 +400,8 @@ def _template_location(settings: WebValidationSettings, template_name: str) -> s
     return template_name
 
 
-def _static_location(settings: WebValidationSettings, asset: str) -> str:
-    if _uses_filesystem_static_root(settings) and settings.static_root is not None:
-        return str(settings.static_root / asset)
-
-    return asset
-
-
 def _uses_filesystem_template_root(settings: WebValidationSettings) -> bool:
     return settings.uses_filesystem_template_root
-
-
-def _uses_filesystem_static_root(settings: WebValidationSettings) -> bool:
-    return settings.uses_filesystem_static_root
 
 
 validation_targets = {"web": validate_web}

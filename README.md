@@ -25,8 +25,10 @@ Repository: <https://github.com/Uniquode/wybra>
 
 - `wybra.core`: module composition, package resource helpers, settings loading,
   diagnostics, and shared conventions.
-- `wybra.web`: route composition, template rendering, static assets, CSRF,
-  theme defaults, error handling, views, and web validation.
+- `wybra.assets`: static asset settings, source discovery, runtime serving,
+  URL resolution, collection, and validation.
+- `wybra.web`: route composition, template rendering, CSRF, theme defaults,
+  error handling, views, and web validation.
 - `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
 - `wybra.tools`: generic project command adapters and validation target
@@ -153,10 +155,11 @@ reload_env = "APP_RELOAD"
 
 ## Static Asset Collection
 
-Wybra can collect the static assets for the configured application into the
-filesystem tree configured by `[app.assets].root`. Collection output is
-deployment/export output; it does not become the runtime source of app-served
-static files:
+`wybra.assets` owns static asset settings, source discovery, runtime serving,
+URL resolution, collection, and validation. Wybra can collect the static assets
+for the configured application into the filesystem tree configured by
+`[app.assets].root`. Collection output is deployment/export output; it does not
+become the runtime source of app-served static files:
 
 ```sh
 uv run wybra-collect --config config/app.toml
@@ -277,7 +280,7 @@ other package-owned project commands, then reads `[auth]` from that file. Use
 ```toml
 [app]
 database_url = "sqlite+aiosqlite:///app.sqlite3"
-modules = ["wybra.web", "wybra.auth"]
+modules = ["wybra.assets", "wybra.web", "wybra.auth"]
 
 [app.templates]
 auto_reload = true

@@ -7,8 +7,11 @@ from types import SimpleNamespace
 import click
 import pytest
 
+import wybra.assets.validation as asset_validation
 import wybra.tools.validate as validate_module
 import wybra.web
+from wybra.assets.validation import validate_assets
+from wybra.config import AppConfigSource, ConfigService
 from wybra.core.composition import (
     AppConfig,
     AssetOptions,
@@ -16,10 +19,12 @@ from wybra.core.composition import (
     TemplateOptions,
 )
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
+from wybra.tools.settings import ProjectSettings
 from wybra.tools.validate import main as validate_main
 from wybra.tools.validation.core import ValidationResult
 from wybra.tools.validation.registry import (
     ValidationDiscoveryError,
+    discover_validation_target_details,
     discover_validation_targets,
 )
 from wybra.web.validation import _contains_post_form, validate_web
@@ -37,6 +42,15 @@ class WebSettings:
     template_cache_size: int = 400
     app_config: AppConfig | None = None
     uses_filesystem_template_root: bool = False
+    uses_filesystem_static_root: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AssetValidationOnlySettings:
+    project_root: Path
+    modules: tuple[str, ...]
+    static_root: Path | None
+    app_config: AppConfig | None
     uses_filesystem_static_root: bool = False
 
 
@@ -263,6 +277,30 @@ def test_validation_targets_are_discovered_from_configured_modules(
     assert isinstance(targets["first"](object()), ValidationResult)
 
 
+def test_validation_target_details_include_origins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_validation_module(
+        tmp_path,
+        "origin_validation_module",
+        """
+        from wybra.tools.validation.core import ValidationResult
+
+        def validate_origin(settings):
+            return ValidationResult(name="origin", errors=())
+
+        validation_targets = {"origin": validate_origin}
+        """,
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    details = discover_validation_target_details(("origin_validation_module",))
+
+    assert tuple(details.targets) == ("origin",)
+    assert details.origins == {"origin": "origin_validation_module.validation"}
+
+
 def test_unlisted_module_validation_targets_are_not_discovered(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -334,18 +372,54 @@ def test_validate_command_runs_discovered_module_targets(
         """,
     )
     monkeypatch.syspath_prepend(str(tmp_path))
+    settings = _web_settings(tmp_path, ("command_validation_module",))
     monkeypatch.setattr(
         validate_module,
         "_build_settings",
-        lambda _overrides: SimpleNamespace(modules=("command_validation_module",)),
+        lambda _overrides: settings,
     )
 
     exit_code = validate_main([])
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out == "command-target: ok\n"
+    assert captured.out == "assets: ok\ncommand-target: ok\n"
     assert captured.err == ""
+
+
+def test_validate_command_rejects_module_target_conflicting_with_builtin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_validation_module(
+        tmp_path,
+        "conflicting_validation_module",
+        """
+        from wybra.tools.validation.core import ValidationResult
+
+        def validate_assets(settings):
+            return ValidationResult(name="assets", errors=())
+
+        validation_targets = {"assets": validate_assets}
+        """,
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    settings = _web_settings(tmp_path, ("conflicting_validation_module",))
+    monkeypatch.setattr(
+        validate_module,
+        "_build_settings",
+        lambda _overrides: settings,
+    )
+
+    exit_code = validate_main([])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "configuration: failed" in captured.err
+    assert "assets from conflicting_validation_module.validation" in captured.err
+    assert "Built-in validation targets cannot be overridden" in captured.err
 
 
 def test_validate_command_reports_malformed_validation_surface(
@@ -427,6 +501,174 @@ def test_validate_web_omitting_wybra_web_does_not_use_default_static_root(
 
     assert not result.is_ok
     assert "Missing static asset: styles/app.css" in result.errors
+
+
+def test_project_settings_do_not_treat_asset_root_as_runtime_static_root(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService([AppConfigSource(_app_config(tmp_path, ("wybra.web",)))])
+
+    settings = ProjectSettings.load_settings(
+        config,
+        app_config=_app_config(tmp_path, ("wybra.web",)),
+    )
+
+    assert settings.static_root is None
+    assert not settings.uses_filesystem_static_root
+
+
+def test_validate_assets_accepts_missing_creatable_default_asset_root(
+    tmp_path: Path,
+) -> None:
+    result = validate_assets(_web_settings(tmp_path, ("wybra.assets", "wybra.web")))
+
+    assert result.is_ok
+    assert result.name == "assets"
+    assert not (tmp_path / "static").exists()
+    assert any(
+        check.description
+        == f"static asset collection root is usable: {(tmp_path / 'static').resolve()}"
+        and check.passed
+        for check in result.checks
+    )
+
+
+def test_validate_assets_reads_static_url_path_from_app_config(
+    tmp_path: Path,
+) -> None:
+    settings = AssetValidationOnlySettings(
+        project_root=tmp_path,
+        modules=("wybra.assets",),
+        static_root=None,
+        app_config=_app_config(tmp_path, ("wybra.assets",)),
+    )
+
+    result = validate_assets(settings)
+
+    assert result.is_ok
+    assert any(
+        check.description == "static URL path is configured: /static/" and check.passed
+        for check in result.checks
+    )
+
+
+def test_validate_assets_reports_blank_app_config_static_url_path(
+    tmp_path: Path,
+) -> None:
+    app_config = replace(
+        _app_config(tmp_path, ("wybra.assets",)),
+        assets=AssetOptions(url_path=""),
+    )
+    settings = AssetValidationOnlySettings(
+        project_root=tmp_path,
+        modules=("wybra.assets",),
+        static_root=None,
+        app_config=app_config,
+    )
+
+    result = validate_assets(settings)
+
+    assert not result.is_ok
+    assert "Static URL path must not be empty." in result.errors
+
+
+def test_validate_assets_reports_asset_root_createability_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _web_settings(tmp_path, ("wybra.assets", "wybra.web"))
+    monkeypatch.setattr(asset_validation.os, "access", lambda *_args: False)
+
+    result = validate_assets(settings)
+
+    assert not result.is_ok
+    assert any(
+        error
+        == (
+            "Static asset collection root cannot be created because parent is "
+            f"not writable: {tmp_path.resolve()}"
+        )
+        for error in result.errors
+    )
+
+
+def test_validate_assets_reports_asset_root_existing_file(
+    tmp_path: Path,
+) -> None:
+    app_config = replace(
+        _app_config(tmp_path, ("wybra.assets", "wybra.web")),
+        assets=AssetOptions(url_path="/static/", root=Path("asset-file")),
+    )
+    (tmp_path / "asset-file").write_text("not a directory", encoding="utf-8")
+    settings = replace(
+        _web_settings(tmp_path, ("wybra.assets", "wybra.web")),
+        app_config=app_config,
+    )
+
+    result = validate_assets(settings)
+
+    assert not result.is_ok
+    assert (
+        "Static asset collection root is not a directory: "
+        f"{(tmp_path / 'asset-file').resolve()}"
+    ) in result.errors
+
+
+def test_validate_assets_accepts_web_without_asset_provider(tmp_path: Path) -> None:
+    result = validate_assets(_web_settings(tmp_path, ("wybra.web",)))
+
+    assert result.is_ok
+    assert any(
+        check.description == "static asset capability provider is not required"
+        and check.passed
+        for check in result.checks
+    )
+
+
+def test_validate_assets_accepts_provider_after_web(tmp_path: Path) -> None:
+    result = validate_assets(_web_settings(tmp_path, ("wybra.web", "wybra.assets")))
+
+    assert result.is_ok
+    assert any(
+        check.description == "static asset capability provider is configured"
+        and check.passed
+        for check in result.checks
+    )
+
+
+def test_validate_assets_accepts_marked_provider_before_web(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_root = tmp_path / "custom_asset_provider"
+    module_root.mkdir()
+    (module_root / "__init__.py").write_text(
+        "provides_static_asset_capability = True\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = validate_assets(
+        _web_settings(tmp_path, ("custom_asset_provider", "wybra.web"))
+    )
+
+    assert result.is_ok
+
+
+def test_validate_command_exposes_builtin_assets_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = _web_settings(tmp_path, ("wybra.assets", "wybra.web"))
+    monkeypatch.setattr(validate_module, "_build_settings", lambda _overrides: settings)
+
+    exit_code = validate_main(["assets"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out == "assets: ok\n"
+    assert captured.err == ""
 
 
 def test_validate_post_form_detection_accepts_html_attribute_variants() -> None:

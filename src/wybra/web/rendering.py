@@ -7,13 +7,12 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, select_autoescape
 
-from wybra.assets import NormalStaticAssetStorage, StaticAssetStorage
+from wybra.assets import StaticAssetCapability, require_static_asset_capability
 from wybra.core.resources import PackageResourceSource
+from wybra.site import SiteCapabilityProxy, get_site
 from wybra.web.context import TemplateContext, get_request_context
 from wybra.web.forms.csrf import CsrfProtector
 from wybra.web.templating import build_template_loader
-
-_DEFAULT_STATIC_ASSET_STORAGE = NormalStaticAssetStorage()
 
 
 @dataclass(slots=True)
@@ -61,7 +60,6 @@ class TemplateRenderer:
     ) -> dict[str, Any]:
         framework_context: dict[str, Any] = {
             "route_name": self._resolve_route_name(request),
-            "static_mount_path": self._resolve_static_mount_path(request),
             "asset_url": self._resolve_asset_url(request),
         }
         if self.include_request_context:
@@ -77,49 +75,29 @@ class TemplateRenderer:
         )
 
     @staticmethod
-    def _resolve_static_mount_path(request: Request) -> str:
-        try:
-            app_state = request.app.state
-        except (AttributeError, KeyError, RuntimeError):
-            return "/static"
-
-        static_mount_path = getattr(app_state, "static_mount_path", None)
-        if isinstance(static_mount_path, str) and static_mount_path.strip():
-            return static_mount_path.rstrip("/")
-
-        settings = getattr(app_state, "settings", None)
-        settings_static_mount_path = getattr(settings, "static_mount_path", None)
-        if (
-            isinstance(settings_static_mount_path, str)
-            and settings_static_mount_path.strip()
-        ):
-            return settings_static_mount_path.rstrip("/")
-
-        return "/static"
+    def _static_asset_proxy(
+        request: Request,
+    ) -> SiteCapabilityProxy[StaticAssetCapability]:
+        return get_site(request.app).capability_proxy(StaticAssetCapability)
 
     @classmethod
     def _resolve_asset_url(cls, request: Request) -> Callable[[str], str]:
-        """Build the template helper for resolving logical static asset paths."""
-        static_mount_path = cls._resolve_static_mount_path(request)
-        storage = cls._resolve_static_asset_storage(request)
+        """Build the template helper for static asset URLs.
+
+        Missing static asset capability is intentionally strict: templates that
+        do not call ``asset_url`` can render without assets, but using the helper
+        requires a configured asset capability provider.
+        """
+        proxy = cls._static_asset_proxy(request)
+        capability: StaticAssetCapability | None = None
 
         def asset_url(logical_path: str) -> str:
-            return storage.url(logical_path, url_path=static_mount_path)
+            nonlocal capability
+            if capability is None:
+                capability = require_static_asset_capability(proxy)
+            return capability.url(logical_path)
 
         return asset_url
-
-    @staticmethod
-    def _resolve_static_asset_storage(request: Request) -> StaticAssetStorage:
-        try:
-            app_state = request.app.state
-        except AttributeError:
-            return _DEFAULT_STATIC_ASSET_STORAGE
-
-        storage = getattr(app_state, "static_asset_storage", None)
-        if isinstance(storage, StaticAssetStorage):
-            return storage
-
-        return _DEFAULT_STATIC_ASSET_STORAGE
 
     def render_page(
         self,

@@ -13,8 +13,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from wybra.assets.config import AssetExportMode
+from wybra.assets.settings import AssetSettings
 from wybra.assets.storage import normalise_logical_asset_path, static_asset_storage
+from wybra.config import AppConfigSource, ConfigService, discover_module_config_defs
 from wybra.core.composition import AppConfig, load_app_config
+from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import InputValidationError
 from wybra.core.resources import (
     PackageResourceFile,
@@ -81,6 +84,7 @@ def collect_configured_static_assets(
     config_path: Path | None = None,
     environ: Mapping[str, str] | None = None,
     root: Path | None = None,
+    delete: bool = True,
 ) -> StaticCollectResult:
     from wybra.assets.serving import static_sources_from_modules
 
@@ -89,10 +93,16 @@ def collect_configured_static_assets(
         config_path=config_path,
         environ=environ,
     )
+    config_service = ConfigService(
+        [AppConfigSource(config)],
+        config_defs=(RUNTIME_CONFIG_DEF, *discover_module_config_defs(config.modules)),
+    )
+    settings = AssetSettings.load_settings(config_service)
     return collect_static_assets(
         static_sources_from_modules(config.modules),
-        root=_resolve_root(config, root),
-        export_mode=config.assets.export_mode,
+        root=settings.root if root is None else _resolve_root(config, root),
+        delete=delete,
+        export_mode=settings.export_mode,
     )
 
 

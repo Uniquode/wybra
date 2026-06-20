@@ -33,4 +33,18 @@ def to_path(value: object, *, root: Path | None = None) -> Path:
     return resolved
 
 
-__all__ = ("to_bool", "to_path")
+def to_raw_path(value: object, *, name: str = "value") -> Path:
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str) and value.strip():
+        return Path(value)
+    raise ValueError(f"{name} must be a non-blank path.")
+
+
+def to_url_path(value: object, *, name: str = "value") -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-blank string.")
+    return f"/{value.strip('/')}"
+
+
+__all__ = ("to_bool", "to_path", "to_raw_path", "to_url_path")

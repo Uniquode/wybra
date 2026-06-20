@@ -227,7 +227,15 @@ def start_site(
 
 
 def get_site(app: FastAPI) -> Site:
-    site = getattr(app.state, "site", None)
+    try:
+        site = getattr(app.state, "site", None)
+    except AttributeError as exc:
+        raise SiteCapabilityError(
+            structured_error(
+                "Site is not available on app state",
+                attribute="state",
+            )
+        ) from exc
     if not isinstance(site, Site):
         raise SiteCapabilityError(
             structured_error(

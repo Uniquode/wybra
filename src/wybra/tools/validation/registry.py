@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from importlib import import_module
 from importlib.util import find_spec
 from types import ModuleType
@@ -21,6 +22,12 @@ from wybra.tools.validation.core import ValidationResult
 ValidationTarget = Callable[[Any], ValidationResult]
 
 
+@dataclass(frozen=True, slots=True)
+class DiscoveredValidationTargets:
+    targets: dict[str, ValidationTarget]
+    origins: dict[str, str]
+
+
 class ValidationDiscoveryError(ValueError):
     """Raised when configured module validation surfaces are invalid."""
 
@@ -28,6 +35,12 @@ class ValidationDiscoveryError(ValueError):
 def discover_validation_targets(
     module_names: Sequence[str],
 ) -> dict[str, ValidationTarget]:
+    return discover_validation_target_details(module_names).targets
+
+
+def discover_validation_target_details(
+    module_names: Sequence[str],
+) -> DiscoveredValidationTargets:
     targets: dict[str, ValidationTarget] = {}
     target_origins: dict[str, str] = {}
 
@@ -51,7 +64,7 @@ def discover_validation_targets(
             targets[target_name] = target
             target_origins[target_name] = surface_name
 
-    return targets
+    return DiscoveredValidationTargets(targets=targets, origins=target_origins)
 
 
 def validation_target_names(module_names: Sequence[str]) -> tuple[str, ...]:

@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from http import HTTPStatus
 from typing import Literal, cast
@@ -14,6 +14,7 @@ from wybra.web.rendering import TemplateRenderer
 from wybra.web.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 
 RouteSurface = Literal["page", "partial", "api", "static"]
+StaticMountPathResolver = Callable[[], str | None]
 
 logger = logging.getLogger(__name__)
 _SAFE_ERROR_HEADERS: set[str] = {"allow", "www-authenticate", "retry-after"}
@@ -35,7 +36,7 @@ class ErrorPresentation:
 
 @dataclass(frozen=True, slots=True)
 class ErrorHandlerOptions:
-    static_mount_path: str = "/static"
+    static_mount_path: str | StaticMountPathResolver | None = None
     api_path_prefix: str = API_PATH_PREFIX
     partial_path_prefix: str = PARTIAL_PATH_PREFIX
     page_template: str = "errors/base.html"
@@ -159,7 +160,8 @@ def _build_error_response(
 def _resolve_route_surface(request: Request) -> RouteSurface:
     path = request.url.path
     options = _error_options(request)
-    if _matches_path_prefix(path, options.static_mount_path):
+    static_mount_path = _resolve_static_mount_path(options)
+    if static_mount_path is not None and _matches_path_prefix(path, static_mount_path):
         return "static"
     if _matches_path_prefix(path, options.api_path_prefix):
         return "api"
@@ -174,6 +176,13 @@ def _error_options(request: Request) -> ErrorHandlerOptions:
         return options
 
     return ErrorHandlerOptions()
+
+
+def _resolve_static_mount_path(options: ErrorHandlerOptions) -> str | None:
+    static_mount_path = options.static_mount_path
+    if isinstance(static_mount_path, str) or static_mount_path is None:
+        return static_mount_path
+    return static_mount_path()
 
 
 def _apply_headers(response: Response, headers: Mapping[str, str] | None) -> None:

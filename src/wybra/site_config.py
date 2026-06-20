@@ -40,11 +40,6 @@ def app_config_from_site(site: Site) -> AppConfig:
         assets=AssetOptions(
             url_path=_str_value(static_config, "url_path", "/static/"),
             root=_path_value(static_config, "root", Path("static")),
-            root_configured=_bool_value(
-                static_config,
-                "root_configured",
-                "root" in static_config,
-            ),
             export_mode=_asset_export_mode(static_config),
             serve=_bool_value(static_config, "serve", True),
             cors=_asset_cors_options(_section(site, "app.assets.cors")),

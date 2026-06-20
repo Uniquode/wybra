@@ -8,9 +8,6 @@ from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup, to_b
 ENV_CSRF_SECRET: Final = "CSRF_SECRET"
 ENV_CSRF_SECURE: Final = "CSRF_SECURE"
 ENV_REQUEST_CONTEXT_ENABLED: Final = "REQUEST_CONTEXT_ENABLED"
-ENV_STATIC_ROOT: Final = "STATIC_ROOT"
-ENV_STATIC_SERVE: Final = "STATIC_SERVE"
-ENV_STATIC_URL: Final = "STATIC_URL"
 ENV_TEMPLATE_ROOT: Final = "TEMPLATE_ROOT"
 GENERATE_LOCAL_CSRF_SECRET: Final = "__generate-local-csrf-secret__"
 WEB_CONFIG_SECTION: Final = "wybra.web"
@@ -63,18 +60,6 @@ module_config: Final = ConfigDef(
                 ),
             ),
         ),
-        "app.assets": ConfigGroup(
-            fields=(
-                ConfigField(name="root", env=ENV_STATIC_ROOT),
-                ConfigField(
-                    name="serve",
-                    default=True,
-                    env=ENV_STATIC_SERVE,
-                    transform=to_bool,
-                ),
-                ConfigField(name="url_path", env=ENV_STATIC_URL),
-            ),
-        ),
         "app.templates": ConfigGroup(
             fields=(
                 ConfigField(name="auto_reload"),
@@ -98,9 +83,6 @@ __all__ = (
     "ENV_CSRF_SECRET",
     "ENV_CSRF_SECURE",
     "ENV_REQUEST_CONTEXT_ENABLED",
-    "ENV_STATIC_ROOT",
-    "ENV_STATIC_SERVE",
-    "ENV_STATIC_URL",
     "ENV_TEMPLATE_ROOT",
     "GENERATE_LOCAL_CSRF_SECRET",
     "WEB_CONFIG_SECTION",

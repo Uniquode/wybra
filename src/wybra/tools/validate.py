@@ -6,6 +6,7 @@ from typing import Any, TextIO
 
 import click
 
+from wybra.assets.validation import validate_assets
 from wybra.core.exceptions import ConfigurationError
 from wybra.tools.project import (
     ProjectToolConfigurationError,
@@ -16,7 +17,7 @@ from wybra.tools.validation.core import ValidationResult
 from wybra.tools.validation.registry import (
     ValidationDiscoveryError,
     ValidationTarget,
-    discover_validation_targets,
+    discover_validation_target_details,
 )
 
 __all__ = (
@@ -29,6 +30,11 @@ __all__ = (
 
 class UnknownValidationTargetError(ValueError):
     """Raised when validation is requested for unknown target names."""
+
+
+BUILTIN_VALIDATION_TARGETS: Mapping[str, ValidationTarget] = {
+    "assets": validate_assets,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +61,38 @@ def _resolve_targets(
     return tuple(dict.fromkeys(targets))
 
 
+def _merge_validation_targets(
+    *,
+    builtin_targets: Mapping[str, ValidationTarget],
+    discovered_targets: Mapping[str, ValidationTarget],
+    discovered_origins: Mapping[str, str],
+) -> Mapping[str, ValidationTarget]:
+    duplicate_names = {
+        name
+        for name in builtin_targets.keys() & discovered_targets.keys()
+        if discovered_targets[name] is not builtin_targets[name]
+    }
+    if duplicate_names:
+        duplicates = ", ".join(
+            f"{name} from {discovered_origins.get(name, 'unknown validation surface')}"
+            for name in sorted(duplicate_names)
+        )
+        raise ConfigurationError(
+            "Validation target name(s) conflict with built-in targets: "
+            f"{duplicates}. Built-in validation targets cannot be overridden."
+        )
+
+    merged: dict[str, ValidationTarget] = dict(builtin_targets)
+    merged.update(
+        {
+            name: target
+            for name, target in discovered_targets.items()
+            if name not in builtin_targets
+        }
+    )
+    return merged
+
+
 def _build_settings(overrides: ValidationOverrides) -> Any:
     project_root = runtime_project_root()
     try:
@@ -76,6 +114,7 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
                 if overrides.static_root is not None
                 else defaults.static_root
             ),
+            static_root_configured=overrides.static_root is not None,
             migrations_root=(
                 overrides.migrations_root
                 if overrides.migrations_root is not None
@@ -156,9 +195,18 @@ def validate_command(
         return 1
 
     try:
-        validation_targets = discover_validation_targets(settings.modules)
+        discovered = discover_validation_target_details(settings.modules)
+        validation_targets = _merge_validation_targets(
+            builtin_targets=BUILTIN_VALIDATION_TARGETS,
+            discovered_targets=discovered.targets,
+            discovered_origins=discovered.origins,
+        )
     except ValidationDiscoveryError as exc:
         print("validation discovery: failed", file=sys.stderr)
+        print(f"- {exc}", file=sys.stderr)
+        return 1
+    except ConfigurationError as exc:
+        print("configuration: failed", file=sys.stderr)
         print(f"- {exc}", file=sys.stderr)
         return 1
 

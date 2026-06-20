@@ -12,8 +12,7 @@ from wybra.assets import (
     StaticCollectionError,
     StaticCollectionStatus,
     StaticCollectResult,
-    collect_static_assets,
-    static_sources_from_modules,
+    collect_configured_static_assets,
 )
 from wybra.core.composition import CompositionError
 from wybra.core.exceptions import ConfigurationError
@@ -21,7 +20,7 @@ from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
     CONFIG_SOURCE_OPTION,
-    load_required_app_config,
+    normalise_cli_config_source,
 )
 from wybra.tools.project import (
     ProjectToolConfigurationError,
@@ -60,18 +59,15 @@ def collect_command(
 ) -> int:
     try:
         project_root = runtime_project_root()
-        app_config = load_required_app_config(
+        result = collect_configured_static_assets(
             project_root=project_root,
-            config_source=config_source,
-        )
-        result = collect_static_assets(
-            static_sources_from_modules(app_config.modules),
-            root=_collection_root(
-                app_config.project_root,
-                destination or app_config.assets.root,
+            config_path=(
+                Path(normalise_cli_config_source(config_source))
+                if config_source is not None
+                else None
             ),
             delete=delete,
-            export_mode=app_config.assets.export_mode,
+            root=destination,
         )
     except (CompositionError, ConfigurationError, ProjectToolConfigurationError) as exc:
         print("configuration: failed", file=sys.stderr)
@@ -84,10 +80,6 @@ def collect_command(
 
     _print_collection_result(result)
     return 0
-
-
-def _collection_root(project_root: Path, root: Path) -> Path:
-    return root if root.is_absolute() else project_root / root
 
 
 def _print_collection_result(

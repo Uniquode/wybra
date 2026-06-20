@@ -10,7 +10,7 @@ from wybra.config.sources import (
     FileConfigSource,
     MappingConfigSource,
 )
-from wybra.config.transforms import to_bool, to_path
+from wybra.config.transforms import to_bool, to_path, to_raw_path, to_url_path
 from wybra.config.types import (
     ConfigDef,
     ConfigDefinitionError,
@@ -56,4 +56,6 @@ __all__ = (
     "discover_module_config_defs",
     "to_bool",
     "to_path",
+    "to_raw_path",
+    "to_url_path",
 )
