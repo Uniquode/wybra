@@ -8,12 +8,8 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import Response
 
-from wybra.assets import (
-    static_app_from_config,
-    static_asset_storage,
-    static_sources_from_modules,
-)
-from wybra.site import Site
+from wybra.assets import StaticAssetCapability
+from wybra.site import Site, SiteCapabilityProxy, get_site
 from wybra.site_config import app_config_from_site
 from wybra.utils.paths import resolve_project_path
 from wybra.web.config import WebSettings, module_config
@@ -41,11 +37,7 @@ TEMPLATE_CONTEXT_MIDDLEWARE_STATE_ATTRIBUTE = (
 
 async def setup_site(site: Site) -> None:
     app_config = app_config_from_site(site)
-    static_mount_path = _normalise_static_mount_path(app_config.assets.url_path)
-    site.app.state.static_mount_path = static_mount_path
-    site.app.state.static_asset_storage = static_asset_storage(
-        app_config.assets.export_mode
-    )
+    asset_capability = site.capability_proxy(StaticAssetCapability)
 
     csrf = getattr(site.app.state, "csrf", None)
     if csrf is None:
@@ -81,20 +73,10 @@ async def setup_site(site: Site) -> None:
     )
     register_error_handlers(
         site.app,
-        options=ErrorHandlerOptions(static_mount_path=static_mount_path),
+        options=ErrorHandlerOptions(
+            static_mount_path=lambda: _optional_static_mount_path(asset_capability)
+        ),
     )
-    if app_config.assets.serve:
-        site.app.mount(
-            static_mount_path,
-            static_app_from_config(
-                project_root=app_config.project_root,
-                static_root=None,
-                static_sources=static_sources_from_modules(site.modules),
-                cors=app_config.assets.cors,
-                url_path=static_mount_path,
-            ),
-            name="static",
-        )
     register_module_routes(
         site.app,
         load_module_routes(
@@ -129,20 +111,19 @@ def _register_template_context_middleware(site: Site) -> None:
 
 def _should_resolve_template_context(request: Request) -> bool:
     path = request.url.path
-    static_mount_path = getattr(request.app.state, "static_mount_path", "/static")
-    return not (
-        _matches_path_prefix(path, static_mount_path)
-        or _matches_path_prefix(path, API_PATH_PREFIX)
+    static_mount_path = _optional_static_mount_path(
+        get_site(request.app).capability_proxy(StaticAssetCapability)
     )
+    is_static_path = static_mount_path is not None and _matches_path_prefix(
+        path,
+        static_mount_path,
+    )
+    return not (is_static_path or _matches_path_prefix(path, API_PATH_PREFIX))
 
 
 def _matches_path_prefix(path: str, prefix: str) -> bool:
     normalised_prefix = "/" + prefix.strip("/")
     return path == normalised_prefix or path.startswith(f"{normalised_prefix}/")
-
-
-def _normalise_static_mount_path(url_path: str) -> str:
-    return f"/{url_path.strip('/')}"
 
 
 def _template_root(project_root: Path, template_root: Path | None) -> Path | None:
@@ -151,6 +132,19 @@ def _template_root(project_root: Path, template_root: Path | None) -> Path | Non
 
 def _request_context_enabled(site: Site) -> bool:
     return WebSettings.load_settings(site.config).request_context_enabled
+
+
+def _optional_static_mount_path(
+    proxy: SiteCapabilityProxy[StaticAssetCapability],
+) -> str | None:
+    capability = proxy.optional()
+    if capability is None:
+        return None
+    return _normalise_static_mount_path(capability.url_path)
+
+
+def _normalise_static_mount_path(url_path: str) -> str:
+    return "/" + url_path.strip("/")
 
 
 __all__ = [

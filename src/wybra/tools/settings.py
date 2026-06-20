@@ -41,6 +41,7 @@ class ProjectSettings(BaseSettings):
     database_url: str | None = None
     template_root: Path | None = None
     static_root: Path | None = None
+    static_root_configured: bool = False
     migrations_root: Path | None = None
     static_url_path: str = "/static/"
     media_root: Path | None = None
@@ -133,7 +134,7 @@ class ProjectSettings(BaseSettings):
 
     @property
     def uses_filesystem_static_root(self) -> bool:
-        return self.static_root is not None
+        return self.static_root_configured and self.static_root is not None
 
 
 def load_project_settings(
@@ -206,8 +207,6 @@ def _project_settings_kwargs(
     for field_name in ("migrations_root",):
         if field_name in app_values:
             settings_kwargs[field_name] = app_values[field_name]
-    if "root" in static_values:
-        settings_kwargs["static_root"] = static_values["root"]
     if "root" in template_values:
         settings_kwargs["template_root"] = template_values["root"]
     if "root" in media_values:

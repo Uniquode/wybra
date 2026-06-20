@@ -294,7 +294,6 @@ account_creation_policy = "closed"
     assert service.get_config("app.assets") == {
         "url_path": "/static",
         "root": Path("static"),
-        "root_configured": True,
         "export_mode": "normal",
         "serve": True,
     }
@@ -902,7 +901,6 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
     assert service.get_config("app.assets") == {
         "url_path": "/assets/",
         "root": Path("static"),
-        "root_configured": False,
         "export_mode": "normal",
         "serve": True,
     }

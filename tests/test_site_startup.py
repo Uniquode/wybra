@@ -167,13 +167,16 @@ async def test_start_composes_existing_fastapi_app_from_file_source(
     tmp_path: Path,
 ) -> None:
     app = FastAPI(title="Host app")
-    config_path = _write_app_config(tmp_path / "app.toml", modules=("wybra.web",))
+    config_path = _write_app_config(
+        tmp_path / "app.toml",
+        modules=("wybra.assets", "wybra.web"),
+    )
 
     site = await start(app, config_source=str(config_path))
 
     assert isinstance(site, Site)
     assert site.app is app
-    assert site.modules == ("wybra.web",)
+    assert site.modules == ("wybra.assets", "wybra.web")
     assert site.has_module("wybra.web") is True
     assert site.has_module("wybra.auth") is False
 
@@ -183,12 +186,15 @@ async def test_start_accepts_relative_file_source_string(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _write_app_config(tmp_path / "app.toml", modules=("wybra.web",))
+    _write_app_config(
+        tmp_path / "app.toml",
+        modules=("wybra.assets", "wybra.web"),
+    )
     monkeypatch.chdir(tmp_path)
 
     site = await start(FastAPI(), config_source="app.toml")
 
-    assert site.modules == ("wybra.web",)
+    assert site.modules == ("wybra.assets", "wybra.web")
 
 
 @pytest.mark.anyio
@@ -197,7 +203,10 @@ async def test_start_uses_app_root_environment_for_app_config(
 ) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
-    _write_app_config(project_root / "app.toml", modules=("wybra.web",))
+    _write_app_config(
+        project_root / "app.toml",
+        modules=("wybra.assets", "wybra.web"),
+    )
 
     site = await start(
         FastAPI(),
@@ -219,7 +228,10 @@ async def test_start_app_config_does_not_override_project_root(
     project_root = tmp_path / "project"
     config_root = project_root / "config"
     config_root.mkdir(parents=True)
-    _write_app_config(config_root / "app.toml", modules=("wybra.web",))
+    _write_app_config(
+        config_root / "app.toml",
+        modules=("wybra.assets", "wybra.web"),
+    )
 
     site = await start(
         FastAPI(),
@@ -241,7 +253,10 @@ async def test_start_relative_config_source_uses_supplied_app_root(
     project_root = tmp_path / "project"
     config_root = project_root / "config"
     config_root.mkdir(parents=True)
-    _write_app_config(config_root / "app.toml", modules=("wybra.web",))
+    _write_app_config(
+        config_root / "app.toml",
+        modules=("wybra.assets", "wybra.web"),
+    )
 
     site = await start(
         FastAPI(),
@@ -284,12 +299,12 @@ async def test_start_environment_overrides_database_url_and_deployment_environme
 async def test_start_accepts_file_uri_source_string(tmp_path: Path) -> None:
     config_path = _write_app_config(
         tmp_path / "app.toml",
-        modules=("wybra.web",),
+        modules=("wybra.assets", "wybra.web"),
     )
 
     site = await start(FastAPI(), config_source=config_path.as_uri())
 
-    assert site.modules == ("wybra.web",)
+    assert site.modules == ("wybra.assets", "wybra.web")
 
 
 @pytest.mark.anyio
@@ -511,7 +526,7 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
     app_config = AppConfig(
         config_path=tmp_path / "app.toml",
         project_root=tmp_path,
-        modules=("wybra.web",),
+        modules=("wybra.assets", "wybra.web"),
         routes=RouteOptions(prefixes={}),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
         assets=AssetOptions(url_path="/static/"),
@@ -519,7 +534,7 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
 
     site = await start(FastAPI(), config_source=app_config)
 
-    assert site.modules == ("wybra.web",)
+    assert site.modules == ("wybra.assets", "wybra.web")
     assert site.has_module("wybra.web") is True
 
 
@@ -528,12 +543,12 @@ async def test_start_accepts_config_source_object() -> None:
     site = await start(
         FastAPI(),
         config_source=MappingConfigSource(
-            {"app": {"modules": ("wybra.web",)}},
+            {"app": {"modules": ("wybra.assets", "wybra.web")}},
             source="test",
         ),
     )
 
-    assert site.modules == ("wybra.web",)
+    assert site.modules == ("wybra.assets", "wybra.web")
 
 
 @pytest.mark.anyio

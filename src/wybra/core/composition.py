@@ -44,10 +44,13 @@ class TemplateOptions:
 class AssetOptions:
     url_path: str
     root: Path = DEFAULT_ASSET_ROOT
-    root_configured: bool = False
     export_mode: AssetExportMode = AssetExportMode.NORMAL
     serve: bool = True
     cors: AssetCorsOptions = field(default_factory=AssetCorsOptions)
+
+    def __post_init__(self) -> None:
+        if self.root is None:
+            object.__setattr__(self, "root", DEFAULT_ASSET_ROOT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,7 +412,6 @@ def _load_asset_options(data: dict[str, Any]) -> AssetOptions:
                 DEFAULT_ASSET_ROOT.as_posix(),
             )
         ),
-        root_configured="root" in asset_data,
         export_mode=_asset_export_mode(asset_data),
         serve=_bool_from_config(asset_data, "app.assets.serve", True),
         cors=_load_asset_cors_options(asset_data),
