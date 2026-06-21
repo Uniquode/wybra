@@ -19,7 +19,8 @@ def render_nginx_cors_config(policy_set: CorsPolicySet) -> str:
 
 def _location_block(path: str, policy: CorsPolicy) -> list[str]:
     location = "/" if path == "/" else path.rstrip("/")
-    lines = [f"location {location}/ {{"]
+    location_path = "/" if location == "/" else f"{location}/"
+    lines = [f"location {location_path} {{"]
     for header, value in _cors_headers(policy):
         lines.append(f"    add_header {header} {_nginx_quote(value)} always;")
     lines.append("}")
@@ -27,17 +28,22 @@ def _location_block(path: str, policy: CorsPolicy) -> list[str]:
 
 
 def _cors_headers(policy: CorsPolicy) -> tuple[tuple[str, str], ...]:
-    return (
+    headers = [
         ("Access-Control-Allow-Origin", " ".join(policy.allow_origins)),
         ("Access-Control-Allow-Methods", ", ".join(policy.allow_methods)),
-        ("Access-Control-Allow-Headers", ", ".join(policy.allow_headers)),
-        ("Access-Control-Expose-Headers", ", ".join(policy.expose_headers)),
-        (
-            "Access-Control-Allow-Credentials",
-            "true" if policy.allow_credentials else "false",
-        ),
         ("Access-Control-Max-Age", str(policy.max_age)),
-    )
+    ]
+    if policy.allow_headers:
+        headers.append(
+            ("Access-Control-Allow-Headers", ", ".join(policy.allow_headers))
+        )
+    if policy.expose_headers:
+        headers.append(
+            ("Access-Control-Expose-Headers", ", ".join(policy.expose_headers))
+        )
+    if policy.allow_credentials:
+        headers.append(("Access-Control-Allow-Credentials", "true"))
+    return tuple(headers)
 
 
 def _nginx_quote(value: str) -> str:

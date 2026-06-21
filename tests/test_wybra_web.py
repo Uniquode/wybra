@@ -69,6 +69,7 @@ from wybra.security import (
     SecurityHeaderOptions,
     cross_origin_opener_policy,
     register_security_headers,
+    render_nginx_cors_config,
 )
 from wybra.site import Site, SiteCapabilityError, start
 from wybra.template import (
@@ -4004,6 +4005,54 @@ def test_static_collect_command_writes_nginx_cors_config(
     assert 'add_header Access-Control-Allow-Origin "https://example.com" always;' in (
         nginx_config.read_text(encoding="utf-8")
     )
+
+
+def test_render_nginx_cors_config_uses_single_slash_root_location() -> None:
+    config = render_nginx_cors_config(
+        CorsPolicySet(
+            enabled=True,
+            allow_origins=("https://example.com",),
+        )
+    )
+
+    assert "location / {" in config
+    assert "location // {" not in config
+
+
+def test_render_nginx_cors_config_omits_blank_optional_headers() -> None:
+    config = render_nginx_cors_config(
+        CorsPolicySet(
+            enabled=True,
+            allow_origins=("https://example.com",),
+            allow_methods=("GET", "HEAD"),
+        )
+    )
+
+    assert "Access-Control-Allow-Headers" not in config
+    assert "Access-Control-Expose-Headers" not in config
+    assert "Access-Control-Allow-Credentials" not in config
+
+
+def test_render_nginx_cors_config_includes_configured_optional_headers() -> None:
+    config = render_nginx_cors_config(
+        CorsPolicySet(
+            enabled=True,
+            allow_origins=("https://example.com",),
+            allow_headers=("Authorization",),
+            expose_headers=("ETag",),
+            allow_credentials=True,
+            paths={
+                "/private/": CorsPolicy(
+                    allow_origins=("https://admin.example.com",),
+                ),
+            },
+        )
+    )
+
+    assert "location /private/ {" in config
+    assert 'add_header Access-Control-Allow-Headers "Authorization" always;' in config
+    assert 'add_header Access-Control-Expose-Headers "ETag" always;' in config
+    assert 'add_header Access-Control-Allow-Credentials "true" always;' in config
 
 
 def test_static_collect_command_writes_nginx_cors_for_replacement_provider(
