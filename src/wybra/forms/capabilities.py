@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from typing import Any, Protocol, runtime_checkable
 
 from fastapi import Request
@@ -62,6 +63,7 @@ def forms_provider_configured(modules: tuple[str, ...]) -> bool:
     )
 
 
+@cache
 def _module_provides_forms_capability(module_name: str) -> bool:
     from importlib import import_module
 

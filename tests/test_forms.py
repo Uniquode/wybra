@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
@@ -14,6 +15,7 @@ from wybra.forms import (
     FormsCapability,
     FormsSettings,
     csrf_exempt,
+    request_csrf_response_finalisation,
     request_form_data,
     validate_csrf,
 )
@@ -265,6 +267,42 @@ async def test_forms_setup_provides_forms_capability(tmp_path) -> None:
 
     assert site.require_capability(FormsCapability)
     assert isinstance(app.state.csrf, CsrfProtector)
+
+
+@pytest.mark.anyio
+async def test_forms_setup_finalises_csrf_cookie_when_requested(tmp_path) -> None:
+    app = FastAPI()
+
+    @app.get("/form")
+    async def form(request: Request) -> PlainTextResponse:
+        request_csrf_response_finalisation(request)
+        return PlainTextResponse("ok")
+
+    @app.get("/partials/form")
+    async def partial_form() -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.forms",),
+                },
+            }
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/form")
+        partial_response = client.get("/partials/form")
+
+    assert response.status_code == 200
+    assert CSRF_COOKIE_NAME in response.cookies
+    assert partial_response.status_code == 200
+    assert CSRF_COOKIE_NAME not in partial_response.cookies
 
 
 @pytest.mark.anyio
