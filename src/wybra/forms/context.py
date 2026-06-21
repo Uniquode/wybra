@@ -15,7 +15,7 @@ def forms_context(request: Request, context: TemplateContext) -> TemplateContext
     return context.with_layer(capability.token_context(request))
 
 
-add_to_context(forms_context, module_name="wybra.forms")
+add_to_context(forms_context)
 
 
 __all__ = ("forms_context",)
