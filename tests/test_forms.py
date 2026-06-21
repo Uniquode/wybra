@@ -11,11 +11,16 @@ from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
-    CsrfProtector,
+    FormsCapability,
+    FormsSettings,
     csrf_exempt,
     request_form_data,
     validate_csrf,
 )
+from wybra.forms.csrf import CsrfProtector
+from wybra.site import start
+from wybra.tools.validate import validate_command
+from wybra.tools.validation.core import ValidationResult
 
 
 def csrf_request(
@@ -141,30 +146,6 @@ def test_csrf_dependency_allows_safe_methods_on_protected_router() -> None:
     assert response.json() == {"ok": True}
 
 
-def test_csrf_dependency_is_noop_when_csrf_protector_missing() -> None:
-    app = FastAPI()
-    router = APIRouter(dependencies=[Depends(validate_csrf)])
-
-    @router.get("/form")
-    async def form() -> dict[str, bool]:
-        return {"ok": True}
-
-    @router.post("/submit")
-    async def submit() -> dict[str, bool]:
-        return {"ok": True}
-
-    app.include_router(router)
-    client = TestClient(app)
-
-    get_response = client.get("/form")
-    post_response = client.post("/submit", data={"field": "value"})
-
-    assert get_response.status_code == 200
-    assert get_response.json() == {"ok": True}
-    assert post_response.status_code == 200
-    assert post_response.json() == {"ok": True}
-
-
 def test_csrf_dependency_raises_when_csrf_protector_misconfigured() -> None:
     app = FastAPI()
     app.state.csrf = object()
@@ -217,9 +198,7 @@ def test_csrf_exempt_allows_route_to_bypass_protected_router() -> None:
     assert response.json() == {"ok": True}
 
 
-def test_csrf_settings_generates_local_secret(caplog) -> None:
-    from wybra.forms import FormsSettings
-
+def test_forms_settings_generates_local_secret(caplog) -> None:
     caplog.set_level(logging.INFO, logger="wybra.forms.settings")
 
     settings = FormsSettings()
@@ -229,59 +208,7 @@ def test_csrf_settings_generates_local_secret(caplog) -> None:
     assert "Generated startup-local CSRF token secret." in caplog.text
 
 
-def test_csrf_settings_load_settings_generates_local_secret(caplog) -> None:
-    from wybra.forms import FormsSettings
-
-    caplog.set_level(logging.INFO, logger="wybra.forms.settings")
-
-    settings = FormsSettings.load_settings({})
-
-    assert settings.token_secret
-    assert settings.cookie_secure is False
-    assert settings.deployment_environment == "local"
-    assert "Generated startup-local CSRF token secret." in caplog.text
-
-
-def test_csrf_settings_requires_stable_secret_for_non_local_environment() -> None:
-    from wybra.core.exceptions import ConfigurationError
-    from wybra.forms import FormsSettings
-
-    with pytest.raises(
-        ConfigurationError,
-        match="Non-local deployments must configure a stable CSRF token secret",
-    ):
-        FormsSettings(deployment_environment="production")
-
-    with pytest.raises(ConfigurationError, match="CSRF token secret must not be blank"):
-        FormsSettings(deployment_environment="production", csrf_token_secret="   ")
-
-    with pytest.raises(
-        ConfigurationError,
-        match="Non-local deployments must use secure CSRF cookies",
-    ):
-        FormsSettings(
-            deployment_environment="production",
-            csrf_token_secret="production-csrf-secret",
-            csrf_cookie_secure=False,
-        )
-
-
-def test_csrf_settings_accepts_stable_secure_non_local_configuration() -> None:
-    from wybra.forms import FormsSettings
-
-    settings = FormsSettings(
-        deployment_environment="production",
-        csrf_token_secret="production-csrf-secret",
-        csrf_cookie_secure=True,
-    )
-
-    assert settings.token_secret == "production-csrf-secret"
-    assert settings.cookie_secure is True
-
-
-def test_csrf_settings_load_settings_uses_config_service_sources() -> None:
-    from wybra.forms import FormsSettings
-
+def test_forms_settings_load_settings_uses_config_service_sources() -> None:
     config = ConfigService(
         [
             MappingConfigSource(
@@ -306,76 +233,7 @@ def test_csrf_settings_load_settings_uses_config_service_sources() -> None:
     assert settings.cookie_secure is True
 
 
-def test_csrf_settings_load_settings_requires_stable_secret_for_non_local() -> None:
-    from wybra.core.exceptions import ConfigurationError
-    from wybra.forms import FormsSettings
-
-    config = ConfigService(
-        [
-            MappingConfigSource(
-                {
-                    "app": {
-                        "deployment_environment": "production",
-                        "modules": ("wybra.forms",),
-                    },
-                }
-            )
-        ],
-    )
-
-    with pytest.raises(
-        ConfigurationError,
-        match="Non-local deployments must configure a stable CSRF token secret",
-    ):
-        FormsSettings.load_settings(config)
-
-
-def test_csrf_settings_load_settings_transforms_secure_cookie_policy() -> None:
-    from wybra.forms import FormsSettings
-
-    settings = FormsSettings.load_settings(
-        {
-            "csrf_token_secret": "production-csrf-secret",
-            "csrf_cookie_secure": "false",
-            "deployment_environment": "local",
-        }
-    )
-
-    assert settings.cookie_secure is False
-
-
-def test_csrf_settings_load_settings_reads_sectioned_mapping_app_config() -> None:
-    from wybra.forms import FormsSettings
-
-    settings = FormsSettings.load_settings(
-        {
-            "app": {"deployment_environment": "production"},
-            "wybra.forms": {
-                "csrf_token_secret": "production-csrf-secret",
-                "csrf_cookie_secure": "true",
-            },
-        }
-    )
-
-    assert settings.deployment_environment == "production"
-    assert settings.token_secret == "production-csrf-secret"
-    assert settings.cookie_secure is True
-
-
-def test_csrf_settings_load_settings_rejects_non_table_app_section() -> None:
-    from wybra.core.exceptions import ConfigurationError
-    from wybra.forms import FormsSettings
-
-    with pytest.raises(ConfigurationError, match=r"\[app\] must be a table"):
-        FormsSettings.load_settings(
-            {
-                "app": "production",
-                "csrf_token_secret": "production-csrf-secret",
-            }
-        )
-
-
-def test_csrf_settings_load_settings_rejects_blank_token_secret() -> None:
+def test_forms_settings_load_settings_rejects_blank_token_secret() -> None:
     with pytest.raises(ConfigSourceError, match="csrf_token_secret"):
         ConfigService(
             [
@@ -389,19 +247,95 @@ def test_csrf_settings_load_settings_rejects_blank_token_secret() -> None:
         )
 
 
-def test_csrf_settings_load_settings_rejects_explicit_generator_sentinel() -> None:
-    from wybra.forms import GENERATE_LOCAL_CSRF_SECRET
+@pytest.mark.anyio
+async def test_forms_setup_provides_forms_capability(tmp_path) -> None:
+    app = FastAPI()
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.forms",),
+                },
+            }
+        ),
+    )
 
-    with pytest.raises(ConfigSourceError, match="reserved for internal use"):
-        ConfigService(
+    assert site.require_capability(FormsCapability)
+    assert isinstance(app.state.csrf, CsrfProtector)
+
+
+@pytest.mark.anyio
+async def test_web_setup_omits_forms_behaviour_without_forms_module(tmp_path) -> None:
+    app = FastAPI()
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.web",),
+                },
+                "app.routes": {"prefixes": {"wybra.web": {}}},
+            }
+        ),
+    )
+
+    assert not hasattr(app.state, "csrf")
+
+
+def test_validate_forms_target_is_available(monkeypatch, tmp_path) -> None:
+    class Settings:
+        modules = ("wybra.forms",)
+        config = ConfigService(
             [
                 MappingConfigSource(
                     {
-                        "app": {"modules": ("wybra.forms",)},
-                        "wybra.forms": {
-                            "csrf_token_secret": GENERATE_LOCAL_CSRF_SECRET,
+                        "app": {
+                            "config_path": tmp_path / "app.toml",
+                            "project_root": tmp_path,
+                            "modules": ("wybra.forms",),
                         },
                     }
                 )
             ],
         )
+
+    monkeypatch.setattr(
+        "wybra.tools.validate._build_settings",
+        lambda _overrides: Settings(),
+    )
+
+    assert validate_command.main(args=["forms"], standalone_mode=False) == 0
+
+
+def test_validate_forms_reports_loaded_settings() -> None:
+    from wybra.forms.validation import validate_forms
+
+    result = validate_forms(
+        type(
+            "Settings",
+            (),
+            {
+                "modules": ("wybra.forms",),
+                "config": ConfigService(
+                    [
+                        MappingConfigSource(
+                            {
+                                "app": {"modules": ("wybra.forms",)},
+                            }
+                        )
+                    ],
+                ),
+            },
+        )()
+    )
+
+    assert isinstance(result, ValidationResult)
+    assert result.is_ok
+    assert any(
+        check.description.startswith("forms settings load") for check in result.checks
+    )

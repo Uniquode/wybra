@@ -413,7 +413,7 @@ def test_validate_command_runs_discovered_module_targets(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out == (
-        "assets: ok\nsecurity: ok\ntemplate: ok\ncommand-target: ok\n"
+        "assets: ok\nforms: ok\nsecurity: ok\ntemplate: ok\ncommand-target: ok\n"
     )
     assert captured.err == ""
 

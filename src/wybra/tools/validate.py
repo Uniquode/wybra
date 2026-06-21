@@ -8,6 +8,7 @@ import click
 
 from wybra.assets.validation import validate_assets
 from wybra.core.exceptions import ConfigurationError
+from wybra.forms.validation import validate_forms
 from wybra.security.validation import validate_security
 from wybra.template.validation import validate_template
 from wybra.tools.project import (
@@ -36,6 +37,7 @@ class UnknownValidationTargetError(ValueError):
 
 BUILTIN_VALIDATION_TARGETS: Mapping[str, ValidationTarget] = {
     "assets": validate_assets,
+    "forms": validate_forms,
     "security": validate_security,
     "template": validate_template,
 }

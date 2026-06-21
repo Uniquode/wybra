@@ -13,7 +13,7 @@ from wybra.site import SiteCapabilityError, start
 def _site_config_source(
     tmp_path: Path,
     *,
-    modules: tuple[str, ...] = ("wybra.db", "wybra.auth"),
+    modules: tuple[str, ...] = ("wybra.forms", "wybra.db", "wybra.auth"),
 ) -> MappingConfigSource:
     return MappingConfigSource(
         {
@@ -62,7 +62,10 @@ async def test_wybra_auth_setup_site_allows_database_provider_later(
     app = FastAPI()
     site = await start(
         app,
-        config_source=_site_config_source(tmp_path, modules=("wybra.auth", "wybra.db")),
+        config_source=_site_config_source(
+            tmp_path,
+            modules=("wybra.forms", "wybra.auth", "wybra.db"),
+        ),
     )
 
     assert site.has_capability(DatabaseCapability) is True
@@ -76,7 +79,10 @@ async def test_wybra_auth_post_setup_site_requires_database_capability(
     with pytest.raises(SiteCapabilityError, match="Missing capability"):
         await start(
             FastAPI(),
-            config_source=_site_config_source(tmp_path, modules=("wybra.auth",)),
+            config_source=_site_config_source(
+                tmp_path,
+                modules=("wybra.forms", "wybra.auth"),
+            ),
         )
 
 

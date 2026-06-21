@@ -37,17 +37,10 @@ class TemplateCapability(Protocol):
     ) -> HTMLResponse: ...
 
 
-class TemplateCsrfProtector(Protocol):
-    def token_context(self, request: Request) -> dict[str, Any]: ...
-
-    def set_cookie(self, request: Request, response: HTMLResponse) -> None: ...
-
-
 @dataclass(slots=True)
 class DefaultTemplateCapability:
     template_sources: tuple[PackageResourceSource, ...] = ()
     template_root: Path | None = None
-    csrf: TemplateCsrfProtector | None = None
     assets: SiteCapabilityProxy[StaticAssetCapability] | None = None
     include_request_context: bool = True
     auto_reload: bool | None = None
@@ -82,15 +75,12 @@ class DefaultTemplateCapability:
         *,
         status_code: int = 200,
     ) -> HTMLResponse:
-        response = self._render_response(
+        return self._render_response(
             request,
             template_name,
             context,
             status_code=status_code,
         )
-        if self.csrf is not None:
-            self.csrf.set_cookie(request, response)
-        return response
 
     def render_partial(
         self,
@@ -142,8 +132,6 @@ class DefaultTemplateCapability:
         }
         if self.include_request_context:
             protected_context["request"] = request
-        if self.csrf is not None:
-            protected_context.update(self.csrf.token_context(request))
         return protected_context
 
     def _resolve_asset_url(self) -> Callable[[str], str]:

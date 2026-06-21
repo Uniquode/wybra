@@ -29,6 +29,7 @@ from wybra.auth.sessions import (
 )
 from wybra.auth.settings import AuthSettings
 from wybra.db.capabilities import DatabaseCapability
+from wybra.forms import FormsCapability
 from wybra.site import Site, get_site
 from wybra.site_config import app_config_from_site
 
@@ -113,6 +114,7 @@ async def setup_site(site: Site) -> None:
 
 async def post_setup_site(site: Site) -> None:
     site.require_capability(DatabaseCapability)
+    site.require_capability(FormsCapability)
 
 
 def _register_session_cookie_cleanup_middleware(

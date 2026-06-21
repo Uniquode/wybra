@@ -12,8 +12,8 @@ from wybra.auth.sessions import (
     resolve_current_user,
     verify_user,
 )
+from wybra.forms import request_form_data
 from wybra.template import render_page
-from wybra.web.forms.csrf import request_form_data
 
 from .shared import (
     _form_value,

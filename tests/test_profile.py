@@ -123,6 +123,7 @@ async def test_profile_setup_registers_profile_capability_before_media_exists() 
                     "modules": (
                         "wybra.profile",
                         "wybra.media",
+                        "wybra.forms",
                         "wybra.auth",
                         "wybra.db",
                     ),

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import hashlib
 import hmac
@@ -11,7 +13,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from starlette.datastructures import FormData
 
-from wybra.web.forms.security import is_form_content_type, is_safe_method
+from wybra.forms.security import is_form_content_type, is_safe_method
 
 CSRF_COOKIE_NAME = "wybra_web_csrf"
 CSRF_FIELD_NAME = "csrf_token"
@@ -20,6 +22,7 @@ CSRF_FORM_DATA_STATE_ATTR = "csrf_form_data"
 CSRF_MAX_FORM_BODY_BYTES = 1_048_576
 CSRF_NONCE_MAX_LENGTH = 256
 CSRF_NONCE_MIN_LENGTH = 32
+CSRF_RESPONSE_FINALISATION_STATE_ATTR = "wybra_forms_csrf_finalise_response"
 CSRF_TOKEN_BYTES = 32
 CSRF_TOKEN_SEPARATOR = "."
 CSRF_EXEMPT_ENDPOINT_ATTR = "__wybra_csrf_exempt__"
@@ -55,6 +58,14 @@ async def validate_csrf(request: Request) -> None:
 
     if not await protector.validate_request(request):
         raise HTTPException(status_code=403, detail="Invalid CSRF token.")
+
+
+def request_csrf_response_finalisation(request: Request) -> None:
+    setattr(request.state, CSRF_RESPONSE_FINALISATION_STATE_ATTR, True)
+
+
+def csrf_response_finalisation_requested(request: Request) -> bool:
+    return bool(getattr(request.state, CSRF_RESPONSE_FINALISATION_STATE_ATTR, False))
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,3 +195,24 @@ class CsrfProtector:
             },
         )
         return False
+
+
+__all__ = (
+    "CSRF_COOKIE_NAME",
+    "CSRF_EXEMPT_ENDPOINT_ATTR",
+    "CSRF_FIELD_NAME",
+    "CSRF_FORM_DATA_STATE_ATTR",
+    "CSRF_HEADER_NAME",
+    "CSRF_MAX_FORM_BODY_BYTES",
+    "CSRF_NONCE_MAX_LENGTH",
+    "CSRF_NONCE_MIN_LENGTH",
+    "CSRF_RESPONSE_FINALISATION_STATE_ATTR",
+    "CSRF_TOKEN_BYTES",
+    "CSRF_TOKEN_SEPARATOR",
+    "CsrfProtector",
+    "csrf_exempt",
+    "csrf_response_finalisation_requested",
+    "request_csrf_response_finalisation",
+    "request_form_data",
+    "validate_csrf",
+)
