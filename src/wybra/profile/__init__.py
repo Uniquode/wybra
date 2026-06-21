@@ -1,5 +1,7 @@
 """User profile infrastructure."""
 
+from wybra.auth import AuthCapability
+from wybra.db import DatabaseCapability
 from wybra.media import MediaCapability
 from wybra.profile.capabilities import (
     ProfileCapability,
@@ -20,6 +22,14 @@ async def setup_site(site: Site) -> None:
     )
 
 
+async def post_setup_site(site: Site) -> None:
+    site.require_capability(AuthCapability)
+    site.require_capability(DatabaseCapability)
+    capability = site.require_capability(ProfileCapability)
+    if isinstance(capability, SiteProfileCapability):
+        capability.media.finalise_optional()
+
+
 __all__ = (
     "ProfileCapability",
     "ProfileCapabilityError",
@@ -28,5 +38,6 @@ __all__ = (
     "ProfileUser",
     "SiteProfileCapability",
     "profile_picture_storage_key",
+    "post_setup_site",
     "setup_site",
 )

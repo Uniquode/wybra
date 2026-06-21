@@ -67,6 +67,7 @@ _EXPORTS = {
     "module_config": "wybra.auth.settings",
     "required_authentication_methods_for_totp_policy": "wybra.auth.mfa.challenges",
     "optional_current_user": "wybra.auth.capabilities",
+    "post_setup_site": "wybra.auth.capabilities",
     "setup_site": "wybra.auth.capabilities",
     "validate_auth_settings": "wybra.auth.settings",
     "supported_auth_environment_names": "wybra.auth.settings",

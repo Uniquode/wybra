@@ -56,7 +56,21 @@ async def test_wybra_auth_setup_site_registers_auth_capability(
 
 
 @pytest.mark.anyio
-async def test_wybra_auth_setup_site_requires_database_capability(
+async def test_wybra_auth_setup_site_allows_database_provider_later(
+    tmp_path: Path,
+) -> None:
+    app = FastAPI()
+    site = await start(
+        app,
+        config_source=_site_config_source(tmp_path, modules=("wybra.auth", "wybra.db")),
+    )
+
+    assert site.has_capability(DatabaseCapability) is True
+    assert site.has_capability(AuthCapability) is True
+
+
+@pytest.mark.anyio
+async def test_wybra_auth_post_setup_site_requires_database_capability(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(SiteCapabilityError, match="Missing capability"):

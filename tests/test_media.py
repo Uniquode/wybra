@@ -24,7 +24,7 @@ from wybra.media import (
 )
 from wybra.media.models import MediaItem
 from wybra.media.validation import validate_media
-from wybra.site import Site, start
+from wybra.site import Site, SiteCapabilityError, start
 
 _CREATED_SITES: list[Site] = []
 
@@ -435,7 +435,8 @@ async def test_media_setup_registers_capability_and_serves_files(
             {
                 "app": {
                     "project_root": tmp_path,
-                    "modules": ("wybra.media",),
+                    "modules": ("wybra.media", "wybra.db"),
+                    "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
                 },
                 "wybra.media": {"root": "media", "mount_path": "/media"},
             }
@@ -450,6 +451,45 @@ async def test_media_setup_registers_capability_and_serves_files(
 
 
 @pytest.mark.anyio
+async def test_media_setup_registers_capability_before_database_exists(
+    tmp_path: Path,
+) -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "project_root": tmp_path,
+                    "modules": ("wybra.media", "wybra.db"),
+                    "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+                },
+                "wybra.media": {"root": "media", "mount_path": "/media"},
+            }
+        ),
+    )
+
+    assert site.has_capability(MediaCapability) is True
+    assert site.has_capability(DatabaseCapability) is True
+
+
+@pytest.mark.anyio
+async def test_media_post_setup_requires_database_capability(tmp_path: Path) -> None:
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "project_root": tmp_path,
+                        "modules": ("wybra.media",),
+                    },
+                    "wybra.media": {"root": "media", "mount_path": "/media"},
+                }
+            ),
+        )
+
+
+@pytest.mark.anyio
 async def test_media_setup_skips_serving_when_disabled(tmp_path: Path) -> None:
     app = FastAPI()
 
@@ -459,7 +499,8 @@ async def test_media_setup_skips_serving_when_disabled(tmp_path: Path) -> None:
             {
                 "app": {
                     "project_root": tmp_path,
-                    "modules": ("wybra.media",),
+                    "modules": ("wybra.media", "wybra.db"),
+                    "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
                 },
                 "wybra.media": {"serve": False},
             }

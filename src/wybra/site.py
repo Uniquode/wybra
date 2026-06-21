@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from importlib import import_module
 from inspect import iscoroutinefunction
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Protocol, TypeGuard, TypeVar, cast
+from typing import Any, NoReturn, Protocol, TypeGuard, TypeVar, cast
 from urllib.parse import unquote, urlparse
 
 from fastapi import FastAPI
@@ -40,7 +41,14 @@ ConfigSourceInput = str | AppConfig | ConfigSource | None
 ModuleLoader = Callable[[str], ModuleType]
 AppT = TypeVar("AppT", bound=FastAPI)
 SETUP_SITE_ATTRIBUTE = "setup_site"
+POST_SETUP_SITE_ATTRIBUTE = "post_setup_site"
 T = TypeVar("T")
+
+
+class _CapabilityProxyState(Enum):
+    UNRESOLVED = auto()
+    AVAILABLE = auto()
+    UNAVAILABLE = auto()
 
 
 class SiteLifespan(Protocol[AppT]):
@@ -178,28 +186,94 @@ class SiteCapabilityProxy[T]:
     site: Site
     capability_type: type[T]
     _capability: T | None = field(default=None, init=False, repr=False)
+    _state: _CapabilityProxyState = field(
+        default=_CapabilityProxyState.UNRESOLVED,
+        init=False,
+        repr=False,
+    )
+
+    @property
+    def finalised(self) -> bool:
+        return self._state is not _CapabilityProxyState.UNRESOLVED
+
+    @property
+    def unavailable(self) -> bool:
+        return self._state is _CapabilityProxyState.UNAVAILABLE
 
     def available(self) -> bool:
+        if self._state is _CapabilityProxyState.AVAILABLE:
+            return True
+        if self._state is _CapabilityProxyState.UNAVAILABLE:
+            return False
         return self.site.has_capability(self.capability_type)
 
     def require(self) -> T:
-        if self._capability is None:
-            self._capability = self.site.require_capability(self.capability_type)
-        return self._capability
+        if self._state is _CapabilityProxyState.AVAILABLE:
+            return self._require_cached_capability()
+        if self._state is _CapabilityProxyState.UNAVAILABLE:
+            self._raise_missing_capability()
+
+        capability = self.site.require_capability(self.capability_type)
+        self._set_available(capability)
+        return capability
 
     def optional(self) -> T | None:
-        if self._capability is not None:
-            return self._capability
+        if self._state is _CapabilityProxyState.AVAILABLE:
+            return self._require_cached_capability()
+        if self._state is _CapabilityProxyState.UNAVAILABLE:
+            return None
 
         capability = self.site.optional_capability(self.capability_type)
         if capability is None:
             return None
 
-        self._capability = capability
-        return self._capability
+        self._set_available(capability)
+        return capability
+
+    def finalise_required(self) -> T:
+        if self._state is _CapabilityProxyState.AVAILABLE:
+            return self._require_cached_capability()
+        if self._state is _CapabilityProxyState.UNAVAILABLE:
+            self._raise_missing_capability()
+
+        capability = self.require()
+        return capability
+
+    def finalise_optional(self) -> T | None:
+        if self._state is _CapabilityProxyState.AVAILABLE:
+            return self._require_cached_capability()
+        if self._state is _CapabilityProxyState.UNAVAILABLE:
+            return None
+
+        capability = self.optional()
+        if capability is None:
+            self._set_unavailable()
+            return None
+        return capability
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.require(), name)
+
+    def _set_available(self, capability: T) -> None:
+        self._capability = capability
+        self._state = _CapabilityProxyState.AVAILABLE
+
+    def _set_unavailable(self) -> None:
+        self._capability = None
+        self._state = _CapabilityProxyState.UNAVAILABLE
+
+    def _require_cached_capability(self) -> T:
+        if self._capability is None:
+            self._raise_missing_capability()
+        return self._capability
+
+    def _raise_missing_capability(self) -> NoReturn:
+        raise SiteCapabilityError(
+            structured_error(
+                "Missing capability",
+                capability_type=type_name(self.capability_type),
+            )
+        )
 
 
 def start_site(
@@ -392,36 +466,70 @@ def _matches_capability_type(value: object, capability_type: type[object]) -> bo
         ) from exc
 
 
-def _require_async_setup_site(module_name: str, setup_site: object) -> None:
-    if not callable(setup_site) or not iscoroutinefunction(setup_site):
+def _require_async_hook(
+    *,
+    module_name: str,
+    attribute: str,
+    hook: object,
+) -> None:
+    if not callable(hook) or not iscoroutinefunction(hook):
         raise SiteCapabilityError(
             structured_error(
-                "Configured module setup hook is invalid",
+                "Configured module hook is invalid",
                 module=module_name,
-                attribute="setup_site",
-                attribute_type=type(setup_site).__name__,
+                attribute=attribute,
+                attribute_type=type(hook).__name__,
                 expected="async_callable",
             )
         )
 
 
 async def _setup_modules(site: Site, module_loader: ModuleLoader) -> None:
+    loaded_modules: list[tuple[str, ModuleType]] = []
     for module_name in site.modules:
         module = module_loader(module_name)
+        loaded_modules.append((module_name, module))
         setup_site = getattr(module, SETUP_SITE_ATTRIBUTE, None)
         if setup_site is None:
             continue
-        _require_async_setup_site(module_name, setup_site)
-        try:
-            await setup_site(site)
-        except SiteCapabilityError:
-            raise
-        except Exception as exc:
-            raise SiteCapabilityError(
-                structured_error(
-                    "Configured module setup hook failed",
-                    module=module_name,
-                    attribute="setup_site",
-                    error_type=type(exc).__name__,
-                )
-            ) from exc
+        await _run_module_hook(
+            site,
+            module_name=module_name,
+            attribute=SETUP_SITE_ATTRIBUTE,
+            hook=setup_site,
+        )
+
+    for module_name, module in loaded_modules:
+        post_setup_site = getattr(module, POST_SETUP_SITE_ATTRIBUTE, None)
+        if post_setup_site is None:
+            continue
+        await _run_module_hook(
+            site,
+            module_name=module_name,
+            attribute=POST_SETUP_SITE_ATTRIBUTE,
+            hook=post_setup_site,
+        )
+
+
+async def _run_module_hook(
+    site: Site,
+    *,
+    module_name: str,
+    attribute: str,
+    hook: object,
+) -> None:
+    _require_async_hook(module_name=module_name, attribute=attribute, hook=hook)
+    async_hook = cast(Callable[[Site], Awaitable[None]], hook)
+    try:
+        await async_hook(site)
+    except SiteCapabilityError:
+        raise
+    except Exception as exc:
+        raise SiteCapabilityError(
+            structured_error(
+                "Configured module hook failed",
+                module=module_name,
+                attribute=attribute,
+                error_type=type(exc).__name__,
+            )
+        ) from exc

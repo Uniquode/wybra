@@ -6,8 +6,10 @@ from wybra.assets import StaticAssetCapability
 from wybra.config.transforms import to_url_path
 from wybra.site import Site, SiteCapabilityProxy
 from wybra.site_config import app_config_from_site
+from wybra.template import TemplateCapability
 from wybra.web.config import module_config
 from wybra.web.errors import ErrorHandlerOptions, register_error_handlers
+from wybra.web.routes.inspection import inspect_route_tree
 from wybra.web.routes.registration import load_module_routes, register_module_routes
 from wybra.web.security import SecurityHeaderOptions, register_security_headers
 
@@ -38,6 +40,14 @@ async def setup_site(site: Site) -> None:
     )
 
 
+async def post_setup_site(site: Site) -> None:
+    if any(
+        route.shape.template is not None
+        for route in inspect_route_tree(site.app).routes
+    ):
+        site.require_capability(TemplateCapability)
+
+
 def _optional_static_mount_path(
     proxy: SiteCapabilityProxy[StaticAssetCapability],
 ) -> str | None:
@@ -49,5 +59,6 @@ def _optional_static_mount_path(
 
 __all__ = [
     "module_config",
+    "post_setup_site",
     "setup_site",
 ]
