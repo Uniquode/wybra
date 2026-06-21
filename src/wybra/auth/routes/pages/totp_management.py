@@ -32,7 +32,7 @@ from wybra.auth.sessions import (
     set_session_cookie,
 )
 from wybra.auth.timestamps import current_timestamp
-from wybra.web.forms.csrf import request_form_data
+from wybra.forms import request_form_data
 
 from .shared import (
     _form_value,

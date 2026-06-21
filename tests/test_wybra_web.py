@@ -61,6 +61,7 @@ from wybra.core.settings import (
     load_composed_settings,
     values_from_env_settings,
 )
+from wybra.forms import CsrfProtector
 from wybra.security import (
     COOP_HEADER_NAME,
     CorsPolicy,
@@ -91,7 +92,6 @@ from wybra.template.discovery import (
     template_sources_from_modules,
 )
 from wybra.tools import collect as collect_tool
-from wybra.web.forms.csrf import CsrfProtector
 from wybra.web.routes import (
     ConfiguredModuleRouter,
     RouteCompositionError,
@@ -270,10 +270,7 @@ def test_template_render_context_protects_framework_values(
 ) -> None:
     template_root = tmp_path / "templates"
     template_root.mkdir()
-    renderer = DefaultTemplateCapability(
-        template_root=template_root,
-        csrf=FixedTemplateCsrfProtector(),
-    )
+    renderer = DefaultTemplateCapability(template_root=template_root)
     request = Request(
         {
             "type": "http",
@@ -287,9 +284,6 @@ def test_template_render_context_protects_framework_values(
         TemplateContext.from_mapping(
             {
                 "asset_url": "provider_asset_url",
-                "csrf_field_name": "provider_csrf_field_name",
-                "csrf_header_name": "provider_csrf_header_name",
-                "csrf_token": "provider_csrf_token",
                 "request": "provider_request",
                 "route_name": "provider_route",
             }
@@ -300,33 +294,14 @@ def test_template_render_context_protects_framework_values(
         request,
         {
             "asset_url": "caller_asset_url",
-            "csrf_field_name": "caller_csrf_field_name",
-            "csrf_header_name": "caller_csrf_header_name",
-            "csrf_token": "caller_csrf_token",
             "request": "caller_request",
             "route_name": "caller_route",
         },
     )
 
     assert callable(context["asset_url"])
-    assert context["csrf_field_name"] == "csrf_token"
-    assert context["csrf_header_name"] == "x-csrf-token"
-    assert context["csrf_token"] == "framework_csrf_token"
     assert context["request"] is request
     assert context["route_name"] == "framework_route"
-
-
-class FixedTemplateCsrfProtector:
-    def token_context(self, request: Request) -> dict[str, Any]:
-        del request
-        return {
-            "csrf_field_name": "csrf_token",
-            "csrf_header_name": "x-csrf-token",
-            "csrf_token": "framework_csrf_token",
-        }
-
-    def set_cookie(self, request: Request, response: Response) -> None:
-        del request, response
 
 
 def test_template_partial_rendering_does_not_set_csrf_cookie(tmp_path: Path) -> None:
@@ -334,29 +309,12 @@ def test_template_partial_rendering_does_not_set_csrf_cookie(tmp_path: Path) -> 
     template_root.mkdir()
     (template_root / "fragment.html").write_text("<span>ok</span>", encoding="utf-8")
 
-    class CountingCsrfProtector:
-        cookie_sets = 0
-
-        def token_context(self, request: Request) -> dict[str, Any]:
-            del request
-            return {}
-
-        def set_cookie(self, request: Request, response: Response) -> None:
-            del request, response
-            self.cookie_sets += 1
-
-    csrf = CountingCsrfProtector()
-    renderer = DefaultTemplateCapability(template_root=template_root, csrf=csrf)
+    renderer = DefaultTemplateCapability(template_root=template_root)
     request = Request({"type": "http", "app": FastAPI(), "headers": []})
 
     partial_response = renderer.render_partial(request, "fragment.html", {})
 
     assert partial_response.body == b"<span>ok</span>"
-    assert csrf.cookie_sets == 0
-
-    renderer.render_page(request, "fragment.html", {})
-
-    assert csrf.cookie_sets == 1
 
 
 def test_wybra_widgets_config_defaults_to_theme_and_login_features() -> None:
@@ -429,7 +387,7 @@ async def test_wybra_widgets_setup_loads_settings_class(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("wybra.widgets", "wybra.template"),
+                    "modules": ("wybra.forms", "wybra.widgets", "wybra.template"),
                 },
                 "app.templates": {"auto_reload": True, "cache_size": 0},
             }
@@ -559,25 +517,25 @@ async def test_wybra_web_setup_does_not_install_security_policy(
 
 
 @pytest.mark.anyio
-async def test_wybra_web_setup_loads_csrf_settings_class(
+async def test_wybra_forms_setup_loads_forms_settings_class(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import wybra.template.setup as template_setup_module
+    import wybra.forms.setup as forms_setup_module
 
     protector = CsrfProtector("test-secret")
     observed: list[ConfigService] = []
 
-    class StubCsrfSettings:
+    class StubFormsSettings:
         def protector(self) -> CsrfProtector:
             return protector
 
-    def load_settings(config: ConfigService) -> StubCsrfSettings:
+    def load_settings(config: ConfigService) -> StubFormsSettings:
         observed.append(config)
-        return StubCsrfSettings()
+        return StubFormsSettings()
 
     monkeypatch.setattr(
-        template_setup_module.CsrfSettings,
+        forms_setup_module.FormsSettings,
         "load_settings",
         load_settings,
     )
@@ -590,11 +548,7 @@ async def test_wybra_web_setup_loads_csrf_settings_class(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": (
-                        "wybra.assets",
-                        "wybra.template",
-                        "wybra.web",
-                    ),
+                    "modules": ("wybra.forms",),
                 },
             }
         ),
@@ -1470,6 +1424,7 @@ async def test_wybra_widgets_publish_theme_selector_when_enabled(
                     "project_root": tmp_path,
                     "modules": (
                         "widget_page_app",
+                        "wybra.forms",
                         "wybra.widgets",
                         "wybra.assets",
                         "wybra.template",
@@ -1524,6 +1479,7 @@ async def test_wybra_widgets_publish_login_button_when_auth_is_available(
                     "modules": (
                         "login_widget_page_app",
                         "login_widget_auth",
+                        "wybra.forms",
                         "wybra.widgets",
                         "wybra.assets",
                         "wybra.template",
@@ -1577,6 +1533,7 @@ async def test_wybra_widgets_publish_profile_initial_and_logout_when_authenticat
                     "modules": (
                         "authenticated_widget_page_app",
                         "authenticated_widget_auth",
+                        "wybra.forms",
                         "wybra.widgets",
                         "wybra.assets",
                         "wybra.template",
@@ -1630,6 +1587,7 @@ async def test_wybra_widgets_use_profile_descriptor_when_profile_is_available(
                     "modules": (
                         "profile_widget_page_app",
                         "profile_widget_auth",
+                        "wybra.forms",
                         "wybra.widgets",
                         "wybra.profile",
                         "wybra.db",
@@ -1685,6 +1643,7 @@ async def test_wybra_widgets_do_not_publish_login_button_without_auth(
                     "project_root": tmp_path,
                     "modules": (
                         "no_auth_widget_page_app",
+                        "wybra.forms",
                         "wybra.widgets",
                         "wybra.assets",
                         "wybra.template",
@@ -1732,6 +1691,7 @@ async def test_wybra_widgets_can_disable_login_button_when_auth_is_available(
                     "modules": (
                         "disabled_login_widget_page_app",
                         "disabled_login_widget_auth",
+                        "wybra.forms",
                         "wybra.widgets",
                         "wybra.assets",
                         "wybra.template",
@@ -1819,6 +1779,7 @@ async def test_wybra_widgets_can_disable_theme_selector(
                     "project_root": tmp_path,
                     "modules": (
                         "disabled_widget_page_app",
+                        "wybra.forms",
                         "wybra.widgets",
                         "wybra.assets",
                         "wybra.template",
@@ -1894,6 +1855,7 @@ async def test_application_template_overrides_widget_partial(
                     "project_root": tmp_path,
                     "modules": (
                         "widget_override_app",
+                        "wybra.forms",
                         "wybra.widgets",
                         "wybra.assets",
                         "wybra.template",
@@ -2085,6 +2047,7 @@ async def test_wybra_web_registers_auth_routes_through_module_composition(
                         "wybra.template",
                         "wybra.web",
                         "wybra.db",
+                        "wybra.forms",
                         "wybra.auth",
                     ),
                     "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
@@ -2108,9 +2071,7 @@ def test_wybra_web_package_exposes_expected_submodules() -> None:
     for module_name in (
         "wybra.core.composition",
         "wybra.template.context",
-        "wybra.web.forms.csrf",
         "wybra.web.errors",
-        "wybra.web.forms.security",
         "wybra.core.resources",
         "wybra.web.routes.contracts",
         "wybra.web.routes",
@@ -2120,7 +2081,11 @@ def test_wybra_web_package_exposes_expected_submodules() -> None:
         "wybra.web.routes",
         "wybra.web.routes.discovery",
         "wybra.template",
+        "wybra.forms",
+        "wybra.forms.csrf",
+        "wybra.forms.security",
         "wybra.web.views",
+        "wybra.forms",
         "wybra.widgets",
         "wybra.widgets.config",
         "wybra.widgets.context",
@@ -2169,6 +2134,7 @@ def test_wybra_web_composition_loader_is_cli_safe() -> None:
     }
 
     forbidden_modules = {
+        "wybra.forms",
         "wybra.auth",
         "fastapi",
         "jinja2",

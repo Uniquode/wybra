@@ -36,9 +36,9 @@ from wybra.auth.sessions import (
 from wybra.auth.settings import identity_options_from_state
 from wybra.auth.timestamps import current_timestamp
 from wybra.db import DatabaseCapability
+from wybra.forms import request_form_data, validate_csrf
 from wybra.site import get_site
 from wybra.template import render_page
-from wybra.web.forms.csrf import request_form_data, validate_csrf
 from wybra.web.routes.contracts import API_PATH_PREFIX
 
 account_router = APIRouter(dependencies=[Depends(validate_csrf)])

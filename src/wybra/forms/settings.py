@@ -9,21 +9,21 @@ from typing import Any, ClassVar, Self
 from wybra.config import BaseSettings, ConfigDef, ConfigService
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.runtime import DeploymentEnvironment, normalise_deployment_environment
-from wybra.web.config import (
+from wybra.forms.config import (
+    FORMS_CONFIG_SECTION,
     GENERATE_LOCAL_CSRF_SECRET,
-    WEB_CONFIG_SECTION,
     module_config,
 )
-from wybra.web.forms.csrf import CsrfProtector
+from wybra.forms.csrf import CsrfProtector
 
 CSRF_TOKEN_SECRET_BYTES = 32
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class CsrfSettings(BaseSettings):
+class FormsSettings(BaseSettings):
     module_config: ClassVar[ConfigDef] = module_config
-    config_section: ClassVar[str | None] = WEB_CONFIG_SECTION
+    config_section: ClassVar[str | None] = FORMS_CONFIG_SECTION
 
     csrf_token_secret: str = GENERATE_LOCAL_CSRF_SECRET
     csrf_cookie_secure: bool | str | None = None
@@ -118,13 +118,8 @@ def _normalise_optional_bool(
 def _deployment_environment_from_config(
     config: ConfigService | Mapping[str, Any],
 ) -> str | None:
-    """Return configured deployment environment.
-
-    Missing values are left as None so CsrfSettings construction applies its
-    local default. Blank or non-text values are explicit configuration errors.
-    """
     if isinstance(config, ConfigService):
-        app_config = CsrfSettings.section_values(config, "app")
+        app_config = FormsSettings.section_values(config, "app")
         value = app_config.get("deployment_environment")
     else:
         app_config = config.get("app")
@@ -143,6 +138,6 @@ def _deployment_environment_from_config(
 
 __all__ = (
     "CSRF_TOKEN_SECRET_BYTES",
-    "CsrfSettings",
+    "FormsSettings",
     "GENERATE_LOCAL_CSRF_SECRET",
 )

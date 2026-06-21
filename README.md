@@ -29,6 +29,8 @@ Repository: <https://github.com/Uniquode/wybra>
   URL resolution, collection, and validation.
 - `wybra.template`: template settings, source discovery, rendering capability,
   context construction, and template validation.
+- `wybra.forms`: form settings, CSRF protection, request form parsing, form
+  safety helpers, form response finalisation, and forms validation.
 - `wybra.security`: web-facing security policy, COOP/security headers, CORS
   policy data, middleware setup, and security validation.
 - `wybra.web`: route composition, error handling, views, and web validation.
@@ -110,9 +112,10 @@ checks: hard dependencies bind to real capabilities or fail startup, while soft
 dependencies can be finalised with `finalise_optional()` and handled by the
 consuming module's fallback behaviour.
 
-Current hard dependencies include auth, media, and profile data access, widgets
-on templates, and routes that explicitly require template rendering. Soft
-dependencies include profile images on media, templates on assets for
+Current hard dependencies include auth, media, and profile data access, auth on
+forms for protected browser form routes, widgets on templates, widgets on forms
+for theme form routes, and routes that explicitly require template rendering.
+Soft dependencies include profile images on media, templates on assets for
 `asset_url(...)`, and widgets on auth/profile enrichment.
 
 Auth is exposed through `AuthCapability`, so applications can depend on public
@@ -325,6 +328,7 @@ database_url = "sqlite+aiosqlite:///app.sqlite3"
 modules = [
     "wybra.assets",
     "wybra.security",
+    "wybra.forms",
     "wybra.template",
     "wybra.web",
     "wybra.auth",
