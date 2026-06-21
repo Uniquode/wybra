@@ -231,24 +231,12 @@ class SiteCapabilityProxy[T]:
         return capability
 
     def finalise_required(self) -> T:
-        if self._state is _CapabilityProxyState.AVAILABLE:
-            return self._require_cached_capability()
-        if self._state is _CapabilityProxyState.UNAVAILABLE:
-            self._raise_missing_capability()
-
-        capability = self.require()
-        return capability
+        return self.require()
 
     def finalise_optional(self) -> T | None:
-        if self._state is _CapabilityProxyState.AVAILABLE:
-            return self._require_cached_capability()
-        if self._state is _CapabilityProxyState.UNAVAILABLE:
-            return None
-
         capability = self.optional()
         if capability is None:
             self._set_unavailable()
-            return None
         return capability
 
     def __getattr__(self, name: str) -> Any:
