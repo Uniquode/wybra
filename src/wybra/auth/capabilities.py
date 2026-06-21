@@ -96,8 +96,6 @@ async def anonymous_required(request: Request) -> None:
 
 
 async def setup_site(site: Site) -> None:
-    site.require_capability(DatabaseCapability)
-
     app_config = app_config_from_site(site)
     settings = AuthSettings.load_settings(
         site.config,
@@ -111,6 +109,10 @@ async def setup_site(site: Site) -> None:
     site.app.state.fastapi_users = capability.fastapi_users
     site.provide_capability(AuthCapability, capability)
     _register_session_cookie_cleanup_middleware(site, settings)
+
+
+async def post_setup_site(site: Site) -> None:
+    site.require_capability(DatabaseCapability)
 
 
 def _register_session_cookie_cleanup_middleware(

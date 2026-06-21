@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 
-from wybra.auth import models as auth_models  # noqa: F401
+from wybra.auth import AuthCapability  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core import InputValidationError
 from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
@@ -30,7 +30,7 @@ from wybra.profile import (
 )
 from wybra.profile.models import UserProfile
 from wybra.profile.validation import validate_profile
-from wybra.site import Site, start
+from wybra.site import Site, SiteCapabilityError, start
 
 _CREATED_SITES: list[Site] = []
 
@@ -118,21 +118,65 @@ async def test_profile_setup_registers_profile_capability_before_media_exists() 
     site = await start(
         FastAPI(),
         config_source=MappingConfigSource(
-            {"app": {"modules": ("wybra.profile", "wybra.media")}}
+            {
+                "app": {
+                    "modules": (
+                        "wybra.profile",
+                        "wybra.media",
+                        "wybra.auth",
+                        "wybra.db",
+                    ),
+                    "database_url": "sqlite+aiosqlite:///profile.sqlite3",
+                },
+            }
         ),
     )
 
     assert site.has_capability(ProfileCapability) is True
     assert site.has_capability(MediaCapability) is True
+    assert site.has_capability(AuthCapability) is True
+    assert site.has_capability(DatabaseCapability) is True
 
 
 @pytest.mark.anyio
-async def test_profile_image_descriptor_uses_email_initial_without_media() -> None:
-    site = await start(
-        FastAPI(),
-        config_source=MappingConfigSource({"app": {"modules": ("wybra.profile",)}}),
-    )
-    capability = site.require_capability(ProfileCapability)
+async def test_profile_post_setup_requires_auth_capability() -> None:
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.profile", "wybra.db"),
+                        "database_url": "sqlite+aiosqlite:///profile.sqlite3",
+                    },
+                }
+            ),
+        )
+
+
+@pytest.mark.anyio
+async def test_profile_post_setup_requires_database_capability() -> None:
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.profile", "wybra.auth"),
+                        "database_url": "sqlite+aiosqlite:///profile.sqlite3",
+                    }
+                }
+            ),
+        )
+
+
+@pytest.mark.anyio
+async def test_profile_image_descriptor_uses_email_initial_without_media(
+    tmp_path: Path,
+) -> None:
+    site = _site_with_database(tmp_path)
+    capability = SiteProfileCapability(site.capability_proxy(MediaCapability))
+    capability.media.finalise_optional()
 
     image = await capability.profile_image_for_user(
         ProfileUser(id=uuid.uuid4(), email="_david@example.test")

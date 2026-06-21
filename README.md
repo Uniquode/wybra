@@ -85,17 +85,34 @@ async def setup_site(site: Site) -> None:
 
 Startup calls configured module hooks in `app.toml` order. Modules use
 type-keyed capabilities for shared services rather than importing another
-module's implementation details:
+module's implementation details. When a module depends on a capability that may
+be provided later in the configured module list, keep the setup order
+independent by storing a capability proxy in `setup_site(...)` and finalising it
+in `post_setup_site(...)`:
 
 ```python
 from wybra.db import DatabaseCapability
 
 
 async def setup_site(site: Site) -> None:
-    database = site.require_capability(DatabaseCapability)
-    async with database.transaction() as session:
-        ...
+    database = site.capability_proxy(DatabaseCapability)
+    ...
+
+
+async def post_setup_site(site: Site) -> None:
+    database.finalise_required()
 ```
+
+`post_setup_site(...)` is an optional async hook that runs only after every
+configured module has completed `setup_site(...)`. Use it for final composition
+checks: hard dependencies bind to real capabilities or fail startup, while soft
+dependencies can be finalised with `finalise_optional()` and handled by the
+consuming module's fallback behaviour.
+
+Current hard dependencies include auth, media, and profile data access, widgets
+on templates, and routes that explicitly require template rendering. Soft
+dependencies include profile images on media, templates on assets for
+`asset_url(...)`, and widgets on auth/profile enrichment.
 
 Auth is exposed through `AuthCapability`, so applications can depend on public
 helpers rather than auth internals:

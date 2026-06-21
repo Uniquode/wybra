@@ -425,14 +425,85 @@ async def test_wybra_widgets_setup_loads_settings_class(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("wybra.widgets",),
+                    "modules": ("wybra.widgets", "wybra.template"),
                 },
+                "app.templates": {"auto_reload": True, "cache_size": 0},
             }
         ),
     )
 
     assert observed == [site.config]
+    assert site.has_capability(TemplateCapability) is True
     assert enabled_features() == ("theme",)
+
+
+@pytest.mark.anyio
+async def test_wybra_widgets_post_setup_requires_template_capability(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("wybra.widgets",),
+                    },
+                }
+            ),
+        )
+
+
+@pytest.mark.anyio
+async def test_wybra_web_post_setup_requires_template_for_template_routes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "templated_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        dedent(
+            """
+            from fastapi import APIRouter
+            from wybra.template import route_template
+
+            router = APIRouter()
+
+            @router.get("/")
+            @route_template("pages/home.html")
+            async def home():
+                return "home"
+
+            module_routers = {"default": router}
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("templated_route_app", "wybra.web"),
+                    },
+                    "app.routes": {
+                        "prefixes": {
+                            "templated_route_app": {"default": ""},
+                            "wybra.web": {},
+                        }
+                    },
+                }
+            ),
+        )
 
 
 @pytest.mark.anyio
@@ -1447,10 +1518,12 @@ async def test_wybra_widgets_use_profile_descriptor_when_profile_is_available(
                         "profile_widget_auth",
                         "wybra.widgets",
                         "wybra.profile",
+                        "wybra.db",
                         "wybra.assets",
                         "wybra.template",
                         "wybra.web",
                     ),
+                    "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
                 },
                 "app.routes": {
                     "prefixes": {

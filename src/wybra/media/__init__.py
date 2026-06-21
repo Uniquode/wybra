@@ -35,6 +35,12 @@ async def setup_site(site: Site) -> None:
         _register_media_item_route(site, capability)
 
 
+async def post_setup_site(site: Site) -> None:
+    capability = site.require_capability(MediaCapability)
+    if isinstance(capability, FilesystemMediaCapability):
+        capability.database.finalise_required()
+
+
 def _register_media_item_route(site: Site, capability: MediaCapability) -> None:
     async def media_item(media_id: uuid.UUID):
         try:
@@ -62,6 +68,7 @@ __all__ = (
     "MediaSettings",
     "MediaValidationSettings",
     "module_config",
+    "post_setup_site",
     "setup_site",
     "validate_media",
 )

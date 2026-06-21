@@ -32,6 +32,8 @@ _.capability_proxy
 _.start_site
 _.get_site
 _.setup_site
+_.finalised
+_.unavailable
 _.template_context_middleware
 _.session_cookie_cleanup_middleware
 _.session

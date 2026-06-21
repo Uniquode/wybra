@@ -51,6 +51,11 @@ class ExampleImplementation(ExampleCapability):
         return "implementation"
 
 
+class LateCapability:
+    def label(self) -> str:
+        return "late"
+
+
 class ClosingCapability:
     def __init__(self) -> None:
         self.closed = False
@@ -432,6 +437,104 @@ async def test_site_capability_proxy_reports_missing_required_capability() -> No
 
 
 @pytest.mark.anyio
+async def test_site_capability_proxy_finalises_required_capability() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    proxy = site.capability_proxy(ExampleCapability)
+    capability = ExampleImplementation()
+    site.provide_capability(ExampleCapability, capability)
+
+    assert proxy.finalise_required() is capability
+    assert proxy.require() is capability
+    assert proxy.finalised is True
+    assert proxy.unavailable is False
+
+
+@pytest.mark.anyio
+async def test_site_capability_proxy_reuses_required_finalisation() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    proxy = site.capability_proxy(ExampleCapability)
+    capability = ExampleImplementation()
+    site.provide_capability(ExampleCapability, capability)
+
+    assert proxy.finalise_required() is capability
+    del site._capabilities[ExampleCapability]
+
+    assert proxy.finalise_required() is capability
+    assert proxy.finalise_optional() is capability
+    assert proxy.finalised is True
+    assert proxy.unavailable is False
+
+
+@pytest.mark.anyio
+async def test_site_capability_proxy_reports_missing_required_finalisation() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    proxy = site.capability_proxy(ExampleCapability)
+
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        proxy.finalise_required()
+
+
+@pytest.mark.anyio
+async def test_site_capability_proxy_finalises_optional_capability() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    proxy = site.capability_proxy(ExampleCapability)
+    capability = ExampleImplementation()
+    site.provide_capability(ExampleCapability, capability)
+
+    assert proxy.finalise_optional() is capability
+    assert proxy.optional() is capability
+    assert proxy.finalised is True
+    assert proxy.unavailable is False
+
+
+@pytest.mark.anyio
+async def test_site_capability_proxy_records_unavailable_optional_capability() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    proxy = site.capability_proxy(ExampleCapability)
+
+    assert proxy.finalise_optional() is None
+    assert proxy.optional() is None
+    assert proxy.finalised is True
+    assert proxy.unavailable is True
+
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        proxy.label()
+
+
+@pytest.mark.anyio
+async def test_site_capability_proxy_reuses_unavailable_optional_finalisation() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ()}}),
+    )
+    proxy = site.capability_proxy(ExampleCapability)
+
+    assert proxy.finalise_optional() is None
+    site.provide_capability(ExampleCapability, ExampleImplementation())
+
+    assert proxy.finalise_optional() is None
+    with pytest.raises(SiteCapabilityError, match="Missing capability"):
+        proxy.finalise_required()
+    assert proxy.finalised is True
+    assert proxy.unavailable is True
+
+
+@pytest.mark.anyio
 async def test_site_rejects_duplicate_capability_provider() -> None:
     site = await start(
         FastAPI(),
@@ -596,6 +699,111 @@ async def test_start_invokes_setup_site_hooks_in_configured_module_order(
 
 
 @pytest.mark.anyio
+async def test_start_invokes_post_setup_site_hooks_after_all_setup_hooks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(tmp_path, "post_setup_recorder", "calls = []\n")
+    _write_module(
+        tmp_path,
+        "first_post_module",
+        "from post_setup_recorder import calls\n"
+        'async def setup_site(site):\n    calls.append("first.setup")\n'
+        'async def post_setup_site(site):\n    calls.append("first.post")\n',
+    )
+    _write_module(
+        tmp_path,
+        "second_post_module",
+        "from post_setup_recorder import calls\n"
+        'async def setup_site(site):\n    calls.append("second.setup")\n'
+        'async def post_setup_site(site):\n    calls.append("second.post")\n',
+    )
+
+    await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {"app": {"modules": ("first_post_module", "second_post_module")}}
+        ),
+    )
+
+    from post_setup_recorder import calls
+
+    assert calls == [
+        "first.setup",
+        "second.setup",
+        "first.post",
+        "second.post",
+    ]
+
+
+@pytest.mark.anyio
+async def test_start_ignores_modules_without_post_setup_site(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(tmp_path, "post_setup_missing_recorder", "calls = []\n")
+    _write_module(
+        tmp_path,
+        "plain_module",
+        "from post_setup_missing_recorder import calls\n"
+        'async def setup_site(site):\n    calls.append("setup")\n',
+    )
+
+    await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ("plain_module",)}}),
+    )
+
+    from post_setup_missing_recorder import calls
+
+    assert calls == ["setup"]
+
+
+@pytest.mark.anyio
+async def test_post_setup_site_can_finalise_late_capability_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(
+        tmp_path,
+        "late_dependency_types",
+        'class LateCapability:\n    def label(self):\n        return "late"\n',
+    )
+    _write_module(
+        tmp_path,
+        "dependent_module",
+        "from late_dependency_types import LateCapability\n"
+        "proxy = None\n"
+        "async def setup_site(site):\n"
+        "    global proxy\n"
+        "    proxy = site.capability_proxy(LateCapability)\n"
+        "async def post_setup_site(site):\n"
+        "    proxy.finalise_required()\n",
+    )
+    _write_module(
+        tmp_path,
+        "provider_module",
+        "from late_dependency_types import LateCapability\n"
+        "async def setup_site(site):\n"
+        "    site.provide_capability(LateCapability, LateCapability())\n",
+    )
+
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {"app": {"modules": ("dependent_module", "provider_module")}}
+        ),
+    )
+
+    capability_type = __import__("late_dependency_types").LateCapability
+
+    assert site.require_capability(capability_type).label() == "late"
+
+
+@pytest.mark.anyio
 async def test_start_ignores_modules_without_setup_site(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -673,5 +881,73 @@ async def test_start_reports_setup_site_failure(
             FastAPI(),
             config_source=MappingConfigSource(
                 {"app": {"modules": ("failing_module",)}}
+            ),
+        )
+
+
+@pytest.mark.anyio
+async def test_start_rejects_non_callable_post_setup_site(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(tmp_path, "invalid_post_module", "post_setup_site = object()\n")
+
+    with pytest.raises(
+        SiteCapabilityError,
+        match="module=invalid_post_module.*attribute=post_setup_site",
+    ):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {"app": {"modules": ("invalid_post_module",)}}
+            ),
+        )
+
+
+@pytest.mark.anyio
+async def test_start_rejects_sync_post_setup_site(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(
+        tmp_path,
+        "sync_post_module",
+        'def post_setup_site(site):\n    raise RuntimeError("should not be called")\n',
+    )
+
+    with pytest.raises(
+        SiteCapabilityError,
+        match="module=sync_post_module.*expected=async_callable",
+    ):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {"app": {"modules": ("sync_post_module",)}}
+            ),
+        )
+
+
+@pytest.mark.anyio
+async def test_start_reports_post_setup_site_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(
+        tmp_path,
+        "failing_post_module",
+        'async def post_setup_site(site):\n    raise RuntimeError("boom")\n',
+    )
+
+    with pytest.raises(
+        SiteCapabilityError,
+        match="module=failing_post_module.*attribute=post_setup_site.*RuntimeError",
+    ):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {"app": {"modules": ("failing_post_module",)}}
             ),
         )

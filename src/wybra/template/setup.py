@@ -33,4 +33,13 @@ async def setup_site(site: Site) -> None:
         register_template_context_middleware(site)
 
 
-__all__ = ("setup_site",)
+async def post_setup_site(site: Site) -> None:
+    capability = site.require_capability(TemplateCapability)
+    if (
+        isinstance(capability, DefaultTemplateCapability)
+        and capability.assets is not None
+    ):
+        capability.assets.finalise_optional()
+
+
+__all__ = ("post_setup_site", "setup_site")
