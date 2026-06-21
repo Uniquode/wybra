@@ -52,10 +52,17 @@ from wybra.tools.project import (
     default=True,
     help="Leave stale files in the destination tree.",
 )
+@click.option(
+    "--nginx-cors",
+    "nginx_cors",
+    type=click.Path(path_type=Path, dir_okay=False, writable=True),
+    help="Write an nginx CORS config section for externally served assets.",
+)
 def collect_command(
     config_source: str | None,
     destination: Path | None,
     delete: bool,
+    nginx_cors: Path | None,
 ) -> int:
     try:
         project_root = runtime_project_root()
@@ -68,6 +75,7 @@ def collect_command(
             ),
             delete=delete,
             root=destination,
+            nginx_cors=nginx_cors,
         )
     except (CompositionError, ConfigurationError, ProjectToolConfigurationError) as exc:
         print("configuration: failed", file=sys.stderr)

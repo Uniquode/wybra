@@ -19,6 +19,8 @@ from wybra.core.composition import (
     RouteOptions,
     TemplateOptions,
 )
+from wybra.core.config import RUNTIME_CONFIG_DEF
+from wybra.security.validation import validate_security
 from wybra.template.validation import _contains_post_form, validate_template
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 from wybra.tools.settings import ProjectSettings
@@ -43,6 +45,7 @@ class WebSettings:
     template_auto_reload: bool | None = None
     template_cache_size: int = 400
     app_config: AppConfig | None = None
+    config: ConfigService | None = None
     uses_filesystem_template_root: bool = False
     uses_filesystem_static_root: bool = False
 
@@ -86,6 +89,19 @@ def _write_validation_module(
     )
 
 
+def _write_replacement_security_module(root: Path, module_name: str) -> None:
+    module_root = root / module_name
+    module_root.mkdir()
+    (module_root / "__init__.py").write_text(
+        dedent(
+            """
+            provides_security_capability = True
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
 def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
     route_prefixes = {
         "wybra.web": {},
@@ -115,12 +131,23 @@ def _web_settings(
     app_config = _app_config(tmp_path, modules)
     if raw_config is not None:
         app_config = replace(app_config, raw_config=raw_config)
+    config_defs = [RUNTIME_CONFIG_DEF]
+    if "wybra.security" in modules:
+        from wybra.security import module_config as security_module_config
+
+        config_defs.append(security_module_config)
+    config = ConfigService(
+        [AppConfigSource(app_config)],
+        config_defs=tuple(config_defs),
+        discover_module_config=False,
+    )
     return WebSettings(
         project_root=tmp_path,
         modules=modules,
         template_root=wybra_web_root / "templates",
         static_root=wybra_web_root / "static",
         app_config=app_config,
+        config=config,
     )
 
 
@@ -385,8 +412,59 @@ def test_validate_command_runs_discovered_module_targets(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out == "assets: ok\ntemplate: ok\ncommand-target: ok\n"
+    assert captured.out == (
+        "assets: ok\nsecurity: ok\ntemplate: ok\ncommand-target: ok\n"
+    )
     assert captured.err == ""
+
+
+def test_validate_security_accepts_omitted_security_module(tmp_path: Path) -> None:
+    result = validate_security(_web_settings(tmp_path, ("wybra.web",)))
+
+    assert result.is_ok
+    assert any(
+        check.description == "security module is not configured"
+        for check in result.checks
+    )
+
+
+def test_validate_security_loads_configured_security_module(tmp_path: Path) -> None:
+    result = validate_security(
+        _web_settings(
+            tmp_path,
+            ("wybra.security", "wybra.web"),
+            raw_config={
+                "app.security": {
+                    "cross_origin_opener_policy": "same-origin-allow-popups",
+                },
+                "app.assets.cors": {
+                    "enabled": True,
+                    "allow_origins": ("https://example.com",),
+                },
+            },
+        )
+    )
+
+    assert result.is_ok
+    assert any("security settings load" in check.description for check in result.checks)
+
+
+def test_validate_security_accepts_replacement_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_replacement_security_module(tmp_path, "replacement_security")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = validate_security(
+        _web_settings(tmp_path, ("replacement_security", "wybra.web"))
+    )
+
+    assert result.is_ok
+    assert any(
+        check.description == "replacement security capability provider is configured"
+        for check in result.checks
+    )
 
 
 def test_validate_command_rejects_module_target_conflicting_with_builtin(

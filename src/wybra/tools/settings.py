@@ -38,6 +38,7 @@ class ProjectSettings(BaseSettings):
 
     project_root: Path
     app_config: AppConfig
+    config: ConfigService
     database_url: str | None = None
     template_root: Path | None = None
     static_root: Path | None = None
@@ -192,6 +193,7 @@ def _project_settings_kwargs(
     settings_kwargs: dict[str, Any] = {
         "project_root": app_config.project_root,
         "app_config": app_config,
+        "config": config,
         "static_url_path": static_values.get("url_path", app_config.assets.url_path),
         "template_auto_reload": template_values.get(
             "auto_reload",

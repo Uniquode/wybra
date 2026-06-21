@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -12,6 +13,11 @@ from wybra.assets.settings import AssetSettings
 from wybra.assets.storage import StaticAssetStorage, static_asset_storage
 from wybra.core.resources import PackageResourceSource
 from wybra.errors import structured_error
+from wybra.security import (
+    CorsPolicySet,
+    SecurityCapability,
+    security_provider_configured,
+)
 from wybra.site import Site, SiteCapabilityError, SiteCapabilityProxy
 
 
@@ -71,6 +77,11 @@ def require_static_asset_capability(
 
 async def setup_site(site: Site) -> None:
     settings = AssetSettings.load_settings(site.config)
+    security = (
+        site.capability_proxy(SecurityCapability)
+        if security_provider_configured(site.modules)
+        else None
+    )
     capability = DefaultStaticAssetCapability(
         settings=settings,
         sources=static_sources_from_modules(site.modules),
@@ -84,11 +95,26 @@ async def setup_site(site: Site) -> None:
                 project_root=settings.project_root,
                 static_root=None,
                 static_sources=capability.sources,
-                cors=settings.cors,
+                cors=_security_cors_resolver(security),
                 url_path=capability.url_path,
             ),
             name="static",
         )
+
+
+def _security_cors_resolver(
+    security: SiteCapabilityProxy[SecurityCapability] | None,
+) -> Callable[[], CorsPolicySet | None] | None:
+    if security is None:
+        return None
+
+    def resolve() -> CorsPolicySet | None:
+        security_capability = security.optional()
+        if security_capability is None:
+            return None
+        return security_capability.asset_cors
+
+    return resolve
 
 
 __all__ = (

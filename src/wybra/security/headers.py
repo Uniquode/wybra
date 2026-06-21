@@ -17,8 +17,8 @@ CrossOriginOpenerPolicy = Literal[
 ]
 COOP_HEADER_NAME = "Cross-Origin-Opener-Policy"
 COOP_STATE_ATTRIBUTE = "wybra_cross_origin_opener_policy"
-SECURITY_MIDDLEWARE_STATE_ATTRIBUTE = "wybra_web_security_middleware_registered"
-SECURITY_OPTIONS_STATE_ATTRIBUTE = "wybra_web_security_options"
+SECURITY_MIDDLEWARE_STATE_ATTRIBUTE = "wybra_security_middleware_registered"
+SECURITY_OPTIONS_STATE_ATTRIBUTE = "wybra_security_options"
 _ALLOWED_COOP_POLICIES = frozenset(get_args(CrossOriginOpenerPolicy))
 _UNSET = object()
 
@@ -28,13 +28,13 @@ class SecurityHeaderOptions:
     cross_origin_opener_policy: CrossOriginOpenerPolicy | None = "same-origin"
 
     def __post_init__(self) -> None:
-        _validate_cross_origin_opener_policy(self.cross_origin_opener_policy)
+        validate_cross_origin_opener_policy(self.cross_origin_opener_policy)
 
 
 def cross_origin_opener_policy(
     policy: CrossOriginOpenerPolicy | None,
 ) -> Callable[[Request], None]:
-    _validate_cross_origin_opener_policy(policy)
+    validate_cross_origin_opener_policy(policy)
 
     def dependency(request: Request) -> None:
         setattr(request.state, COOP_STATE_ATTRIBUTE, policy)
@@ -77,7 +77,7 @@ def _effective_cross_origin_opener_policy(
     request_policy = getattr(request.state, COOP_STATE_ATTRIBUTE, _UNSET)
     if request_policy is not _UNSET:
         policy = cast(CrossOriginOpenerPolicy | None, request_policy)
-        _validate_cross_origin_opener_policy(policy)
+        validate_cross_origin_opener_policy(policy)
         return policy
 
     options = getattr(request.app.state, SECURITY_OPTIONS_STATE_ATTRIBUTE, None)
@@ -87,7 +87,7 @@ def _effective_cross_origin_opener_policy(
     return SecurityHeaderOptions().cross_origin_opener_policy
 
 
-def _validate_cross_origin_opener_policy(
+def validate_cross_origin_opener_policy(
     policy: CrossOriginOpenerPolicy | None,
 ) -> None:
     if policy is None:
@@ -98,15 +98,3 @@ def _validate_cross_origin_opener_policy(
             "Cross-Origin-Opener-Policy must be one of "
             f"{allowed}, or None; got {policy!r}."
         )
-
-
-__all__ = [
-    "COOP_HEADER_NAME",
-    "COOP_STATE_ATTRIBUTE",
-    "CrossOriginOpenerPolicy",
-    "SECURITY_MIDDLEWARE_STATE_ATTRIBUTE",
-    "SECURITY_OPTIONS_STATE_ATTRIBUTE",
-    "SecurityHeaderOptions",
-    "cross_origin_opener_policy",
-    "register_security_headers",
-]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from importlib.util import find_spec
 from pathlib import Path
@@ -14,7 +14,6 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import PlainTextResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from wybra.assets.config import AssetCorsOptions, AssetCorsPolicy
 from wybra.core.composition import CompositionError
 from wybra.core.conventions import STATIC_RESOURCE_DIRECTORY
 from wybra.core.diagnostics import configured_module_message
@@ -24,7 +23,10 @@ from wybra.core.resources import (
     ResourcePathError,
     first_existing_resource,
 )
+from wybra.security import CorsPolicy, CorsPolicySet
 from wybra.utils.paths import resolve_project_path
+
+CorsPolicyResolver = Callable[[], CorsPolicySet | None]
 
 
 class ComposedStaticFiles:
@@ -98,7 +100,7 @@ def static_app_from_config(
     project_root: Path,
     static_root: Path | None,
     static_sources: tuple[PackageResourceSource, ...],
-    cors: AssetCorsOptions | None = None,
+    cors: CorsPolicySet | CorsPolicyResolver | None = None,
     url_path: str | None = None,
 ) -> ASGIApp:
     """Build the runtime static ASGI app.
@@ -201,9 +203,11 @@ def _resolve_static_root(project_root: Path, static_root: Path | None) -> Path |
 
 def _asset_cors_app(
     app: ASGIApp,
-    cors: AssetCorsOptions | None,
+    cors: CorsPolicySet | CorsPolicyResolver | None,
     url_path: str | None,
 ) -> ASGIApp:
+    if callable(cors):
+        return DynamicCorsStaticFiles(app=app, cors=cors, url_path=url_path)
     if cors is None or (not cors.enabled and not cors.paths):
         return app
 
@@ -244,7 +248,27 @@ class PathCorsStaticFiles:
         await self.default_app(scope, receive, send)
 
 
-def _cors_wrapped_app(app: ASGIApp, policy: AssetCorsPolicy) -> ASGIApp:
+@dataclass(slots=True)
+class DynamicCorsStaticFiles:
+    app: ASGIApp
+    cors: CorsPolicyResolver
+    url_path: str | None
+    _cached_policy: CorsPolicySet | None = field(default=None, init=False, repr=False)
+    _cached_app: ASGIApp | None = field(default=None, init=False, repr=False)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        app = self._resolved_app()
+        await app(scope, receive, send)
+
+    def _resolved_app(self) -> ASGIApp:
+        policy = self.cors()
+        if self._cached_app is None or policy != self._cached_policy:
+            self._cached_policy = policy
+            self._cached_app = _asset_cors_app(self.app, policy, self.url_path)
+        return self._cached_app
+
+
+def _cors_wrapped_app(app: ASGIApp, policy: CorsPolicy) -> ASGIApp:
     return CORSMiddleware(
         app=app,
         allow_origins=list(policy.allow_origins),
@@ -291,6 +315,7 @@ def _normalise_url_path(path: str) -> str:
 
 __all__ = [
     "ComposedStaticFiles",
+    "DynamicCorsStaticFiles",
     "NoStaticFiles",
     "PathCorsStaticFiles",
     "discover_static_sources",
