@@ -26,14 +26,13 @@ from wybra.config import (
 )
 from wybra.core.composition import (
     AppConfig,
-    AssetCorsOptions,
-    AssetCorsPolicy,
     AssetExportMode,
     AssetOptions,
     RouteOptions,
     TemplateOptions,
 )
 from wybra.core.settings import EnvironmentSetting, EnvironmentValueType
+from wybra.security import CorsPolicy, CorsPolicySet
 
 
 class FailingSource:
@@ -874,11 +873,11 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
             url_path="/assets/",
             root=Path("static"),
             export_mode=AssetExportMode.NORMAL,
-            cors=AssetCorsOptions(
+            cors=CorsPolicySet(
                 enabled=True,
                 allow_origins=("https://example.com",),
                 paths={
-                    "/assets/private/": AssetCorsPolicy(
+                    "/assets/private/": CorsPolicy(
                         allow_origins=("https://admin.example.com",),
                     )
                 },

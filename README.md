@@ -29,8 +29,9 @@ Repository: <https://github.com/Uniquode/wybra>
   URL resolution, collection, and validation.
 - `wybra.template`: template settings, source discovery, rendering capability,
   context construction, and template validation.
-- `wybra.web`: route composition, CSRF, theme defaults, error handling, views,
-  and web validation.
+- `wybra.security`: web-facing security policy, COOP/security headers, CORS
+  policy data, middleware setup, and security validation.
+- `wybra.web`: route composition, error handling, views, and web validation.
 - `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
 - `wybra.tools`: generic project command adapters and validation target
@@ -229,6 +230,14 @@ serve = false
 `export_mode = "normal"` is the default and performs a direct collection to the
 configured asset root. Manifest collection is a separate mode and backend.
 
+When nginx serves collected assets directly, Wybra runtime middleware cannot
+apply asset CORS headers. Configure `wybra.security` and ask collection to write
+an nginx CORS include for the same asset-serving policy:
+
+```sh
+uv run wybra-collect --config config/app.toml --nginx-cors deploy/asset-cors.conf
+```
+
 ## Template Context
 
 `wybra.template` composes template context as read-only mapping layers. Adding
@@ -313,7 +322,13 @@ other package-owned project commands, then reads `[auth]` from that file. Use
 ```toml
 [app]
 database_url = "sqlite+aiosqlite:///app.sqlite3"
-modules = ["wybra.assets", "wybra.template", "wybra.web", "wybra.auth"]
+modules = [
+    "wybra.assets",
+    "wybra.security",
+    "wybra.template",
+    "wybra.web",
+    "wybra.auth",
+]
 
 [app.templates]
 auto_reload = true

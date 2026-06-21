@@ -24,6 +24,11 @@ from wybra.core.resources import (
     PackageResourceSource,
     iter_package_resource_files,
 )
+from wybra.security import (
+    SecuritySettings,
+    render_nginx_cors_config,
+    security_provider_configured,
+)
 
 STATIC_COLLECT_MANIFEST_FILENAME = ".wybra-static-collect.json"
 STATIC_COLLECT_MANIFEST_VERSION = 1
@@ -85,6 +90,7 @@ def collect_configured_static_assets(
     environ: Mapping[str, str] | None = None,
     root: Path | None = None,
     delete: bool = True,
+    nginx_cors: Path | None = None,
 ) -> StaticCollectResult:
     from wybra.assets.serving import static_sources_from_modules
 
@@ -98,12 +104,19 @@ def collect_configured_static_assets(
         config_defs=(RUNTIME_CONFIG_DEF, *discover_module_config_defs(config.modules)),
     )
     settings = AssetSettings.load_settings(config_service)
-    return collect_static_assets(
+    result = collect_static_assets(
         static_sources_from_modules(config.modules),
         root=settings.root if root is None else _resolve_root(config, root),
         delete=delete,
         export_mode=settings.export_mode,
     )
+    if nginx_cors is not None:
+        _write_nginx_cors_config(
+            config=config,
+            config_service=config_service,
+            destination=nginx_cors,
+        )
+    return result
 
 
 def collect_static_assets(
@@ -211,6 +224,37 @@ def _resolve_root(config: AppConfig, root: Path | None) -> Path:
         path = config.project_root / path
 
     return path
+
+
+def _write_nginx_cors_config(
+    *,
+    config: AppConfig,
+    config_service: ConfigService,
+    destination: Path,
+) -> None:
+    if not security_provider_configured(config.modules):
+        raise StaticCollectionError(
+            "nginx CORS config export requires wybra.security or another security "
+            "policy provider in [app].modules"
+        )
+    settings = SecuritySettings.load_settings(config_service)
+    resolved_destination = _resolve_output_file(config, destination)
+    try:
+        resolved_destination.parent.mkdir(parents=True, exist_ok=True)
+        resolved_destination.write_text(
+            render_nginx_cors_config(settings.asset_cors),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise StaticCollectionError(
+            f"write failed for nginx CORS config {resolved_destination}: {exc}"
+        ) from exc
+
+
+def _resolve_output_file(config: AppConfig, path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return config.project_root / path
 
 
 def _copy_asset(

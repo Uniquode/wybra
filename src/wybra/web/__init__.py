@@ -11,20 +11,12 @@ from wybra.web.config import module_config
 from wybra.web.errors import ErrorHandlerOptions, register_error_handlers
 from wybra.web.routes.inspection import inspect_route_tree
 from wybra.web.routes.registration import load_module_routes, register_module_routes
-from wybra.web.security import SecurityHeaderOptions, register_security_headers
 
 
 async def setup_site(site: Site) -> None:
     app_config = app_config_from_site(site)
     asset_capability = site.capability_proxy(StaticAssetCapability)
 
-    security_options = getattr(site.app.state, "security_header_options", None)
-    register_security_headers(
-        site.app,
-        options=security_options
-        if isinstance(security_options, SecurityHeaderOptions)
-        else SecurityHeaderOptions(),
-    )
     register_error_handlers(
         site.app,
         options=ErrorHandlerOptions(

@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
 from wybra.assets.config import (
     DEFAULT_ASSET_ROOT,
-    AssetCorsOptions,
     AssetExportMode,
     _export_mode_value,
     _path_value,
     _url_path_value,
-    load_asset_cors_options,
     module_config,
 )
 from wybra.config import BaseSettings
@@ -32,7 +30,6 @@ class AssetSettings(BaseSettings):
     root: Path = DEFAULT_ASSET_ROOT
     export_mode: AssetExportMode = AssetExportMode.NORMAL
     serve: bool = True
-    cors: AssetCorsOptions = field(default_factory=AssetCorsOptions)
 
     @classmethod
     def load_settings(cls, config) -> AssetSettings:  # type: ignore[override]
@@ -41,11 +38,9 @@ class AssetSettings(BaseSettings):
             app_values.get("project_root", Path.cwd()),
             name="app.project_root",
         )
-        cors_values = cls.section_values(config, "app.assets.cors")
         return cls(
             project_root=project_root,
             **cls.settings_kwargs(config),
-            cors=load_asset_cors_options(cors_values, "app.assets.cors"),
         )
 
     def __post_init__(self) -> None:

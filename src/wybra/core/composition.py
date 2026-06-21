@@ -9,15 +9,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
-from wybra.assets.config import (
-    AssetCorsOptions,
-    AssetCorsPolicy,
-    AssetExportMode,
-    load_asset_cors_options,
-    parse_asset_export_mode,
-)
+from wybra.assets.config import AssetExportMode, parse_asset_export_mode
 from wybra.config.transforms import to_bool
 from wybra.core.diagnostics import app_config_message, configured_module_import_message
+from wybra.security import CorsPolicy, CorsPolicySet, load_cors_policy_set
 
 APP_ROOT_ENV: Final = "APP_ROOT"
 APP_CONFIG_ENV: Final = "APP_CONFIG"
@@ -46,7 +41,7 @@ class AssetOptions:
     root: Path = DEFAULT_ASSET_ROOT
     export_mode: AssetExportMode = AssetExportMode.NORMAL
     serve: bool = True
-    cors: AssetCorsOptions = field(default_factory=AssetCorsOptions)
+    cors: CorsPolicySet = field(default_factory=CorsPolicySet)
 
     def __post_init__(self) -> None:
         if self.root is None:
@@ -426,9 +421,9 @@ def _asset_export_mode(data: dict[str, Any]) -> AssetExportMode:
         raise CompositionError(f"App config {exc}") from exc
 
 
-def _load_asset_cors_options(data: dict[str, Any]) -> AssetCorsOptions:
+def _load_asset_cors_options(data: dict[str, Any]) -> CorsPolicySet:
     cors_data = _optional_table(data, "app.assets.cors")
-    return load_asset_cors_options(
+    return load_cors_policy_set(
         cors_data,
         "App config app.assets.cors",
         error_type=CompositionError,
@@ -458,14 +453,14 @@ __all__ = [
     "AppConfig",
     "APP_CONFIG_ENV",
     "APP_ROOT_ENV",
-    "AssetCorsOptions",
-    "AssetCorsPolicy",
     "AssetOptions",
     "CompositionError",
     "DEFAULT_ASSET_ROOT",
     "RouteOptions",
     "RunserverOptions",
     "TemplateOptions",
+    "CorsPolicy",
+    "CorsPolicySet",
     "load_app_config",
     "load_app_config_modules",
     "load_modules",

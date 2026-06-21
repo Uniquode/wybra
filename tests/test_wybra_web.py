@@ -21,7 +21,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from jinja2 import Environment, select_autoescape
 from jinja2.exceptions import TemplateNotFound
+from starlette.types import ASGIApp, Receive, Scope, Send
 
+import wybra.assets.serving as asset_serving_module
 import wybra.template.capabilities as template_capabilities_module
 import wybra.web as web_module
 from wybra.assets import (
@@ -42,8 +44,6 @@ from wybra.assets.config import _path_value, _url_path_value
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core.composition import (
     AppConfig,
-    AssetCorsOptions,
-    AssetCorsPolicy,
     AssetExportMode,
     AssetOptions,
     CompositionError,
@@ -60,6 +60,16 @@ from wybra.core.settings import (
     SettingsLoadError,
     load_composed_settings,
     values_from_env_settings,
+)
+from wybra.security import (
+    COOP_HEADER_NAME,
+    CorsPolicy,
+    CorsPolicySet,
+    SecurityCapability,
+    SecurityHeaderOptions,
+    cross_origin_opener_policy,
+    register_security_headers,
+    render_nginx_cors_config,
 )
 from wybra.site import Site, SiteCapabilityError, start
 from wybra.template import (
@@ -95,12 +105,6 @@ from wybra.web.routes.discovery import (
     discover_module_routers,
     discover_module_surface,
     discover_module_surfaces,
-)
-from wybra.web.security import (
-    COOP_HEADER_NAME,
-    SecurityHeaderOptions,
-    cross_origin_opener_policy,
-    register_security_headers,
 )
 from wybra.widgets.config import WidgetsSettings
 
@@ -507,6 +511,54 @@ async def test_wybra_web_post_setup_requires_template_for_template_routes(
 
 
 @pytest.mark.anyio
+async def test_wybra_security_setup_registers_default_policy(tmp_path: Path) -> None:
+    app = FastAPI()
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.security",),
+                },
+            }
+        ),
+    )
+
+    assert site.require_capability(SecurityCapability)
+    response = TestClient(app).get("/")
+    assert response.status_code == 404
+    assert response.headers[COOP_HEADER_NAME] == "same-origin"
+
+
+@pytest.mark.anyio
+async def test_wybra_web_setup_does_not_install_security_policy(
+    tmp_path: Path,
+) -> None:
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.web",),
+                },
+                "app.routes": {"prefixes": {"wybra.web": {}}},
+            }
+        ),
+    )
+
+    response = TestClient(app).get("/")
+    assert response.status_code == 404
+    assert COOP_HEADER_NAME not in response.headers
+
+
+@pytest.mark.anyio
 async def test_wybra_web_setup_loads_csrf_settings_class(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -739,13 +791,13 @@ def test_load_app_config_loads_asset_cors_with_path_overrides(
 
     config = load_app_config(project_root=tmp_path, config_path=config_path)
 
-    assert config.assets.cors == AssetCorsOptions(
+    assert config.assets.cors == CorsPolicySet(
         enabled=True,
         allow_origins=("https://example.com",),
         allow_methods=("GET", "HEAD"),
         max_age=120,
         paths={
-            "/static/private/": AssetCorsPolicy(
+            "/static/private/": CorsPolicy(
                 allow_origins=("https://admin.example.com",),
                 allow_methods=("GET", "HEAD"),
                 expose_headers=("x-static",),
@@ -756,7 +808,7 @@ def test_load_app_config_loads_asset_cors_with_path_overrides(
     assert isinstance(config.assets.cors.paths, MappingProxyType)
     mutable_paths = cast(Any, config.assets.cors.paths)
     with pytest.raises(TypeError):
-        mutable_paths["/static/admin/"] = AssetCorsPolicy()
+        mutable_paths["/static/admin/"] = CorsPolicy()
 
 
 def _write_widget_page_app(tmp_path: Path, module_name: str) -> None:
@@ -1137,6 +1189,57 @@ def test_static_app_from_config_uses_module_assets_when_static_root_absent(
     assert isinstance(app, ComposedStaticFiles)
 
 
+def test_dynamic_cors_static_files_reuses_wrapped_app_until_policy_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policies = [
+        CorsPolicySet(enabled=True, allow_origins=("https://example.com",)),
+        CorsPolicySet(enabled=True, allow_origins=("https://example.com",)),
+        CorsPolicySet(enabled=True, allow_origins=("https://cdn.example.com",)),
+    ]
+    resolved_policies: list[CorsPolicySet | None] = []
+    wrapped_apps: list[object] = []
+
+    async def base_app(_scope: Scope, _receive: Receive, _send: Send) -> None:
+        return None
+
+    def resolve_policy() -> CorsPolicySet | None:
+        return policies.pop(0)
+
+    def wrap_app(
+        _app: ASGIApp,
+        policy: CorsPolicySet | asset_serving_module.CorsPolicyResolver | None,
+        _url_path: str | None,
+    ) -> ASGIApp:
+        assert not callable(policy)
+        resolved_policies.append(policy)
+
+        async def wrapped_app(_scope: Scope, _receive: Receive, _send: Send) -> None:
+            return None
+
+        wrapped_apps.append(wrapped_app)
+        return wrapped_app
+
+    monkeypatch.setattr(asset_serving_module, "_asset_cors_app", wrap_app)
+    app = asset_serving_module.DynamicCorsStaticFiles(
+        app=base_app,
+        cors=resolve_policy,
+        url_path="/static",
+    )
+
+    first = app._resolved_app()
+    second = app._resolved_app()
+    third = app._resolved_app()
+
+    assert first is second
+    assert third is not first
+    assert resolved_policies == [
+        CorsPolicySet(enabled=True, allow_origins=("https://example.com",)),
+        CorsPolicySet(enabled=True, allow_origins=("https://cdn.example.com",)),
+    ]
+    assert len(wrapped_apps) == 2
+
+
 @pytest.mark.anyio
 async def test_wybra_web_setup_applies_global_asset_cors(
     tmp_path: Path,
@@ -1158,7 +1261,12 @@ async def test_wybra_web_setup_applies_global_asset_cors(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("cors_static_app", "wybra.assets", "wybra.web"),
+                    "modules": (
+                        "cors_static_app",
+                        "wybra.assets",
+                        "wybra.security",
+                        "wybra.web",
+                    ),
                 },
                 "app.routes": {"prefixes": {"cors_static_app": {}, "wybra.web": {}}},
                 "app.templates": {"auto_reload": True, "cache_size": 0},
@@ -1207,7 +1315,12 @@ async def test_wybra_web_setup_applies_per_path_asset_cors(
                 "app": {
                     "config_path": tmp_path / "app.toml",
                     "project_root": tmp_path,
-                    "modules": ("path_cors_static_app", "wybra.assets", "wybra.web"),
+                    "modules": (
+                        "path_cors_static_app",
+                        "wybra.assets",
+                        "wybra.security",
+                        "wybra.web",
+                    ),
                 },
                 "app.routes": {
                     "prefixes": {"path_cors_static_app": {}, "wybra.web": {}}
@@ -1278,6 +1391,7 @@ async def test_wybra_web_setup_uses_normalised_static_mount_path_for_asset_cors(
                     "modules": (
                         "normalised_cors_static_app",
                         "wybra.assets",
+                        "wybra.security",
                         "wybra.web",
                     ),
                 },
@@ -2000,7 +2114,7 @@ def test_wybra_web_package_exposes_expected_submodules() -> None:
         "wybra.core.resources",
         "wybra.web.routes.contracts",
         "wybra.web.routes",
-        "wybra.web.security",
+        "wybra.security",
         "wybra.assets",
         "wybra.core.settings",
         "wybra.web.routes",
@@ -3852,6 +3966,179 @@ def test_static_collect_command_reports_destination_creation_failures(
     assert "create failed for static collection root" in captured.err
 
 
+def test_static_collect_command_writes_nginx_cors_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_static_collect_app(tmp_path, "nginx_cors_collect_app", "body {}")
+    config_path = _write_static_collect_config(
+        tmp_path,
+        "app.toml",
+        module_name="nginx_cors_collect_app",
+        root="collected-assets",
+        extra_modules=("wybra.security",),
+        extra_config="""
+            [app.assets.cors]
+            enabled = true
+            allow_origins = ["https://example.com"]
+            allow_methods = ["GET", "HEAD"]
+        """,
+    )
+    nginx_config = tmp_path / "deploy" / "asset-cors.conf"
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(collect_tool, "runtime_project_root", lambda: tmp_path)
+    importlib.invalidate_caches()
+
+    exit_code = collect_tool.main(
+        [
+            "--config",
+            config_path.as_posix(),
+            "--nginx-cors",
+            nginx_config.as_posix(),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "static collection: ok" in captured.out
+    assert 'add_header Access-Control-Allow-Origin "https://example.com" always;' in (
+        nginx_config.read_text(encoding="utf-8")
+    )
+
+
+def test_render_nginx_cors_config_uses_single_slash_root_location() -> None:
+    config = render_nginx_cors_config(
+        CorsPolicySet(
+            enabled=True,
+            allow_origins=("https://example.com",),
+        )
+    )
+
+    assert "location / {" in config
+    assert "location // {" not in config
+
+
+def test_render_nginx_cors_config_omits_blank_optional_headers() -> None:
+    config = render_nginx_cors_config(
+        CorsPolicySet(
+            enabled=True,
+            allow_origins=("https://example.com",),
+            allow_methods=("GET", "HEAD"),
+        )
+    )
+
+    assert "Access-Control-Allow-Headers" not in config
+    assert "Access-Control-Expose-Headers" not in config
+    assert "Access-Control-Allow-Credentials" not in config
+
+
+def test_render_nginx_cors_config_includes_configured_optional_headers() -> None:
+    config = render_nginx_cors_config(
+        CorsPolicySet(
+            enabled=True,
+            allow_origins=("https://example.com",),
+            allow_headers=("Authorization",),
+            expose_headers=("ETag",),
+            allow_credentials=True,
+            paths={
+                "/private/": CorsPolicy(
+                    allow_origins=("https://admin.example.com",),
+                ),
+            },
+        )
+    )
+
+    assert "location /private/ {" in config
+    assert 'add_header Access-Control-Allow-Headers "Authorization" always;' in config
+    assert 'add_header Access-Control-Expose-Headers "ETag" always;' in config
+    assert 'add_header Access-Control-Allow-Credentials "true" always;' in config
+
+
+def test_static_collect_command_writes_nginx_cors_for_replacement_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_static_collect_app(tmp_path, "replacement_nginx_cors_app", "body {}")
+    replacement_module = tmp_path / "replacement_security"
+    replacement_module.mkdir()
+    (replacement_module / "__init__.py").write_text(
+        dedent(
+            """
+            from wybra.security import module_config
+
+            provides_security_capability = True
+            """
+        ),
+        encoding="utf-8",
+    )
+    config_path = _write_static_collect_config(
+        tmp_path,
+        "app.toml",
+        module_name="replacement_nginx_cors_app",
+        root="collected-assets",
+        extra_modules=("replacement_security",),
+        extra_config="""
+            [app.assets.cors]
+            enabled = true
+            allow_origins = ["https://example.com"]
+            allow_methods = ["GET", "HEAD"]
+        """,
+    )
+    nginx_config = tmp_path / "deploy" / "asset-cors.conf"
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(collect_tool, "runtime_project_root", lambda: tmp_path)
+    importlib.invalidate_caches()
+
+    exit_code = collect_tool.main(
+        [
+            "--config",
+            config_path.as_posix(),
+            "--nginx-cors",
+            nginx_config.as_posix(),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "static collection: ok" in captured.out
+    assert 'add_header Access-Control-Allow-Origin "https://example.com" always;' in (
+        nginx_config.read_text(encoding="utf-8")
+    )
+
+
+def test_static_collect_command_nginx_cors_requires_security_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_static_collect_app(tmp_path, "nginx_cors_missing_security_app", "body {}")
+    config_path = _write_static_collect_config(
+        tmp_path,
+        "app.toml",
+        module_name="nginx_cors_missing_security_app",
+        root="collected-assets",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(collect_tool, "runtime_project_root", lambda: tmp_path)
+    importlib.invalidate_caches()
+
+    exit_code = collect_tool.main(
+        [
+            "--config",
+            config_path.as_posix(),
+            "--nginx-cors",
+            "asset-cors.conf",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "static collection: failed" in captured.err
+    assert "requires wybra.security" in captured.err
+
+
 def test_static_collect_main_handles_click_abort_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -3883,13 +4170,18 @@ def _write_static_collect_config(
     module_name: str,
     root: str,
     export_mode: str = "normal",
+    extra_modules: tuple[str, ...] = (),
+    extra_config: str = "",
 ) -> Path:
     config_path = tmp_path / file_name
+    modules = ", ".join(
+        f'"{configured_module}"' for configured_module in (module_name, *extra_modules)
+    )
     config_path.write_text(
         dedent(
             f"""
             [app]
-            modules = ["{module_name}"]
+            modules = [{modules}]
 
             [app.templates]
             auto_reload = true
@@ -3899,6 +4191,8 @@ def _write_static_collect_config(
             url_path = "/static/"
             root = "{root}"
             export_mode = "{export_mode}"
+
+            {extra_config}
             """
         ),
         encoding="utf-8",

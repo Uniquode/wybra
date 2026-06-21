@@ -4,12 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from wybra.assets.config import (
-    AssetCorsOptions,
-    AssetExportMode,
-    load_asset_cors_options,
-    parse_asset_export_mode,
-)
+from wybra.assets.config import AssetExportMode, parse_asset_export_mode
 from wybra.core.composition import (
     AppConfig,
     AssetOptions,
@@ -17,6 +12,7 @@ from wybra.core.composition import (
     RouteOptions,
     TemplateOptions,
 )
+from wybra.security import CorsPolicySet, load_cors_policy_set
 from wybra.site import Site
 
 
@@ -62,8 +58,8 @@ def _section(site: Site, name: str) -> Mapping[str, Any]:
     raise CompositionError(f"Config section {name!r} must be a mapping.")
 
 
-def _asset_cors_options(config: Mapping[str, Any]) -> AssetCorsOptions:
-    return load_asset_cors_options(
+def _asset_cors_options(config: Mapping[str, Any]) -> CorsPolicySet:
+    return load_cors_policy_set(
         config,
         "Config section app.assets.cors",
         error_type=CompositionError,
