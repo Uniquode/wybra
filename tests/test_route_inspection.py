@@ -369,7 +369,7 @@ def test_graph_renderer_uses_compact_visual_tree() -> None:
                 prefix="/account",
             ),
             ConfiguredModuleRouter(
-                module_name="wybra.web",
+                module_name="wybra.core",
                 label="partials",
                 router=partials_router,
                 prefix="",
@@ -384,7 +384,7 @@ def test_graph_renderer_uses_compact_visual_tree() -> None:
         "├─ [get] /account auth:account wybra.auth:account",
         "│  └─ [get,post] /login auth:login",
         "├─ [get] /health health",
-        "└─ /partials wybra.web:partials",
+        "└─ /partials wybra.core:partials",
         "   ├─ [get] /theme-mode theme-mode (partial)",
         "   └─ [get] /theme-selector theme-selector (partial)",
     ]

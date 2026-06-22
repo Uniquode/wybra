@@ -57,7 +57,7 @@ type ContextProvider = Callable[[Any, TemplateContext], ContextResult]
 type ContextProviderRegistration = ContextProvider | Mapping[str, Any]
 
 _CONTEXT_PROVIDERS: dict[str, list[ContextProvider]] = {}
-REQUEST_CONTEXT_STATE_ATTRIBUTE = "wybra_web_template_context"
+REQUEST_CONTEXT_STATE_ATTRIBUTE = "wybra_template_context"
 
 
 class ContextProviderError(CompositionError):

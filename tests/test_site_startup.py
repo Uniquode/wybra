@@ -29,7 +29,7 @@ from wybra.core.exceptions import Http404
 from wybra.core.routes import inspect_route_tree
 from wybra.db.config import ENV_DATABASE_URL
 from wybra.errors.capabilities import ErrorHandlingCapability
-from wybra.errors.handlers import EmptyBodyResponseException, _handle_http_exception
+from wybra.errors.handlers import EmptyBodyResponseException
 from wybra.site import start
 from wybra.site_config import app_config_from_site
 
@@ -297,15 +297,15 @@ async def test_start_composes_existing_fastapi_app_from_file_source(
     app = FastAPI(title="Host app")
     config_path = _write_app_config(
         tmp_path / "app.toml",
-        modules=("wybra.assets", "wybra.web"),
+        modules=("wybra.assets",),
     )
 
     site = await start(app, config_source=str(config_path))
 
     assert isinstance(site, Site)
     assert site.app is app
-    assert site.modules == ("wybra.assets", "wybra.web")
-    assert site.has_module("wybra.web") is True
+    assert site.modules == ("wybra.assets",)
+    assert site.has_module("wybra.assets") is True
     assert site.has_module("wybra.auth") is False
 
 
@@ -316,13 +316,13 @@ async def test_start_accepts_relative_file_source_string(
 ) -> None:
     _write_app_config(
         tmp_path / "app.toml",
-        modules=("wybra.assets", "wybra.web"),
+        modules=("wybra.assets",),
     )
     monkeypatch.chdir(tmp_path)
 
     site = await start(FastAPI(), config_source="app.toml")
 
-    assert site.modules == ("wybra.assets", "wybra.web")
+    assert site.modules == ("wybra.assets",)
 
 
 @pytest.mark.anyio
@@ -333,7 +333,7 @@ async def test_start_uses_app_root_environment_for_app_config(
     project_root.mkdir()
     _write_app_config(
         project_root / "app.toml",
-        modules=("wybra.assets", "wybra.web"),
+        modules=("wybra.assets",),
     )
 
     site = await start(
@@ -358,7 +358,7 @@ async def test_start_app_config_does_not_override_project_root(
     config_root.mkdir(parents=True)
     _write_app_config(
         config_root / "app.toml",
-        modules=("wybra.assets", "wybra.web"),
+        modules=("wybra.assets",),
     )
 
     site = await start(
@@ -383,7 +383,7 @@ async def test_start_relative_config_source_uses_supplied_app_root(
     config_root.mkdir(parents=True)
     _write_app_config(
         config_root / "app.toml",
-        modules=("wybra.assets", "wybra.web"),
+        modules=("wybra.assets",),
     )
 
     site = await start(
@@ -427,12 +427,12 @@ async def test_start_environment_overrides_database_url_and_deployment_environme
 async def test_start_accepts_file_uri_source_string(tmp_path: Path) -> None:
     config_path = _write_app_config(
         tmp_path / "app.toml",
-        modules=("wybra.assets", "wybra.web"),
+        modules=("wybra.assets",),
     )
 
     site = await start(FastAPI(), config_source=config_path.as_uri())
 
-    assert site.modules == ("wybra.assets", "wybra.web")
+    assert site.modules == ("wybra.assets",)
 
 
 @pytest.mark.anyio
@@ -752,7 +752,7 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
     app_config = AppConfig(
         config_path=tmp_path / "app.toml",
         project_root=tmp_path,
-        modules=("wybra.assets", "wybra.web"),
+        modules=("wybra.assets",),
         routes=RouteOptions(prefixes={}),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
         assets=AssetOptions(url_path="/static/"),
@@ -760,8 +760,8 @@ async def test_start_accepts_loaded_app_config(tmp_path: Path) -> None:
 
     site = await start(FastAPI(), config_source=app_config)
 
-    assert site.modules == ("wybra.assets", "wybra.web")
-    assert site.has_module("wybra.web") is True
+    assert site.modules == ("wybra.assets",)
+    assert site.has_module("wybra.assets") is True
 
 
 @pytest.mark.anyio
@@ -769,12 +769,12 @@ async def test_start_accepts_config_source_object() -> None:
     site = await start(
         FastAPI(),
         config_source=MappingConfigSource(
-            {"app": {"modules": ("wybra.assets", "wybra.web")}},
+            {"app": {"modules": ("wybra.assets",)}},
             source="test",
         ),
     )
 
-    assert site.modules == ("wybra.assets", "wybra.web")
+    assert site.modules == ("wybra.assets",)
 
 
 @pytest.mark.anyio
@@ -872,26 +872,6 @@ async def test_errors_module_registers_error_handling_capability() -> None:
     assert site.has_capability(ErrorHandlingCapability)
     assert StarletteHTTPException in app.exception_handlers
     assert EmptyBodyResponseException in app.exception_handlers
-
-
-@pytest.mark.anyio
-async def test_web_module_does_not_register_error_handlers_without_errors_module() -> (
-    None
-):
-    app = FastAPI()
-
-    await start(
-        app,
-        config_source=MappingConfigSource(
-            {
-                "app": {"modules": ("wybra.web",)},
-                "app.routes": {"prefixes": {"wybra.web": {}}},
-            }
-        ),
-    )
-
-    assert app.exception_handlers[StarletteHTTPException] is not _handle_http_exception
-    assert EmptyBodyResponseException not in app.exception_handlers
 
 
 @pytest.mark.anyio

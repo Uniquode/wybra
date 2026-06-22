@@ -305,26 +305,6 @@ async def test_forms_setup_finalises_csrf_cookie_when_requested(tmp_path) -> Non
     assert CSRF_COOKIE_NAME not in partial_response.cookies
 
 
-@pytest.mark.anyio
-async def test_web_setup_omits_forms_behaviour_without_forms_module(tmp_path) -> None:
-    app = FastAPI()
-    await start(
-        app,
-        config_source=MappingConfigSource(
-            {
-                "app": {
-                    "config_path": tmp_path / "app.toml",
-                    "project_root": tmp_path,
-                    "modules": ("wybra.web",),
-                },
-                "app.routes": {"prefixes": {"wybra.web": {}}},
-            }
-        ),
-    )
-
-    assert not hasattr(app.state, "csrf")
-
-
 def test_validate_forms_target_is_available(monkeypatch, tmp_path) -> None:
     class Settings:
         modules = ("wybra.forms",)
