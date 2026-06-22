@@ -54,6 +54,14 @@ _.profile_image_for_user
 _.status_response
 _.streaming_response
 _.page_link
+_.Http400
+_.Http401
+_.Http403
+_.Http404
+_.development_error_context
+_._handle_http_exception
+_._handle_validation_error
+_._handle_unexpected_exception
 
 # Click command callbacks registered through decorators.
 _.create_command
@@ -192,6 +200,9 @@ _.terms_accepted_at
 _.data_deletion_requested
 _.model
 _.dispatch
+_.filename
+_.exception_message
+_.traceback
 
 # Alembic revision module metadata.
 _.down_revision

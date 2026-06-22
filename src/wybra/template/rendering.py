@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 
-from wybra.errors import structured_error
+from wybra.errors.diagnostics import structured_error
 from wybra.site import SiteCapabilityError, get_site
 from wybra.template.capabilities import TemplateCapability
 

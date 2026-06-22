@@ -10,6 +10,7 @@ from wybra.api.validation import validate_api
 from wybra.assets.validation import validate_assets
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.routes.validation import validate_routes
+from wybra.errors.validation import validate_errors
 from wybra.forms.validation import validate_forms
 from wybra.security.validation import validate_security
 from wybra.template.validation import validate_template
@@ -40,6 +41,7 @@ class UnknownValidationTargetError(ValueError):
 BUILTIN_VALIDATION_TARGETS: Mapping[str, ValidationTarget] = {
     "api": validate_api,
     "assets": validate_assets,
+    "errors": validate_errors,
     "forms": validate_forms,
     "routes": validate_routes,
     "security": validate_security,

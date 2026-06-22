@@ -24,6 +24,7 @@ from jinja2.exceptions import TemplateNotFound
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import wybra.assets.serving as asset_serving_module
+import wybra.errors.capabilities as errors_capabilities_module
 import wybra.template.capabilities as template_capabilities_module
 import wybra.web as web_module
 from wybra.assets import (
@@ -2071,7 +2072,7 @@ def test_wybra_web_package_exposes_expected_submodules() -> None:
     for module_name in (
         "wybra.core.composition",
         "wybra.template.context",
-        "wybra.web.errors",
+        "wybra.errors.handlers",
         "wybra.core.resources",
         "wybra.core.routes.contracts",
         "wybra.core.routes",
@@ -3470,7 +3471,7 @@ def test_optional_static_mount_path_normalises_capability_url_path() -> None:
     site.provide_capability(StaticAssetCapability, UnnormalisedStaticAssetCapability())
 
     assert (
-        web_module._optional_static_mount_path(
+        errors_capabilities_module._optional_static_mount_path(
             site.capability_proxy(StaticAssetCapability)
         )
         == "/static"

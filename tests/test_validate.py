@@ -22,6 +22,7 @@ from wybra.core.composition import (
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.routes.validation import validate_routes
+from wybra.errors.validation import validate_errors
 from wybra.security.validation import validate_security
 from wybra.template.validation import _contains_post_form, validate_template
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
@@ -431,8 +432,8 @@ def test_validate_command_runs_discovered_module_targets(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out == (
-        "api: ok\nassets: ok\nforms: ok\nroutes: ok\nsecurity: ok\ntemplate: ok\n"
-        "command-target: ok\n"
+        "api: ok\nassets: ok\nerrors: ok\nforms: ok\nroutes: ok\nsecurity: ok\n"
+        "template: ok\ncommand-target: ok\n"
     )
     assert captured.err == ""
 
@@ -565,6 +566,25 @@ def test_validate_api_accepts_replacement_provider(
     assert any(
         check.description == "replacement API capability provider is configured"
         for check in result.checks
+    )
+
+
+def test_validate_errors_accepts_omitted_errors_module(tmp_path: Path) -> None:
+    result = validate_errors(_web_settings(tmp_path, ("wybra.web",)))
+
+    assert result.is_ok
+    assert any(
+        check.description == "errors module is not configured"
+        for check in result.checks
+    )
+
+
+def test_validate_errors_accepts_configured_errors_module(tmp_path: Path) -> None:
+    result = validate_errors(_web_settings(tmp_path, ("wybra.errors", "wybra.web")))
+
+    assert result.is_ok
+    assert any(
+        check.description == "errors module is configured" for check in result.checks
     )
 
 

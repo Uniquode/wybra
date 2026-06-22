@@ -32,7 +32,7 @@ from wybra.core.composition import (
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.environment import EnvironmentMapping, load_environment
 from wybra.core.settings import load_composition_config_from_environment
-from wybra.errors import structured_error, type_name
+from wybra.errors.diagnostics import structured_error, type_name
 from wybra.tools.project import runtime_project_root
 
 logger = logging.getLogger(__name__)

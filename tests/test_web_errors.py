@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from wybra.api import ApiCapability
 from wybra.config import ConfigService, MappingConfigSource
+from wybra.errors.capabilities import ErrorHandlingCapability
+from wybra.errors.handlers import (
+    ErrorPresentation,
+    _api_error_code,
+    _resolve_error_response_kind,
+    register_error_handlers,
+)
 from wybra.site import Site
-from wybra.web.errors import ErrorPresentation, _api_error_code, register_error_handlers
 
 
 class CustomApiCapability:
@@ -72,6 +78,38 @@ class CustomApiCapability:
             headers=headers,
             media_type=media_type,
         )
+
+
+class CustomErrorCapability:
+    def response_for_exception(self, request, exc):
+        return JSONResponse(
+            {
+                "custom_error": type(exc).__name__,
+                "path": request.url.path,
+            },
+            status_code=599,
+        )
+
+
+def test_errors_are_translated_through_error_handling_capability() -> None:
+    app = FastAPI()
+    site = Site(
+        app=app,
+        config=ConfigService([MappingConfigSource({"app": {"modules": []}})]),
+    )
+    app.state.site = site
+    site.provide_capability(ErrorHandlingCapability, CustomErrorCapability())
+    register_error_handlers(app)
+
+    @app.get("/fail")
+    async def fail() -> Response:
+        raise RuntimeError("boom")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/fail")
+
+    assert response.status_code == 599
+    assert response.json() == {"custom_error": "RuntimeError", "path": "/fail"}
 
 
 def test_api_errors_are_rendered_through_api_capability() -> None:
@@ -143,3 +181,54 @@ def test_api_errors_without_api_capability_use_plain_text_fallback() -> None:
     assert response.status_code == 500
     assert response.headers["content-type"].startswith("text/plain")
     assert response.text.startswith("500 Internal Server Error:")
+
+
+def test_error_classification_uses_htmx_header() -> None:
+    app = FastAPI()
+    observed = {}
+    register_error_handlers(app)
+
+    @app.get("/items")
+    async def items(request: Request) -> Response:
+        observed["kind"] = _resolve_error_response_kind(request)
+        return Response()
+
+    with TestClient(app) as client:
+        client.get("/items", headers={"HX-Request": "true"})
+
+    assert observed["kind"] == "partial"
+
+
+def test_error_classification_uses_accept_header() -> None:
+    app = FastAPI()
+    observed = {}
+    register_error_handlers(app)
+
+    @app.get("/items")
+    async def items(request: Request) -> Response:
+        observed["kind"] = _resolve_error_response_kind(request)
+        return Response()
+
+    with TestClient(app) as client:
+        client.get("/items", headers={"Accept": "application/json"})
+
+    assert observed["kind"] == "api"
+
+
+def test_error_classification_uses_route_type_metadata() -> None:
+    from wybra.core.routes import RouteType, route_type
+
+    app = FastAPI()
+    observed = {}
+    register_error_handlers(app)
+
+    @app.get("/items")
+    @route_type(RouteType.API)
+    async def items(request: Request) -> Response:
+        observed["kind"] = _resolve_error_response_kind(request)
+        return Response()
+
+    with TestClient(app) as client:
+        client.get("/items")
+
+    assert observed["kind"] == "api"

@@ -35,7 +35,11 @@ Repository: <https://github.com/Uniquode/wybra>
   safety helpers, form response finalisation, and forms validation.
 - `wybra.security`: web-facing security policy, COOP/security headers, CORS
   policy data, middleware setup, and security validation.
-- `wybra.web`: remaining web foundation setup and error handling.
+- `wybra.errors`: exception handler registration, error classification,
+  safe fallback responses, renderer coordination, and error validation.
+- `wybra.api`: API request classification, response formatting, error payloads,
+  HATEOAS-style paging metadata, streaming responses, and API validation.
+- `wybra.web`: remaining web foundation setup.
 - `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
 - `wybra.tools`: generic project command adapters and validation target
@@ -331,6 +335,8 @@ modules = [
     "wybra.assets",
     "wybra.security",
     "wybra.forms",
+    "wybra.errors",
+    "wybra.api",
     "wybra.template",
     "wybra.web",
     "wybra.auth",
