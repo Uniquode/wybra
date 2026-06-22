@@ -78,8 +78,12 @@ def _traceback_frames(exc: BaseException) -> tuple[ErrorFrame, ...]:
 
 def _chained_errors(exc: BaseException) -> tuple[ChainedError, ...]:
     causes: list[ChainedError] = []
+    seen = {id(exc)}
     current = exc.__cause__ or exc.__context__
     while current is not None:
+        if id(current) in seen:
+            break
+        seen.add(id(current))
         causes.append(
             ChainedError(
                 exception_type=type(current).__name__,

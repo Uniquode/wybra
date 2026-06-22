@@ -6,23 +6,23 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class ErrorMapping:
-    exception_type: type[BaseException]
-    target_exception_type: type[BaseException]
+    exception_type: type[Exception]
+    target_exception_type: type[Exception]
     detail: str | None = None
 
 
 def translate_exception(
-    exc: BaseException,
+    exc: Exception,
     *,
     mappings: Iterable[ErrorMapping],
-) -> BaseException:
+) -> Exception:
     for mapping in mappings:
         if isinstance(exc, mapping.exception_type):
             return _mapped_exception(exc, mapping)
     return exc
 
 
-def _mapped_exception(exc: BaseException, mapping: ErrorMapping) -> BaseException:
+def _mapped_exception(exc: Exception, mapping: ErrorMapping) -> Exception:
     if mapping.detail is None:
         mapped = mapping.target_exception_type()
     else:

@@ -84,8 +84,6 @@ def register_error_handlers(
 
 def _handle_exception(request: Request, exc: Exception) -> Response:
     translated = translate_exception(exc, mappings=_error_options(request).mappings)
-    if not isinstance(translated, Exception):
-        translated = exc
     return _error_capability(request).response_for_exception(request, translated)
 
 

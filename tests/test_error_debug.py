@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from wybra.errors.debug import development_error_context
+from wybra.errors.debug import _chained_errors, development_error_context
 
 
 def test_development_error_context_includes_request_route_and_traceback() -> None:
@@ -58,3 +58,16 @@ def test_development_error_context_includes_chained_causes() -> None:
     assert response.json() == {
         "causes": [{"type": "LookupError", "message": "original"}]
     }
+
+
+def test_chained_error_collection_stops_at_cycles() -> None:
+    first = RuntimeError("first")
+    second = ValueError("second")
+    first.__cause__ = second
+    second.__cause__ = first
+
+    causes = _chained_errors(first)
+
+    assert [(cause.exception_type, cause.exception_message) for cause in causes] == [
+        ("ValueError", "second")
+    ]
