@@ -1,18 +1,19 @@
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from http import HTTPStatus
 from typing import Literal, cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse, Response
 from jinja2.exceptions import TemplateNotFound
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from wybra.core.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
+from wybra.api import ApiCapability, ApiError
+from wybra.core.routes.contracts import PARTIAL_PATH_PREFIX
 from wybra.core.url_paths import matches_path_prefix
-from wybra.site import SiteCapabilityError
+from wybra.site import SiteCapabilityError, get_site
 from wybra.template.rendering import template_capability_from
 
 ErrorResponseKind = Literal["page", "partial", "api", "static"]
@@ -39,7 +40,6 @@ class ErrorPresentation:
 @dataclass(frozen=True, slots=True)
 class ErrorHandlerOptions:
     static_mount_path: str | StaticMountPathResolver | None = None
-    api_path_prefix: str = API_PATH_PREFIX
     partial_path_prefix: str = PARTIAL_PATH_PREFIX
     page_template: str = "errors/base.html"
     partial_template: str = "errors/fragment.html"
@@ -80,12 +80,10 @@ def _handle_validation_error(request: Request, exc: Exception) -> Response:
     presentation = _build_error_presentation(422, detail="The request was invalid.")
     response_kind = _resolve_error_response_kind(request)
     if response_kind == "api":
-        return JSONResponse(
-            status_code=422,
-            content=_build_api_error_payload(
-                presentation,
-                errors=validation_exc.errors(),
-            ),
+        return _build_api_validation_error_response(
+            request,
+            presentation,
+            errors=validation_exc.errors(),
         )
 
     if response_kind in ("page", "partial"):
@@ -111,12 +109,11 @@ def _build_error_response(
 ) -> Response:
     response_kind = _resolve_error_response_kind(request)
     if response_kind == "api":
-        response = JSONResponse(
-            status_code=presentation.status_code,
-            content=_build_api_error_payload(presentation),
+        return _build_api_error_response(
+            request,
+            presentation,
+            headers=headers,
         )
-        _apply_headers(response, headers)
-        return response
     if response_kind == "static":
         response = PlainTextResponse(
             presentation.heading,
@@ -162,12 +159,13 @@ def _build_error_response(
 
 def _resolve_error_response_kind(request: Request) -> ErrorResponseKind:
     path = request.url.path
+    api = _optional_api_capability(request)
+    if api is not None and api.is_api_request(request):
+        return "api"
     options = _error_options(request)
     static_mount_path = _resolve_static_mount_path(options)
     if static_mount_path is not None and _matches_path_prefix(path, static_mount_path):
         return "static"
-    if _matches_path_prefix(path, options.api_path_prefix):
-        return "api"
     if _matches_path_prefix(path, options.partial_path_prefix):
         return "partial"
     return "page"
@@ -204,19 +202,13 @@ def _fallback_error_response(
     headers: Mapping[str, str] | None = None,
 ) -> Response:
     if response_kind == "api":
-        response = JSONResponse(
-            status_code=presentation.status_code,
-            content=_build_api_error_payload(presentation),
+        return _build_api_error_response(
+            None,
+            presentation,
+            headers=headers,
         )
-        _apply_headers(response, headers)
-        return response
 
-    response = PlainTextResponse(
-        f"{presentation.status_code} {presentation.heading}: {presentation.detail}",
-        status_code=presentation.status_code,
-    )
-    _apply_headers(response, headers)
-    return response
+    return _plain_text_error_response(presentation, headers=headers)
 
 
 def _build_error_presentation(
@@ -242,20 +234,81 @@ def _normalise_http_detail(status_code: int, detail: str | None) -> str | None:
     return detail
 
 
-def _build_api_error_payload(
+def _build_api_error_response(
+    request: Request | None,
     presentation: ErrorPresentation,
     *,
-    errors: Sequence[object] | None = None,
-) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "error": presentation.heading,
-        "detail": presentation.detail,
-        "status_code": presentation.status_code,
-    }
-    if errors is not None:
-        payload["errors"] = errors
+    details: object | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> Response:
+    api = _optional_api_capability(request) if request is not None else None
+    if api is not None:
+        response = api.error_response(
+            ApiError(
+                code=_api_error_code(presentation),
+                message=presentation.heading,
+                details=details,
+            ),
+            status_code=presentation.status_code,
+            headers=_safe_headers(headers),
+        )
+        return response
 
-    return payload
+    return _plain_text_error_response(presentation, headers=headers)
+
+
+def _build_api_validation_error_response(
+    request: Request,
+    presentation: ErrorPresentation,
+    *,
+    errors: object,
+) -> Response:
+    api = _optional_api_capability(request)
+    if api is not None and isinstance(errors, list):
+        return api.validation_error_response(
+            errors,
+            status_code=presentation.status_code,
+        )
+    return _plain_text_error_response(presentation)
+
+
+def _plain_text_error_response(
+    presentation: ErrorPresentation,
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> PlainTextResponse:
+    response = PlainTextResponse(
+        f"{presentation.status_code} {presentation.heading}: {presentation.detail}",
+        status_code=presentation.status_code,
+    )
+    _apply_headers(response, headers)
+    return response
+
+
+def _optional_api_capability(request: Request | None) -> ApiCapability | None:
+    if request is None:
+        return None
+    try:
+        return get_site(request.app).optional_capability(ApiCapability)
+    except SiteCapabilityError:
+        return None
+
+
+def _safe_headers(headers: Mapping[str, str] | None) -> dict[str, str] | None:
+    if not headers:
+        return None
+    return {
+        name: value
+        for name, value in headers.items()
+        if name.lower() in _SAFE_ERROR_HEADERS
+    }
+
+
+def _api_error_code(presentation: ErrorPresentation) -> str:
+    try:
+        return HTTPStatus(presentation.status_code).name.lower()
+    except ValueError:
+        return f"http_{presentation.status_code}"
 
 
 def _matches_path_prefix(path: str, prefix: str) -> bool:

@@ -11,6 +11,7 @@ import wybra.assets.validation as asset_validation
 import wybra.template.validation as template_validation
 import wybra.tools.validate as validate_module
 import wybra.web
+from wybra.api.validation import validate_api
 from wybra.assets.validation import validate_assets
 from wybra.config import AppConfigSource, ConfigService
 from wybra.core.composition import (
@@ -102,6 +103,19 @@ def _write_replacement_security_module(root: Path, module_name: str) -> None:
     )
 
 
+def _write_replacement_api_module(root: Path, module_name: str) -> None:
+    module_root = root / module_name
+    module_root.mkdir()
+    (module_root / "__init__.py").write_text(
+        dedent(
+            """
+            provides_api_capability = True
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
 def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
     route_prefixes = {
         "wybra.web": {},
@@ -136,6 +150,10 @@ def _web_settings(
         from wybra.security import module_config as security_module_config
 
         config_defs.append(security_module_config)
+    if "wybra.api" in modules:
+        from wybra.api import module_config as api_module_config
+
+        config_defs.append(api_module_config)
     config = ConfigService(
         [AppConfigSource(app_config)],
         config_defs=tuple(config_defs),
@@ -413,7 +431,7 @@ def test_validate_command_runs_discovered_module_targets(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out == (
-        "assets: ok\nforms: ok\nroutes: ok\nsecurity: ok\ntemplate: ok\n"
+        "api: ok\nassets: ok\nforms: ok\nroutes: ok\nsecurity: ok\ntemplate: ok\n"
         "command-target: ok\n"
     )
     assert captured.err == ""
@@ -501,6 +519,69 @@ def test_validate_command_rejects_module_target_conflicting_with_builtin(
     assert "configuration: failed" in captured.err
     assert "assets from conflicting_validation_module.validation" in captured.err
     assert "Built-in validation targets cannot be overridden" in captured.err
+
+
+def test_validate_api_accepts_omitted_api_module(tmp_path: Path) -> None:
+    result = validate_api(_web_settings(tmp_path, ("wybra.web",)))
+
+    assert result.is_ok
+    assert any(
+        check.description == "api module is not configured" for check in result.checks
+    )
+
+
+def test_validate_api_loads_configured_api_module(tmp_path: Path) -> None:
+    result = validate_api(
+        _web_settings(
+            tmp_path,
+            ("wybra.api", "wybra.web"),
+            raw_config={
+                "app.api": {
+                    "path_prefix": "/service",
+                    "paging_link_mode": "request_path",
+                },
+            },
+        )
+    )
+
+    assert result.is_ok
+    assert any("API settings load" in check.description for check in result.checks)
+    assert any(
+        check.description == "API path prefix is configured" and check.passed
+        for check in result.checks
+    )
+
+
+def test_validate_api_accepts_replacement_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_replacement_api_module(tmp_path, "replacement_api")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = validate_api(_web_settings(tmp_path, ("replacement_api", "wybra.web")))
+
+    assert result.is_ok
+    assert any(
+        check.description == "replacement API capability provider is configured"
+        for check in result.checks
+    )
+
+
+def test_validate_command_exposes_builtin_api_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = _web_settings(tmp_path, ("wybra.api", "wybra.web"))
+    monkeypatch.setattr(validate_module, "_build_settings", lambda _overrides: settings)
+
+    exit_code = validate_main(["api"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out == "api: ok\n"
+    assert captured.err == ""
 
 
 def test_validate_command_reports_malformed_validation_surface(

@@ -51,6 +51,9 @@ _.get_profile
 _.ensure_profile
 _.set_profile_picture
 _.profile_image_for_user
+_.status_response
+_.streaming_response
+_.page_link
 
 # Click command callbacks registered through decorators.
 _.create_command

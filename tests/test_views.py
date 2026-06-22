@@ -7,12 +7,12 @@ import pytest
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from wybra.api import ApiCapability, ApiPaging, ApiSettings, DefaultApiCapability
 from wybra.site import SiteCapabilityError
 from wybra.views import (
     APIResult,
     APIView,
     HTMLView,
-    Page,
     TemplateView,
     View,
 )
@@ -134,27 +134,90 @@ async def test_api_view_renders_paged_api_result() -> None:
         def get(self, _request: Request) -> APIResult:
             return APIResult(
                 data=[{"name": "Ada"}],
-                page=Page(number=1, size=25, total=1),
+                paging=ApiPaging(cursor="abc", limit=25, has_more=False),
             )
 
-    response = await ExampleAPIView().dispatch(_request())
+    response = await ExampleAPIView(api=DefaultApiCapability(ApiSettings())).dispatch(
+        _request()
+    )
 
     assert isinstance(response, JSONResponse)
     assert response.body == (
-        b'{"data":[{"name":"Ada"}],"page":{"number":1,"size":25,"total":1}}'
+        b'{"data":[{"name":"Ada"}],"links":[],"paging":{"cursor":"abc",'
+        b'"limit":25,"has_more":false}}'
     )
 
 
 @pytest.mark.anyio
 async def test_api_view_can_delegate_final_formatting() -> None:
-    class Formatter:
-        def response_from_result(self, result: object) -> Response:
-            return JSONResponse({"wrapped": result})
+    class ApiFormatter(ApiCapability):
+        def is_api_request(self, request: Request, *, route_type=None) -> bool:
+            return True
+
+        def response(self, data, *, status_code=200, headers=None, metadata=None):
+            return JSONResponse({"wrapped": data}, status_code=status_code)
+
+        def paged_response(
+            self,
+            items,
+            *,
+            paging,
+            status_code=200,
+            headers=None,
+            metadata=None,
+        ):
+            return JSONResponse(
+                {"wrapped": list(items), "links": len(paging.links)},
+                status_code=status_code,
+            )
+
+        def error_response(self, error, *, status_code, headers=None):
+            return JSONResponse({"error": error.message}, status_code=status_code)
+
+        def status_response(
+            self,
+            *,
+            status_code,
+            message=None,
+            headers=None,
+            metadata=None,
+        ):
+            return JSONResponse({"status": message}, status_code=status_code)
+
+        def validation_error_response(
+            self,
+            errors,
+            *,
+            status_code=422,
+            headers=None,
+        ):
+            return JSONResponse({"errors": list(errors)}, status_code=status_code)
+
+        def streaming_response(
+            self,
+            body,
+            *,
+            status_code=200,
+            headers=None,
+            media_type=None,
+        ):
+            return Response(status_code=status_code, headers=headers)
 
     class ExampleAPIView(APIView):
         def get(self, _request: Request) -> dict[str, str]:
             return {"ok": "yes"}
 
-    response = await ExampleAPIView(formatter=Formatter()).dispatch(_request())
+    api: ApiCapability = ApiFormatter()
+    response = await ExampleAPIView(api=api).dispatch(_request())
 
     assert response.body == b'{"wrapped":{"ok":"yes"}}'
+
+
+@pytest.mark.anyio
+async def test_api_view_reports_missing_api_capability() -> None:
+    class ExampleAPIView(APIView):
+        def get(self, _request: Request) -> dict[str, str]:
+            return {"ok": "yes"}
+
+    with pytest.raises(SiteCapabilityError, match="configure wybra.api"):
+        await ExampleAPIView().dispatch(_request())
