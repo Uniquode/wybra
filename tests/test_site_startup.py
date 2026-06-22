@@ -6,6 +6,7 @@ from typing import Protocol
 
 import pytest
 from fastapi import FastAPI
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from wybra import Site, SiteCapabilityError, SiteCapabilityProxy, get_site, start_site
 from wybra.config import (
@@ -24,8 +25,11 @@ from wybra.core.composition import (
     TemplateOptions,
 )
 from wybra.core.config import ENV_APP_ENV
+from wybra.core.exceptions import Http404
 from wybra.core.routes import inspect_route_tree
 from wybra.db.config import ENV_DATABASE_URL
+from wybra.errors.capabilities import ErrorHandlingCapability
+from wybra.errors.handlers import EmptyBodyResponseException, _handle_http_exception
 from wybra.site import start
 from wybra.site_config import app_config_from_site
 
@@ -854,6 +858,79 @@ async def test_start_invokes_post_setup_site_hooks_after_all_setup_hooks(
         "first.post",
         "second.post",
     ]
+
+
+@pytest.mark.anyio
+async def test_errors_module_registers_error_handling_capability() -> None:
+    app = FastAPI()
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource({"app": {"modules": ("wybra.errors",)}}),
+    )
+
+    assert site.has_capability(ErrorHandlingCapability)
+    assert StarletteHTTPException in app.exception_handlers
+    assert EmptyBodyResponseException in app.exception_handlers
+
+
+@pytest.mark.anyio
+async def test_web_module_does_not_register_error_handlers_without_errors_module() -> (
+    None
+):
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {"modules": ("wybra.web",)},
+                "app.routes": {"prefixes": {"wybra.web": {}}},
+            }
+        ),
+    )
+
+    assert app.exception_handlers[StarletteHTTPException] is not _handle_http_exception
+    assert EmptyBodyResponseException not in app.exception_handlers
+
+
+@pytest.mark.anyio
+async def test_errors_module_uses_configured_module_error_mappings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _write_module(
+        tmp_path,
+        "mapped_error_app",
+        "from jinja2.exceptions import TemplateNotFound\n"
+        "from wybra.core.exceptions import Http404\n"
+        "from wybra.errors.mappings import ErrorMapping\n"
+        "error_mappings = (\n"
+        "    ErrorMapping(TemplateNotFound, Http404, 'Missing page.'),\n"
+        ")\n",
+    )
+    app = FastAPI()
+
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {"app": {"modules": ("mapped_error_app", "wybra.errors")}}
+        ),
+    )
+
+    from jinja2.exceptions import TemplateNotFound
+
+    @app.get("/missing")
+    async def missing() -> None:
+        raise TemplateNotFound("missing.html")
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/missing")
+
+    assert response.status_code == Http404.default_status_code
 
 
 @pytest.mark.anyio

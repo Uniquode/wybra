@@ -12,7 +12,7 @@ from wybra.assets.serving import static_app_from_config, static_sources_from_mod
 from wybra.assets.settings import AssetSettings
 from wybra.assets.storage import StaticAssetStorage, static_asset_storage
 from wybra.core.resources import PackageResourceSource
-from wybra.errors import structured_error
+from wybra.errors.diagnostics import structured_error
 from wybra.security import (
     CorsPolicySet,
     SecurityCapability,

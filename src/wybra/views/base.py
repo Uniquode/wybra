@@ -11,7 +11,7 @@ from fastapi import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from wybra.api import ApiCapability, ApiPaging
-from wybra.errors import structured_error, type_name
+from wybra.errors.diagnostics import structured_error, type_name
 from wybra.site import SiteCapabilityError
 
 type JsonValue = Mapping[str, Any] | Sequence[Any] | str | int | float | bool | None

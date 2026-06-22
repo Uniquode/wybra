@@ -9,6 +9,8 @@ kind of failure instead of inspecting messages:
   work and should stay module-specific.
 """
 
+from starlette.exceptions import HTTPException
+
 
 class DataValidationError(ValueError):
     """Base for invalid data values supplied to Wybra APIs."""
@@ -24,3 +26,55 @@ class InvalidConfigurationError(DataValidationError):
 
 class ConfigurationError(ValueError):
     """Raised when runtime or module configuration is invalid."""
+
+
+class HttpException(HTTPException):
+    """Base for HTTP control-flow exceptions."""
+
+    default_status_code = 500
+    default_detail = "Internal Server Error"
+
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        status_code: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        resolved_status_code = (
+            self.default_status_code if status_code is None else status_code
+        )
+        resolved_detail = self.default_detail if detail is None else detail
+        super().__init__(
+            status_code=resolved_status_code,
+            detail=resolved_detail,
+            headers=headers,
+        )
+
+
+class Http400(HttpException):
+    """Raised when the request is malformed."""
+
+    default_status_code = 400
+    default_detail = "Bad Request"
+
+
+class Http401(HttpException):
+    """Raised when authentication is required."""
+
+    default_status_code = 401
+    default_detail = "Authentication Required"
+
+
+class Http403(HttpException):
+    """Raised when access is forbidden."""
+
+    default_status_code = 403
+    default_detail = "Forbidden"
+
+
+class Http404(HttpException):
+    """Raised when a requested resource is not found."""
+
+    default_status_code = 404
+    default_detail = "Not Found"

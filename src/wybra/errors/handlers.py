@@ -2,7 +2,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from http import HTTPStatus
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -11,8 +11,10 @@ from jinja2.exceptions import TemplateNotFound
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from wybra.api import ApiCapability, ApiError
+from wybra.core.routes import ROUTE_TYPE_ATTRIBUTE, RouteType
 from wybra.core.routes.contracts import PARTIAL_PATH_PREFIX
 from wybra.core.url_paths import matches_path_prefix
+from wybra.errors.mappings import ErrorMapping, translate_exception
 from wybra.site import SiteCapabilityError, get_site
 from wybra.template.rendering import template_capability_from
 
@@ -21,7 +23,11 @@ StaticMountPathResolver = Callable[[], str | None]
 
 logger = logging.getLogger(__name__)
 _SAFE_ERROR_HEADERS: set[str] = {"allow", "www-authenticate", "retry-after"}
-ERROR_OPTIONS_STATE_ATTRIBUTE = "wybra_web_error_options"
+ERROR_OPTIONS_STATE_ATTRIBUTE = "wybra_errors_options"
+
+
+class _ErrorHandlingCapability(Protocol):
+    def response_for_exception(self, request: Request, exc: Exception) -> Response: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +49,21 @@ class ErrorHandlerOptions:
     partial_path_prefix: str = PARTIAL_PATH_PREFIX
     page_template: str = "errors/base.html"
     partial_template: str = "errors/fragment.html"
+    mappings: tuple[ErrorMapping, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DefaultErrorHandlingCapability:
+    """Default exception-to-response translator."""
+
+    def response_for_exception(self, request: Request, exc: Exception) -> Response:
+        if isinstance(exc, EmptyBodyResponseException):
+            return Response(status_code=exc.status_code)
+        if isinstance(exc, StarletteHTTPException):
+            return _response_for_http_exception(request, exc)
+        if isinstance(exc, RequestValidationError):
+            return _response_for_validation_error(request, exc)
+        return _response_for_unexpected_exception(request, exc)
 
 
 def register_error_handlers(
@@ -55,19 +76,26 @@ def register_error_handlers(
         ERROR_OPTIONS_STATE_ATTRIBUTE,
         options or ErrorHandlerOptions(),
     )
-    app.add_exception_handler(EmptyBodyResponseException, _handle_empty_body_error)
-    app.add_exception_handler(StarletteHTTPException, _handle_http_exception)
-    app.add_exception_handler(RequestValidationError, _handle_validation_error)
-    app.add_exception_handler(Exception, _handle_unexpected_exception)
+    app.add_exception_handler(EmptyBodyResponseException, _handle_exception)
+    app.add_exception_handler(StarletteHTTPException, _handle_exception)
+    app.add_exception_handler(RequestValidationError, _handle_exception)
+    app.add_exception_handler(Exception, _handle_exception)
 
 
-def _handle_empty_body_error(request: Request, exc: Exception) -> Response:
-    empty_body_exc = cast(EmptyBodyResponseException, exc)
-    return Response(status_code=empty_body_exc.status_code)
+def _handle_exception(request: Request, exc: Exception) -> Response:
+    translated = translate_exception(exc, mappings=_error_options(request).mappings)
+    return _error_capability(request).response_for_exception(request, translated)
 
 
 def _handle_http_exception(request: Request, exc: Exception) -> Response:
     http_exc = cast(StarletteHTTPException, exc)
+    return _response_for_http_exception(request, http_exc)
+
+
+def _response_for_http_exception(
+    request: Request,
+    http_exc: StarletteHTTPException,
+) -> Response:
     presentation = _build_error_presentation(
         http_exc.status_code,
         detail=_normalise_http_detail(http_exc.status_code, http_exc.detail),
@@ -77,6 +105,13 @@ def _handle_http_exception(request: Request, exc: Exception) -> Response:
 
 def _handle_validation_error(request: Request, exc: Exception) -> Response:
     validation_exc = cast(RequestValidationError, exc)
+    return _response_for_validation_error(request, validation_exc)
+
+
+def _response_for_validation_error(
+    request: Request,
+    validation_exc: RequestValidationError,
+) -> Response:
     presentation = _build_error_presentation(422, detail="The request was invalid.")
     response_kind = _resolve_error_response_kind(request)
     if response_kind == "api":
@@ -96,6 +131,10 @@ def _handle_validation_error(request: Request, exc: Exception) -> Response:
 
 
 def _handle_unexpected_exception(request: Request, exc: Exception) -> Response:
+    return _response_for_unexpected_exception(request, exc)
+
+
+def _response_for_unexpected_exception(request: Request, exc: Exception) -> Response:
     logger.exception("Unhandled application error", exc_info=exc)
     presentation = _build_error_presentation(500)
     return _build_error_response(request, presentation)
@@ -159,9 +198,16 @@ def _build_error_response(
 
 def _resolve_error_response_kind(request: Request) -> ErrorResponseKind:
     path = request.url.path
+    route_kind = _route_response_kind(request)
+    if route_kind is not None:
+        return route_kind
     api = _optional_api_capability(request)
     if api is not None and api.is_api_request(request):
         return "api"
+    if _accepts_json(request):
+        return "api"
+    if _is_htmx_request(request):
+        return "partial"
     options = _error_options(request)
     static_mount_path = _resolve_static_mount_path(options)
     if static_mount_path is not None and _matches_path_prefix(path, static_mount_path):
@@ -169,6 +215,32 @@ def _resolve_error_response_kind(request: Request) -> ErrorResponseKind:
     if _matches_path_prefix(path, options.partial_path_prefix):
         return "partial"
     return "page"
+
+
+def _route_response_kind(request: Request) -> ErrorResponseKind | None:
+    endpoint = request.scope.get("endpoint")
+    route_type = getattr(endpoint, ROUTE_TYPE_ATTRIBUTE, None)
+    if route_type == RouteType.API.value:
+        return "api"
+    if route_type == RouteType.PARTIAL.value:
+        return "partial"
+    if route_type == RouteType.PAGE.value:
+        return "page"
+    if route_type == RouteType.STATIC.value:
+        return "static"
+    return None
+
+
+def _accepts_json(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    if not accept:
+        return False
+    accepted = {item.split(";", 1)[0].strip().lower() for item in accept.split(",")}
+    return "application/json" in accepted or "application/*" in accepted
+
+
+def _is_htmx_request(request: Request) -> bool:
+    return request.headers.get("hx-request", "").lower() == "true"
 
 
 def _error_options(request: Request) -> ErrorHandlerOptions:
@@ -226,8 +298,6 @@ def _build_error_presentation(
 def _normalise_http_detail(status_code: int, detail: str | None) -> str | None:
     if not isinstance(detail, str) or not detail:
         return None
-    # Treat a bare reason phrase as “no bespoke detail” so generic fallback copy
-    # is used consistently unless a handler supplies something more specific.
     if detail == _reason_phrase(status_code):
         return None
 
@@ -243,7 +313,7 @@ def _build_api_error_response(
 ) -> Response:
     api = _optional_api_capability(request) if request is not None else None
     if api is not None:
-        response = api.error_response(
+        return api.error_response(
             ApiError(
                 code=_api_error_code(presentation),
                 message=presentation.heading,
@@ -252,7 +322,6 @@ def _build_api_error_response(
             status_code=presentation.status_code,
             headers=_safe_headers(headers),
         )
-        return response
 
     return _plain_text_error_response(presentation, headers=headers)
 
@@ -292,6 +361,18 @@ def _optional_api_capability(request: Request | None) -> ApiCapability | None:
         return get_site(request.app).optional_capability(ApiCapability)
     except SiteCapabilityError:
         return None
+
+
+def _error_capability(request: Request) -> _ErrorHandlingCapability:
+    try:
+        from wybra.errors.capabilities import ErrorHandlingCapability
+
+        capability = get_site(request.app).optional_capability(ErrorHandlingCapability)
+    except SiteCapabilityError:
+        return DefaultErrorHandlingCapability()
+    if capability is None:
+        return DefaultErrorHandlingCapability()
+    return capability
 
 
 def _safe_headers(headers: Mapping[str, str] | None) -> dict[str, str] | None:
