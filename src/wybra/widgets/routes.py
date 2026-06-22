@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from wybra.core.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 from wybra.forms import validate_csrf
-from wybra.web.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 from wybra.widgets.config import THEME_FEATURE
 from wybra.widgets.theme import (
     THEME_API_ROUTE_NAME,

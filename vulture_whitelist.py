@@ -187,6 +187,8 @@ _.profile_visibility
 _.marketing_consent
 _.terms_accepted_at
 _.data_deletion_requested
+_.model
+_.dispatch
 
 # Alembic revision module metadata.
 _.down_revision

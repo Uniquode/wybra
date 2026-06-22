@@ -324,7 +324,7 @@ async def start(
         ),
     )
     app.state.site = site
-    await _setup_modules(site, module_loader or import_module)
+    await _compose_site(site, module_loader or import_module)
     return site
 
 
@@ -472,7 +472,26 @@ def _require_async_hook(
         )
 
 
-async def _setup_modules(site: Site, module_loader: ModuleLoader) -> None:
+async def _compose_site(site: Site, module_loader: ModuleLoader) -> None:
+    """Run site composition phases in dependency-safe order.
+
+    Module setup hooks run first so modules can provide capabilities and route
+    modules are importable. Core route registration then installs the final
+    configured route tree. Route-level dependency validation runs before
+    post-setup hooks so modules can finalise dependencies against the composed
+    application.
+    """
+
+    loaded_modules = await _setup_module_hooks(site, module_loader)
+    _register_configured_routes(site)
+    _validate_registered_route_dependencies(site)
+    await _post_setup_module_hooks(site, loaded_modules)
+
+
+async def _setup_module_hooks(
+    site: Site,
+    module_loader: ModuleLoader,
+) -> tuple[tuple[str, ModuleType], ...]:
     loaded_modules: list[tuple[str, ModuleType]] = []
     for module_name in site.modules:
         module = module_loader(module_name)
@@ -486,7 +505,13 @@ async def _setup_modules(site: Site, module_loader: ModuleLoader) -> None:
             attribute=SETUP_SITE_ATTRIBUTE,
             hook=setup_site,
         )
+    return tuple(loaded_modules)
 
+
+async def _post_setup_module_hooks(
+    site: Site,
+    loaded_modules: tuple[tuple[str, ModuleType], ...],
+) -> None:
     for module_name, module in loaded_modules:
         post_setup_site = getattr(module, POST_SETUP_SITE_ATTRIBUTE, None)
         if post_setup_site is None:
@@ -497,6 +522,23 @@ async def _setup_modules(site: Site, module_loader: ModuleLoader) -> None:
             attribute=POST_SETUP_SITE_ATTRIBUTE,
             hook=post_setup_site,
         )
+
+
+def _register_configured_routes(site: Site) -> None:
+    from wybra.core.routes import register_configured_routes_for_site
+
+    register_configured_routes_for_site(site)
+
+
+def _validate_registered_route_dependencies(site: Site) -> None:
+    from wybra.core.routes import inspect_route_tree
+    from wybra.template import TemplateCapability
+
+    if any(
+        route.shape.template is not None
+        for route in inspect_route_tree(site.app).routes
+    ):
+        site.require_capability(TemplateCapability)
 
 
 async def _run_module_hook(

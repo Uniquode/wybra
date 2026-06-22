@@ -55,6 +55,20 @@ from wybra.core.composition import (
 )
 from wybra.core.exceptions import ConfigurationError, InputValidationError
 from wybra.core.resources import PackageResourceSource, read_text_resource
+from wybra.core.routes import (
+    ConfiguredModuleRouter,
+    RouteCompositionError,
+    load_configured_module_routes,
+    load_module_routes,
+    register_module_routes,
+    route_prefixes_from_app_config,
+)
+from wybra.core.routes.discovery import (
+    ModuleSurface,
+    discover_module_routers,
+    discover_module_surface,
+    discover_module_surfaces,
+)
 from wybra.core.settings import (
     EnvironmentSetting,
     SettingsLoadError,
@@ -92,20 +106,6 @@ from wybra.template.discovery import (
     template_sources_from_modules,
 )
 from wybra.tools import collect as collect_tool
-from wybra.web.routes import (
-    ConfiguredModuleRouter,
-    RouteCompositionError,
-    load_configured_module_routes,
-    load_module_routes,
-    register_module_routes,
-    route_prefixes_from_app_config,
-)
-from wybra.web.routes.discovery import (
-    ModuleSurface,
-    discover_module_routers,
-    discover_module_surface,
-    discover_module_surfaces,
-)
 from wybra.widgets.config import WidgetsSettings
 
 
@@ -430,7 +430,7 @@ async def test_wybra_web_post_setup_requires_template_for_template_routes(
         dedent(
             """
             from fastapi import APIRouter
-            from wybra.template import route_template
+            from wybra.core.routes import route_template
 
             router = APIRouter()
 
@@ -878,7 +878,7 @@ def _write_fake_auth_module(
 
 
 @pytest.mark.anyio
-async def test_wybra_web_setup_site_registers_routes_renderer_and_static(
+async def test_start_registers_routes_and_module_capabilities(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2073,18 +2073,18 @@ def test_wybra_web_package_exposes_expected_submodules() -> None:
         "wybra.template.context",
         "wybra.web.errors",
         "wybra.core.resources",
-        "wybra.web.routes.contracts",
-        "wybra.web.routes",
+        "wybra.core.routes.contracts",
+        "wybra.core.routes",
         "wybra.security",
         "wybra.assets",
         "wybra.core.settings",
-        "wybra.web.routes",
-        "wybra.web.routes.discovery",
+        "wybra.core.routes",
+        "wybra.core.routes.discovery",
         "wybra.template",
         "wybra.forms",
         "wybra.forms.csrf",
         "wybra.forms.security",
-        "wybra.web.views",
+        "wybra.views",
         "wybra.forms",
         "wybra.widgets",
         "wybra.widgets.config",
@@ -2093,6 +2093,15 @@ def test_wybra_web_package_exposes_expected_submodules() -> None:
         "wybra.widgets.theme",
     ):
         assert importlib.import_module(module_name).__name__ == module_name
+
+
+def test_wybra_web_package_does_not_expose_route_or_view_helpers() -> None:
+    source_root = Path(__file__).resolve().parents[1] / "src" / "wybra" / "web"
+
+    assert not hasattr(web_module, "routes")
+    assert not hasattr(web_module, "views")
+    assert not any((source_root / "routes").glob("*.py"))
+    assert not any((source_root / "views").glob("*.py"))
 
 
 def test_wybra_web_package_is_independent_from_application_and_auth_modules() -> None:
@@ -2476,7 +2485,7 @@ def test_discover_module_routers_accepts_mapping_static_collect(
     assert isinstance(routers["default"], APIRouter)
 
 
-def test_load_module_routes_reads_configured_route_surfaces_in_order(
+def test_load_module_routes_reads_configured_route_types_in_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2540,7 +2549,7 @@ def test_load_module_routes_reads_configured_route_surfaces_in_order(
     )
 
 
-def test_configured_module_routes_and_registration_are_wybra_web_concerns(
+def test_configured_module_routes_and_registration_are_core_concerns(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2701,7 +2710,7 @@ def test_register_module_routes_skips_later_method_path_conflicts(
     app = FastAPI()
     with caplog.at_level(
         logging.WARNING,
-        logger="wybra.web.routes.registration",
+        logger="wybra.core.routes.registration",
     ):
         register_module_routes(
             app,
@@ -2751,7 +2760,7 @@ def test_register_module_routes_existing_app_route_wins_on_conflict(
 
     with caplog.at_level(
         logging.WARNING,
-        logger="wybra.web.routes.registration",
+        logger="wybra.core.routes.registration",
     ):
         register_module_routes(
             app,
@@ -3122,7 +3131,7 @@ def test_discover_package_resource_sources_without_route_import(
     (package_root / "templates").mkdir()
     (package_root / "static").mkdir()
     (package_root / "routes.py").write_text(
-        "raise RuntimeError('route surface should not be imported')\n",
+        "raise RuntimeError('route module should not be imported')\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -3594,7 +3603,7 @@ def test_configured_static_collect_uses_app_toml_without_route_import(
     static_root.mkdir(parents=True)
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (package_root / "routes.py").write_text(
-        "raise RuntimeError('route surface should not be imported')\n",
+        "raise RuntimeError('route module should not be imported')\n",
         encoding="utf-8",
     )
     (static_root / "app.css").write_text(":root {}", encoding="utf-8")
@@ -4427,11 +4436,11 @@ def test_template_context_can_be_constructed_from_multiple_layers() -> None:
 
 
 def test_load_modules_imports_explicit_modules_in_configured_order() -> None:
-    modules = load_modules(("wybra.core.resources", "wybra.web.routes"))
+    modules = load_modules(("wybra.core.resources", "wybra.core.routes"))
 
     assert tuple(module.__name__ for module in modules) == (
         "wybra.core.resources",
-        "wybra.web.routes",
+        "wybra.core.routes",
     )
 
 

@@ -8,7 +8,9 @@ from typing import Any, cast
 from fastapi import Request
 from fastapi.responses import Response
 
+from wybra.site import SiteCapabilityError
 from wybra.template import TemplateCapability
+from wybra.views.base import View
 
 type ContextBuilder = Callable[[Request], dict[str, Any] | Awaitable[dict[str, Any]]]
 
@@ -26,12 +28,18 @@ async def resolve_context(
     return context
 
 
-@dataclass(frozen=True, slots=True)
-class TemplateView:
+@dataclass(slots=True)
+class TemplateView(View):
     template_name: str
     context_builder: ContextBuilder | None = None
 
-    async def render(self, request: Request, renderer: TemplateCapability) -> Response:
+    async def render(
+        self,
+        request: Request,
+        renderer: TemplateCapability | None,
+    ) -> Response:
+        if renderer is None:
+            raise SiteCapabilityError("Missing capability: TemplateCapability")
         context = await resolve_context(self.context_builder, request)
         return renderer.render_page(request, self.template_name, context)
 

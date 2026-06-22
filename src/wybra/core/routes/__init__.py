@@ -1,20 +1,23 @@
-"""Route contracts, discovery, registration, and built-in web routes."""
+"""Core route discovery, registration, metadata, and inspection support."""
 
-from wybra.web.routes.builtins import module_routers
-from wybra.web.routes.contracts import (
+from wybra.core.routes.contracts import (
     API_PATH_PREFIX,
     PARTIAL_PATH_PREFIX,
     _normalise_path_prefix,
 )
-from wybra.web.routes.discovery import (
+from wybra.core.routes.discovery import (
     ROUTE_EXPORT_ATTRIBUTE,
-    ROUTE_SURFACE_MODULE,
+    ROUTE_MODULE,
     ModuleSurface,
     discover_module_routers,
     discover_module_surface,
     discover_module_surfaces,
 )
-from wybra.web.routes.inspection import (
+from wybra.core.routes.inspection import (
+    ROUTE_METHODS_ATTRIBUTE,
+    ROUTE_PATH_ATTRIBUTE,
+    ROUTE_TEMPLATE_ATTRIBUTE,
+    ROUTE_TYPE_ATTRIBUTE,
     EndpointShape,
     RouteInspection,
     RouteKind,
@@ -22,17 +25,15 @@ from wybra.web.routes.inspection import (
     RouteProblem,
     RouteProblemKind,
     RouteRecord,
-    RouteSurface,
     RouteTreeNode,
+    RouteType,
     inspect_route_tree,
     record_route_origin,
-    render_graph,
-    render_json,
-    render_mermaid,
-    render_succinct,
-    route_surface,
+    route,
+    route_template,
+    route_type,
 )
-from wybra.web.routes.registration import (
+from wybra.core.routes.registration import (
     ConfiguredModuleRouter,
     ConfiguredRouteSettings,
     ModuleRouters,
@@ -44,6 +45,8 @@ from wybra.web.routes.registration import (
     route_prefixes_from_app_config,
     route_prefixes_from_settings,
 )
+from wybra.core.routes.setup import register_configured_routes_for_site
+from wybra.core.routes.validation import validate_routes
 
 __all__ = [
     "API_PATH_PREFIX",
@@ -54,16 +57,20 @@ __all__ = [
     "ModuleSurface",
     "PARTIAL_PATH_PREFIX",
     "ROUTE_EXPORT_ATTRIBUTE",
-    "ROUTE_SURFACE_MODULE",
+    "ROUTE_METHODS_ATTRIBUTE",
+    "ROUTE_MODULE",
+    "ROUTE_PATH_ATTRIBUTE",
+    "ROUTE_TEMPLATE_ATTRIBUTE",
+    "ROUTE_TYPE_ATTRIBUTE",
+    "RouteCompositionError",
     "RouteInspection",
     "RouteKind",
     "RouteOrigin",
     "RouteProblem",
     "RouteProblemKind",
-    "RouteCompositionError",
     "RouteRecord",
-    "RouteSurface",
     "RouteTreeNode",
+    "RouteType",
     "_normalise_path_prefix",
     "discover_module_routers",
     "discover_module_surface",
@@ -71,15 +78,14 @@ __all__ = [
     "inspect_route_tree",
     "load_configured_module_routes",
     "load_module_routes",
-    "module_routers",
     "record_route_origin",
     "register_configured_module_routes",
+    "register_configured_routes_for_site",
     "register_module_routes",
-    "render_graph",
-    "render_json",
-    "render_mermaid",
-    "render_succinct",
+    "route",
+    "route_template",
     "route_prefixes_from_app_config",
     "route_prefixes_from_settings",
-    "route_surface",
+    "route_type",
+    "validate_routes",
 ]

@@ -1,7 +1,7 @@
 """Diagnostic message helpers for reusable composition layers.
 
 This module is text-only and must not import host applications, runtime
-startup, configured modules, route surfaces, or database infrastructure.
+startup, configured modules, route modules, or database infrastructure.
 """
 
 from typing import TypeVar

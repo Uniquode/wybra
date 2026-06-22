@@ -63,7 +63,7 @@ def load_module_routes(
     *,
     route_prefixes: RoutePrefixMap | None = None,
 ) -> tuple[ConfiguredModuleRouter, ...]:
-    from wybra.web.routes.discovery import discover_module_routers
+    from wybra.core.routes.discovery import discover_module_routers
 
     configured_routers: list[ConfiguredModuleRouter] = []
     for module_name in module_names:
@@ -141,7 +141,7 @@ def register_module_routes(
     app: FastAPI,
     configured_routers: Iterable[ConfiguredModuleRouter],
 ) -> None:
-    from wybra.web.routes.inspection import RouteOrigin, record_route_origin
+    from wybra.core.routes.inspection import RouteOrigin, record_route_origin
 
     routers = tuple(configured_routers)
     _validate_configured_routers(routers)
@@ -238,7 +238,7 @@ def _validate_configured_routers(
         )
         if not configured_router.router.routes:
             raise RouteCompositionError(
-                f"Route surface for {owner.label} did not register any routes; "
+                f"Route module for {owner.label} did not register any routes; "
                 "ensure decorated handler modules are imported before exposing "
                 "module_routers."
             )
@@ -424,7 +424,7 @@ def _record_selected_route_origin(
     configured_router: ConfiguredModuleRouter,
     route: BaseRoute,
 ) -> None:
-    from wybra.web.routes.inspection import RouteOrigin, record_route_origin
+    from wybra.core.routes.inspection import RouteOrigin, record_route_origin
 
     route_path = getattr(route, "path", None)
     route_name = getattr(route, "name", None)

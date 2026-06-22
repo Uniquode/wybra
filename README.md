@@ -23,8 +23,10 @@ Repository: <https://github.com/Uniquode/wybra>
 
 ## Package Areas
 
-- `wybra.core`: module composition, package resource helpers, settings loading,
-  diagnostics, and shared conventions.
+- `wybra.core`: module composition, route management, package resource helpers,
+  settings loading, diagnostics, and shared conventions.
+- `wybra.views`: developer-facing view base classes, plain HTML view helpers,
+  template view helpers, API view helpers, and paging/result helper types.
 - `wybra.assets`: static asset settings, source discovery, runtime serving,
   URL resolution, collection, and validation.
 - `wybra.template`: template settings, source discovery, rendering capability,
@@ -33,7 +35,7 @@ Repository: <https://github.com/Uniquode/wybra>
   safety helpers, form response finalisation, and forms validation.
 - `wybra.security`: web-facing security policy, COOP/security headers, CORS
   policy data, middleware setup, and security validation.
-- `wybra.web`: route composition, error handling, views, and web validation.
+- `wybra.web`: remaining web foundation setup and error handling.
 - `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
 - `wybra.tools`: generic project command adapters and validation target
@@ -63,8 +65,8 @@ application through the host app config file selected by `--config`,
 
 ## Application Startup
 
-Host applications own their FastAPI instance and application routes. Wybra owns the
-common engine setup behind the FastAPI lifespan hook:
+Host applications own their FastAPI instance. Wybra owns the common engine setup,
+including configured route registration, behind the FastAPI lifespan hook:
 
 ```python
 from fastapi import FastAPI
