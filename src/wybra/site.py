@@ -531,14 +531,18 @@ def _register_configured_routes(site: Site) -> None:
 
 
 def _validate_registered_route_dependencies(site: Site) -> None:
-    from wybra.core.routes import inspect_route_tree
+    from wybra.api import ApiCapability
+    from wybra.core.routes import RouteType, inspect_route_tree
     from wybra.template import TemplateCapability
 
-    if any(
-        route.shape.template is not None
-        for route in inspect_route_tree(site.app).routes
-    ):
+    route_inspection = inspect_route_tree(site.app)
+    if any(route.shape.template is not None for route in route_inspection.routes):
         site.require_capability(TemplateCapability)
+    if any(
+        route.shape.declared_route_type is RouteType.API
+        for route in route_inspection.routes
+    ):
+        site.require_capability(ApiCapability)
 
 
 async def _run_module_hook(

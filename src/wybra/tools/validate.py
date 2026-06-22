@@ -6,6 +6,7 @@ from typing import Any, TextIO
 
 import click
 
+from wybra.api.validation import validate_api
 from wybra.assets.validation import validate_assets
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.routes.validation import validate_routes
@@ -37,6 +38,7 @@ class UnknownValidationTargetError(ValueError):
 
 
 BUILTIN_VALIDATION_TARGETS: Mapping[str, ValidationTarget] = {
+    "api": validate_api,
     "assets": validate_assets,
     "forms": validate_forms,
     "routes": validate_routes,

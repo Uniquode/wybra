@@ -5,15 +5,27 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from inspect import isawaitable
-from typing import Any, ClassVar, Protocol, cast
+from typing import Any, ClassVar, cast
 
 from fastapi import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-JsonValue = Mapping[str, Any] | Sequence[Any] | str | int | float | bool | None
-HandlerResult = Response | JsonValue
-ViewHandler = Callable[..., HandlerResult | Awaitable[HandlerResult]]
+from wybra.api import ApiCapability, ApiPaging
+from wybra.errors import structured_error, type_name
+from wybra.site import SiteCapabilityError
+
+type JsonValue = Mapping[str, Any] | Sequence[Any] | str | int | float | bool | None
 HTTP_METHOD_HANDLERS = ("get", "post", "put", "patch", "delete", "head", "options")
+
+
+@dataclass(frozen=True, slots=True)
+class APIResult:
+    data: Any
+    paging: ApiPaging | None = None
+
+
+type HandlerResult = Response | JsonValue | APIResult
+type ViewHandler = Callable[..., HandlerResult | Awaitable[HandlerResult]]
 
 
 @dataclass(slots=True)
@@ -67,55 +79,42 @@ class HTMLView(View):
         return HTMLResponse(str(result))
 
 
-@dataclass(frozen=True, slots=True)
-class Page:
-    number: int
-    size: int
-    total: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class APIResult:
-    data: Any
-    page: Page | None = None
-
-
-class APIResponseFormatter(Protocol):
-    """Future API capability integration point for final response formatting."""
-
-    def response_from_result(self, result: HandlerResult | APIResult) -> Response: ...
-
-
 @dataclass(slots=True)
 class APIView(View):
     """View base for API endpoint responses."""
 
-    formatter: APIResponseFormatter | None = None
+    api: ApiCapability | None = None
 
     def response_from_result(self, result: HandlerResult | APIResult) -> Response:
-        if self.formatter is not None:
-            return self.formatter.response_from_result(result)
         if isinstance(result, Response):
             return result
+        api = self._require_api_capability()
         if isinstance(result, APIResult):
-            payload: dict[str, Any] = {"data": result.data}
-            if result.page is not None:
-                payload["page"] = {
-                    "number": result.page.number,
-                    "size": result.page.size,
-                    "total": result.page.total,
-                }
-            return JSONResponse(payload)
-        return JSONResponse(result)
+            if result.paging is not None:
+                return api.paged_response(result.data, paging=result.paging)
+            return api.response(result.data)
+        return api.response(result)
+
+    def _require_api_capability(self) -> ApiCapability:
+        if self.api is not None:
+            return self.api
+        raise SiteCapabilityError(
+            structured_error(
+                "Missing capability",
+                capability_type=type_name(ApiCapability),
+                provider_hint=(
+                    "configure wybra.api or another ApiCapability provider, "
+                    "or pass an ApiCapability to the APIView instance"
+                ),
+            )
+        )
 
 
 __all__ = [
-    "APIResponseFormatter",
     "APIView",
     "APIResult",
     "HTMLView",
     "HandlerResult",
     "JsonValue",
-    "Page",
     "View",
 ]

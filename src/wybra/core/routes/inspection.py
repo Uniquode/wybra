@@ -61,6 +61,7 @@ class RouteOrigin:
 @dataclass(frozen=True, slots=True)
 class EndpointShape:
     route_type: RouteType = RouteType.UNKNOWN
+    declared_route_type: RouteType | None = None
     accepts_body: bool = False
     accepts_form: bool = False
     path_parameters: tuple[str, ...] = ()
@@ -358,10 +359,16 @@ def _endpoint_shape(route: BaseRoute, *, path: str, kind: RouteKind) -> Endpoint
             None,
         )
 
+    declared_route_type = _declared_route_type(endpoint)
+
     return EndpointShape(
         route_type=_route_type(
-            route, path=path, kind=kind, media_type=response_media_type
+            path=path,
+            kind=kind,
+            media_type=response_media_type,
+            declared_route_type=declared_route_type,
         ),
+        declared_route_type=declared_route_type,
         accepts_body=bool(getattr(route, "body_field", None)),
         accepts_form=_accepts_form(route),
         path_parameters=_path_parameters(route),
@@ -383,16 +390,14 @@ def _route_kind(route: BaseRoute) -> RouteKind:
 
 
 def _route_type(
-    route: BaseRoute,
     *,
     path: str,
     kind: RouteKind,
     media_type: str | None,
+    declared_route_type: RouteType | None,
 ) -> RouteType:
-    endpoint = getattr(route, "endpoint", None)
-    explicit_route_type = getattr(endpoint, ROUTE_TYPE_ATTRIBUTE, None)
-    if explicit_route_type is not None:
-        return RouteType(explicit_route_type)
+    if declared_route_type is not None:
+        return declared_route_type
     if kind == RouteKind.STATIC:
         return RouteType.STATIC
     if kind == RouteKind.MOUNT:
@@ -404,6 +409,13 @@ def _route_type(
     if media_type == "text/html":
         return RouteType.PAGE
     return RouteType.UNKNOWN
+
+
+def _declared_route_type(endpoint: object) -> RouteType | None:
+    explicit_route_type = getattr(endpoint, ROUTE_TYPE_ATTRIBUTE, None)
+    if explicit_route_type is None:
+        return None
+    return RouteType(explicit_route_type)
 
 
 def _accepts_form(route: BaseRoute) -> bool:

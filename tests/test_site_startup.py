@@ -147,6 +147,85 @@ async def test_start_registers_configured_routes_without_web_module(
     assert "/api/status" in paths
 
 
+@pytest.mark.anyio
+async def test_start_requires_api_capability_for_routes_declaring_api_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "api_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "from wybra.core.routes import RouteType, route\n"
+        "router = APIRouter()\n"
+        "@router.get('/status', name='status')\n"
+        "async def status():\n"
+        "    return {'ok': True}\n"
+        "status = route('/status', RouteType.API)(status)\n"
+        "module_routers = {'default': router}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(SiteCapabilityError, match="ApiCapability"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("api_route_app",),
+                    },
+                    "app.routes": {"prefixes": {"api_route_app": {"default": "/api"}}},
+                }
+            ),
+        )
+
+
+@pytest.mark.anyio
+async def test_start_accepts_api_semantics_when_api_module_is_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "configured_api_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "from wybra.core.routes import RouteType, route\n"
+        "router = APIRouter()\n"
+        "@router.get('/status', name='status')\n"
+        "async def status():\n"
+        "    return {'ok': True}\n"
+        "status = route('/status', RouteType.API)(status)\n"
+        "module_routers = {'default': router}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    app = FastAPI()
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("wybra.api", "configured_api_route_app"),
+                },
+                "app.routes": {
+                    "prefixes": {"configured_api_route_app": {"default": "/api"}}
+                },
+            }
+        ),
+    )
+
+    assert site.has_module("wybra.api")
+    assert "/api/status" in {route.path for route in inspect_route_tree(app).routes}
+
+
 def test_app_config_from_site_rejects_non_mapping_route_prefixes() -> None:
     site = _site_from_mapping(
         {
