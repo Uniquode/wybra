@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from wybra.api.capabilities import api_provider_configured
-from wybra.api.config import parse_api_link_mode
+from wybra.api.config import ApiLinkMode, parse_api_link_mode
 from wybra.api.settings import ApiSettings
 from wybra.config import ConfigService
 from wybra.config.transforms import to_url_path
@@ -89,7 +89,7 @@ def _valid_path_prefix(value: object) -> bool:
 
 
 def _valid_link_mode(value: object) -> bool:
-    if not isinstance(value, str):
+    if not isinstance(value, (ApiLinkMode, str)):
         return False
     try:
         parse_api_link_mode(value)

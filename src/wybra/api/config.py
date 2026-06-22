@@ -43,7 +43,7 @@ def _path_prefix_value(value: object) -> str:
 
 
 def _link_mode_value(value: object) -> ApiLinkMode:
-    if not isinstance(value, ApiLinkMode | str):
+    if not isinstance(value, (ApiLinkMode, str)):
         raise ValueError("app.api.paging_link_mode must be a string.")
     return parse_api_link_mode(value)
 
