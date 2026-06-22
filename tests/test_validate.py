@@ -10,7 +10,6 @@ import pytest
 import wybra.assets.validation as asset_validation
 import wybra.template.validation as template_validation
 import wybra.tools.validate as validate_module
-import wybra.web
 from wybra.api.validation import validate_api
 from wybra.assets.validation import validate_assets
 from wybra.config import AppConfigSource, ConfigService
@@ -118,20 +117,11 @@ def _write_replacement_api_module(root: Path, module_name: str) -> None:
 
 
 def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
-    route_prefixes = {
-        "wybra.web": {},
-    }
     return AppConfig(
         config_path=tmp_path / "app.toml",
         project_root=tmp_path,
         modules=modules,
-        routes=RouteOptions(
-            prefixes={
-                module_name: route_prefixes[module_name]
-                for module_name in modules
-                if module_name in route_prefixes
-            }
-        ),
+        routes=RouteOptions(prefixes={}),
         templates=TemplateOptions(auto_reload=True, cache_size=0),
         assets=AssetOptions(url_path="/static/"),
     )
@@ -139,10 +129,9 @@ def _app_config(tmp_path: Path, modules: tuple[str, ...]) -> AppConfig:
 
 def _web_settings(
     tmp_path: Path,
-    modules: tuple[str, ...] = ("wybra.web",),
+    modules: tuple[str, ...] = ("wybra.assets",),
     raw_config: dict[str, dict[str, object]] | None = None,
 ) -> WebSettings:
-    wybra_web_root = Path(wybra.web.__file__).resolve().parent
     app_config = _app_config(tmp_path, modules)
     if raw_config is not None:
         app_config = replace(app_config, raw_config=raw_config)
@@ -163,8 +152,8 @@ def _web_settings(
     return WebSettings(
         project_root=tmp_path,
         modules=modules,
-        template_root=wybra_web_root / "templates",
-        static_root=wybra_web_root / "static",
+        template_root=tmp_path / "templates",
+        static_root=tmp_path / "static",
         app_config=app_config,
         config=config,
     )
@@ -242,7 +231,7 @@ def test_validate_routes_checks_configured_route_modules(tmp_path: Path) -> None
     assert result.is_ok
     assert result.name == "routes"
     assert any(
-        check.description == "configured route modules load: wybra.web"
+        check.description == "configured route modules load: wybra.assets"
         for check in result.checks
     )
 
@@ -439,7 +428,7 @@ def test_validate_command_runs_discovered_module_targets(
 
 
 def test_validate_security_accepts_omitted_security_module(tmp_path: Path) -> None:
-    result = validate_security(_web_settings(tmp_path, ("wybra.web",)))
+    result = validate_security(_web_settings(tmp_path, ("wybra.assets",)))
 
     assert result.is_ok
     assert any(
@@ -452,7 +441,7 @@ def test_validate_security_loads_configured_security_module(tmp_path: Path) -> N
     result = validate_security(
         _web_settings(
             tmp_path,
-            ("wybra.security", "wybra.web"),
+            ("wybra.security", "wybra.assets"),
             raw_config={
                 "app.security": {
                     "cross_origin_opener_policy": "same-origin-allow-popups",
@@ -477,7 +466,7 @@ def test_validate_security_accepts_replacement_provider(
     monkeypatch.syspath_prepend(str(tmp_path))
 
     result = validate_security(
-        _web_settings(tmp_path, ("replacement_security", "wybra.web"))
+        _web_settings(tmp_path, ("replacement_security", "wybra.assets"))
     )
 
     assert result.is_ok
@@ -523,7 +512,7 @@ def test_validate_command_rejects_module_target_conflicting_with_builtin(
 
 
 def test_validate_api_accepts_omitted_api_module(tmp_path: Path) -> None:
-    result = validate_api(_web_settings(tmp_path, ("wybra.web",)))
+    result = validate_api(_web_settings(tmp_path, ("wybra.assets",)))
 
     assert result.is_ok
     assert any(
@@ -535,7 +524,7 @@ def test_validate_api_loads_configured_api_module(tmp_path: Path) -> None:
     result = validate_api(
         _web_settings(
             tmp_path,
-            ("wybra.api", "wybra.web"),
+            ("wybra.api", "wybra.assets"),
             raw_config={
                 "app.api": {
                     "path_prefix": "/service",
@@ -560,7 +549,7 @@ def test_validate_api_accepts_replacement_provider(
     _write_replacement_api_module(tmp_path, "replacement_api")
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    result = validate_api(_web_settings(tmp_path, ("replacement_api", "wybra.web")))
+    result = validate_api(_web_settings(tmp_path, ("replacement_api", "wybra.assets")))
 
     assert result.is_ok
     assert any(
@@ -570,7 +559,7 @@ def test_validate_api_accepts_replacement_provider(
 
 
 def test_validate_errors_accepts_omitted_errors_module(tmp_path: Path) -> None:
-    result = validate_errors(_web_settings(tmp_path, ("wybra.web",)))
+    result = validate_errors(_web_settings(tmp_path, ("wybra.assets",)))
 
     assert result.is_ok
     assert any(
@@ -580,7 +569,7 @@ def test_validate_errors_accepts_omitted_errors_module(tmp_path: Path) -> None:
 
 
 def test_validate_errors_accepts_configured_errors_module(tmp_path: Path) -> None:
-    result = validate_errors(_web_settings(tmp_path, ("wybra.errors", "wybra.web")))
+    result = validate_errors(_web_settings(tmp_path, ("wybra.errors", "wybra.assets")))
 
     assert result.is_ok
     assert any(
@@ -593,7 +582,7 @@ def test_validate_command_exposes_builtin_api_target(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    settings = _web_settings(tmp_path, ("wybra.api", "wybra.web"))
+    settings = _web_settings(tmp_path, ("wybra.api", "wybra.assets"))
     monkeypatch.setattr(validate_module, "_build_settings", lambda _overrides: settings)
 
     exit_code = validate_main(["api"])
@@ -641,7 +630,7 @@ def test_validate_command_unknown_target_returns_usage_error(
     monkeypatch.setattr(
         validate_module,
         "_build_settings",
-        lambda _overrides: SimpleNamespace(modules=("wybra.web",)),
+        lambda _overrides: SimpleNamespace(modules=("wybra.assets",)),
     )
 
     exit_code = validate_main(["foo"])
@@ -673,11 +662,11 @@ def test_validate_main_treats_falsy_click_exception_as_failure(
 def test_project_settings_do_not_treat_asset_root_as_runtime_static_root(
     tmp_path: Path,
 ) -> None:
-    config = ConfigService([AppConfigSource(_app_config(tmp_path, ("wybra.web",)))])
+    config = ConfigService([AppConfigSource(_app_config(tmp_path, ("wybra.assets",)))])
 
     settings = ProjectSettings.load_settings(
         config,
-        app_config=_app_config(tmp_path, ("wybra.web",)),
+        app_config=_app_config(tmp_path, ("wybra.assets",)),
     )
 
     assert settings.static_root is None
@@ -687,7 +676,7 @@ def test_project_settings_do_not_treat_asset_root_as_runtime_static_root(
 def test_validate_assets_accepts_missing_creatable_default_asset_root(
     tmp_path: Path,
 ) -> None:
-    result = validate_assets(_web_settings(tmp_path, ("wybra.assets", "wybra.web")))
+    result = validate_assets(_web_settings(tmp_path, ("wybra.assets",)))
 
     assert result.is_ok
     assert result.name == "assets"
@@ -743,7 +732,7 @@ def test_validate_assets_reports_asset_root_createability_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = _web_settings(tmp_path, ("wybra.assets", "wybra.web"))
+    settings = _web_settings(tmp_path, ("wybra.assets",))
     monkeypatch.setattr(asset_validation.os, "access", lambda *_args: False)
 
     result = validate_assets(settings)
@@ -763,12 +752,12 @@ def test_validate_assets_reports_asset_root_existing_file(
     tmp_path: Path,
 ) -> None:
     app_config = replace(
-        _app_config(tmp_path, ("wybra.assets", "wybra.web")),
+        _app_config(tmp_path, ("wybra.assets",)),
         assets=AssetOptions(url_path="/static/", root=Path("asset-file")),
     )
     (tmp_path / "asset-file").write_text("not a directory", encoding="utf-8")
     settings = replace(
-        _web_settings(tmp_path, ("wybra.assets", "wybra.web")),
+        _web_settings(tmp_path, ("wybra.assets",)),
         app_config=app_config,
     )
 
@@ -781,8 +770,8 @@ def test_validate_assets_reports_asset_root_existing_file(
     ) in result.errors
 
 
-def test_validate_assets_accepts_web_without_asset_provider(tmp_path: Path) -> None:
-    result = validate_assets(_web_settings(tmp_path, ("wybra.web",)))
+def test_validate_assets_accepts_missing_asset_provider(tmp_path: Path) -> None:
+    result = validate_assets(_web_settings(tmp_path, ("wybra.security",)))
 
     assert result.is_ok
     assert any(
@@ -792,8 +781,10 @@ def test_validate_assets_accepts_web_without_asset_provider(tmp_path: Path) -> N
     )
 
 
-def test_validate_assets_accepts_provider_after_web(tmp_path: Path) -> None:
-    result = validate_assets(_web_settings(tmp_path, ("wybra.web", "wybra.assets")))
+def test_validate_assets_accepts_configured_provider(tmp_path: Path) -> None:
+    result = validate_assets(
+        _web_settings(tmp_path, ("wybra.security", "wybra.assets"))
+    )
 
     assert result.is_ok
     assert any(
@@ -816,7 +807,7 @@ def test_validate_assets_accepts_marked_provider_before_web(
     monkeypatch.syspath_prepend(str(tmp_path))
 
     result = validate_assets(
-        _web_settings(tmp_path, ("custom_asset_provider", "wybra.web"))
+        _web_settings(tmp_path, ("custom_asset_provider", "wybra.security"))
     )
 
     assert result.is_ok
@@ -827,7 +818,7 @@ def test_validate_command_exposes_builtin_assets_target(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    settings = _web_settings(tmp_path, ("wybra.assets", "wybra.web"))
+    settings = _web_settings(tmp_path, ("wybra.assets",))
     monkeypatch.setattr(validate_module, "_build_settings", lambda _overrides: settings)
 
     exit_code = validate_main(["assets"])
@@ -899,7 +890,7 @@ def test_validate_template_rejects_post_form_missing_csrf_field(
 def test_validate_template_accepts_omitted_template_provider(
     tmp_path: Path,
 ) -> None:
-    result = validate_template(_web_settings(tmp_path, ("wybra.web",)))
+    result = validate_template(_web_settings(tmp_path, ("wybra.assets",)))
 
     assert result.is_ok
     assert result.name == "template"
@@ -1012,7 +1003,7 @@ def test_validate_widgets_checks_login_resources_when_enabled(tmp_path: Path) ->
 
 
 def test_validate_widgets_accepts_absent_widgets_module(tmp_path: Path) -> None:
-    result = validate_widgets(_web_settings(tmp_path, ("wybra.web",)))
+    result = validate_widgets(_web_settings(tmp_path, ("wybra.assets",)))
 
     assert result.is_ok
     assert any(

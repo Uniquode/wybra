@@ -15,7 +15,7 @@ from starlette.datastructures import FormData
 
 from wybra.forms.security import is_form_content_type, is_safe_method
 
-CSRF_COOKIE_NAME = "wybra_web_csrf"
+CSRF_COOKIE_NAME = "wybra_forms_csrf"
 CSRF_FIELD_NAME = "csrf_token"
 CSRF_HEADER_NAME = "x-csrf-token"
 CSRF_FORM_DATA_STATE_ATTR = "csrf_form_data"

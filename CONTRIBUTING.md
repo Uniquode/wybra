@@ -59,8 +59,14 @@ uv build
 ### Package Areas
 
 - `wybra.core`: composition, settings loading, diagnostics, and conventions.
-- `wybra.web`: route registration, templates, static assets, CSRF, errors, and
-  web validation.
+- `wybra.views`: reusable view helpers.
+- `wybra.assets`: static asset settings, serving, collection, and validation.
+- `wybra.template`: template settings, rendering, context, and validation.
+- `wybra.forms`: form settings, CSRF protection, parsing, and validation.
+- `wybra.security`: security headers, CORS policy, and validation.
+- `wybra.errors`: exception handler registration, classification, and
+  fallbacks.
+- `wybra.api`: API request classification, response formatting, and validation.
 - `wybra.db`: database URL helpers, async database helpers, SQLAlchemy metadata
   conventions, and Alembic command support.
 - `wybra.tools`: project command adapters.

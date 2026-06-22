@@ -39,7 +39,6 @@ Repository: <https://github.com/Uniquode/wybra>
   safe fallback responses, renderer coordination, and error validation.
 - `wybra.api`: API request classification, response formatting, error payloads,
   HATEOAS-style paging metadata, streaming responses, and API validation.
-- `wybra.web`: remaining web foundation setup.
 - `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
 - `wybra.tools`: generic project command adapters and validation target
@@ -338,7 +337,6 @@ modules = [
     "wybra.errors",
     "wybra.api",
     "wybra.template",
-    "wybra.web",
     "wybra.auth",
 ]
 
