@@ -8,6 +8,7 @@ import click
 
 from wybra.assets.validation import validate_assets
 from wybra.core.exceptions import ConfigurationError
+from wybra.core.routes.validation import validate_routes
 from wybra.forms.validation import validate_forms
 from wybra.security.validation import validate_security
 from wybra.template.validation import validate_template
@@ -38,6 +39,7 @@ class UnknownValidationTargetError(ValueError):
 BUILTIN_VALIDATION_TARGETS: Mapping[str, ValidationTarget] = {
     "assets": validate_assets,
     "forms": validate_forms,
+    "routes": validate_routes,
     "security": validate_security,
     "template": validate_template,
 }
@@ -141,7 +143,7 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
         "Run project validation checks. Examples: wybra-validate, "
-        "wybra-validate --verbose web persistence."
+        "wybra-validate --verbose routes persistence."
     ),
 )
 @click.option(
@@ -153,16 +155,16 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
 @click.option(
     "--template-root",
     type=click.Path(path_type=Path),
-    help="Override the configured template root for web validation.",
+    help="Override the configured template root for template validation.",
 )
 @click.option(
     "--static-root",
     type=click.Path(path_type=Path),
-    help="Override the configured static root for web validation.",
+    help="Override the configured static root for asset/template validation.",
 )
 @click.option(
     "--static-url-path",
-    help="Override the configured static URL prefix for web validation.",
+    help="Override the configured static URL prefix for asset validation.",
 )
 @click.option(
     "--database-url",

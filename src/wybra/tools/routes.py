@@ -5,12 +5,12 @@ import inspect
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from enum import StrEnum
 from typing import Any, TextIO, TypeGuard
 
 import click
 
 from wybra.core.composition import CompositionError
+from wybra.core.routes import RouteInspection, inspect_route_tree
 from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
@@ -22,21 +22,14 @@ from wybra.tools.project import (
     import_from_string,
     runtime_project_root,
 )
-from wybra.web.routes import (
-    RouteInspection,
-    inspect_route_tree,
+from wybra.tools.route_rendering import (
+    RouteOutputFormat,
     render_graph,
+    render_inspection,
     render_json,
     render_mermaid,
     render_succinct,
 )
-
-
-class RouteOutputFormat(StrEnum):
-    SUCCINCT = "succinct"
-    GRAPH = "graph"
-    MERMAID = "mermaid"
-    JSON = "json"
 
 
 def load_configured_asgi_app(config_source: str | None = None) -> Any:
@@ -46,23 +39,6 @@ def load_configured_asgi_app(config_source: str | None = None) -> Any:
         config_source=config_source,
     )
     return import_from_string(app_target)
-
-
-def render_inspection(
-    inspection: RouteInspection,
-    output_format: RouteOutputFormat,
-) -> str:
-    match output_format:
-        case RouteOutputFormat.SUCCINCT:
-            return render_succinct(inspection)
-        case RouteOutputFormat.GRAPH:
-            return render_graph(inspection)
-        case RouteOutputFormat.MERMAID:
-            return render_mermaid(inspection)
-        case RouteOutputFormat.JSON:
-            return render_json(inspection)
-        case _:
-            raise ValueError(f"Unsupported route output format: {output_format!r}")
 
 
 @click.command(
@@ -317,6 +293,10 @@ __all__ = [
     "RouteOutputFormat",
     "load_configured_asgi_app",
     "main",
+    "render_graph",
     "render_inspection",
+    "render_json",
+    "render_mermaid",
+    "render_succinct",
     "routes_command",
 ]

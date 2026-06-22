@@ -7,7 +7,6 @@ from typing import Any
 
 _EXPORT_MODULES = {
     "DefaultTemplateCapability": "wybra.template.capabilities",
-    "ROUTE_TEMPLATE_ATTRIBUTE": "wybra.template.metadata",
     "TemplateCapability": "wybra.template.capabilities",
     "TemplateSettings": "wybra.template.settings",
     "build_template_loader": "wybra.template.templating",
@@ -16,7 +15,6 @@ _EXPORT_MODULES = {
     "post_setup_site": "wybra.template.setup",
     "render_page": "wybra.template.rendering",
     "render_partial": "wybra.template.rendering",
-    "route_template": "wybra.template.metadata",
     "setup_site": "wybra.template.setup",
     "template_capability_from": "wybra.template.rendering",
     "template_sources_from_modules": "wybra.template.discovery",
@@ -36,7 +34,6 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "DefaultTemplateCapability",
-    "ROUTE_TEMPLATE_ATTRIBUTE",
     "TemplateCapability",
     "TemplateSettings",
     "build_template_loader",
@@ -45,7 +42,6 @@ __all__ = [
     "post_setup_site",
     "render_page",
     "render_partial",
-    "route_template",
     "setup_site",
     "template_capability_from",
     "template_sources_from_modules",

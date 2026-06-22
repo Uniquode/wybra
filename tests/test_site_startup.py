@@ -24,6 +24,7 @@ from wybra.core.composition import (
     TemplateOptions,
 )
 from wybra.core.config import ENV_APP_ENV
+from wybra.core.routes import inspect_route_tree
 from wybra.db.config import ENV_DATABASE_URL
 from wybra.site import start
 from wybra.site_config import app_config_from_site
@@ -105,6 +106,45 @@ def _site_from_mapping(values: dict[str, dict[str, object]]) -> Site:
             discover_module_config=False,
         ),
     )
+
+
+@pytest.mark.anyio
+async def test_start_registers_configured_routes_without_web_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "core_route_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/status', name='status')\n"
+        "async def status():\n"
+        "    return {'ok': True}\n"
+        "module_routers = {'default': router}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    app = FastAPI()
+    await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "config_path": tmp_path / "app.toml",
+                    "project_root": tmp_path,
+                    "modules": ("core_route_app",),
+                },
+                "app.routes": {"prefixes": {"core_route_app": {"default": "/api"}}},
+            }
+        ),
+    )
+
+    paths = {route.path for route in inspect_route_tree(app).routes}
+
+    assert "/api/status" in paths
 
 
 def test_app_config_from_site_rejects_non_mapping_route_prefixes() -> None:

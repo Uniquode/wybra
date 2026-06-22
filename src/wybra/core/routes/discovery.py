@@ -1,7 +1,7 @@
-"""Conventional configured-module route surface discovery.
+"""Conventional configured-module route discovery.
 
 Callers provide an explicit configured module list; this module never scans
-installed packages. Missing optional surfaces are empty contributions. Route
+installed packages. Missing optional route modules are empty contributions. Route
 modules are imported only when requested.
 """
 
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from wybra.core.composition import CompositionError
 from wybra.core.conventions import (
     ROUTE_EXPORT_ATTRIBUTE,
-    ROUTE_SURFACE_MODULE,
+    ROUTE_MODULE,
     module_surface_name,
 )
 from wybra.core.diagnostics import surface_message
@@ -25,7 +25,7 @@ from wybra.core.module_discovery import (
 )
 
 if TYPE_CHECKING:
-    from wybra.web.routes.registration import ModuleRouters
+    from wybra.core.routes.registration import ModuleRouters
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,19 +67,19 @@ def discover_module_surface(
 def discover_module_routers(module_name: str) -> ModuleRouters:
     from fastapi.routing import APIRouter
 
-    route_module_name = module_surface_name(module_name, ROUTE_SURFACE_MODULE)
-    if find_module_spec(route_module_name) is None:
+    route_module_name = module_surface_name(module_name, ROUTE_MODULE)
+    if not _has_route_module(route_module_name):
         return {}
 
     route_module = import_surface_module(
         route_module_name,
-        surface="Configured module surface",
+        surface="Configured module route module",
     )
     module_routers = getattr(route_module, ROUTE_EXPORT_ATTRIBUTE, None)
     if not isinstance(module_routers, Mapping):
         raise CompositionError(
             surface_message(
-                "Route surface",
+                "Route module",
                 route_module_name,
                 (
                     f"must expose `{ROUTE_EXPORT_ATTRIBUTE}` as a "
@@ -93,7 +93,7 @@ def discover_module_routers(module_name: str) -> ModuleRouters:
         if not isinstance(label, str) or not label.strip():
             raise CompositionError(
                 surface_message(
-                    "Route surface",
+                    "Route module",
                     route_module_name,
                     "must use non-blank string router labels.",
                 )
@@ -101,7 +101,7 @@ def discover_module_routers(module_name: str) -> ModuleRouters:
         if not isinstance(router, APIRouter):
             raise CompositionError(
                 surface_message(
-                    "Route surface",
+                    "Route module",
                     route_module_name,
                     f"router label {label!r} must be a fastapi.APIRouter instance.",
                 )
@@ -112,10 +112,17 @@ def discover_module_routers(module_name: str) -> ModuleRouters:
     return routers
 
 
+def _has_route_module(route_module_name: str) -> bool:
+    spec = find_module_spec(route_module_name)
+    if spec is None:
+        return False
+    return getattr(spec, "origin", None) is not None
+
+
 __all__ = [
     "ModuleSurface",
     "ROUTE_EXPORT_ATTRIBUTE",
-    "ROUTE_SURFACE_MODULE",
+    "ROUTE_MODULE",
     "discover_module_routers",
     "discover_module_surface",
     "discover_module_surfaces",

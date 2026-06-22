@@ -3,6 +3,7 @@ import sys
 import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi import APIRouter, FastAPI, Form
@@ -12,23 +13,24 @@ from starlette.staticfiles import StaticFiles
 
 import wybra.tools.routes as routes_tool
 from wybra.core import InputValidationError
-from wybra.template import route_template
-from wybra.tools.project import ProjectToolConfigurationError
-from wybra.web.routes import (
+from wybra.core.routes import (
+    ROUTE_METHODS_ATTRIBUTE,
+    ROUTE_PATH_ATTRIBUTE,
+    ROUTE_TEMPLATE_ATTRIBUTE,
+    ROUTE_TYPE_ATTRIBUTE,
     ConfiguredModuleRouter,
     RouteKind,
     RouteOrigin,
     RouteProblemKind,
-    RouteSurface,
+    RouteType,
     inspect_route_tree,
     record_route_origin,
     register_module_routes,
-    render_graph,
-    render_json,
-    render_mermaid,
-    render_succinct,
-    route_surface,
+    route,
+    route_template,
+    route_type,
 )
+from wybra.tools.project import ProjectToolConfigurationError
 
 
 def test_wybra_package_command_scripts_are_prefixed() -> None:
@@ -67,6 +69,61 @@ def test_route_template_rejects_invalid_template_name(template_name: str) -> Non
         route_template(template_name)
 
 
+def test_route_metadata_can_be_declared_on_view_class() -> None:
+    @route("/home", RouteType.PAGE, template="pages/home.html", methods=("get",))
+    class HomePage:
+        pass
+
+    assert getattr(HomePage, ROUTE_PATH_ATTRIBUTE) == "/home"
+    assert getattr(HomePage, ROUTE_TYPE_ATTRIBUTE) == RouteType.PAGE.value
+    assert getattr(HomePage, ROUTE_TEMPLATE_ATTRIBUTE) == "pages/home.html"
+    assert getattr(HomePage, ROUTE_METHODS_ATTRIBUTE) == ("GET",)
+
+
+@pytest.mark.parametrize("path", ("", " ", "   "))
+def test_route_rejects_blank_or_whitespace_path(path: str) -> None:
+    with pytest.raises(InputValidationError, match="Route path"):
+
+        @route(path, RouteType.PAGE)
+        class View:
+            pass
+
+
+@pytest.mark.parametrize("path", ("status", "status/health", "api/status", "v1/home"))
+def test_route_rejects_paths_not_starting_with_slash(path: str) -> None:
+    with pytest.raises(InputValidationError, match="Route path"):
+
+        @route(path, RouteType.PAGE)
+        class View:
+            pass
+
+
+@pytest.mark.parametrize(
+    "methods",
+    (
+        ("",),
+        (" ",),
+        ("GET", " "),
+        ("GET", "", "POST"),
+    ),
+)
+def test_route_rejects_methods_with_blank_entries(methods: tuple[str, ...]) -> None:
+    with pytest.raises(InputValidationError, match="Route methods"):
+
+        @route("/status", RouteType.PAGE, methods=methods)
+        class View:
+            pass
+
+
+@pytest.mark.parametrize("template", ("", " ", 123, object()))
+def test_route_rejects_invalid_template_when_provided(template: object) -> None:
+    with pytest.raises(InputValidationError, match="Route template name"):
+
+        @route("/home", RouteType.PAGE, template=cast(Any, template))
+        class View:
+            pass
+
+
 def test_inspect_route_tree_reports_installed_routes_and_endpoint_shape(
     tmp_path: Path,
 ) -> None:
@@ -74,7 +131,7 @@ def test_inspect_route_tree_reports_installed_routes_and_endpoint_shape(
 
     @app.get("/", name="home", response_class=HTMLResponse)
     @route_template("pages/home.html")
-    @route_surface(RouteSurface.PAGE)
+    @route_type(RouteType.PAGE)
     async def home() -> HTMLResponse:
         return HTMLResponse("home")
 
@@ -115,18 +172,18 @@ def test_inspect_route_tree_reports_installed_routes_and_endpoint_shape(
         "/ws",
     )
     assert records["/"].kind == RouteKind.HTTP
-    assert records["/"].shape.surface == RouteSurface.PAGE
+    assert records["/"].shape.route_type == RouteType.PAGE
     assert records["/"].shape.template == "pages/home.html"
     assert records["/login"].shape.accepts_body is True
     assert records["/login"].shape.accepts_form is True
-    assert records["/api/items/{item_id}"].shape.surface == RouteSurface.API
+    assert records["/api/items/{item_id}"].shape.route_type == RouteType.API
     assert records["/api/items/{item_id}"].shape.path_parameters == ("item_id",)
     assert records["/static"].kind == RouteKind.STATIC
     assert records["/tools"].kind == RouteKind.MOUNT
     assert records["/tools/status"].kind == RouteKind.HTTP
     assert records["/ws"].kind == RouteKind.WEBSOCKET
 
-    tree_nodes = json.loads(render_json(inspection))["tree"]["children"]
+    tree_nodes = json.loads(routes_tool.render_json(inspection))["tree"]["children"]
     tree_by_path = {node["path"]: node for node in tree_nodes}
     assert tree_by_path["/static"]["opaque"] is True
     assert tree_by_path["/tools"]["opaque"] is False
@@ -245,10 +302,10 @@ def test_renderers_use_the_same_route_tree_model() -> None:
 
     inspection = inspect_route_tree(app)
 
-    succinct = render_succinct(inspection)
-    graph = render_graph(inspection)
-    mermaid = render_mermaid(inspection)
-    json_output = json.loads(render_json(inspection))
+    succinct = routes_tool.render_succinct(inspection)
+    graph = routes_tool.render_graph(inspection)
+    mermaid = routes_tool.render_mermaid(inspection)
+    json_output = json.loads(routes_tool.render_json(inspection))
 
     assert "GET          /api/status name=status" in succinct
     assert "api" in graph
@@ -320,7 +377,7 @@ def test_graph_renderer_uses_compact_visual_tree() -> None:
         ),
     )
 
-    graph = render_graph(inspect_route_tree(app))
+    graph = routes_tool.render_graph(inspect_route_tree(app))
 
     assert graph.splitlines() == [
         "/ [get] public:home app:default",
@@ -345,19 +402,19 @@ def test_graph_renderer_preserves_trailing_slash_route_nodes() -> None:
         return {"page": "account"}
 
     inspection = inspect_route_tree(app)
-    tree = json.loads(render_json(inspection))["tree"]
+    tree = json.loads(routes_tool.render_json(inspection))["tree"]
     account_node = tree["children"][0]
     trailing_node = account_node["children"][0]
 
     assert [route.path for route in inspection.routes] == ["/account", "/account/"]
     assert account_node["path"] == "/account"
     assert trailing_node["path"] == "/account/"
-    assert render_graph(inspection).splitlines() == [
+    assert routes_tool.render_graph(inspection).splitlines() == [
         "/",
         "└─ [get] /account account",
         "   └─ [get] / account-trailing",
     ]
-    assert "/account/" in render_mermaid(inspection)
+    assert "/account/" in routes_tool.render_mermaid(inspection)
 
 
 def test_template_metadata_is_not_inferred_from_handler_source() -> None:
@@ -373,7 +430,7 @@ def test_template_metadata_is_not_inferred_from_handler_source() -> None:
         route for route in inspection.routes if route.path == "/implicit-template"
     )
 
-    assert record.shape.surface == RouteSurface.PAGE
+    assert record.shape.route_type == RouteType.PAGE
     assert record.shape.template is None
 
 

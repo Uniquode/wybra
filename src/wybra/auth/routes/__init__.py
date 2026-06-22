@@ -1,6 +1,6 @@
 """Authentication route pages, context providers, and router wiring.
 
-Hosts normally compose the ``module_routers`` route surface through configured
+Hosts normally compose the ``module_routers`` route module through configured
 application modules rather than importing routers directly.
 """
 

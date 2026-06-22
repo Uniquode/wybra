@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
-import html
-import json
 import re
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, cast
+from typing import Any
 
 from fastapi.routing import APIRoute
 from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
-from wybra.template.metadata import ROUTE_TEMPLATE_ATTRIBUTE
-from wybra.web.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
+from wybra.core.exceptions import InputValidationError
+from wybra.core.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 
 ROUTE_ORIGINS_STATE_KEY = "_wybra_route_origins"
-ROUTE_SURFACE_ATTRIBUTE = "__wybra_route_surface__"
+ROUTE_PATH_ATTRIBUTE = "__wybra_route_path__"
+ROUTE_METHODS_ATTRIBUTE = "__wybra_route_methods__"
+ROUTE_TYPE_ATTRIBUTE = "__wybra_route_type__"
+ROUTE_TEMPLATE_ATTRIBUTE = "__wybra_template_name__"
 PATH_PARAMETER_PATTERN = re.compile(r"{([^}:]+)(?::[^}]+)?}")
 
 
@@ -31,7 +32,7 @@ class RouteKind(StrEnum):
     UNKNOWN = "unknown"
 
 
-class RouteSurface(StrEnum):
+class RouteType(StrEnum):
     API = "api"
     PAGE = "page"
     PARTIAL = "partial"
@@ -59,7 +60,7 @@ class RouteOrigin:
 
 @dataclass(frozen=True, slots=True)
 class EndpointShape:
-    surface: RouteSurface = RouteSurface.UNKNOWN
+    route_type: RouteType = RouteType.UNKNOWN
     accepts_body: bool = False
     accepts_form: bool = False
     path_parameters: tuple[str, ...] = ()
@@ -108,15 +109,69 @@ class RouteInspection:
     warnings: tuple[str, ...] = ()
 
 
-def route_surface(
-    surface: RouteSurface | str,
+def route_type(
+    route_type: RouteType | str,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Attach explicit surface metadata to an endpoint for route inspection."""
+    """Attach explicit route type metadata to an endpoint for route inspection."""
 
-    route_surface = RouteSurface(surface)
+    route_type = RouteType(route_type)
 
     def decorator(endpoint: Callable[..., Any]) -> Callable[..., Any]:
-        setattr(endpoint, ROUTE_SURFACE_ATTRIBUTE, route_surface.value)
+        setattr(endpoint, ROUTE_TYPE_ATTRIBUTE, route_type.value)
+        return endpoint
+
+    return decorator
+
+
+def route_template(
+    template_name: str,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Attach explicit template metadata to an endpoint or view class."""
+
+    if not isinstance(template_name, str) or not template_name.strip():
+        raise InputValidationError("Route template name must be a non-blank string.")
+
+    def decorator(endpoint: Callable[..., Any]) -> Callable[..., Any]:
+        setattr(endpoint, ROUTE_TEMPLATE_ATTRIBUTE, template_name.strip())
+        return endpoint
+
+    return decorator
+
+
+def route(
+    path: str,
+    route_type: RouteType | str,
+    *,
+    template: str | None = None,
+    methods: Iterable[str] | None = None,
+) -> Callable[[Any], Any]:
+    """Attach core route metadata to a function endpoint or view class."""
+
+    if not isinstance(path, str) or not path.strip():
+        raise InputValidationError("Route path must be a non-blank string.")
+    normalised_path = path.strip()
+    if not normalised_path.startswith("/"):
+        raise InputValidationError("Route path must start with '/'.")
+
+    resolved_route_type = RouteType(route_type)
+    resolved_methods = ()
+    if methods is not None:
+        resolved_methods = tuple(
+            method.strip().upper() if isinstance(method, str) else ""
+            for method in methods
+        )
+        if any(not method for method in resolved_methods):
+            raise InputValidationError("Route methods must be non-blank strings.")
+    if template is not None and (not isinstance(template, str) or not template.strip()):
+        raise InputValidationError("Route template name must be a non-blank string.")
+
+    def decorator(endpoint: Any) -> Any:
+        setattr(endpoint, ROUTE_PATH_ATTRIBUTE, normalised_path)
+        setattr(endpoint, ROUTE_TYPE_ATTRIBUTE, resolved_route_type.value)
+        if resolved_methods:
+            setattr(endpoint, ROUTE_METHODS_ATTRIBUTE, resolved_methods)
+        if template is not None:
+            setattr(endpoint, ROUTE_TEMPLATE_ATTRIBUTE, template.strip())
         return endpoint
 
     return decorator
@@ -160,33 +215,6 @@ def inspect_route_tree(app: Any) -> RouteInspection:
         problems=problems,
         warnings=tuple(warnings),
     )
-
-
-def render_succinct(inspection: RouteInspection) -> str:
-    lines = [_succinct_line(record) for record in inspection.routes]
-    lines.extend(_problem_lines(inspection.problems))
-    return "\n".join(lines)
-
-
-def render_graph(inspection: RouteInspection) -> str:
-    lines: list[str] = []
-    route_map = {route.id: route for route in inspection.routes}
-    _render_graph_tree(inspection.tree, lines=lines, route_map=route_map)
-    if inspection.problems:
-        lines.append("")
-        lines.extend(_problem_lines(inspection.problems))
-    return "\n".join(lines)
-
-
-def render_mermaid(inspection: RouteInspection) -> str:
-    lines = ["flowchart TD"]
-    route_map = {route.id: route for route in inspection.routes}
-    _render_mermaid_node(inspection.tree, lines=lines, route_map=route_map)
-    return "\n".join(lines)
-
-
-def render_json(inspection: RouteInspection) -> str:
-    return json.dumps(_inspection_to_dict(inspection), indent=2, sort_keys=True)
 
 
 def _collect_routes(
@@ -331,7 +359,7 @@ def _endpoint_shape(route: BaseRoute, *, path: str, kind: RouteKind) -> Endpoint
         )
 
     return EndpointShape(
-        surface=_route_surface(
+        route_type=_route_type(
             route, path=path, kind=kind, media_type=response_media_type
         ),
         accepts_body=bool(getattr(route, "body_field", None)),
@@ -354,28 +382,28 @@ def _route_kind(route: BaseRoute) -> RouteKind:
     return RouteKind.UNKNOWN
 
 
-def _route_surface(
+def _route_type(
     route: BaseRoute,
     *,
     path: str,
     kind: RouteKind,
     media_type: str | None,
-) -> RouteSurface:
+) -> RouteType:
     endpoint = getattr(route, "endpoint", None)
-    explicit_surface = getattr(endpoint, ROUTE_SURFACE_ATTRIBUTE, None)
-    if explicit_surface is not None:
-        return RouteSurface(explicit_surface)
+    explicit_route_type = getattr(endpoint, ROUTE_TYPE_ATTRIBUTE, None)
+    if explicit_route_type is not None:
+        return RouteType(explicit_route_type)
     if kind == RouteKind.STATIC:
-        return RouteSurface.STATIC
+        return RouteType.STATIC
     if kind == RouteKind.MOUNT:
-        return RouteSurface.MOUNT
+        return RouteType.MOUNT
     if path == API_PATH_PREFIX or path.startswith(f"{API_PATH_PREFIX}/"):
-        return RouteSurface.API
+        return RouteType.API
     if path == PARTIAL_PATH_PREFIX or path.startswith(f"{PARTIAL_PATH_PREFIX}/"):
-        return RouteSurface.PARTIAL
+        return RouteType.PARTIAL
     if media_type == "text/html":
-        return RouteSurface.PAGE
-    return RouteSurface.UNKNOWN
+        return RouteType.PAGE
+    return RouteType.UNKNOWN
 
 
 def _accepts_form(route: BaseRoute) -> bool:
@@ -671,294 +699,24 @@ class _NodeIdCounter:
         return f"node_{self.value:03d}"
 
 
-def _succinct_line(record: RouteRecord) -> str:
-    methods = ",".join(record.methods) if record.methods else record.kind.value
-    name = f" name={record.name}" if record.name else ""
-    origin = (
-        f" origin={record.origin.module_name}:{record.origin.router_label}"
-        if record.origin
-        else ""
-    )
-    shape = f" shape={record.shape.surface.value}"
-    return f"{methods:<12} {record.path}{name}{origin}{shape}"
-
-
-def _problem_lines(problems: tuple[RouteProblem, ...]) -> list[str]:
-    return [f"problem {problem.kind.value}: {problem.message}" for problem in problems]
-
-
-def _render_graph_tree(
-    node: RouteTreeNode,
-    *,
-    lines: list[str],
-    route_map: Mapping[str, RouteRecord],
-) -> None:
-    root_route = next(
-        (child for child in node.children if child.path == "/" and child.route_ids),
-        None,
-    )
-    root_route_ids = () if root_route is None else root_route.route_ids
-    root_origin = _graph_node_origin(root_route_ids, route_map=route_map)
-    lines.append(
-        _graph_node_label(
-            "/",
-            root_route_ids,
-            route_map=route_map,
-            inherited_origin=None,
-            is_root=True,
-        )
-    )
-
-    children = tuple(child for child in node.children if child is not root_route)
-    for index, child in enumerate(children):
-        _render_graph_branch(
-            child,
-            lines=lines,
-            route_map=route_map,
-            prefix="",
-            is_last=index == len(children) - 1,
-            inherited_origin=root_origin,
-        )
-
-
-def _render_graph_branch(
-    node: RouteTreeNode,
-    *,
-    lines: list[str],
-    route_map: Mapping[str, RouteRecord],
-    prefix: str,
-    is_last: bool,
-    inherited_origin: tuple[str, str] | None,
-) -> None:
-    connector = "└─ " if is_last else "├─ "
-    node_origin = _graph_node_origin(node.route_ids, route_map=route_map)
-    subtree_origin = None
-    if node_origin is None:
-        subtree_origin = _graph_subtree_origin(node, route_map=route_map)
-    label_origin = node_origin if node_origin is not None else subtree_origin
-    label = _graph_node_label(
-        _graph_path_label(node),
-        node.route_ids,
-        route_map=route_map,
-        inherited_origin=inherited_origin,
-        group_origin=label_origin,
-        is_root=False,
-    )
-    lines.append(f"{prefix}{connector}{label}")
-    child_prefix = f"{prefix}{'   ' if is_last else '│  '}"
-    next_origin = inherited_origin if label_origin is None else label_origin
-    for index, child in enumerate(node.children):
-        _render_graph_branch(
-            child,
-            lines=lines,
-            route_map=route_map,
-            prefix=child_prefix,
-            is_last=index == len(node.children) - 1,
-            inherited_origin=next_origin,
-        )
-
-
-def _graph_path_label(node: RouteTreeNode) -> str:
-    if node.label == "/":
-        return "/"
-    return "/" if node.path == "/" else f"/{node.label}"
-
-
-def _graph_node_label(
-    path_label: str,
-    route_ids: tuple[str, ...],
-    *,
-    route_map: Mapping[str, RouteRecord],
-    inherited_origin: tuple[str, str] | None,
-    group_origin: tuple[str, str] | None = None,
-    is_root: bool = False,
-) -> str:
-    if not route_ids:
-        if group_origin is not None and group_origin != inherited_origin:
-            return f"{path_label} {_graph_origin_label(group_origin)}"
-        return path_label
-
-    route_labels = tuple(
-        _graph_route_label(
-            path_label,
-            route_map[route_id],
-            inherited_origin=inherited_origin,
-            is_root=is_root,
-        )
-        for route_id in route_ids
-    )
-    return " | ".join(route_labels)
-
-
-def _graph_route_label(
-    path_label: str,
-    record: RouteRecord,
-    *,
-    inherited_origin: tuple[str, str] | None,
-    is_root: bool,
-) -> str:
-    parts = [path_label, _graph_route_methods(record)]
-    if not is_root:
-        parts.reverse()
-    if record.name:
-        parts.append(record.name)
-    origin = _graph_route_origin(record)
-    if origin is not None and origin != inherited_origin:
-        parts.append(_graph_origin_label(origin))
-    if record.shape.surface is not RouteSurface.UNKNOWN:
-        parts.append(f"({record.shape.surface.value})")
-    return " ".join(parts)
-
-
-def _graph_node_origin(
-    route_ids: tuple[str, ...],
-    *,
-    route_map: Mapping[str, RouteRecord],
-) -> tuple[str, str] | None:
-    if not route_ids:
-        return None
-
-    origins = tuple(_graph_route_origin(route_map[route_id]) for route_id in route_ids)
-    first_origin = origins[0]
-    if first_origin is None:
-        return None
-    return first_origin if all(origin == first_origin for origin in origins) else None
-
-
-def _graph_subtree_origin(
-    node: RouteTreeNode,
-    *,
-    route_map: Mapping[str, RouteRecord],
-) -> tuple[str, str] | None:
-    origins = tuple(_graph_descendant_origins(node, route_map=route_map))
-    if len(origins) <= 1:
-        return None
-
-    first_origin = origins[0]
-    if first_origin is None:
-        return None
-    return first_origin if all(origin == first_origin for origin in origins) else None
-
-
-def _graph_descendant_origins(
-    node: RouteTreeNode,
-    *,
-    route_map: Mapping[str, RouteRecord],
-) -> Iterator[tuple[str, str] | None]:
-    for route_id in node.route_ids:
-        yield _graph_route_origin(route_map[route_id])
-    for child in node.children:
-        yield from _graph_descendant_origins(child, route_map=route_map)
-
-
-def _graph_route_origin(record: RouteRecord) -> tuple[str, str] | None:
-    if record.origin is None:
-        return None
-    return (record.origin.module_name, record.origin.router_label)
-
-
-def _graph_origin_label(origin: tuple[str, str]) -> str:
-    return f"{origin[0]}:{origin[1]}"
-
-
-def _graph_route_methods(record: RouteRecord) -> str:
-    methods = (
-        ",".join(method.lower() for method in record.methods)
-        if record.methods
-        else record.kind.value
-    )
-    return f"[{methods}]"
-
-
-def _render_mermaid_node(
-    node: RouteTreeNode,
-    *,
-    lines: list[str],
-    route_map: Mapping[str, RouteRecord],
-) -> None:
-    label = _mermaid_label(node, route_map=route_map)
-    lines.append(f"  {node.id}[{label}]")
-    for child in node.children:
-        lines.append(f"  {node.id} --> {child.id}")
-        _render_mermaid_node(child, lines=lines, route_map=route_map)
-
-
-def _mermaid_label(
-    node: RouteTreeNode,
-    *,
-    route_map: Mapping[str, RouteRecord],
-) -> str:
-    details = [node.path]
-    if node.kind:
-        details.append(node.kind.value)
-    if node.route_ids:
-        details.extend(
-            _route_detail(route_map[route_id]) for route_id in node.route_ids
-        )
-    return json.dumps("<br/>".join(html.escape(part) for part in details))
-
-
-def _route_detail(record: RouteRecord) -> str:
-    methods = ",".join(record.methods) if record.methods else record.kind.value
-    name = f" {record.name}" if record.name else ""
-    origin = (
-        f" {record.origin.module_name}:{record.origin.router_label}"
-        if record.origin
-        else ""
-    )
-    return f"{methods}{name}{origin} {record.shape.surface.value}"
-
-
-def _inspection_to_dict(inspection: RouteInspection) -> dict[str, object]:
-    return {
-        "tree": _tree_to_dict(inspection.tree),
-        "routes": [_dataclass_to_dict(route) for route in inspection.routes],
-        "problems": [_dataclass_to_dict(problem) for problem in inspection.problems],
-        "warnings": list(inspection.warnings),
-    }
-
-
-def _tree_to_dict(node: RouteTreeNode) -> dict[str, object]:
-    data = _dataclass_to_dict(node)
-    data["children"] = [_tree_to_dict(child) for child in node.children]
-    return data
-
-
-def _dataclass_to_dict(value: Any) -> dict[str, object]:
-    data = asdict(value)
-    return cast(dict[str, object], _stringify_enums(data))
-
-
-def _stringify_enums(value: object) -> object:
-    if isinstance(value, StrEnum):
-        return value.value
-    if isinstance(value, dict):
-        return {key: _stringify_enums(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_stringify_enums(item) for item in value]
-    if isinstance(value, tuple):
-        return [_stringify_enums(item) for item in value]
-    return value
-
-
 __all__ = [
     "EndpointShape",
+    "ROUTE_METHODS_ATTRIBUTE",
     "ROUTE_ORIGINS_STATE_KEY",
-    "ROUTE_SURFACE_ATTRIBUTE",
+    "ROUTE_PATH_ATTRIBUTE",
     "ROUTE_TEMPLATE_ATTRIBUTE",
+    "ROUTE_TYPE_ATTRIBUTE",
     "RouteInspection",
     "RouteKind",
     "RouteOrigin",
     "RouteProblem",
     "RouteProblemKind",
     "RouteRecord",
-    "RouteSurface",
+    "RouteType",
     "RouteTreeNode",
     "inspect_route_tree",
     "record_route_origin",
-    "render_graph",
-    "render_json",
-    "render_mermaid",
-    "render_succinct",
-    "route_surface",
+    "route",
+    "route_template",
+    "route_type",
 ]

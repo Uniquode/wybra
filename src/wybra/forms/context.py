@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from wybra.core.routes.contracts import PARTIAL_PATH_PREFIX
 from wybra.forms.capabilities import FormsCapability
 from wybra.forms.csrf import request_csrf_response_finalisation
 from wybra.template.context import TemplateContext, add_to_context
-from wybra.web.routes.contracts import PARTIAL_PATH_PREFIX
 
 
 def forms_context(request: Request, context: TemplateContext) -> TemplateContext:

@@ -10,12 +10,12 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from jinja2.exceptions import TemplateNotFound
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from wybra.core.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 from wybra.core.url_paths import matches_path_prefix
 from wybra.site import SiteCapabilityError
 from wybra.template.rendering import template_capability_from
-from wybra.web.routes.contracts import API_PATH_PREFIX, PARTIAL_PATH_PREFIX
 
-RouteSurface = Literal["page", "partial", "api", "static"]
+ErrorResponseKind = Literal["page", "partial", "api", "static"]
 StaticMountPathResolver = Callable[[], str | None]
 
 logger = logging.getLogger(__name__)
@@ -78,8 +78,8 @@ def _handle_http_exception(request: Request, exc: Exception) -> Response:
 def _handle_validation_error(request: Request, exc: Exception) -> Response:
     validation_exc = cast(RequestValidationError, exc)
     presentation = _build_error_presentation(422, detail="The request was invalid.")
-    surface = _resolve_route_surface(request)
-    if surface == "api":
+    response_kind = _resolve_error_response_kind(request)
+    if response_kind == "api":
         return JSONResponse(
             status_code=422,
             content=_build_api_error_payload(
@@ -88,7 +88,7 @@ def _handle_validation_error(request: Request, exc: Exception) -> Response:
             ),
         )
 
-    if surface in ("page", "partial"):
+    if response_kind in ("page", "partial"):
         presentation = replace(
             presentation,
             form_errors=_summarise_validation_errors(validation_exc),
@@ -109,15 +109,15 @@ def _build_error_response(
     *,
     headers: Mapping[str, str] | None = None,
 ) -> Response:
-    surface = _resolve_route_surface(request)
-    if surface == "api":
+    response_kind = _resolve_error_response_kind(request)
+    if response_kind == "api":
         response = JSONResponse(
             status_code=presentation.status_code,
             content=_build_api_error_payload(presentation),
         )
         _apply_headers(response, headers)
         return response
-    if surface == "static":
+    if response_kind == "static":
         response = PlainTextResponse(
             presentation.heading,
             status_code=presentation.status_code,
@@ -128,7 +128,7 @@ def _build_error_response(
     try:
         templates = template_capability_from(request)
     except SiteCapabilityError:
-        return _fallback_error_response(surface, presentation, headers=headers)
+        return _fallback_error_response(response_kind, presentation, headers=headers)
 
     context = {
         "page_title": f"{presentation.status_code} {presentation.heading}",
@@ -139,7 +139,7 @@ def _build_error_response(
     }
 
     try:
-        if surface == "partial":
+        if response_kind == "partial":
             response = templates.render_partial(
                 request,
                 _error_options(request).partial_template,
@@ -154,13 +154,13 @@ def _build_error_response(
                 status_code=presentation.status_code,
             )
     except TemplateNotFound:
-        return _fallback_error_response(surface, presentation, headers=headers)
+        return _fallback_error_response(response_kind, presentation, headers=headers)
 
     _apply_headers(response, headers)
     return response
 
 
-def _resolve_route_surface(request: Request) -> RouteSurface:
+def _resolve_error_response_kind(request: Request) -> ErrorResponseKind:
     path = request.url.path
     options = _error_options(request)
     static_mount_path = _resolve_static_mount_path(options)
@@ -198,12 +198,12 @@ def _apply_headers(response: Response, headers: Mapping[str, str] | None) -> Non
 
 
 def _fallback_error_response(
-    surface: RouteSurface,
+    response_kind: ErrorResponseKind,
     presentation: ErrorPresentation,
     *,
     headers: Mapping[str, str] | None = None,
 ) -> Response:
-    if surface == "api":
+    if response_kind == "api":
         response = JSONResponse(
             status_code=presentation.status_code,
             content=_build_api_error_payload(presentation),

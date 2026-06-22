@@ -20,6 +20,7 @@ from wybra.core.composition import (
     TemplateOptions,
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
+from wybra.core.routes.validation import validate_routes
 from wybra.security.validation import validate_security
 from wybra.template.validation import _contains_post_form, validate_template
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
@@ -31,7 +32,6 @@ from wybra.tools.validation.registry import (
     discover_validation_target_details,
     discover_validation_targets,
 )
-from wybra.web.validation import validate_web
 from wybra.widgets.validation import validate_widgets
 
 
@@ -217,19 +217,19 @@ def test_runtime_project_root_reports_malformed_pyproject(
         runtime_project_root()
 
 
-def test_validate_web_checks_framework_web_foundation(tmp_path: Path) -> None:
-    result = validate_web(_web_settings(tmp_path))
+def test_validate_routes_checks_configured_route_modules(tmp_path: Path) -> None:
+    result = validate_routes(_web_settings(tmp_path))
 
     assert result.is_ok
-    assert result.name == "web"
+    assert result.name == "routes"
     assert any(
-        check.description == "configured module surfaces load: wybra.web"
+        check.description == "configured route modules load: wybra.web"
         for check in result.checks
     )
 
 
 def test_validate_command_reports_missing_project_configuration(capsys) -> None:
-    exit_code = validate_main(["web"])
+    exit_code = validate_main(["routes"])
 
     captured = capsys.readouterr()
 
@@ -257,7 +257,7 @@ def test_validate_command_does_not_mask_unrelated_value_errors(
     monkeypatch.setattr(validate_module, "_build_settings", raise_unrelated_value_error)
 
     with pytest.raises(ValueError, match="programmer error"):
-        validate_module.main(["web"])
+        validate_module.main(["routes"])
 
 
 def test_resolve_targets_raises_domain_error_for_unknown_targets() -> None:
@@ -413,7 +413,8 @@ def test_validate_command_runs_discovered_module_targets(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out == (
-        "assets: ok\nforms: ok\nsecurity: ok\ntemplate: ok\ncommand-target: ok\n"
+        "assets: ok\nforms: ok\nroutes: ok\nsecurity: ok\ntemplate: ok\n"
+        "command-target: ok\n"
     )
     assert captured.err == ""
 
@@ -566,20 +567,6 @@ def test_validate_main_treats_falsy_click_exception_as_failure(
 
     captured = capsys.readouterr()
     assert "invalid usage" in captured.err
-
-
-def test_validate_web_omitting_wybra_web_does_not_use_default_static_root(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    package_root = tmp_path / "staticless_app"
-    package_root.mkdir()
-    (package_root / "__init__.py").write_text("", encoding="utf-8")
-    monkeypatch.syspath_prepend(str(tmp_path))
-
-    result = validate_web(_web_settings(tmp_path, ("staticless_app",)))
-
-    assert result.is_ok
 
 
 def test_project_settings_do_not_treat_asset_root_as_runtime_static_root(
@@ -933,8 +920,8 @@ def test_validate_widgets_accepts_absent_widgets_module(tmp_path: Path) -> None:
     )
 
 
-def test_validate_web_reports_missing_configured_module(tmp_path: Path) -> None:
-    result = validate_web(_web_settings(tmp_path, ("missing_validation_app",)))
+def test_validate_routes_reports_missing_configured_module(tmp_path: Path) -> None:
+    result = validate_routes(_web_settings(tmp_path, ("missing_validation_app",)))
 
     assert not result.is_ok
     assert any(
@@ -952,7 +939,7 @@ def test_validate_command_reports_host_configuration_error(
 
     monkeypatch.setattr(validate_module, "_build_settings", raise_configuration_error)
 
-    exit_code = validate_main(["web"])
+    exit_code = validate_main(["routes"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
