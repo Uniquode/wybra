@@ -13,6 +13,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 JsonValue = Mapping[str, Any] | Sequence[Any] | str | int | float | bool | None
 HandlerResult = Response | JsonValue
 ViewHandler = Callable[..., HandlerResult | Awaitable[HandlerResult]]
+HTTP_METHOD_HANDLERS = ("get", "post", "put", "patch", "delete", "head", "options")
 
 
 @dataclass(slots=True)
@@ -35,7 +36,17 @@ class View:
         return cast(ViewHandler, handler)
 
     def method_not_allowed(self, _request: Request, **_kwargs: Any) -> Response:
-        return Response(status_code=405)
+        return Response(
+            status_code=405,
+            headers={"Allow": ", ".join(self._allowed_methods())},
+        )
+
+    def _allowed_methods(self) -> tuple[str, ...]:
+        return tuple(
+            method.upper()
+            for method in HTTP_METHOD_HANDLERS
+            if callable(getattr(self, method, None))
+        )
 
     def response_from_result(self, result: HandlerResult) -> Response:
         if isinstance(result, Response):

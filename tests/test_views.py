@@ -43,9 +43,17 @@ async def test_view_dispatches_to_matching_http_method() -> None:
 
 @pytest.mark.anyio
 async def test_view_returns_method_not_allowed_for_missing_handler() -> None:
-    response = await View().dispatch(_request("DELETE"))
+    class ExampleView(View):
+        def get(self, _request: Request) -> dict[str, str]:
+            return {"ok": "yes"}
+
+        def post(self, _request: Request) -> dict[str, str]:
+            return {"ok": "yes"}
+
+    response = await ExampleView().dispatch(_request("DELETE"))
 
     assert response.status_code == 405
+    assert response.headers["allow"] == "GET, POST"
 
 
 def test_view_model_is_available_to_subclass() -> None:

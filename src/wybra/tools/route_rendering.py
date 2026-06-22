@@ -229,7 +229,7 @@ def _graph_subtree_origin(
     route_map: Mapping[str, RouteRecord],
 ) -> RouteOriginLabel | None:
     origins = tuple(_graph_descendant_origins(node, route_map=route_map))
-    if not origins:
+    if len(origins) <= 1:
         return None
 
     first_origin = origins[0]

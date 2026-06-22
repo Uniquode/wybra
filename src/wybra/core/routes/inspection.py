@@ -154,11 +154,14 @@ def route(
         raise InputValidationError("Route path must start with '/'.")
 
     resolved_route_type = RouteType(route_type)
-    resolved_methods = (
-        tuple(method.upper() for method in methods) if methods is not None else ()
-    )
-    if any(not method for method in resolved_methods):
-        raise InputValidationError("Route methods must be non-blank strings.")
+    resolved_methods = ()
+    if methods is not None:
+        resolved_methods = tuple(
+            method.strip().upper() if isinstance(method, str) else ""
+            for method in methods
+        )
+        if any(not method for method in resolved_methods):
+            raise InputValidationError("Route methods must be non-blank strings.")
     if template is not None and (not isinstance(template, str) or not template.strip()):
         raise InputValidationError("Route template name must be a non-blank string.")
 

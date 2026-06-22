@@ -3,6 +3,7 @@ import sys
 import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi import APIRouter, FastAPI, Form
@@ -77,6 +78,50 @@ def test_route_metadata_can_be_declared_on_view_class() -> None:
     assert getattr(HomePage, ROUTE_TYPE_ATTRIBUTE) == RouteType.PAGE.value
     assert getattr(HomePage, ROUTE_TEMPLATE_ATTRIBUTE) == "pages/home.html"
     assert getattr(HomePage, ROUTE_METHODS_ATTRIBUTE) == ("GET",)
+
+
+@pytest.mark.parametrize("path", ("", " ", "   "))
+def test_route_rejects_blank_or_whitespace_path(path: str) -> None:
+    with pytest.raises(InputValidationError, match="Route path"):
+
+        @route(path, RouteType.PAGE)
+        class View:
+            pass
+
+
+@pytest.mark.parametrize("path", ("status", "status/health", "api/status", "v1/home"))
+def test_route_rejects_paths_not_starting_with_slash(path: str) -> None:
+    with pytest.raises(InputValidationError, match="Route path"):
+
+        @route(path, RouteType.PAGE)
+        class View:
+            pass
+
+
+@pytest.mark.parametrize(
+    "methods",
+    (
+        ("",),
+        (" ",),
+        ("GET", " "),
+        ("GET", "", "POST"),
+    ),
+)
+def test_route_rejects_methods_with_blank_entries(methods: tuple[str, ...]) -> None:
+    with pytest.raises(InputValidationError, match="Route methods"):
+
+        @route("/status", RouteType.PAGE, methods=methods)
+        class View:
+            pass
+
+
+@pytest.mark.parametrize("template", ("", " ", 123, object()))
+def test_route_rejects_invalid_template_when_provided(template: object) -> None:
+    with pytest.raises(InputValidationError, match="Route template name"):
+
+        @route("/home", RouteType.PAGE, template=cast(Any, template))
+        class View:
+            pass
 
 
 def test_inspect_route_tree_reports_installed_routes_and_endpoint_shape(
