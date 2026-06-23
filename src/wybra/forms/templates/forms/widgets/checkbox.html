@@ -1,0 +1,15 @@
+<div class="wybra-form-field wybra-form-field--boolean{% if field.errors %} wybra-form-field--error{% endif %}{% if field.disabled %} wybra-form-field--disabled{% endif %}">
+  <label class="wybra-form-option" for="{{ field.name }}">
+    <input
+      id="{{ field.name }}"
+      name="{{ field.name }}"
+      type="checkbox"
+      value="on"
+      {% if field.value %}checked{% endif %}
+      {% if field.disabled %}disabled{% endif %}
+    >
+    <span>{{ field.label }}</span>
+  </label>
+  {% include "forms/widgets/_help.html" %}
+  {% include "forms/widgets/_field_errors.html" %}
+</div>

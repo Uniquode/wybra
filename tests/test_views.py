@@ -82,6 +82,9 @@ async def test_html_view_renders_literal_html_without_template_capability() -> N
 @pytest.mark.anyio
 async def test_template_view_renders_through_template_capability() -> None:
     class FakeTemplateCapability:
+        def render_template(self, template_name: str, context: dict[str, Any]) -> str:
+            return f"{template_name}:{context['name']}"
+
         def render_page(
             self,
             request: Request,

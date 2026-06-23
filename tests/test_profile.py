@@ -57,6 +57,9 @@ class ProfileUser:
 
 
 class ProfileTemplateStub:
+    def render_template(self, template_name: str, context: dict[str, object]) -> str:
+        return self._render(template_name, context)
+
     def render_page(
         self,
         request: Request,
@@ -66,6 +69,12 @@ class ProfileTemplateStub:
         status_code: int = 200,
     ) -> HTMLResponse:
         del request
+        return HTMLResponse(
+            self._render(template_name, context),
+            status_code=status_code,
+        )
+
+    def _render(self, template_name: str, context: dict[str, object]) -> str:
         field_values = context["field_values"]
         preferred_name = (
             field_values["preferred_name"] if isinstance(field_values, dict) else ""
@@ -75,11 +84,10 @@ class ProfileTemplateStub:
             "verified" if contact.verified_at else "unverified"
             for contact in phone_contacts
         )
-        return HTMLResponse(
+        return (
             f"{template_name}|preferred_name={preferred_name}|"
             f"csrf_field={context.get('csrf_field_name', '')}|"
-            f"phone_states={phone_states}",
-            status_code=status_code,
+            f"phone_states={phone_states}"
         )
 
     def render_partial(
