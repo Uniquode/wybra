@@ -5,9 +5,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date, datetime, time
+from types import MappingProxyType
 from typing import Any, Literal, Protocol, Self, runtime_checkable
 
 type UnknownFieldPolicy = Literal["ignore", "error"]
+type FormErrorKey = str | None
 
 
 @runtime_checkable
@@ -48,9 +50,12 @@ class FieldResult:
 
 @dataclass(frozen=True, slots=True)
 class FormResult:
-    fields: dict[str, FieldResult]
+    fields: Mapping[str, FieldResult]
     unknown_fields: tuple[str, ...] = ()
     form_errors: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fields", MappingProxyType(dict(self.fields)))
 
     @property
     def values(self) -> dict[str, object]:
@@ -61,12 +66,12 @@ class FormResult:
         }
 
     @property
-    def errors(self) -> dict[str, tuple[str, ...]]:
-        errors = {
+    def errors(self) -> dict[FormErrorKey, tuple[str, ...]]:
+        errors: dict[FormErrorKey, tuple[str, ...]] = {
             name: result.errors for name, result in self.fields.items() if result.errors
         }
         if self.form_errors:
-            errors["__form__"] = self.form_errors
+            errors[None] = self.form_errors
         return errors
 
     @property
@@ -123,7 +128,15 @@ class Field:
 
     def with_result(self, result: FieldResult) -> None:
         self.raw_value = result.raw_value
-        self.value = result.value if result.value is not None else self.value
+        if self.disabled:
+            self.errors = result.errors
+            return
+        if result.value is not None:
+            self.value = result.value
+        elif result.errors and isinstance(result.raw_value, str):
+            self.value = result.raw_value
+        else:
+            self.value = None
         self.errors = result.errors
 
     def _accepted(self, value: object, *, raw_value: object) -> FieldResult:
@@ -320,6 +333,28 @@ class SwitchField(CheckboxField):
         return "switch"
 
 
+class FileUploadField(Field):
+    @property
+    def default_widget(self) -> str:
+        return "file"
+
+    def parse(self, raw_value: object) -> FieldResult:
+        if self.disabled:
+            return self._accepted(None, raw_value=None)
+        if self._is_empty_file(raw_value):
+            if self.required:
+                return self._rejected(raw_value, "This field is required.")
+            return self._accepted(None, raw_value=raw_value)
+        return self._accepted(raw_value, raw_value=raw_value)
+
+    @staticmethod
+    def _is_empty_file(raw_value: object) -> bool:
+        if Field._is_empty(raw_value):
+            return True
+        filename = getattr(raw_value, "filename", None)
+        return filename == ""
+
+
 class SliderField(PositiveIntegerField):
     def __init__(
         self,
@@ -369,7 +404,19 @@ class Form:
     ) -> None:
         self.unknown_fields = unknown_fields
         self.fields = self._bind_fields(defaults or {}, values or {}, options or {})
-        self.result = FormResult(
+        self.errors: dict[FormErrorKey, list[str]] = {}
+        self.values: dict[str, object] = {
+            name: form_field.value
+            for name, form_field in self.fields.items()
+            if form_field.value is not None
+        }
+        self.raw_values: dict[str, object] = {}
+        self.field_results: dict[str, FieldResult] = {
+            name: FieldResult(name=name, value=form_field.value)
+            for name, form_field in self.fields.items()
+        }
+        self._defer_result_sync = False
+        self._result = FormResult(
             fields={
                 name: FieldResult(name=name, value=form_field.value)
                 for name, form_field in self.fields.items()
@@ -387,8 +434,11 @@ class Form:
 
     def parse(self, data: Mapping[str, object]) -> FormResult:
         results: dict[str, FieldResult] = {}
+        self.errors = {}
+        self.raw_values = {}
+        self.values = {}
         unknown = tuple(name for name in data if name not in self.fields)
-        form_errors = (
+        self._pending_form_errors = (
             ("Unknown submitted field(s): " + ", ".join(sorted(unknown)),)
             if unknown and self.unknown_fields == "error"
             else ()
@@ -398,12 +448,51 @@ class Form:
             result = form_field.parse(raw_value)
             form_field.with_result(result)
             results[name] = result
-        self.result = FormResult(
+            self.raw_values[name] = raw_value
+            if result.is_valid and result.value is not None:
+                self.values[name] = result.value
+        self.field_results = results
+        self._defer_result_sync = True
+        try:
+            for name in self.fields:
+                self.validate(name)
+            self.validate(None)
+        finally:
+            self._defer_result_sync = False
+        results = self._results_with_errors(results)
+        self._result = FormResult(
             fields=results,
             unknown_fields=unknown,
-            form_errors=form_errors,
+            form_errors=tuple(self.errors.get(None, ())),
         )
+        del self._pending_form_errors
         return self.result
+
+    def validate(self, field_name: str | None = None) -> bool:
+        if field_name is None:
+            for message in getattr(self, "_pending_form_errors", ()):
+                self.add_error(None, message)
+            return not self.errors
+
+        result = self.field_results.get(field_name)
+        if result is not None:
+            for message in result.errors:
+                self.add_error(field_name, message)
+        return field_name not in self.errors
+
+    def add_error(self, field_name: str | None, message: str) -> None:
+        messages = self.errors.setdefault(field_name, [])
+        if message not in messages:
+            messages.append(message)
+            if not self._defer_result_sync:
+                self._sync_result_errors()
+
+    def is_valid(self) -> bool:
+        return not self.errors
+
+    @property
+    def result(self) -> FormResult:
+        return self._result
 
     def _bind_fields(
         self,
@@ -425,6 +514,32 @@ class Form:
             fields[name] = bound
         return fields
 
+    def _results_with_errors(
+        self,
+        results: Mapping[str, FieldResult],
+    ) -> dict[str, FieldResult]:
+        updated_results: dict[str, FieldResult] = {}
+        for name, result in results.items():
+            field_errors = tuple(self.errors.get(name, ()))
+            updated = FieldResult(
+                name=result.name,
+                raw_value=result.raw_value,
+                value=result.value,
+                errors=field_errors,
+            )
+            self.fields[name].with_result(updated)
+            updated_results[name] = updated
+        self.field_results = updated_results
+        return updated_results
+
+    def _sync_result_errors(self) -> None:
+        results = self._results_with_errors(self.field_results)
+        self._result = FormResult(
+            fields=results,
+            unknown_fields=self.result.unknown_fields,
+            form_errors=tuple(self.errors.get(None, ())),
+        )
+
 
 def label_from_name(name: str) -> str:
     return name.replace("_", " ").capitalize()
@@ -433,6 +548,11 @@ def label_from_name(name: str) -> str:
 def text_value(raw_value: object) -> str:
     if isinstance(raw_value, str):
         return raw_value
+    if isinstance(raw_value, bytes | bytearray):
+        try:
+            return bytes(raw_value).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Enter a valid text value.") from exc
     if raw_value is None:
         return ""
     return str(raw_value)
@@ -471,6 +591,7 @@ __all__ = (
     "DateTimeField",
     "Field",
     "FieldResult",
+    "FileUploadField",
     "Form",
     "FormError",
     "FormResult",

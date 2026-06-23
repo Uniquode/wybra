@@ -147,7 +147,7 @@ Declare fields as class variables; field names are inferred from the variable
 name and labels default to that name:
 
 ```python
-from wybra.forms import ChoiceField, Form, TextAreaField, TextField
+from wybra.forms import ChoiceField, FileUploadField, Form, TextAreaField, TextField
 
 PRONOUNS = {
     "she|her": "she/her",
@@ -159,24 +159,41 @@ class ProfileForm(Form):
     preferred_name = TextField(max_length=64)
     bio = TextAreaField(max_length=1024, required=False)
     pronouns = ChoiceField(choices=PRONOUNS, required=False)
+    avatar = FileUploadField(required=False)
+
+    def validate(self, field_name: str | None = None) -> bool:
+        inherited = super().validate(field_name)
+        local = True
+        if field_name == "preferred_name" and self.values.get(field_name) == "admin":
+            self.add_error(field_name, "This preferred name is reserved.")
+            local = False
+        if field_name is None and not self.values.get("preferred_name"):
+            self.add_error(None, "Profile details are incomplete.")
+            local = False
+        return inherited and local
 ```
 
 Forms can be constructed with defaults and explicit field values, then parsed
 back into structured results containing raw submitted values, parsed values,
-field errors, and form-level validity:
+field errors, and form-level validity. Form subclasses can add validation with
+`validate(field_name: str | None = None) -> bool`; `None` is used for
+form-level validation and form-level errors are stored in `errors[None]`.
+Wybra intentionally does not support Django-style `clean` or
+`clean_<field_name>` hooks.
 
 ```python
 form = ProfileForm(values={"preferred_name": "David"})
 result = form.parse(await forms.request_form_data(request))
-if result.is_valid:
-    values = result.values
+if form.is_valid():
+    values = form.values
 ```
 
 Template helpers can render a complete form, an individual field inside a
 custom application-owned form, or an explicit CSRF hidden field. Complete form
 rendering includes configured fields, labels, errors, CSRF, and action widgets;
 field rendering uses the same widget/component templates and override
-semantics.
+semantics. Forms containing `FileUploadField` render with
+`multipart/form-data` by default.
 
 ## Project Commands
 

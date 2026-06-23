@@ -1,0 +1,14 @@
+<div class="wybra-form-field{% if field.errors %} wybra-form-field--error{% endif %}{% if field.required %} wybra-form-field--required{% endif %}{% if field.disabled %} wybra-form-field--disabled{% endif %}">
+  <label class="wybra-form-label" for="{{ field.name }}">{{ field.label }}</label>
+  <input
+    class="wybra-form-control"
+    id="{{ field.name }}"
+    name="{{ field.name }}"
+    type="file"
+    {% if field.required %}required{% endif %}
+    {% if field.disabled %}disabled{% endif %}
+    {% if field.errors %}aria-invalid="true" aria-describedby="{{ field.name }}_errors"{% endif %}
+  >
+  {% include "forms/widgets/_help.html" %}
+  {% include "forms/widgets/_field_errors.html" %}
+</div>
