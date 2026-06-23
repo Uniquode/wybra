@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar, Final
 
-from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup
+from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup, to_bool
 
 THEME_FEATURE: Final = "theme"
 LOGIN_FEATURE: Final = "login"
@@ -47,6 +47,11 @@ module_config: Final = ConfigDef(
                     default=DEFAULT_WIDGET_FEATURES,
                     transform=to_widget_features,
                 ),
+                ConfigField(
+                    name="default_profile_avatar_navigation",
+                    default=True,
+                    transform=to_bool,
+                ),
             ),
         ),
     }
@@ -58,6 +63,7 @@ class WidgetsSettings(BaseSettings):
     module_config: ClassVar[ConfigDef] = module_config
 
     features: tuple[str, ...] = DEFAULT_WIDGET_FEATURES
+    default_profile_avatar_navigation: bool = True
 
 
 __all__ = (

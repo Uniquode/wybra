@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,9 +10,11 @@ from wybra.auth.capabilities import AuthCapability
 from wybra.profile import ProfileCapability, ProfileImage
 from wybra.site import SiteCapabilityError, get_site
 
+logger = logging.getLogger(__name__)
 LOGIN_TEMPLATE = "components/login_control.html"
 LOGIN_ROUTE_NAME = "auth:login"
 LOGOUT_ROUTE_NAME = "auth:logout"
+PROFILE_EDIT_ROUTE_NAME = "profile:edit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +23,7 @@ class LoginWidgetState:
     login_path: str | None
     logout_path: str | None
     profile_image: ProfileImage | None = None
+    profile_path: str | None = None
 
 
 async def login_widget_state(request: Any) -> LoginWidgetState | None:
@@ -48,6 +52,7 @@ async def login_widget_state(request: Any) -> LoginWidgetState | None:
         login_path=None,
         logout_path=logout_path,
         profile_image=await _profile_image(request, user),
+        profile_path=_profile_path(request),
     )
 
 
@@ -80,10 +85,21 @@ def _route_path(request: Any, route_name: str) -> str | None:
         return None
 
 
+def _profile_path(request: Any) -> str | None:
+    settings = getattr(request.app.state, "widgets_settings", None)
+    if settings is None:
+        logger.warning("widgets_settings missing; profile avatar navigation disabled.")
+        return None
+    if not getattr(settings, "default_profile_avatar_navigation", False):
+        return None
+    return _route_path(request, PROFILE_EDIT_ROUTE_NAME)
+
+
 __all__ = (
     "LOGIN_ROUTE_NAME",
     "LOGIN_TEMPLATE",
     "LOGOUT_ROUTE_NAME",
     "LoginWidgetState",
+    "PROFILE_EDIT_ROUTE_NAME",
     "login_widget_state",
 )

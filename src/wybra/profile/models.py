@@ -16,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from wybra.db.models import Base, metadata
+from wybra.profile.types import ProfileLinks, Pronouns
 
 
 class UserProfile(Base):
@@ -42,12 +43,14 @@ class UserProfile(Base):
         ForeignKey("media_item.id", ondelete="SET NULL"),
         nullable=True,
     )
+    preferred_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    pronouns: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    pronouns: Mapped[Pronouns | None] = mapped_column(JSON, nullable=True)
     phone_number: Mapped[str | None] = mapped_column(String(48), nullable=True)
-    website_links: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    website_links: Mapped[ProfileLinks | None] = mapped_column(JSON, nullable=True)
     country_region: Mapped[str | None] = mapped_column(String(120), nullable=True)
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     postal_code: Mapped[str | None] = mapped_column(String(24), nullable=True)
@@ -79,4 +82,32 @@ class UserProfile(Base):
     )
 
 
-__all__ = ("UserProfile", "metadata")
+class UserPhoneContact(Base):
+    """Per-user phone contact with per-number verification state."""
+
+    __tablename__ = "profile_phone_contact"
+    __table_args__ = (
+        Index("ix_profile_phone_contact_user_id", "user_id"),
+        Index("ix_profile_phone_contact_normalised_number", "normalised_number"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    subdivision_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    normalised_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    number_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    sms_capable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Unix timestamp seconds when this phone contact was verified.
+    verified_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+__all__ = ("UserPhoneContact", "UserProfile", "metadata")
