@@ -520,6 +520,10 @@ def test_text_field_rejects_binary_input_before_local_validation() -> None:
         "Enter a valid text value.",
         "Local validation still ran.",
     ]
+    assert result.errors["name"] == (
+        "Enter a valid text value.",
+        "Local validation still ran.",
+    )
 
 
 def test_programmatically_created_form_uses_validation_path() -> None:
@@ -571,6 +575,30 @@ def test_required_file_upload_rejects_omission() -> None:
 
     assert not result.is_valid
     assert form.errors["attachment"] == ["This field is required."]
+
+
+def test_required_file_upload_rejects_empty_filename() -> None:
+    class RequiredUploadForm(Form):
+        attachment = FileUploadField()
+
+    upload = UploadedFile(filename="")
+    form = RequiredUploadForm()
+    result = form.parse({"attachment": upload})
+
+    assert not result.is_valid
+    assert form.errors["attachment"] == ["This field is required."]
+    assert result.errors["attachment"] == ("This field is required.",)
+
+
+def test_optional_file_upload_treats_empty_filename_as_omitted() -> None:
+    class OptionalUploadForm(Form):
+        attachment = FileUploadField(required=False)
+
+    upload = UploadedFile(filename="")
+    result = OptionalUploadForm().parse({"attachment": upload})
+
+    assert result.is_valid
+    assert "attachment" not in result.values
 
 
 def test_field_renderer_outputs_labels_options_and_errors() -> None:
