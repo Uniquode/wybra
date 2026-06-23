@@ -1,0 +1,21 @@
+<div class="wybra-form-field{% if field.errors %} wybra-form-field--error{% endif %}{% if field.required %} wybra-form-field--required{% endif %}{% if field.disabled %} wybra-form-field--disabled{% endif %}">
+  <label class="wybra-form-label" for="{{ field.name }}">{{ field.label }}</label>
+  <select
+    class="wybra-form-control"
+    id="{{ field.name }}"
+    name="{{ field.name }}{% if field.widget_name == 'multiselect' %}[]{% endif %}"
+    {% if field.widget_name == 'multiselect' %}multiple{% endif %}
+    {% if field.required %}required{% endif %}
+    {% if field.disabled %}disabled{% endif %}
+    {% if field.errors %}aria-invalid="true" aria-describedby="{{ field.name }}_errors"{% endif %}
+  >
+    {% if not field.required %}
+      <option value=""></option>
+    {% endif %}
+    {% for option in field.options() %}
+      <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+    {% endfor %}
+  </select>
+  {% include "forms/widgets/_help.html" %}
+  {% include "forms/widgets/_field_errors.html" %}
+</div>

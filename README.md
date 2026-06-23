@@ -140,6 +140,44 @@ App-side Wybra database, auth, route, template, static, or runtime-state setup
 is not supported. Configure modules and settings once, then use
 `wybra.start_site(...)` to initialise the Wybra-owned concerns.
 
+## Declarative Forms
+
+`wybra.forms` provides CSRF protection and a small declarative forms API.
+Declare fields as class variables; field names are inferred from the variable
+name and labels default to that name:
+
+```python
+from wybra.forms import ChoiceField, Form, TextAreaField, TextField
+
+PRONOUNS = {
+    "she|her": "she/her",
+    "he|him": "he/him",
+}
+
+
+class ProfileForm(Form):
+    preferred_name = TextField(max_length=64)
+    bio = TextAreaField(max_length=1024, required=False)
+    pronouns = ChoiceField(choices=PRONOUNS, required=False)
+```
+
+Forms can be constructed with defaults and explicit field values, then parsed
+back into structured results containing raw submitted values, parsed values,
+field errors, and form-level validity:
+
+```python
+form = ProfileForm(values={"preferred_name": "David"})
+result = form.parse(await forms.request_form_data(request))
+if result.is_valid:
+    values = result.values
+```
+
+Template helpers can render a complete form, an individual field inside a
+custom application-owned form, or an explicit CSRF hidden field. Complete form
+rendering includes configured fields, labels, errors, CSRF, and action widgets;
+field rendering uses the same widget/component templates and override
+semantics.
+
 ## Project Commands
 
 Wybra publishes prefixed console scripts to avoid collisions with host

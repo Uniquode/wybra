@@ -1,0 +1,22 @@
+<form class="wybra-form" method="{{ method }}" action="{{ action }}"{% if enctype %} enctype="{{ enctype }}"{% endif %}>
+  {{ csrf_field }}
+  {% for field in hidden_fields %}
+    {{ field }}
+  {% endfor %}
+  {% for field in fields %}
+    {{ field }}
+  {% endfor %}
+  {% if actions %}
+    <div class="wybra-form-actions">
+      {% for action_name in actions %}
+        {% if action_name == "submit" %}
+          <button class="wybra-form-action wybra-form-action--submit" type="submit">Submit</button>
+        {% elif action_name == "clear" %}
+          <button class="wybra-form-action wybra-form-action--clear" type="reset">Clear</button>
+        {% elif action_name == "cancel" %}
+          <button class="wybra-form-action wybra-form-action--cancel" type="button" data-wybra-form-cancel>Cancel</button>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+</form>

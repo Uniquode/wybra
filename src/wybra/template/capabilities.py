@@ -18,6 +18,8 @@ from wybra.template.templating import build_template_loader
 
 @runtime_checkable
 class TemplateCapability(Protocol):
+    def render_template(self, template_name: str, context: dict[str, Any]) -> str: ...
+
     def render_page(
         self,
         request: Request,

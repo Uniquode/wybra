@@ -1,0 +1,52 @@
+.wybra-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.wybra-form-field {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.wybra-form-label {
+  font-weight: 600;
+}
+
+.wybra-form-control {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.wybra-form-options {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.wybra-form-option {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.wybra-form-help {
+  color: currentColor;
+  font-size: 0.875rem;
+  opacity: 0.75;
+}
+
+.wybra-form-errors {
+  color: #b42318;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.wybra-form-field--error .wybra-form-control {
+  border-color: #b42318;
+}
+
+.wybra-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
