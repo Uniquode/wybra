@@ -20,7 +20,11 @@ class FormError(ValueError):
 
 
 class UnknownFormFieldError(FormError):
-    """Raised when form input references a field the form does not declare."""
+    """Base for errors that reference a field the form does not declare."""
+
+
+class UnknownInitialFieldError(UnknownFormFieldError):
+    """Raised when initial form mappings reference undeclared fields."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,7 +413,7 @@ class Form:
         unknown_values = (set(defaults) | set(values) | set(options)) - set(declared)
         if unknown_values and self.unknown_fields == "error":
             unknown = ", ".join(sorted(unknown_values))
-            raise UnknownFormFieldError(f"Unknown form field value(s): {unknown}")
+            raise UnknownInitialFieldError(f"Unknown initial field value(s): {unknown}")
         for name, form_field in declared.items():
             value = values.get(name, defaults.get(name))
             bound = form_field.bind(name, value)
@@ -479,4 +483,5 @@ __all__ = (
     "TextField",
     "TimeField",
     "UnknownFormFieldError",
+    "UnknownInitialFieldError",
 )

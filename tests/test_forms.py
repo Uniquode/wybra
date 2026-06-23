@@ -32,7 +32,7 @@ from wybra.forms import (
     TextAreaField,
     TextField,
     TimeField,
-    UnknownFormFieldError,
+    UnknownInitialFieldError,
     UnknownWidgetError,
     csrf_exempt,
     forms_rendering_context,
@@ -220,7 +220,7 @@ def test_unknown_submitted_fields_can_be_reported() -> None:
 
 
 def test_unknown_initial_field_values_raise_form_field_error() -> None:
-    with pytest.raises(UnknownFormFieldError, match="unknown"):
+    with pytest.raises(UnknownInitialFieldError, match="unknown"):
         ExampleForm(values={"unknown": "value"}, unknown_fields="error")
 
 
