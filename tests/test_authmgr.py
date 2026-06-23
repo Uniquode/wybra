@@ -1338,6 +1338,29 @@ def test_authmgr_user_help_exposes_user_commands(command: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "usage",
+    [
+        "wybra-authmgr group create <abbrev>",
+        "wybra-authmgr group <group> add-group <group>",
+        "wybra-authmgr group effective-scopes <user-target>",
+    ],
+)
+def test_authmgr_group_help_exposes_group_operations(usage: str) -> None:
+    result = CliRunner().invoke(authmgr.authmgr_command, ["group", "--help"])
+
+    assert result.exit_code == 0
+    assert usage in result.output
+
+
+def test_authmgr_group_help_uses_operation_metavar() -> None:
+    result = CliRunner().invoke(authmgr.authmgr_command, ["group", "--help"])
+
+    assert result.exit_code == 0
+    assert "Usage: wybra-authmgr group [OPTIONS] [OPERATION]..." in result.output
+    assert "TOKENS" not in result.output
+
+
+@pytest.mark.parametrize(
     ("help_suffix_args", "help_option_args"),
     [
         pytest.param(["help"], ["--help"], id="root"),
@@ -1399,6 +1422,16 @@ def test_authmgr_help_suffix_matches_help_option(
             ["group", "help", "project", "update"],
             "Usage: wybra-authmgr group <group> update",
             id="group-target-update",
+        ),
+        pytest.param(
+            ["group", "create", "--help"],
+            "Usage: wybra-authmgr group create <abbrev>",
+            id="group-create-help-option",
+        ),
+        pytest.param(
+            ["group", "project", "add-group", "--help"],
+            "Usage: wybra-authmgr group <group> add-group <group>",
+            id="group-target-add-group-help-option",
         ),
     ],
 )

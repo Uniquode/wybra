@@ -7,15 +7,41 @@ from .clicking import _ensure_mutually_exclusive, _parse_cli_tokens
 from .runtime import _run_authmgr
 
 _OPTION_TERMINATOR_SENTINEL = "\0wybra-authmgr-option-terminator"
+_HELP_OPTIONS = {"-h", "--help"}
 
 
 class _GroupCommand(click.Command):
+    def get_help(self, ctx: click.Context) -> str:
+        return f"{super().get_help(ctx).rstrip()}\n\n{_GROUP_OPERATIONS_HELP}\n"
+
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        help_args = _group_help_args(args)
+        if help_args is not None:
+            click.echo(_group_operation_help(help_args), color=ctx.color)
+            ctx.exit()
         if "--" in args:
             normalised_args = list(args)
             normalised_args[normalised_args.index("--")] = _OPTION_TERMINATOR_SENTINEL
             args = normalised_args
         return super().parse_args(ctx, args)
+
+
+def _group_help_args(args: list[str]) -> tuple[str, ...] | None:
+    if not any(arg in _HELP_OPTIONS for arg in args):
+        return None
+
+    try:
+        terminator_index = args.index("--")
+    except ValueError:
+        help_candidate_args = args
+    else:
+        help_candidate_args = args[:terminator_index]
+
+    if not any(arg in _HELP_OPTIONS for arg in help_candidate_args):
+        return None
+
+    help_args = tuple(arg for arg in help_candidate_args if arg not in _HELP_OPTIONS)
+    return help_args or None
 
 
 def _restore_option_terminator(tokens: tuple[str, ...]) -> tuple[str, ...]:
@@ -194,6 +220,24 @@ _GROUP_TARGET_OPERATION_HELP = {
     "remove-group": "Usage: wybra-authmgr group <group> remove-group <group>.",
 }
 
+_GROUP_OPERATIONS_HELP = """Operations:
+
+  wybra-authmgr group create <abbrev> [--description <text>] [--scope <scope>]
+  wybra-authmgr group list [--json|--csv]
+  wybra-authmgr group effective-scopes <user-target> [--json]
+  wybra-authmgr group <group> show [--json]
+  wybra-authmgr group <group> update [options]
+  wybra-authmgr group <group> delete [--force]
+  wybra-authmgr group <group> add-user <user>
+  wybra-authmgr group <group> remove-user <user>
+  wybra-authmgr group <group> add-group <group>
+  wybra-authmgr group <group> remove-group <group>
+
+Use 'wybra-authmgr group <operation> --help' or
+'wybra-authmgr group <group> <operation> --help' for operation usage."""
+
+_GROUP_COMMAND_HELP = "Manage authorisation groups."
+
 
 def _group_operation_help(tokens: tuple[str, ...]) -> str:
     help_text: str | None = None
@@ -215,10 +259,18 @@ def register_group_commands(root_command: click.Group) -> None:
     @root_command.command(
         "group",
         cls=_GroupCommand,
-        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
-        help="Manage authorisation groups.",
+        context_settings={
+            "ignore_unknown_options": True,
+            "allow_extra_args": True,
+        },
+        help=_GROUP_COMMAND_HELP,
     )
-    @click.argument("tokens", nargs=-1, type=click.UNPROCESSED)
+    @click.argument(
+        "tokens",
+        metavar="[OPERATION]...",
+        nargs=-1,
+        type=click.UNPROCESSED,
+    )
     @click.pass_context
     def group_command(ctx: click.Context, tokens: tuple[str, ...]) -> None:
         tokens = _restore_option_terminator(tokens)
