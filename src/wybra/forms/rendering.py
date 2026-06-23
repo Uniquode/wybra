@@ -47,7 +47,10 @@ class TemplateFormRenderer:
         widget: str | None = None,
     ) -> Markup:
         field = form.fields[field_name]
-        template_name = widget or self._widget_template(field.widget_name)
+        template_name = widget or self._widget_template(
+            field.widget_name,
+            field_name=field.name,
+        )
         return _trusted_template_markup(
             self.templates.render_template(
                 template_name,
@@ -98,7 +101,7 @@ class TemplateFormRenderer:
             self.templates.render_template(self.csrf_template, dict(csrf))
         )
 
-    def _widget_template(self, widget_name: str) -> str:
+    def _widget_template(self, widget_name: str, *, field_name: str) -> str:
         widgets = self.widgets or {}
         template_name = widgets.get(widget_name) or DEFAULT_FIELD_WIDGETS.get(
             widget_name
@@ -107,7 +110,7 @@ class TemplateFormRenderer:
             return template_name
         known_widgets = sorted(set(DEFAULT_FIELD_WIDGETS) | set(widgets))
         raise UnknownWidgetError(
-            f"Unknown form widget {widget_name!r}. "
+            f"Unknown form widget {widget_name!r} for field {field_name!r}. "
             f"Known widgets: {', '.join(known_widgets)}."
         )
 

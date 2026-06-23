@@ -310,8 +310,8 @@ class CheckboxField(Field):
     def default_widget(self) -> str:
         return "checkbox"
 
-    def parse(self, raw_value: object) -> FieldResult:
-        return self._accepted(bool_value(raw_value), raw_value=raw_value)
+    def to_python(self, raw_value: object) -> bool:
+        return bool_value(raw_value)
 
 
 class SwitchField(CheckboxField):
@@ -347,7 +347,10 @@ class SliderField(PositiveIntegerField):
         return "slider"
 
     def to_python(self, raw_value: object) -> int:
-        value = super().to_python(raw_value)
+        try:
+            value = int(text_value(raw_value))
+        except ValueError as exc:
+            raise ValueError("Enter an integer.") from exc
         if self.min_value is not None and value < self.min_value:
             raise ValueError(f"Must be at least {self.min_value}.")
         if self.max_value is not None and value > self.max_value:

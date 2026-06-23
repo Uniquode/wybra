@@ -197,6 +197,72 @@ def test_form_parses_multiselect_values() -> None:
     assert result.values["interests"] == ("forms", "auth")
 
 
+def test_form_rejects_invalid_multiselect_values() -> None:
+    form = ExampleForm(options={"interests": INTEREST_OPTIONS})
+    raw_interests = ["forms", "invalid"]
+
+    result = form.parse({"preferred_name": "David", "interests": raw_interests})
+
+    assert not result.is_valid
+    assert result.errors["interests"] == ("Select a valid option.",)
+    assert result.fields["interests"].raw_value == raw_interests
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected_error"),
+    (
+        ("0", "Must be at least 1."),
+        ("6", "Must be at most 5."),
+    ),
+)
+def test_slider_field_priority_min_max_violations(
+    raw_value: object,
+    expected_error: str,
+) -> None:
+    form = ExampleForm()
+
+    result = form.parse({"preferred_name": "David", "priority": raw_value})
+
+    assert not result.is_valid
+    assert result.errors["priority"] == (expected_error,)
+    assert result.fields["priority"].raw_value == raw_value
+
+
+def test_optional_checkbox_preserves_missing_value_as_none() -> None:
+    class OptionalCheckboxForm(Form):
+        accepted = CheckboxField(required=False)
+
+    result = OptionalCheckboxForm().parse({})
+
+    assert result.is_valid
+    assert result.fields["accepted"].value is None
+    assert "accepted" not in result.values
+
+
+def test_required_checkbox_rejects_missing_value() -> None:
+    class RequiredCheckboxForm(Form):
+        accepted = CheckboxField()
+
+    result = RequiredCheckboxForm().parse({})
+
+    assert not result.is_valid
+    assert result.errors["accepted"] == ("This field is required.",)
+    assert result.fields["accepted"].raw_value is None
+
+
+def test_checkbox_parses_explicit_boolean_values() -> None:
+    class ExplicitCheckboxForm(Form):
+        accepted = CheckboxField()
+
+    false_result = ExplicitCheckboxForm().parse({"accepted": "false"})
+    true_result = ExplicitCheckboxForm().parse({"accepted": "on"})
+
+    assert false_result.is_valid
+    assert false_result.values["accepted"] is False
+    assert true_result.is_valid
+    assert true_result.values["accepted"] is True
+
+
 def test_form_reports_validation_errors_and_preserves_raw_values() -> None:
     form = ExampleForm()
 
@@ -282,7 +348,7 @@ def test_form_renderer_raises_clear_error_for_unknown_widget() -> None:
 
     renderer = TemplateFormRenderer(_forms_templates())
 
-    with pytest.raises(UnknownWidgetError, match="missing-widget"):
+    with pytest.raises(UnknownWidgetError, match="missing-widget.*value"):
         renderer.render_field(UnknownWidgetForm(), "value")
 
 
