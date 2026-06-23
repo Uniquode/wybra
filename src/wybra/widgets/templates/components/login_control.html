@@ -1,19 +1,27 @@
+{% macro avatar(login_widget) %}
+{% if login_widget.profile_image and login_widget.profile_image.src %}
+<img
+  class="login-widget__avatar web-responsive-compact-hidden"
+  src="{{ login_widget.profile_image.src }}"
+  alt="{{ login_widget.profile_image.alt }}"
+>
+{% elif login_widget.profile_image and login_widget.profile_image.fallback_text %}
+<span
+  class="login-widget__avatar login-widget__avatar--fallback web-responsive-compact-hidden"
+  aria-label="{{ login_widget.profile_image.alt }}"
+>
+  {{ login_widget.profile_image.fallback_text }}
+</span>
+{% endif %}
+{% endmacro %}
+
 {% if route_name != "auth:login" %}
 {% if login_widget.authenticated %}
 <div class="login-widget login-widget--authenticated" aria-label="Account controls">
-  {% if login_widget.profile_image and login_widget.profile_image.src %}
-  <img
-    class="login-widget__avatar web-responsive-compact-hidden"
-    src="{{ login_widget.profile_image.src }}"
-    alt="{{ login_widget.profile_image.alt }}"
-  >
-  {% elif login_widget.profile_image and login_widget.profile_image.fallback_text %}
-  <span
-    class="login-widget__avatar login-widget__avatar--fallback web-responsive-compact-hidden"
-    aria-label="{{ login_widget.profile_image.alt }}"
-  >
-    {{ login_widget.profile_image.fallback_text }}
-  </span>
+  {% if login_widget.profile_path %}
+  <a class="login-widget__avatar-link" href="{{ login_widget.profile_path }}" aria-label="Edit profile">{{ avatar(login_widget) }}</a>
+  {% else %}
+  {{ avatar(login_widget) }}
   {% endif %}
   <a class="login-widget__action web-responsive-compact-centre" href="{{ login_widget.logout_path }}">Logout</a>
 </div>

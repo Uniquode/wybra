@@ -1,0 +1,82 @@
+{% extends "layouts/page.html" %}
+
+{% block content %}
+<section class="surface-panel">
+  <p class="eyebrow">Profile</p>
+  <h1>Edit profile</h1>
+  {% if form_error %}
+  <p role="alert">{{ form_error }}</p>
+  {% endif %}
+  <form action="{{ request.url_for('profile:edit') }}" method="post">
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    {% if "preferred_name" in editable_fields %}
+    <label>
+      Preferred name
+      <input name="preferred_name" type="text" value="{{ field_values.preferred_name }}">
+    </label>
+    {% endif %}
+    {% if "display_name" in editable_fields %}
+    <label>
+      Display name
+      <input name="display_name" type="text" value="{{ field_values.display_name }}">
+    </label>
+    {% endif %}
+    {% if "pronouns" in editable_fields %}
+    <label>
+      Pronouns
+      <select name="pronoun_pair">
+        <option value="">Not set</option>
+        {% for option in profile_settings.pronoun_options %}
+        <option value="{{ option.value }}" {% if field_values.pronoun_pair == option.value %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    {% if "profile_links" in editable_fields %}
+    <label>
+      Website
+      <input name="profile_link_website" type="url" value="{{ field_values.profile_link_website }}">
+    </label>
+    {% endif %}
+    {% if "bio" in editable_fields %}
+    <label>
+      Bio
+      <textarea maxlength="1024" name="bio">{{ field_values.bio }}</textarea>
+    </label>
+    {% endif %}
+    {% if "phone_contacts" in editable_fields %}
+    <fieldset>
+      <legend>Phone contact</legend>
+      <label>
+        Country
+        <select name="phone_country_code">
+          <option value="">Select country</option>
+          {% for country in country_choices %}
+          <option value="{{ country.code }}">{{ country.flag }} {{ country.name }} {{ country.dial_prefix }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        State or region
+        <input name="phone_subdivision_code" type="text">
+      </label>
+      <label>
+        Phone number
+        <input autocomplete="tel" name="phone_number" type="tel">
+      </label>
+      {% if phone_contacts %}
+      <ul>
+        {% for contact in phone_contacts %}
+        <li>
+          {{ contact.normalised_number }}
+          {% if contact.verified_at %}verified{% else %}unverified{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </fieldset>
+    {% endif %}
+    <button type="submit">Save profile</button>
+  </form>
+</section>
+{% endblock %}
