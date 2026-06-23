@@ -6,7 +6,7 @@ from typing import Any
 
 from markupsafe import Markup
 
-from wybra.forms.fields import Form, FormError
+from wybra.forms.fields import FileUploadField, Form, FormError
 from wybra.template.capabilities import TemplateCapability
 
 DEFAULT_FIELD_WIDGETS: dict[str, str] = {
@@ -23,6 +23,7 @@ DEFAULT_FIELD_WIDGETS: dict[str, str] = {
     "switch": "forms/widgets/checkbox.html",
     "slider": "forms/widgets/text.html",
     "hidden": "forms/widgets/hidden.html",
+    "file": "forms/widgets/file.html",
 }
 
 CSRF_RENDERING_CONTEXT_KEYS = frozenset(("csrf_field_name", "csrf_token"))
@@ -68,6 +69,7 @@ class TemplateFormRenderer:
         csrf: Mapping[str, str] | None = None,
         actions: Sequence[str] = ("submit",),
     ) -> Markup:
+        resolved_enctype = enctype or _default_enctype(form)
         fields = [
             self.render_field(form, name)
             for name, field in form.fields.items()
@@ -79,6 +81,7 @@ class TemplateFormRenderer:
             if field.widget_name == "hidden"
         ]
         csrf_field = self.render_csrf_field(csrf) if csrf else Markup("")
+        form_errors = tuple(form.errors.get(None, ()))
         return _trusted_template_markup(
             self.templates.render_template(
                 self.form_template,
@@ -86,11 +89,12 @@ class TemplateFormRenderer:
                     "form": form,
                     "action": action,
                     "method": method,
-                    "enctype": enctype,
+                    "enctype": resolved_enctype,
                     "fields": fields,
                     "hidden_fields": hidden_fields,
                     "csrf_field": csrf_field,
                     "actions": tuple(actions),
+                    "form_errors": form_errors,
                 },
             )
         )
@@ -188,6 +192,12 @@ def validate_csrf_rendering_context(csrf: Mapping[str, str]) -> None:
 
 def _trusted_template_markup(html: str) -> Markup:
     return Markup(html)  # nosec B704 - rendered by Jinja with autoescaping enabled.
+
+
+def _default_enctype(form: Form) -> str | None:
+    if any(isinstance(field, FileUploadField) for field in form.fields.values()):
+        return "multipart/form-data"
+    return None
 
 
 __all__ = (

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Any
 
@@ -18,6 +19,8 @@ from wybra.forms import (
     ChoiceField,
     DateField,
     DateTimeField,
+    FieldResult,
+    FileUploadField,
     Form,
     FormsCapability,
     FormsSettings,
@@ -60,6 +63,12 @@ CONTACT_METHOD_OPTIONS = {"email": "Email", "sms": "SMS"}
 INTEREST_OPTIONS = {"forms": "Forms", "auth": "Auth"}
 
 
+@dataclass(frozen=True, slots=True)
+class UploadedFile:
+    filename: str
+    content_type: str = "application/octet-stream"
+
+
 def csrf_request(
     *,
     method: str,
@@ -100,6 +109,7 @@ class ExampleForm(Form):
     public_profile = CheckboxField(required=False)
     email_updates = SwitchField(required=False)
     priority = SliderField(min_value=1, max_value=5, required=False)
+    attachment = FileUploadField(required=False)
     csrf_token = HiddenField(required=False)
 
 
@@ -128,6 +138,7 @@ def test_form_discovers_class_variable_fields_with_names_and_labels() -> None:
         "public_profile",
         "email_updates",
         "priority",
+        "attachment",
         "csrf_token",
     )
     assert form.fields["preferred_name"].name == "preferred_name"
@@ -275,6 +286,34 @@ def test_form_reports_validation_errors_and_preserves_raw_values() -> None:
     assert result.errors["pronouns"]
 
 
+def test_parse_clears_stale_field_value_for_omitted_optional_field() -> None:
+    class OptionalNameForm(Form):
+        name = TextField(required=False)
+
+    form = OptionalNameForm(values={"name": "Previous"})
+
+    result = form.parse({})
+
+    assert result.is_valid
+    assert result.values == {}
+    assert form.fields["name"].value is None
+    assert form.fields["name"].raw_value is None
+
+
+def test_parse_clears_stale_field_value_for_omitted_required_field() -> None:
+    class RequiredNameForm(Form):
+        name = TextField()
+
+    form = RequiredNameForm(values={"name": "Previous"})
+
+    result = form.parse({})
+
+    assert not result.is_valid
+    assert result.errors["name"] == ("This field is required.",)
+    assert form.fields["name"].value is None
+    assert form.fields["name"].raw_value is None
+
+
 def test_unknown_submitted_fields_can_be_reported() -> None:
     form = ExampleForm(unknown_fields="error")
 
@@ -282,7 +321,8 @@ def test_unknown_submitted_fields_can_be_reported() -> None:
 
     assert not result.is_valid
     assert result.unknown_fields == ("unknown",)
-    assert "__form__" in result.errors
+    assert None in form.errors
+    assert None in result.errors
 
 
 def test_unknown_initial_field_values_raise_form_field_error() -> None:
@@ -301,6 +341,236 @@ def test_disabled_fields_render_values_but_do_not_parse_submissions() -> None:
     assert result.is_valid
     assert result.values == {}
     assert form.fields["token"].value == "existing"
+
+
+def test_form_validates_field_by_explicit_name() -> None:
+    class ReservedNameForm(Form):
+        preferred_name = TextField()
+
+        def validate(self, field_name: str | None = None) -> bool:
+            inherited = super().validate(field_name)
+            local = True
+            if (
+                field_name == "preferred_name"
+                and self.values.get(field_name) == "admin"
+            ):
+                self.add_error(field_name, "This preferred name is reserved.")
+                local = False
+            return inherited and local
+
+    form = ReservedNameForm()
+    result = form.parse({"preferred_name": "admin"})
+
+    assert not form.is_valid()
+    assert not result.is_valid
+    assert form.errors["preferred_name"] == ["This preferred name is reserved."]
+    assert result.errors["preferred_name"] == ("This preferred name is reserved.",)
+    assert form.fields["preferred_name"].raw_value == "admin"
+    assert form.fields["preferred_name"].value == "admin"
+
+
+def test_form_validation_preserves_super_errors_and_adds_local_errors() -> None:
+    class ExtraValidationForm(Form):
+        age = PositiveIntegerField()
+
+        def validate(self, field_name: str | None = None) -> bool:
+            inherited = super().validate(field_name)
+            local = True
+            if field_name == "age":
+                self.add_error(field_name, "Local validation still ran.")
+                local = False
+            return inherited and local
+
+    form = ExtraValidationForm()
+    result = form.parse({"age": "-1"})
+
+    assert not result.is_valid
+    assert form.errors["age"] == [
+        "Enter a positive integer.",
+        "Local validation still ran.",
+    ]
+    assert result.errors["age"] == (
+        "Enter a positive integer.",
+        "Local validation still ran.",
+    )
+
+
+def test_repeated_direct_validation_does_not_duplicate_base_errors() -> None:
+    class AgeForm(Form):
+        age = PositiveIntegerField()
+
+    form = AgeForm()
+    result = form.parse({"age": "-1"})
+
+    assert not result.is_valid
+    assert form.errors["age"] == ["Enter a positive integer."]
+
+    assert not form.validate("age")
+    assert form.errors["age"] == ["Enter a positive integer."]
+    assert form.result.errors["age"] == ("Enter a positive integer.",)
+
+
+def test_direct_field_validation_syncs_field_and_result_errors() -> None:
+    class BlockableNameForm(Form):
+        name = TextField(required=False)
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.name_blocked = False
+
+        def validate(self, field_name: str | None = None) -> bool:
+            inherited = super().validate(field_name)
+            local = True
+            if field_name == "name" and self.name_blocked:
+                self.add_error(field_name, "Name is blocked.")
+                local = False
+            return inherited and local
+
+    form = BlockableNameForm()
+    result = form.parse({"name": "available"})
+
+    assert result.is_valid
+    assert form.fields["name"].errors == ()
+    assert form.result.errors == {}
+
+    form.name_blocked = True
+
+    assert not form.validate("name")
+    assert form.errors["name"] == ["Name is blocked."]
+    assert form.fields["name"].errors == ("Name is blocked.",)
+    assert form.result.errors["name"] == ("Name is blocked.",)
+
+
+def test_form_result_is_read_only() -> None:
+    form = ExampleForm(values={"preferred_name": "David"})
+
+    with pytest.raises(AttributeError):
+        form.result = form.result
+
+
+def test_form_result_fields_are_read_only() -> None:
+    form = ExampleForm(values={"preferred_name": "David"})
+
+    with pytest.raises(TypeError):
+        form.result.fields["preferred_name"] = FieldResult(
+            name="preferred_name",
+            value="Changed",
+        )
+
+
+def test_form_level_validation_uses_none_error_key() -> None:
+    class AgreementForm(Form):
+        accepted = CheckboxField(required=False)
+
+        def validate(self, field_name: str | None = None) -> bool:
+            inherited = super().validate(field_name)
+            local = True
+            if field_name is None and self.values.get("accepted") is not True:
+                self.add_error(None, "You must accept the agreement.")
+                local = False
+            return inherited and local
+
+    form = AgreementForm()
+    result = form.parse({"accepted": "false"})
+
+    assert not form.is_valid()
+    assert not result.is_valid
+    assert form.errors[None] == ["You must accept the agreement."]
+    assert result.errors[None] == ("You must accept the agreement.",)
+
+
+def test_multiple_errors_on_one_field_are_preserved() -> None:
+    class MultipleErrorForm(Form):
+        code = TextField()
+
+        def validate(self, field_name: str | None = None) -> bool:
+            inherited = super().validate(field_name)
+            local = True
+            if field_name == "code":
+                self.add_error(field_name, "First error.")
+                self.add_error(field_name, "Second error.")
+                local = False
+            return inherited and local
+
+    form = MultipleErrorForm()
+    result = form.parse({"code": "x"})
+
+    assert not result.is_valid
+    assert form.errors["code"] == ["First error.", "Second error."]
+    assert result.errors["code"] == ("First error.", "Second error.")
+
+
+def test_text_field_rejects_binary_input_before_local_validation() -> None:
+    class BinaryTextForm(Form):
+        name = TextField()
+
+        def validate(self, field_name: str | None = None) -> bool:
+            inherited = super().validate(field_name)
+            local = True
+            if field_name == "name":
+                self.add_error(field_name, "Local validation still ran.")
+                local = False
+            return inherited and local
+
+    form = BinaryTextForm()
+    result = form.parse({"name": b"\xff\xfe"})
+
+    assert not result.is_valid
+    assert form.errors["name"] == [
+        "Enter a valid text value.",
+        "Local validation still ran.",
+    ]
+
+
+def test_programmatically_created_form_uses_validation_path() -> None:
+    class DynamicValidationForm(Form):
+        pass
+
+    DynamicValidationForm.status = TextField()
+
+    def validate(self: Form, field_name: str | None = None) -> bool:
+        inherited = super(DynamicValidationForm, self).validate(field_name)
+        local = True
+        if field_name == "status" and self.values.get("status") == "closed":
+            self.add_error(field_name, "Status cannot be closed.")
+            local = False
+        return inherited and local
+
+    DynamicValidationForm.validate = validate
+
+    form = DynamicValidationForm()
+    result = form.parse({"status": "closed"})
+
+    assert not result.is_valid
+    assert form.errors["status"] == ["Status cannot be closed."]
+
+
+def test_file_upload_field_parses_submitted_file() -> None:
+    upload = UploadedFile(filename="document.pdf", content_type="application/pdf")
+
+    result = ExampleForm().parse({"preferred_name": "David", "attachment": upload})
+
+    assert result.is_valid
+    assert result.values["attachment"] is upload
+    assert result.fields["attachment"].raw_value is upload
+
+
+def test_optional_file_upload_can_be_omitted() -> None:
+    result = ExampleForm().parse({"preferred_name": "David"})
+
+    assert result.is_valid
+    assert "attachment" not in result.values
+
+
+def test_required_file_upload_rejects_omission() -> None:
+    class RequiredUploadForm(Form):
+        attachment = FileUploadField()
+
+    form = RequiredUploadForm()
+    result = form.parse({})
+
+    assert not result.is_valid
+    assert form.errors["attachment"] == ["This field is required."]
 
 
 def test_field_renderer_outputs_labels_options_and_errors() -> None:
@@ -332,7 +602,10 @@ def test_form_renderer_outputs_form_actions_and_csrf_hidden_field() -> None:
         actions=("submit", "clear", "cancel"),
     )
 
-    assert '<form class="wybra-form" method="post" action="/profile">' in html
+    assert (
+        '<form class="wybra-form" method="post" action="/profile" '
+        'enctype="multipart/form-data">'
+    ) in html
     assert 'name="csrf_token"' in html
     assert 'value="secure-token"' in html
     assert 'name="preferred_name"' in html
@@ -340,6 +613,44 @@ def test_form_renderer_outputs_form_actions_and_csrf_hidden_field() -> None:
     assert 'type="submit"' in html
     assert 'type="reset"' in html
     assert "data-wybra-form-cancel" in html
+
+
+def test_form_renderer_outputs_form_level_errors_and_upload_encoding() -> None:
+    class UploadErrorForm(Form):
+        attachment = FileUploadField()
+
+        def validate(self, field_name: str | None = None) -> bool:
+            inherited = super().validate(field_name)
+            local = True
+            if field_name is None:
+                self.add_error(None, "Form-level upload problem.")
+                local = False
+            return inherited and local
+
+    form = UploadErrorForm()
+    form.parse({"attachment": UploadedFile(filename="document.pdf")})
+    renderer = TemplateFormRenderer(_forms_templates())
+
+    html = renderer.render_form(form)
+
+    assert 'enctype="multipart/form-data"' in html
+    assert "Form-level upload problem." in html
+    assert 'type="file"' in html
+
+
+def test_form_renderer_uses_upload_encoding_for_custom_file_widget() -> None:
+    class CustomUploadWidgetForm(Form):
+        attachment = FileUploadField(widget="custom-file")
+
+    renderer = TemplateFormRenderer(
+        _forms_templates(),
+        widgets={"custom-file": "forms/widgets/file.html"},
+    )
+
+    html = renderer.render_form(CustomUploadWidgetForm())
+
+    assert 'enctype="multipart/form-data"' in html
+    assert 'type="file"' in html
 
 
 def test_form_renderer_raises_clear_error_for_unknown_widget() -> None:
@@ -379,7 +690,10 @@ def test_template_rendering_helpers_return_safe_html() -> None:
     )
 
     assert 'name="preferred_name"' in field_html
-    assert '<form class="wybra-form" method="post" action="/save">' in form_html
+    assert (
+        '<form class="wybra-form" method="post" action="/save" '
+        'enctype="multipart/form-data">'
+    ) in form_html
     assert 'type="hidden"' in csrf_html
     assert 'value="secure-token"' in csrf_html
 
