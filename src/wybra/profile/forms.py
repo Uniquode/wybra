@@ -200,7 +200,25 @@ class ProfileEditForm(Form):
         return True
 
     def _validate_pronouns(self) -> bool:
+        allowed_pronouns = {option.value for option in self.settings.pronoun_options}
         pronouns = self._pronouns_data()
+        result = self.field_results.get("pronoun_pair")
+        if result is None:
+            self._profile_field_data[PRONOUNS_FIELD] = None
+            return True
+        raw_value = result.value
+        if raw_value is None:
+            self._profile_field_data[PRONOUNS_FIELD] = None
+            return True
+        if not isinstance(raw_value, str):
+            self.add_error("pronoun_pair", "Pronouns must be a valid choice.")
+            return False
+        if raw_value and raw_value not in allowed_pronouns:
+            self.add_error("pronoun_pair", "Choose a valid pronoun option.")
+            return False
+        if not raw_value:
+            self._profile_field_data[PRONOUNS_FIELD] = None
+            return True
         self._profile_field_data[PRONOUNS_FIELD] = pronouns
         return True
 
@@ -220,7 +238,7 @@ class ProfileEditForm(Form):
             self._profile_field_data[PROFILE_LINKS_FIELD] = None
             return True
         try:
-            _validate_safe_url(url)
+            validate_safe_url(url)
         except ProfileInputError as exc:
             self.add_error("profile_link_website", str(exc))
             return False
@@ -306,10 +324,6 @@ def _phone_error_field(message: str) -> str:
     if "subdivision" in lower_message or "state or region" in lower_message:
         return "phone_subdivision_code"
     return "phone_number"
-
-
-def _validate_safe_url(url: str) -> None:
-    validate_safe_url(url)
 
 
 __all__ = ("ProfileEditForm", "profile_form_values")
