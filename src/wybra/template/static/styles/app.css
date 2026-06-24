@@ -85,7 +85,7 @@ body {
   font-size: var(--web-core-font-size-base);
 }
 
-a {
+.container a {
   color: var(--web-core-colour-link);
 }
 

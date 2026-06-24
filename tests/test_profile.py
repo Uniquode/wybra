@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -60,6 +61,16 @@ _CREATED_SITES: list[Site] = []
 
 def _resource_text(package: str, resource_path: str) -> str:
     return resources.files(package).joinpath(resource_path).read_text(encoding="utf-8")
+
+
+def _css_declaration_exists(css: str, property_name: str, value: str) -> bool:
+    return (
+        re.search(
+            rf"{re.escape(property_name)}\s*:\s*{re.escape(value)}\s*;",
+            css,
+        )
+        is not None
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -914,66 +925,79 @@ def test_login_widget_template_renders_avatar_after_logout() -> None:
     assert 'href="/profile"' in html
 
 
-def test_login_widget_template_renders_post_logout_with_csrf_context() -> None:
+@pytest.mark.parametrize(
+    (
+        "csrf_context",
+        "logout_path",
+        "expects_logout_control",
+        "expects_post_form",
+    ),
+    (
+        (
+            {"csrf_field_name": "csrf_token", "csrf_token": "secure-token"},
+            "/logout",
+            True,
+            True,
+        ),
+        ({}, "/logout", True, False),
+        ({"csrf_field_name": "csrf_token"}, "/logout", True, False),
+        ({"csrf_token": "secure-token"}, "/logout", True, False),
+        (
+            {"csrf_field_name": "csrf_token", "csrf_token": "secure-token"},
+            None,
+            False,
+            False,
+        ),
+        ({}, None, False, False),
+    ),
+)
+def test_login_widget_template_renders_logout_control_for_context(
+    csrf_context: dict[str, str],
+    logout_path: str | None,
+    expects_logout_control: bool,
+    expects_post_form: bool,
+) -> None:
     templates = DefaultTemplateCapability(
         template_sources=(
             PackageResourceSource(package="wybra.widgets", directory="templates"),
         )
     )
+    context = {
+        "login_widget": SimpleNamespace(
+            authenticated=True,
+            login_path=None,
+            logout_path=logout_path,
+            profile_image=None,
+            profile_path=None,
+            settings_path=None,
+        ),
+        "route_name": "home",
+    } | csrf_context
 
     html = templates.render_template(
         "components/login_control.html",
-        {
-            "csrf_field_name": "csrf_token",
-            "csrf_token": "secure-token",
-            "login_widget": SimpleNamespace(
-                authenticated=True,
-                login_path=None,
-                logout_path="/logout",
-                profile_image=None,
-                profile_path=None,
-                settings_path=None,
-            ),
-            "route_name": "home",
-        },
+        context,
     )
 
-    assert (
-        '<form class="login-widget__logout-form" method="post" action="/logout">'
-        in html
-    )
-    assert 'type="hidden" name="csrf_token" value="secure-token"' in html
-    assert 'class="login-widget__action web-responsive-compact-centre"' in html
-    assert 'href="/logout"' not in html
+    if not expects_logout_control:
+        assert 'href="/logout"' not in html
+        assert 'action="/logout"' not in html
+        assert "Logout" not in html
+        return
 
-
-def test_login_widget_template_uses_logout_link_without_csrf_context() -> None:
-    templates = DefaultTemplateCapability(
-        template_sources=(
-            PackageResourceSource(package="wybra.widgets", directory="templates"),
+    if expects_post_form:
+        assert (
+            '<form class="login-widget__logout-form" method="post" action="/logout">'
+            in html
         )
-    )
-
-    html = templates.render_template(
-        "components/login_control.html",
-        {
-            "login_widget": SimpleNamespace(
-                authenticated=True,
-                login_path=None,
-                logout_path="/logout",
-                profile_image=None,
-                profile_path=None,
-                settings_path=None,
-            ),
-            "route_name": "home",
-        },
-    )
-
-    assert (
-        '<a class="login-widget__action web-responsive-compact-centre" href="/logout">'
-        in html
-    )
-    assert "<form" not in html
+        assert 'type="hidden" name="csrf_token" value="secure-token"' in html
+        assert 'href="/logout"' not in html
+    else:
+        assert (
+            '<a class="login-widget__action web-responsive-compact-centre" '
+            'href="/logout">'
+        ) in html
+        assert 'action="/logout"' not in html
 
 
 def test_widget_layout_renders_continuous_header_row() -> None:
@@ -1046,19 +1070,25 @@ def test_foundation_styles_expose_header_and_control_tokens() -> None:
     ):
         assert token in css
 
+    assert re.search(
+        r"\.container\s+a\s*\{[^}]*color\s*:\s*var\(--web-core-colour-link\)\s*;",
+        css,
+    )
+    assert re.search(r"^a\s*\{", css, flags=re.MULTILINE) is None
+
 
 def test_widget_styles_use_header_and_control_tokens() -> None:
     css = _resource_text("wybra.widgets", "static/styles/widgets.css")
 
-    for expected in (
-        "background: var(--web-core-colour-header-surface)",
-        "border-bottom: 1px solid var(--web-core-colour-header-border)",
-        "border-radius: var(--web-core-radius-button)",
-        "border-radius: var(--web-core-radius-icon)",
-        "z-index: var(--web-core-page-header-z-index)",
-        "min-height: var(--web-core-control-size)",
+    for property_name, value in (
+        ("background", "var(--web-core-colour-header-surface)"),
+        ("border-bottom", "1px solid var(--web-core-colour-header-border)"),
+        ("border-radius", "var(--web-core-radius-button)"),
+        ("border-radius", "var(--web-core-radius-icon)"),
+        ("z-index", "var(--web-core-page-header-z-index)"),
+        ("min-height", "var(--web-core-control-size)"),
     ):
-        assert expected in css
+        assert _css_declaration_exists(css, property_name, value)
 
 
 @pytest.mark.anyio

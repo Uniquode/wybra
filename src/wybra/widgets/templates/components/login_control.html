@@ -39,6 +39,7 @@
     </svg>
   </a>
   {% endif %}
+  {% if login_widget.logout_path %}
   {% if csrf_field_name is defined and csrf_token is defined %}
   <form class="login-widget__logout-form" method="post" action="{{ login_widget.logout_path }}">
     <input type="hidden" name="{{ csrf_field_name }}" value="{{ csrf_token }}">
@@ -46,6 +47,7 @@
   </form>
   {% else %}
   <a class="login-widget__action web-responsive-compact-centre" href="{{ login_widget.logout_path }}">Logout</a>
+  {% endif %}
   {% endif %}
   {{ avatar(login_widget) }}
 </div>
