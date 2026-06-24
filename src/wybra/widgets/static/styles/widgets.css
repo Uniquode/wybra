@@ -1,19 +1,21 @@
+.page-header {
+    background: var(--web-core-colour-header-surface);
+    border-bottom: 1px solid var(--web-core-colour-header-border);
+    color: var(--web-core-colour-header-text);
+    left: 0;
+    padding: var(--web-core-page-header-padding);
+    position: sticky;
+    right: 0;
+    top: 0;
+    z-index: var(--web-core-page-header-z-index);
+}
+
 .page-tools {
     align-items: center;
     display: flex;
     gap: 0.75rem;
     justify-content: flex-end;
-    left: 0;
-    padding: 1rem 1rem 0;
-    pointer-events: none;
-    position: sticky;
-    right: 0;
-    top: 0;
-    z-index: 20;
-}
-
-.page-tools > * {
-    pointer-events: auto;
+    margin: 0;
 }
 
 .login-widget {
@@ -30,12 +32,12 @@
     align-items: center;
     background: var(--web-core-colour-surface);
     border: 1px solid var(--web-core-colour-border);
-    border-radius: 999px;
+    border-radius: var(--web-core-radius-button);
     color: var(--web-core-colour-accent);
     display: inline-flex;
     justify-content: center;
     margin: 0;
-    min-height: 3rem;
+    min-height: var(--web-core-control-size);
     vertical-align: middle;
     transition:
         background-color 160ms ease,
@@ -45,6 +47,7 @@
 }
 
 .login-widget__action {
+    appearance: none;
     font-size: 0.875rem;
     font-weight: 700;
     line-height: 1;
@@ -53,13 +56,18 @@
     text-decoration: none;
 }
 
+.login-widget__logout-form {
+    display: inline-flex;
+    margin: 0;
+}
+
 .login-widget__icon-action {
-    height: 3rem;
-    min-height: 3rem;
-    min-width: 3rem;
+    height: var(--web-core-control-size);
+    min-height: var(--web-core-control-size);
+    min-width: var(--web-core-control-size);
     padding: 0;
     text-decoration: none;
-    width: 3rem;
+    width: var(--web-core-control-size);
 }
 
 .login-widget__icon {
@@ -90,19 +98,19 @@
     aspect-ratio: 1;
     background: var(--web-core-colour-accent);
     border: 1px solid var(--web-core-colour-border);
-    border-radius: 999px;
+    border-radius: var(--web-core-radius-icon);
     color: var(--web-core-colour-page-bg);
     display: inline-flex;
     font-size: 2rem;
     font-weight: 800;
-    height: 3rem;
+    height: var(--web-core-control-size);
     justify-content: center;
     text-transform: uppercase;
 }
 
 .theme-selector {
     cursor: pointer;
-    min-width: 3rem;
+    min-width: var(--web-core-control-size);
     padding: 0;
 }
 
