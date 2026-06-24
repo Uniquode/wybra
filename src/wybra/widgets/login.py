@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 from starlette.routing import NoMatchFound
 
 from wybra.auth.capabilities import AuthCapability
 from wybra.profile import ProfileCapability, ProfileImage
+from wybra.profile.utils import extract_return_to_query, normalise_return_to
 from wybra.site import SiteCapabilityError, get_site
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,7 @@ class LoginWidgetState:
     logout_path: str | None
     profile_image: ProfileImage | None = None
     profile_path: str | None = None
+    settings_path: str | None = None
 
 
 async def login_widget_state(request: Any) -> LoginWidgetState | None:
@@ -47,12 +50,14 @@ async def login_widget_state(request: Any) -> LoginWidgetState | None:
     if logout_path is None:
         return None
 
+    profile_path = _profile_path(request)
     return LoginWidgetState(
         authenticated=True,
         login_path=None,
         logout_path=logout_path,
         profile_image=await _profile_image(request, user),
-        profile_path=_profile_path(request),
+        profile_path=profile_path,
+        settings_path=profile_path,
     )
 
 
@@ -92,7 +97,36 @@ def _profile_path(request: Any) -> str | None:
         return None
     if not getattr(settings, "default_profile_avatar_navigation", False):
         return None
-    return _route_path(request, PROFILE_EDIT_ROUTE_NAME)
+    profile_path = _route_path(request, PROFILE_EDIT_ROUTE_NAME)
+    if profile_path is None:
+        return None
+    return (
+        f"{profile_path}?"
+        f"{urlencode({'return_to': _profile_return_path(request, profile_path)})}"
+    )
+
+
+def _profile_return_path(request: Any, profile_path: str) -> str:
+    current_path = _current_path(request)
+    if current_path == profile_path or current_path.startswith(f"{profile_path}?"):
+        return normalise_return_to(_current_return_to(request), default="/")
+    return current_path
+
+
+def _current_return_to(request: Any) -> str | None:
+    query = getattr(getattr(request, "url", None), "query", "")
+    return extract_return_to_query(query)
+
+
+def _current_path(request: Any) -> str:
+    url = getattr(request, "url", None)
+    path = getattr(url, "path", None)
+    query = getattr(url, "query", "")
+    if not isinstance(path, str) or not path.startswith("/"):
+        path = "/"
+    if isinstance(query, str) and query:
+        return f"{path}?{query}"
+    return path
 
 
 __all__ = (

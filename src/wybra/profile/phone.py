@@ -132,7 +132,7 @@ def _country_code_value(value: str) -> str:
         raise ProfileInputError("Country code must be text.")
     country_code = value.strip().upper()
     if len(country_code) != 2 or pycountry.countries.get(alpha_2=country_code) is None:
-        raise ProfileInputError("Country code must be a valid ISO 3166-1 alpha-2 code.")
+        raise ProfileInputError("Choose a valid country.")
     return country_code
 
 
@@ -149,9 +149,9 @@ def _optional_subdivision_code(
         return None
     subdivision = pycountry.subdivisions.get(code=subdivision_code)
     if subdivision is None:
-        raise ProfileInputError("Subdivision code must be a valid ISO 3166-2 code.")
+        raise ProfileInputError("Choose a valid state or region.")
     if country_code is not None and subdivision.country_code != country_code:
-        raise ProfileInputError("Subdivision code must belong to the selected country.")
+        raise ProfileInputError("Choose a state or region for the selected country.")
     return subdivision_code
 
 

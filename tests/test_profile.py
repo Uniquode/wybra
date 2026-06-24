@@ -15,10 +15,16 @@ from fastapi.testclient import TestClient
 from wybra.auth import AuthCapability, login_required  # noqa: F401
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core import InputValidationError
+from wybra.core.resources import PackageResourceSource
 from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
 from wybra.db.models import metadata
 from wybra.db.persistence import create_database
-from wybra.forms import CsrfProtector, DefaultFormsCapability, FormsCapability
+from wybra.forms import (
+    CsrfProtector,
+    DefaultFormsCapability,
+    FormsCapability,
+    forms_rendering_context,
+)
 from wybra.media import (
     FilesystemMediaCapability,
     MediaCapability,
@@ -39,11 +45,12 @@ from wybra.profile import (
     render_profile_bio,
     subdivision_choices,
 )
+from wybra.profile.forms import ProfileEditForm
 from wybra.profile.models import UserPhoneContact, UserProfile
 from wybra.profile.routes import profile_router
 from wybra.profile.validation import validate_profile
 from wybra.site import Site, SiteCapabilityError, start
-from wybra.template import TemplateCapability
+from wybra.template import DefaultTemplateCapability, TemplateCapability
 from wybra.widgets.config import WidgetsSettings
 from wybra.widgets.login import login_widget_state
 
@@ -75,19 +82,40 @@ class ProfileTemplateStub:
         )
 
     def _render(self, template_name: str, context: dict[str, object]) -> str:
-        field_values = context["field_values"]
-        preferred_name = (
-            field_values["preferred_name"] if isinstance(field_values, dict) else ""
-        )
-        phone_contacts = context.get("phone_contacts", ())
-        phone_states = ",".join(
-            "verified" if contact.verified_at else "unverified"
-            for contact in phone_contacts
-        )
+        profile_form = context["profile_form"]
+        preferred_name = ""
+        field_errors = ""
+        phone_states = ""
+        if isinstance(profile_form, ProfileEditForm):
+            preferred_name = str(profile_form.fields["preferred_name"].value or "")
+            field_errors = ",".join(
+                f"{field}:{'|'.join(errors)}"
+                for field, errors in profile_form.errors.items()
+                if field is not None
+            )
+            phone_subdivision = profile_form.fields.get("phone_subdivision_code")
+            phone_number = profile_form.fields.get("phone_number")
+            if phone_subdivision is not None:
+                phone_states += "|subdivisions=" + ",".join(
+                    option.label for option in phone_subdivision.options()
+                )
+            if phone_number is not None and phone_number.disabled:
+                phone_states += "|phone_disabled"
+            if phone_number is not None:
+                phone_states += f"|phone_number={phone_number.value or ''}"
+            country = profile_form.fields.get("phone_country_code")
+            if country is not None:
+                phone_states += f"|country={country.value or ''}"
+            if phone_subdivision is not None:
+                phone_states += f"|subdivision={phone_subdivision.value or ''}"
+        phone_status = context.get("phone_contact_status")
+        if phone_status:
+            phone_states += f"|status={phone_status}"
         return (
             f"{template_name}|preferred_name={preferred_name}|"
             f"csrf_field={context.get('csrf_field_name', '')}|"
-            f"phone_states={phone_states}"
+            f"phone_prefix={context.get('phone_prefix', '')}|"
+            f"phone_states={phone_states}|field_errors={field_errors}"
         )
 
     def render_partial(
@@ -154,7 +182,12 @@ def _site_with_database(tmp_path: Path) -> Site:
     return site
 
 
-def _profile_route_site(tmp_path: Path, user: ProfileUser) -> Site:
+def _profile_route_site(
+    tmp_path: Path,
+    user: ProfileUser,
+    *,
+    profile_config: dict[str, object] | None = None,
+) -> Site:
     app = FastAPI()
     app.include_router(profile_router)
 
@@ -163,15 +196,14 @@ def _profile_route_site(tmp_path: Path, user: ProfileUser) -> Site:
 
     app.dependency_overrides[login_required] = current_user
     app.state.csrf = CsrfProtector("test-secret")
+    config_data: dict[str, object] = {
+        "app": {"modules": ("wybra.profile", "wybra.forms")}
+    }
+    if profile_config is not None:
+        config_data["wybra.profile"] = profile_config
     site = Site(
         app=app,
-        config=ConfigService(
-            [
-                MappingConfigSource(
-                    {"app": {"modules": ("wybra.profile", "wybra.forms")}}
-                )
-            ]
-        ),
+        config=ConfigService([MappingConfigSource(config_data)]),
     )
     database = create_database(
         f"sqlite+aiosqlite:///{tmp_path / 'profile-route.sqlite3'}"
@@ -465,7 +497,7 @@ async def test_profile_edit_route_renders_existing_profile(
 
 
 @pytest.mark.anyio
-async def test_profile_edit_route_displays_phone_verification_states(
+async def test_profile_edit_route_populates_phone_contact_and_status(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
@@ -482,21 +514,15 @@ async def test_profile_edit_route_displays_phone_verification_states(
                     sms_capable=True,
                     verified_at=1234.0,
                 ),
-                UserPhoneContact(
-                    user_id=user.id,
-                    country_code="AU",
-                    normalised_number="+61412345679",
-                    number_type="mobile",
-                    sms_capable=True,
-                ),
             ]
         )
 
     response = TestClient(site.app).get("/profile")
 
     assert response.status_code == 200
-    assert response.text.count("verified") == 2
-    assert "unverified" in response.text
+    assert "country=AU" in response.text
+    assert "phone_number=+61412345678" in response.text
+    assert "status=Verified" in response.text
 
 
 @pytest.mark.anyio
@@ -538,15 +564,276 @@ async def test_profile_edit_route_post_creates_profile(
 
 
 @pytest.mark.anyio
+async def test_profile_edit_route_valid_noop_returns_to_invoking_page(
+    tmp_path: Path,
+) -> None:
+    user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+    site = _profile_route_site(tmp_path, user)
+    await _create_site_schema(site)
+    nonce = "a" * 32
+    token = site.app.state.csrf.create_token(nonce)
+    client = TestClient(site.app)
+    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+
+    response = client.post(
+        "/profile",
+        data={
+            "csrf_token": token,
+            "return_to": "/account",
+            "preferred_name": "",
+            "display_name": "",
+            "pronoun_pair": "",
+            "profile_link_website": "",
+            "bio": "",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account"
+    async with site.require_capability(DatabaseCapability).session() as session:
+        assert (
+            await site.require_capability(ProfileCapability).get_profile(
+                session,
+                user.id,
+            )
+            is None
+        )
+
+
+@pytest.mark.anyio
+async def test_profile_edit_route_clears_existing_profile_fields(
+    tmp_path: Path,
+) -> None:
+    user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+    site = _profile_route_site(tmp_path, user)
+    await _create_site_schema(site)
+    async with site.require_capability(DatabaseCapability).transaction() as session:
+        session.add(
+            UserProfile(
+                user_id=user.id,
+                preferred_name="David",
+                display_name="David Nugent",
+                bio="Existing bio",
+                pronouns={"direct": "they", "possessive": "their"},
+                website_links={"website": "https://example.test"},
+            )
+        )
+    nonce = "a" * 32
+    token = site.app.state.csrf.create_token(nonce)
+    client = TestClient(site.app)
+    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+
+    response = client.post(
+        "/profile",
+        data={
+            "csrf_token": token,
+            "preferred_name": "",
+            "display_name": "",
+            "pronoun_pair": "",
+            "profile_link_website": "",
+            "bio": "",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    async with site.require_capability(DatabaseCapability).session() as session:
+        profile = await site.require_capability(ProfileCapability).get_profile(
+            session,
+            user.id,
+        )
+    assert profile is not None
+    assert profile.preferred_name is None
+    assert profile.display_name is None
+    assert profile.bio is None
+    assert profile.pronouns is None
+    assert profile.website_links is None
+
+
+@pytest.mark.anyio
+async def test_profile_edit_route_re_renders_invalid_form(
+    tmp_path: Path,
+) -> None:
+    user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+    site = _profile_route_site(tmp_path, user)
+    await _create_site_schema(site)
+    nonce = "a" * 32
+    token = site.app.state.csrf.create_token(nonce)
+    client = TestClient(site.app)
+    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+
+    response = client.post(
+        "/profile",
+        data={
+            "csrf_token": token,
+            "preferred_name": "David",
+            "profile_link_website": "javascript:alert(1)",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "preferred_name=David" in response.text
+    assert "profile_link_website:Profile link URL scheme" in response.text
+    async with site.require_capability(DatabaseCapability).session() as session:
+        assert (
+            await site.require_capability(ProfileCapability).get_profile(
+                session,
+                user.id,
+            )
+            is None
+        )
+
+
+@pytest.mark.anyio
+async def test_profile_edit_route_ignores_disabled_submitted_fields(
+    tmp_path: Path,
+) -> None:
+    user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+    site = _profile_route_site(
+        tmp_path,
+        user,
+        profile_config={"editable_fields": ("preferred_name",)},
+    )
+    await _create_site_schema(site)
+    async with site.require_capability(DatabaseCapability).transaction() as session:
+        session.add(
+            UserProfile(
+                user_id=user.id,
+                preferred_name="Previous",
+                bio="Existing bio",
+            )
+        )
+    nonce = "a" * 32
+    token = site.app.state.csrf.create_token(nonce)
+    client = TestClient(site.app)
+    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+
+    response = client.post(
+        "/profile",
+        data={
+            "csrf_token": token,
+            "preferred_name": "David",
+            "bio": "Submitted bio",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    async with site.require_capability(DatabaseCapability).session() as session:
+        profile = await site.require_capability(ProfileCapability).get_profile(
+            session,
+            user.id,
+        )
+    assert profile is not None
+    assert profile.preferred_name == "David"
+    assert profile.bio == "Existing bio"
+
+
+def test_profile_edit_template_renders_declarative_form_fields() -> None:
+    templates = DefaultTemplateCapability(
+        template_sources=(
+            PackageResourceSource(package="wybra.template", directory="templates"),
+            PackageResourceSource(package="wybra.forms", directory="templates"),
+            PackageResourceSource(package="wybra.profile", directory="templates"),
+        )
+    )
+    csrf = {"csrf_field_name": "csrf_token", "csrf_token": "token"}
+    profile_form = ProfileEditForm(
+        settings=ProfileSettings(),
+        values={"preferred_name": "David"},
+    )
+
+    html = templates.render_template(
+        "profile/pages/edit.html",
+        {
+            **csrf,
+            **forms_rendering_context(templates, csrf),
+            "asset_url": lambda path: f"/static/{path}",
+            "editable_fields": DEFAULT_EDITABLE_PROFILE_FIELDS,
+            "form_error": None,
+            "page_title": "Edit profile",
+            "phone_contact_status": "Not verified",
+            "phone_contacts": (),
+            "phone_prefix": "🇦🇺 +61",
+            "phone_prefix_path": "/profile/phone-fields",
+            "profile_form": profile_form,
+            "profile_settings": ProfileSettings(),
+            "route_name": "profile:edit",
+            "theme_attribute": None,
+        },
+    )
+
+    assert 'class="wybra-form"' in html
+    assert "styles/forms.css" in html
+    assert "styles/profile.css" in html
+    assert 'method="post"' in html
+    assert 'name="csrf_token"' in html
+    assert 'name="preferred_name"' in html
+    assert 'value="David"' in html
+    assert 'name="phone_country_code"' in html
+    assert ">Australia<" in html
+    assert "🇦🇺 Australia +61" not in html
+    assert 'class="wybra-profile-phone-control"' in html
+    assert 'id="phone-dial-prefix"' in html
+    assert 'name="phone_subdivision_code"' in html
+    assert "disabled" in html
+    assert "🇦🇺 +61</span>" in html
+    assert ">Not verified<" in html
+    assert "Phone contacts" not in html
+
+
+@pytest.mark.anyio
+async def test_profile_phone_fields_fragment_uses_selected_country(
+    tmp_path: Path,
+) -> None:
+    user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+    site = _profile_route_site(tmp_path, user)
+    await _create_site_schema(site)
+    client = TestClient(site.app)
+
+    response = client.get("/profile/phone-fields?phone_country_code=AU")
+
+    assert response.status_code == 200
+    assert "profile/components/phone_fields.html" in response.text
+    assert "phone_prefix=🇦🇺 +61" in response.text
+    assert "Victoria" in response.text
+    assert "phone_disabled" not in response.text
+
+
+@pytest.mark.anyio
 async def test_login_widget_state_links_avatar_to_profile_edit_route() -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
     site = _widget_site(user)
 
-    state = await login_widget_state(SimpleNamespace(app=site.app))
+    state = await login_widget_state(
+        SimpleNamespace(app=site.app, url=SimpleNamespace(path="/account", query=""))
+    )
 
     assert state is not None
-    assert state.profile_path == "/profile"
+    assert state.profile_path == "/profile?return_to=%2Faccount"
+    assert state.settings_path == "/profile?return_to=%2Faccount"
     assert state.logout_path == "/logout"
+
+
+@pytest.mark.anyio
+async def test_login_widget_state_does_not_nest_profile_return_to() -> None:
+    user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+    site = _widget_site(user)
+
+    state = await login_widget_state(
+        SimpleNamespace(
+            app=site.app,
+            url=SimpleNamespace(
+                path="/profile",
+                query="return_to=%2Faccount",
+            ),
+        )
+    )
+
+    assert state is not None
+    assert state.profile_path == "/profile?return_to=%2Faccount"
+    assert state.settings_path == "/profile?return_to=%2Faccount"
 
 
 @pytest.mark.anyio
@@ -558,6 +845,7 @@ async def test_login_widget_state_omits_profile_link_when_route_missing() -> Non
 
     assert state is not None
     assert state.profile_path is None
+    assert state.settings_path is None
 
 
 @pytest.mark.anyio
@@ -572,6 +860,7 @@ async def test_login_widget_state_omits_profile_link_when_navigation_disabled() 
 
     assert state is not None
     assert state.profile_path is None
+    assert state.settings_path is None
 
 
 @pytest.mark.anyio
@@ -584,6 +873,40 @@ async def test_login_widget_state_omits_profile_link_when_settings_missing() -> 
 
     assert state is not None
     assert state.profile_path is None
+    assert state.settings_path is None
+
+
+def test_login_widget_template_renders_avatar_after_logout() -> None:
+    templates = DefaultTemplateCapability(
+        template_sources=(
+            PackageResourceSource(package="wybra.widgets", directory="templates"),
+        )
+    )
+
+    html = templates.render_template(
+        "components/login_control.html",
+        {
+            "login_widget": SimpleNamespace(
+                authenticated=True,
+                login_path=None,
+                logout_path="/logout",
+                profile_image=SimpleNamespace(
+                    src=None,
+                    alt="Profile picture",
+                    fallback_text="D",
+                ),
+                profile_path="/profile",
+                settings_path="/profile",
+            ),
+            "route_name": "home",
+        },
+    )
+
+    settings_position = html.index('aria-label="Settings"')
+    logout_position = html.index("Logout")
+    avatar_position = html.index("login-widget__avatar")
+    assert settings_position < logout_position < avatar_position
+    assert 'href="/profile"' in html
 
 
 @pytest.mark.anyio

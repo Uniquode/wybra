@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from html import escape
-from urllib.parse import urlsplit
 
 from wybra.profile.exceptions import ProfileInputError
 from wybra.profile.settings import (
@@ -14,6 +13,7 @@ from wybra.profile.settings import (
     ProfileSettings,
 )
 from wybra.profile.types import ProfileFieldValue, ProfileLinks, Pronouns
+from wybra.profile.utils import validate_safe_url
 
 PROFILE_BIO_MAX_LENGTH = 1024
 
@@ -113,25 +113,11 @@ def _profile_links_value(value: object) -> ProfileLinks | None:
         url = raw_url.strip()
         if not link_name or not url:
             continue
-        _validate_safe_url(url)
+        validate_safe_url(url)
         if link_name != "website":
             raise ProfileInputError("Profile link name is not supported.")
         links["website"] = url
     return links or None
-
-
-def _validate_safe_url(url: str) -> None:
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"}:
-        raise ProfileInputError("Profile link URL scheme must be http or https.")
-    if not parsed.netloc:
-        raise ProfileInputError("Profile link URL must include a host.")
-    if _contains_control_character(url):
-        raise ProfileInputError("Profile link URL must not contain control characters.")
-
-
-def _contains_control_character(value: str) -> bool:
-    return any(ord(character) < 32 or ord(character) == 127 for character in value)
 
 
 __all__ = (

@@ -22,10 +22,10 @@
   <p id="login-form-error" role="alert">{{ form_error }}</p>
   {% endif %}
   {% if is_setup_step %}
-  <p role="status">{{ setup_bypass_error or "Set up TOTP before continuing, or continue for now." }}</p>
+  <p role="status">{{ setup_bypass_error or "Set up an authenticator before continuing, or continue for now." }}</p>
   <p>
     <a href="{{ setup_totp_path }}">
-      Continue to TOTP setup
+      Continue to authenticator setup
     </a>
   </p>
   <form action="{{ request.url_for('auth:login') }}" method="post">
@@ -38,7 +38,7 @@
       type="hidden"
       value="1"
     >
-    <button type="submit">Continue without TOTP</button>
+    <button type="submit">Continue without authenticator</button>
   </form>
   {% else %}
   <form action="{{ request.url_for('auth:login') }}" method="post">
@@ -72,26 +72,15 @@
     {% endif %}
     {% if is_totp_step %}
     <label>
-      TOTP code
+      Authenticator code
       <input
         autocomplete="one-time-code"
-        inputmode="numeric"
-        minlength="{{ totp_code_length }}"
-        maxlength="{{ totp_code_length }}"
         name="totp_code"
+        required
         type="text"
       >
     </label>
-    <label>
-      Recovery code
-      <input
-        autocomplete="one-time-code"
-        minlength="{{ recovery_code_length }}"
-        maxlength="{{ recovery_code_length }}"
-        name="recovery_code"
-        type="text"
-      >
-    </label>
+    <p class="muted-copy">Enter the code from your authenticator app or a one-time use recovery code.</p>
     {% endif %}
     <button type="submit">
       {% if is_totp_step %}Complete verification{% else %}Sign in{% endif %}
@@ -102,9 +91,13 @@
   {% endif %}
   {% endif %}
   <p class="muted-copy">
+    {% if is_totp_step or is_setup_step %}
+    <a href="{{ request.url_for('auth:login') }}">Cancel sign in</a>
+    {% else %}
     <a href="{{ request.url_for('auth:password-reset') }}">Reset password</a>
     {% if public_signup_enabled is defined and public_signup_enabled %}
     &middot; <a href="{{ request.url_for('auth:signup') }}">Create account</a>
+    {% endif %}
     {% endif %}
   </p>
 </section>

@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
-from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
+from wybra.auth.options import TOTP_REQUIRED
 from wybra.auth.sessions import (
     clear_session_cookie,
     create_local_user_from_signup,
@@ -20,7 +20,6 @@ from .shared import (
     _identity_context,
     _identity_options,
     _load_active_totp_credential_id,
-    _load_totp_credential_ids,
     _public_signup_enabled,
     _session_factory_from_request,
     account_router,
@@ -94,23 +93,6 @@ async def account(request: Request) -> Response:
     if user is None:
         return render_page(request, "identity/pages/account.html", context)
 
-    options = _identity_options(request)
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        active_totp_id, pending_totp_id = await _load_totp_credential_ids(
-            session,
-            str(user.id),
-        )
-
-    context |= {
-        "totp_mode": options.totp_mode,
-        "totp_enabled": options.totp_mode != TOTP_DISABLED,
-        "totp_has_active_credential": active_totp_id is not None,
-        "totp_has_pending_credential": pending_totp_id is not None,
-        "totp_setup_path": request.url_for("auth:totp-setup"),
-        "totp_disable_path": request.url_for("auth:totp-disable"),
-        "totp_reset_path": request.url_for("auth:totp-reset"),
-    }
     return render_page(request, "identity/pages/account.html", context)
 
 
