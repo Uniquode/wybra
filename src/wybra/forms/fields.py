@@ -15,7 +15,7 @@ type FormErrorKey = str | None
 MARKUP_ERROR = "Enter plain text without HTML or markup."
 UNSAFE_CONTROL_CHARACTER_ERROR = "Enter text without unsafe control characters."
 _MARKUP_PATTERN = re.compile(
-    r"<!--|-->|<![A-Za-z]|<\?|\?>|</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>"
+    r"<!--|--!?>|<![A-Za-z]|<\?|\?>|</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>"
 )
 _ALLOWED_CONTROL_CHARACTERS = {"\t", "\n", "\r"}
 

@@ -292,6 +292,7 @@ def test_form_reports_validation_errors_and_preserves_raw_values() -> None:
         "<script>alert(1)</script>",
         "</strong>",
         "<!-- hidden -->",
+        "hidden --!> end",
         "<!doctype html>",
         "<?xml version='1.0'?>",
     ),
@@ -313,6 +314,25 @@ def test_text_like_fields_reject_markup_by_default(
     assert result.fields[field_name].raw_value == raw_value
     assert result.fields[field_name].value is None
     assert field_name not in result.values
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    (
+        "1 < 2",
+        "2 > 1",
+        "C<++",
+        "Use < placeholder text > here",
+    ),
+)
+def test_text_fields_accept_non_markup_angle_bracket_text(raw_value: str) -> None:
+    class ProtectedTextForm(Form):
+        name = TextField(required=False)
+
+    result = ProtectedTextForm().parse({"name": raw_value})
+
+    assert result.is_valid
+    assert result.values["name"] == raw_value
 
 
 @pytest.mark.parametrize(
