@@ -181,6 +181,14 @@ form-level validation and form-level errors are stored in `errors[None]`.
 Wybra intentionally does not support Django-style `clean` or
 `clean_<field_name>` hooks.
 
+Text-like fields are plain text by default. `TextField`, `TextAreaField`, and
+`HiddenField` reject HTML or markup-like input and unsafe control characters
+unless declared with `allow_html=True`. That option only disables input-side
+markup rejection for fields that intentionally accept HTML; it does not make
+rendered output trusted or replace template escaping. Rich text sanitisation,
+URL scheme validation, and other domain-specific safety checks remain owned by
+the consuming feature.
+
 ```python
 form = ProfileForm(values={"preferred_name": "David"})
 result = form.parse(await forms.request_form_data(request))

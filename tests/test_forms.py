@@ -286,6 +286,77 @@ def test_form_reports_validation_errors_and_preserves_raw_values() -> None:
     assert result.errors["pronouns"]
 
 
+@pytest.mark.parametrize(
+    "raw_value",
+    (
+        "<script>alert(1)</script>",
+        "</strong>",
+        "<!-- hidden -->",
+        "<!doctype html>",
+        "<?xml version='1.0'?>",
+    ),
+)
+@pytest.mark.parametrize("field_name", ("name", "bio", "token"))
+def test_text_like_fields_reject_markup_by_default(
+    field_name: str,
+    raw_value: str,
+) -> None:
+    class ProtectedTextForm(Form):
+        name = TextField(required=False)
+        bio = TextAreaField(required=False)
+        token = HiddenField(required=False)
+
+    result = ProtectedTextForm().parse({field_name: raw_value})
+
+    assert not result.is_valid
+    assert result.errors[field_name] == ("Enter plain text without HTML or markup.",)
+    assert result.fields[field_name].raw_value == raw_value
+    assert result.fields[field_name].value is None
+    assert field_name not in result.values
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    (
+        "hello\x00world",
+        "hello\x1fworld",
+        "hello\x7fworld",
+        "hello\x80world",
+    ),
+)
+def test_text_fields_reject_unsafe_control_characters(raw_value: str) -> None:
+    class ProtectedTextForm(Form):
+        name = TextField(required=False)
+
+    result = ProtectedTextForm().parse({"name": raw_value})
+
+    assert not result.is_valid
+    assert result.errors["name"] == ("Enter text without unsafe control characters.",)
+    assert result.fields["name"].raw_value == raw_value
+    assert result.fields["name"].value is None
+    assert "name" not in result.values
+
+
+def test_text_fields_allow_html_when_explicitly_enabled() -> None:
+    class HtmlTextForm(Form):
+        content = TextAreaField(allow_html=True, max_length=64)
+
+    result = HtmlTextForm().parse({"content": "<p>Hello</p>"})
+
+    assert result.is_valid
+    assert result.values["content"] == "<p>Hello</p>"
+
+
+def test_text_fields_that_allow_html_keep_length_validation() -> None:
+    class HtmlTextForm(Form):
+        content = TextField(allow_html=True, max_length=4)
+
+    result = HtmlTextForm().parse({"content": "<tag>"})
+
+    assert not result.is_valid
+    assert result.errors["content"] == ("Must be 4 characters or fewer.",)
+
+
 def test_parse_clears_stale_field_value_for_omitted_optional_field() -> None:
     class OptionalNameForm(Form):
         name = TextField(required=False)
