@@ -1,4 +1,5 @@
 html {
+  --web-core-font-size-base: 16px;
   --web-core-colour-accent: #4b5c92;
   --web-core-colour-page-bg: #faf8ff;
   --web-core-colour-page-bg-strong: #f4f3fa;
@@ -6,6 +7,17 @@ html {
   --web-core-colour-text: #1a1b21;
   --web-core-colour-muted-text: #45464f;
   --web-core-colour-border: #c5c6d0;
+  --web-core-colour-link: var(--web-core-colour-accent);
+  --web-core-colour-highlight: var(--web-core-colour-accent-soft);
+  --web-core-colour-header-surface: rgba(244, 243, 250, 0.94);
+  --web-core-colour-header-border: var(--web-core-colour-border);
+  --web-core-colour-header-text: var(--web-core-colour-accent);
+  --web-core-radius-panel: 1rem;
+  --web-core-radius-button: 999px;
+  --web-core-radius-icon: 999px;
+  --web-core-page-header-padding: 0.75rem 1rem;
+  --web-core-page-header-z-index: 20;
+  --web-core-control-size: 3rem;
   --web-core-colour-accent-soft: color-mix(
     in srgb,
     var(--web-core-colour-accent) 12%,
@@ -26,6 +38,9 @@ html[data-theme="dark"] {
   --web-core-colour-text: #e7f0ee;
   --web-core-colour-muted-text: #c5c6d0;
   --web-core-colour-border: #45464f;
+  --web-core-colour-header-surface: rgba(26, 27, 33, 0.94);
+  --web-core-colour-header-border: var(--web-core-colour-border);
+  --web-core-colour-header-text: var(--web-core-colour-accent);
   --web-core-colour-accent-soft: color-mix(
     in srgb,
     var(--web-core-colour-accent) 22%,
@@ -43,6 +58,9 @@ html[data-theme="dark"] {
     --web-core-colour-text: #e7f0ee;
     --web-core-colour-muted-text: #c5c6d0;
     --web-core-colour-border: #45464f;
+    --web-core-colour-header-surface: rgba(26, 27, 33, 0.94);
+    --web-core-colour-header-border: var(--web-core-colour-border);
+    --web-core-colour-header-text: var(--web-core-colour-accent);
     --web-core-colour-accent-soft: color-mix(
       in srgb,
       var(--web-core-colour-accent) 22%,
@@ -64,6 +82,11 @@ body {
       var(--web-core-colour-page-bg-strong) 100%
     );
   color: var(--web-core-colour-text);
+  font-size: var(--web-core-font-size-base);
+}
+
+.container a {
+  color: var(--web-core-colour-link);
 }
 
 .container {
@@ -78,7 +101,7 @@ body {
 .surface-panel {
   background: var(--web-core-colour-surface);
   border: 1px solid var(--web-core-colour-border);
-  border-radius: 1rem;
+  border-radius: var(--web-core-radius-panel);
   padding: 1rem;
 }
 
