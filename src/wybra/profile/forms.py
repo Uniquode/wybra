@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from urllib.parse import urlsplit
 
 from wybra.forms import (
     Form,
@@ -28,6 +27,7 @@ from wybra.profile.settings import (
     PRONOUNS_FIELD,
     ProfileSettings,
 )
+from wybra.profile.utils import normalise_form_text, validate_safe_url
 
 PROFILE_FORM_FIELD_MAP = {
     PREFERRED_NAME_FIELD: (PREFERRED_NAME_FIELD,),
@@ -90,7 +90,7 @@ class ProfileEditForm(Form):
         self.settings = settings
         self._profile_field_data: dict[str, object] = {}
         form_values = values or {}
-        phone_country_code = _optional_form_text(form_values.get("phone_country_code"))
+        phone_country_code = normalise_form_text(form_values.get("phone_country_code"))
         super().__init__(
             values=form_values,
             options={
@@ -136,7 +136,7 @@ class ProfileEditForm(Form):
     def parse(self, data: Mapping[str, object]) -> FormResult:
         self._profile_field_data = {}
         self._apply_phone_country_options(
-            _optional_form_text(data.get("phone_country_code"))
+            normalise_form_text(data.get("phone_country_code"))
         )
         return super().parse(data)
 
@@ -149,9 +149,9 @@ class ProfileEditForm(Form):
 
     def phone_contact_data(self) -> dict[str, str | None]:
         return {
-            "number": _optional_form_text(self.values.get("phone_number")) or "",
-            "country_code": _optional_form_text(self.values.get("phone_country_code")),
-            "subdivision_code": _optional_form_text(
+            "number": normalise_form_text(self.values.get("phone_number")) or "",
+            "country_code": normalise_form_text(self.values.get("phone_country_code")),
+            "subdivision_code": normalise_form_text(
                 self.values.get("phone_subdivision_code")
             ),
         }
@@ -283,12 +283,6 @@ def _profile_pronoun_pair(pronouns: Mapping[str, object]) -> str:
     return ""
 
 
-def _optional_form_text(value: object) -> str | None:
-    if not isinstance(value, str) or not value:
-        return None
-    return value
-
-
 def _is_country_choice(country_code: str | None) -> bool:
     if country_code is None:
         return False
@@ -309,23 +303,13 @@ def _phone_error_field(message: str) -> str:
     lower_message = message.casefold()
     if "country" in lower_message:
         return "phone_country_code"
-    if "subdivision" in lower_message:
+    if "subdivision" in lower_message or "state or region" in lower_message:
         return "phone_subdivision_code"
     return "phone_number"
 
 
 def _validate_safe_url(url: str) -> None:
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"}:
-        raise ProfileInputError("Profile link URL scheme must be http or https.")
-    if not parsed.netloc:
-        raise ProfileInputError("Profile link URL must include a host.")
-    if _contains_control_character(url):
-        raise ProfileInputError("Profile link URL must not contain control characters.")
-
-
-def _contains_control_character(value: str) -> bool:
-    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+    validate_safe_url(url)
 
 
 __all__ = ("ProfileEditForm", "profile_form_values")

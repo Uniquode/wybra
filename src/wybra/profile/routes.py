@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import unquote, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -20,6 +19,7 @@ from wybra.profile.forms import ProfileEditForm, profile_form_values
 from wybra.profile.models import UserPhoneContact
 from wybra.profile.phone import country_choices
 from wybra.profile.settings import ProfileSettings
+from wybra.profile.utils import normalise_form_text, normalise_return_to
 from wybra.site import get_site
 from wybra.template import TemplateCapability
 
@@ -130,7 +130,7 @@ async def edit_profile(
         "phone_contacts": phone_contacts,
         "phone_contact_status": _phone_contact_status(current_phone_contact),
         "phone_prefix": _phone_prefix_for_country(
-            _optional_form_text(profile_form.values.get("phone_country_code"))
+            normalise_form_text(profile_form.values.get("phone_country_code"))
         ),
         "phone_prefix_path": str(request.url_for("profile:phone-fields")),
         "form_error": form_error,
@@ -201,12 +201,6 @@ def _form_value(form_data: Any, name: str, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
-def _optional_form_text(value: object) -> str | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    return value.strip()
-
-
 def _phone_prefix_for_country(country_code: str | None) -> str:
     if not country_code:
         return ""
@@ -234,20 +228,7 @@ def _has_non_empty_profile_data(data: dict[str, object]) -> bool:
 
 
 def _normalise_return_to(value: str | None, *, default: str) -> str:
-    candidate = (value or "").strip()
-    if not candidate.startswith("/"):
-        return default
-
-    decoded = unquote(candidate)
-    if decoded.startswith("//") or decoded.startswith("/\\"):
-        return default
-    if any(character in decoded for character in ("\r", "\n", "\x00")):
-        return default
-
-    parsed = urlsplit(candidate)
-    if parsed.scheme or parsed.netloc:
-        return default
-    return urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    return normalise_return_to(value, default=default)
 
 
 __all__ = (

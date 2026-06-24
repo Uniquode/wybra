@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import urlencode
 
 from starlette.routing import NoMatchFound
 
 from wybra.auth.capabilities import AuthCapability
 from wybra.profile import ProfileCapability, ProfileImage
+from wybra.profile.utils import extract_return_to_query, normalise_return_to
 from wybra.site import SiteCapabilityError, get_site
 
 logger = logging.getLogger(__name__)
@@ -108,18 +109,13 @@ def _profile_path(request: Any) -> str | None:
 def _profile_return_path(request: Any, profile_path: str) -> str:
     current_path = _current_path(request)
     if current_path == profile_path or current_path.startswith(f"{profile_path}?"):
-        return _current_return_to(request) or "/"
+        return normalise_return_to(_current_return_to(request), default="/")
     return current_path
 
 
 def _current_return_to(request: Any) -> str | None:
-    url = getattr(request, "url", None)
-    query = getattr(url, "query", "")
-    if not isinstance(query, str) or not query:
-        return None
-    values = parse_qs(query, keep_blank_values=False).get("return_to", ())
-    value = values[0] if values else None
-    return value if isinstance(value, str) and value.startswith("/") else None
+    query = getattr(getattr(request, "url", None), "query", "")
+    return extract_return_to_query(query)
 
 
 def _current_path(request: Any) -> str:
