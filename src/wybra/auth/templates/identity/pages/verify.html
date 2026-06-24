@@ -11,7 +11,7 @@
   <p role="alert">{{ form_error }}</p>
   {% endif %}
   {% if totp_setup_required is defined and totp_setup_required %}
-  <p role="status">TOTP setup is required for this account. Sign in to continue setup.</p>
+  <p role="status">Authenticator setup is required for this account. Sign in to continue setup.</p>
   <p><a href="{{ totp_login_path }}">Continue to sign in</a></p>
   {% endif %}
   <form action="{{ request.url_for('auth:verify') }}" method="post">

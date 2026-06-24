@@ -17,6 +17,7 @@ from wybra.auth.mfa.storage import (
 )
 from wybra.auth.models import User
 from wybra.auth.options import IdentityOptions
+from wybra.auth.result import ERROR_TOTP_CODE_REQUIRED
 from wybra.auth.routes.totp import (
     TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE,
     TOTP_LOGIN_FORM_ERROR_BY_MESSAGE,
@@ -294,7 +295,11 @@ def _login_error_response(
         if message in TOTP_LOGIN_FORM_ERROR_BY_MESSAGE
         else "Email or password is incorrect."
     )
-    if challenge_error is None and message in TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE:
+    if (
+        challenge_error is None
+        and message != ERROR_TOTP_CODE_REQUIRED
+        and message in TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE
+    ):
         challenge_error = TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE[message]
 
     context = login_context(

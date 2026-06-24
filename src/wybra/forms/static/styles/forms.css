@@ -23,6 +23,11 @@
   padding: 0;
 }
 
+.wybra-form-section {
+  display: grid;
+  gap: 1rem;
+}
+
 .wybra-form-option {
   align-items: center;
   display: flex;

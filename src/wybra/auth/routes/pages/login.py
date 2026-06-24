@@ -1,9 +1,11 @@
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
+from starlette.datastructures import FormData
 
 from wybra.auth.ids import log_safe_uuid
 from wybra.auth.mfa.recovery import RECOVERY_CODE_LENGTH
 from wybra.auth.mfa.storage import TOTP_ACTIVE_STATUS, SqlAlchemyChallengeStore
+from wybra.auth.mfa.totp import is_valid_totp_code
 from wybra.auth.models import User
 from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
 from wybra.auth.result import (
@@ -95,8 +97,7 @@ async def login(request: Request) -> Response:
             return_to=return_to,
             email=email,
             password=password,
-            totp_code=_form_value(form_data, "totp_code"),
-            recovery_code=_form_value(form_data, "recovery_code"),
+            submitted_code=_submitted_totp_code_value(form_data),
             setup_bypass=setup_bypass,
         )
 
@@ -106,6 +107,14 @@ async def login(request: Request) -> Response:
         password=password,
         return_to=return_to,
     )
+
+
+def _submitted_totp_code_value(form_data: FormData) -> str:
+    totp_code = _form_value(form_data, "totp_code").strip()
+    if totp_code:
+        return totp_code
+
+    return _form_value(form_data, "recovery_code").strip()
 
 
 async def _handle_primary_login(
@@ -172,7 +181,7 @@ async def _handle_totp_post_authentication_decision(
                 email=email,
                 setup_challenge_id=setup_challenge_id,
                 setup_bypass_error=(
-                    "Your email must be verified before TOTP setup can proceed."
+                    "Verify your email before authenticator setup can proceed."
                     if not user.is_verified
                     else None
                 ),
@@ -190,8 +199,7 @@ async def _handle_login_totp_challenge(
     return_to: str,
     email: str,
     password: str,
-    totp_code: str,
-    recovery_code: str,
+    submitted_code: str,
     setup_bypass: bool = False,
 ) -> Response:
     del password
@@ -275,7 +283,7 @@ async def _handle_login_totp_challenge(
                 email=challenge_user.email,
                 setup_challenge_id=challenge.id,
                 setup_bypass_error=(
-                    "Your email must be verified before TOTP setup can proceed."
+                    "Verify your email before authenticator setup can proceed."
                     if not challenge_user.is_verified
                     else None
                 ),
@@ -366,10 +374,9 @@ async def _handle_login_totp_challenge(
                 challenge_step=challenge_step,
             )
 
-        code = (totp_code or "").strip()
-        alt_code = (recovery_code or "").strip().upper()
+        code = (submitted_code or "").strip()
         totp_asserted_at: float | None = None
-        if code:
+        if is_valid_totp_code(code):
             verification_timestamp = current_timestamp()
             accepted, counter, _challenge_error = await verify_totp_code_for_credential(
                 session=session,
@@ -392,8 +399,9 @@ async def _handle_login_totp_challenge(
                 )
 
             totp_asserted_at = verification_timestamp
-        elif alt_code:
-            if len(alt_code) != RECOVERY_CODE_LENGTH:
+        elif code:
+            recovery_code = code.upper()
+            if len(recovery_code) != RECOVERY_CODE_LENGTH:
                 return _totp_login_error_response(
                     request,
                     email=email,
@@ -407,7 +415,7 @@ async def _handle_login_totp_challenge(
             recovery_store = recovery_code_store(request, session)
             if not await recovery_store.consume_recovery_code(
                 str(user.id),
-                alt_code,
+                recovery_code,
             ):
                 return _totp_login_error_response(
                     request,

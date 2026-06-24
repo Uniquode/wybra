@@ -1,0 +1,52 @@
+#profile-phone-fields {
+  display: grid;
+  gap: 1rem;
+}
+
+.wybra-profile-phone-control {
+  align-items: stretch;
+  column-gap: 0.5rem;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  width: 100%;
+}
+
+.wybra-profile-phone-prefix {
+  align-items: center;
+  border: 1px solid currentColor;
+  display: inline-flex;
+  min-width: 4.5rem;
+  opacity: 0.75;
+  padding: 0 0.75rem;
+  white-space: nowrap;
+}
+
+.wybra-profile-phone-prefix:empty {
+  display: none;
+}
+
+.wybra-profile-phone-control .wybra-form-control {
+  margin: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.wybra-profile-phone-contact-inline-status {
+  margin: 0.5rem 0 0;
+}
+
+.wybra-profile-phone-contact-status {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+}
+
+.wybra-profile-phone-contact-status--verified {
+  color: #027a48;
+}
+
+.wybra-profile-phone-contact-status--unverified {
+  color: #b42318;
+}

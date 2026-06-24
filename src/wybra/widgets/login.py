@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qs, urlencode
 
 from starlette.routing import NoMatchFound
 
@@ -24,6 +25,7 @@ class LoginWidgetState:
     logout_path: str | None
     profile_image: ProfileImage | None = None
     profile_path: str | None = None
+    settings_path: str | None = None
 
 
 async def login_widget_state(request: Any) -> LoginWidgetState | None:
@@ -47,12 +49,14 @@ async def login_widget_state(request: Any) -> LoginWidgetState | None:
     if logout_path is None:
         return None
 
+    profile_path = _profile_path(request)
     return LoginWidgetState(
         authenticated=True,
         login_path=None,
         logout_path=logout_path,
         profile_image=await _profile_image(request, user),
-        profile_path=_profile_path(request),
+        profile_path=profile_path,
+        settings_path=profile_path,
     )
 
 
@@ -92,7 +96,41 @@ def _profile_path(request: Any) -> str | None:
         return None
     if not getattr(settings, "default_profile_avatar_navigation", False):
         return None
-    return _route_path(request, PROFILE_EDIT_ROUTE_NAME)
+    profile_path = _route_path(request, PROFILE_EDIT_ROUTE_NAME)
+    if profile_path is None:
+        return None
+    return (
+        f"{profile_path}?"
+        f"{urlencode({'return_to': _profile_return_path(request, profile_path)})}"
+    )
+
+
+def _profile_return_path(request: Any, profile_path: str) -> str:
+    current_path = _current_path(request)
+    if current_path == profile_path or current_path.startswith(f"{profile_path}?"):
+        return _current_return_to(request) or "/"
+    return current_path
+
+
+def _current_return_to(request: Any) -> str | None:
+    url = getattr(request, "url", None)
+    query = getattr(url, "query", "")
+    if not isinstance(query, str) or not query:
+        return None
+    values = parse_qs(query, keep_blank_values=False).get("return_to", ())
+    value = values[0] if values else None
+    return value if isinstance(value, str) and value.startswith("/") else None
+
+
+def _current_path(request: Any) -> str:
+    url = getattr(request, "url", None)
+    path = getattr(url, "path", None)
+    query = getattr(url, "query", "")
+    if not isinstance(path, str) or not path.startswith("/"):
+        path = "/"
+    if isinstance(query, str) and query:
+        return f"{path}?{query}"
+    return path
 
 
 __all__ = (

@@ -12,41 +12,6 @@
     <dt>Active</dt>
     <dd>{{ "Yes" if user.is_active else "No" }}</dd>
   </dl>
-  {% if totp_enabled is defined and totp_enabled %}
-  <p><strong>TOTP mode:</strong> {{ totp_mode }}</p>
-  <dl>
-    <dt>Authenticator</dt>
-    <dd>{{ "Enabled" if totp_has_active_credential else "Not enabled" }}</dd>
-    {% if totp_has_pending_credential and not totp_has_active_credential %}
-    <dt>Pending setup</dt>
-    <dd>Waiting for confirmation</dd>
-    {% endif %}
-  </dl>
-  {% if user.is_verified and not totp_has_active_credential %}
-  <p>
-    <a href="{{ totp_setup_path }}">Set up authenticator</a>
-  </p>
-  {% elif not user.is_verified and not totp_has_active_credential %}
-  <p>Verify your email before enabling TOTP.</p>
-  {% elif totp_has_active_credential %}
-  <form action="{{ totp_disable_path }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-    <label>
-      Current password
-      <input autocomplete="current-password" name="password" required type="password">
-    </label>
-    <button type="submit">Disable authenticator</button>
-  </form>
-  <form action="{{ totp_reset_path }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-    <label>
-      Current password
-      <input autocomplete="current-password" name="password" required type="password">
-    </label>
-    <button type="submit">Reset authenticator</button>
-  </form>
-  {% endif %}
-  {% endif %}
   <form action="{{ request.url_for('auth:logout') }}" method="post">
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
     <button type="submit">Sign out</button>

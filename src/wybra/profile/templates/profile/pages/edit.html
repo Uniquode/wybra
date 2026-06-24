@@ -1,5 +1,11 @@
 {% extends "layouts/page.html" %}
 
+{% block styles %}
+{{ super() }}
+<link href="{{ asset_url('styles/forms.css') }}" rel="stylesheet">
+<link href="{{ asset_url('styles/profile.css') }}" rel="stylesheet">
+{% endblock %}
+
 {% block content %}
 <section class="surface-panel">
   <p class="eyebrow">Profile</p>
@@ -7,76 +13,59 @@
   {% if form_error %}
   <p role="alert">{{ form_error }}</p>
   {% endif %}
-  <form action="{{ request.url_for('profile:edit') }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-    {% if "preferred_name" in editable_fields %}
-    <label>
-      Preferred name
-      <input name="preferred_name" type="text" value="{{ field_values.preferred_name }}">
-    </label>
+  <form class="wybra-form" method="post" action="">
+    {{ render_csrf_field() }}
+    {% if "return_to" in profile_form.fields %}
+    {{ render_field(profile_form, "return_to") }}
     {% endif %}
-    {% if "display_name" in editable_fields %}
-    <label>
-      Display name
-      <input name="display_name" type="text" value="{{ field_values.display_name }}">
-    </label>
+    {% if "preferred_name" in profile_form.fields %}
+    {{ render_field(profile_form, "preferred_name") }}
     {% endif %}
-    {% if "pronouns" in editable_fields %}
-    <label>
-      Pronouns
-      <select name="pronoun_pair">
-        <option value="">Not set</option>
-        {% for option in profile_settings.pronoun_options %}
-        <option value="{{ option.value }}" {% if field_values.pronoun_pair == option.value %}selected{% endif %}>{{ option.label }}</option>
-        {% endfor %}
-      </select>
-    </label>
+    {% if "display_name" in profile_form.fields %}
+    {{ render_field(profile_form, "display_name") }}
     {% endif %}
-    {% if "profile_links" in editable_fields %}
-    <label>
-      Website
-      <input name="profile_link_website" type="url" value="{{ field_values.profile_link_website }}">
-    </label>
+    {% if "pronoun_pair" in profile_form.fields %}
+    {{ render_field(profile_form, "pronoun_pair") }}
     {% endif %}
-    {% if "bio" in editable_fields %}
-    <label>
-      Bio
-      <textarea maxlength="1024" name="bio">{{ field_values.bio }}</textarea>
-    </label>
+    {% if "profile_link_website" in profile_form.fields %}
+    {{ render_field(profile_form, "profile_link_website") }}
     {% endif %}
-    {% if "phone_contacts" in editable_fields %}
-    <fieldset>
-      <legend>Phone contact</legend>
-      <label>
-        Country
-        <select name="phone_country_code">
-          <option value="">Select country</option>
-          {% for country in country_choices %}
-          <option value="{{ country.code }}">{{ country.flag }} {{ country.name }} {{ country.dial_prefix }}</option>
+    {% if "bio" in profile_form.fields %}
+    {{ render_field(profile_form, "bio") }}
+    {% endif %}
+    {% if "phone_country_code" in profile_form.fields or "phone_number" in profile_form.fields %}
+    <section class="wybra-form-section">
+      <h2>Phone contact</h2>
+      {% if "phone_country_code" in profile_form.fields %}
+      {% set country_field = profile_form.fields.get("phone_country_code") %}
+      <div class="wybra-form-field{% if country_field.errors %} wybra-form-field--error{% endif %}">
+        <label class="wybra-form-label" for="phone_country_code">{{ country_field.label }}</label>
+        <select
+          class="wybra-form-control"
+          id="phone_country_code"
+          name="phone_country_code"
+          hx-get="{{ phone_prefix_path }}"
+          hx-target="#profile-phone-fields"
+          hx-trigger="change"
+          hx-include="this"
+          hx-swap="outerHTML"
+          {% if country_field.errors %}aria-invalid="true" aria-describedby="phone_country_code_errors"{% endif %}
+        >
+          <option value=""></option>
+          {% for option in country_field.options() %}
+          <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
           {% endfor %}
         </select>
-      </label>
-      <label>
-        State or region
-        <input name="phone_subdivision_code" type="text">
-      </label>
-      <label>
-        Phone number
-        <input autocomplete="tel" name="phone_number" type="tel">
-      </label>
-      {% if phone_contacts %}
-      <ul>
-        {% for contact in phone_contacts %}
-        <li>
-          {{ contact.normalised_number }}
-          {% if contact.verified_at %}verified{% else %}unverified{% endif %}
-        </li>
-        {% endfor %}
-      </ul>
+        {% set field = country_field %}
+        {% include "forms/widgets/_field_errors.html" %}
+      </div>
       {% endif %}
-    </fieldset>
+      {% include "profile/components/phone_fields.html" %}
+    </section>
     {% endif %}
-    <button type="submit">Save profile</button>
+    <div class="wybra-form-actions">
+      <button class="wybra-form-action wybra-form-action--submit" type="submit">Submit</button>
+    </div>
   </form>
 </section>
 {% endblock %}

@@ -1,0 +1,33 @@
+<div id="profile-phone-fields">
+  {% if "phone_subdivision_code" in profile_form.fields %}
+  {{ render_field(profile_form, "phone_subdivision_code") }}
+  {% endif %}
+  {% if "phone_number" in profile_form.fields %}
+  {% set phone_field = profile_form.fields.get("phone_number") %}
+  <div class="wybra-form-field{% if phone_field.errors %} wybra-form-field--error{% endif %}{% if phone_field.disabled %} wybra-form-field--disabled{% endif %}">
+    <label class="wybra-form-label" for="phone_number">{{ phone_field.label }}</label>
+    <div class="wybra-profile-phone-control">
+      <span
+        class="wybra-profile-phone-prefix"
+        id="phone-dial-prefix"
+      >{{ phone_prefix }}</span>
+      <input
+        class="wybra-form-control"
+        id="phone_number"
+        name="phone_number"
+        type="text"
+        value="{{ phone_field.value or '' }}"
+        {% if phone_field.disabled %}disabled{% endif %}
+        {% if phone_field.errors %}aria-invalid="true" aria-describedby="phone_number_errors"{% endif %}
+      >
+    </div>
+    {% if phone_contact_status %}
+    <p class="wybra-profile-phone-contact-inline-status">
+      <span class="wybra-profile-phone-contact-status{% if phone_contact_status == 'Verified' %} wybra-profile-phone-contact-status--verified{% else %} wybra-profile-phone-contact-status--unverified{% endif %}">{{ phone_contact_status }}</span>
+    </p>
+    {% endif %}
+    {% set field = phone_field %}
+    {% include "forms/widgets/_field_errors.html" %}
+  </div>
+  {% endif %}
+</div>

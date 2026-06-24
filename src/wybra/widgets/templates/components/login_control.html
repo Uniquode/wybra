@@ -18,12 +18,29 @@
 {% if route_name != "auth:login" %}
 {% if login_widget.authenticated %}
 <div class="login-widget login-widget--authenticated" aria-label="Account controls">
-  {% if login_widget.profile_path %}
-  <a class="login-widget__avatar-link" href="{{ login_widget.profile_path }}" aria-label="Edit profile">{{ avatar(login_widget) }}</a>
-  {% else %}
-  {{ avatar(login_widget) }}
+  {% if login_widget.settings_path %}
+  <a
+    class="login-widget__icon-action web-responsive-compact-centre"
+    href="{{ login_widget.settings_path }}"
+    aria-label="Settings"
+  >
+    <svg
+      class="login-widget__icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.75"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M9.7 2.8 9.2 5a7.9 7.9 0 0 0-1.8 1L5.3 5.3 3.1 8.9l1.6 1.5a7.4 7.4 0 0 0 0 2.2L3.1 14.1l2.2 3.6 2.1-.7a7.9 7.9 0 0 0 1.8 1l.5 2.2h4.6l.5-2.2a7.9 7.9 0 0 0 1.8-1l2.1.7 2.2-3.6-1.6-1.5a7.4 7.4 0 0 0 0-2.2l1.6-1.5-2.2-3.6-2.1.7a7.9 7.9 0 0 0-1.8-1l-.5-2.2Z" />
+      <circle cx="12" cy="12" r="3.2" />
+    </svg>
+  </a>
   {% endif %}
   <a class="login-widget__action web-responsive-compact-centre" href="{{ login_widget.logout_path }}">Logout</a>
+  {{ avatar(login_widget) }}
 </div>
 {% else %}
 <div class="login-widget login-widget--anonymous" aria-label="Account controls">

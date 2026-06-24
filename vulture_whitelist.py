@@ -192,6 +192,8 @@ _.pronouns
 _.phone_number
 _.website_links
 _.country_region
+_.profile_link_website
+_.phone_subdivision_code
 _.city
 _.postal_code
 _.job_title
@@ -217,6 +219,7 @@ _.max_length
 _.pronoun_options
 _.website
 _.model
+_.settings_path
 _.dispatch
 _.filename
 _.exception_message

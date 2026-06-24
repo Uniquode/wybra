@@ -18,7 +18,6 @@ from wybra.auth.mfa.challenges import (
     AuthenticationMethod,
     required_authentication_methods_for_totp_policy,
 )
-from wybra.auth.mfa.recovery import RECOVERY_CODE_LENGTH
 from wybra.auth.mfa.storage import (
     TOTP_ACTIVE_STATUS,
     ChallengeRecord,
@@ -51,19 +50,21 @@ TOTP_LOGIN_FORM_ERROR_BY_MESSAGE: Final[dict[str, str]] = {
     ERROR_TOTP_CODE_REQUIRED: "Two-factor verification failed.",
     ERROR_TOTP_INVALID: "Two-factor verification failed.",
     ERROR_TOTP_RECOVERY_INVALID: "Two-factor verification failed.",
-    ERROR_TOTP_SETUP_REQUIRED: "Complete TOTP setup to continue.",
+    ERROR_TOTP_SETUP_REQUIRED: "Complete authenticator setup to continue.",
     ERROR_VERIFICATION_CODE_INVALID: "Two-factor verification failed.",
 }
 TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE: Final[dict[str, str]] = {
-    ERROR_TOTP_CODE_REQUIRED: "Enter a TOTP or recovery code.",
+    ERROR_TOTP_CODE_REQUIRED: (
+        "Enter the code from your authenticator app or a one-time use recovery code."
+    ),
     ERROR_TOTP_INVALID: "Verification code is invalid.",
     ERROR_TOTP_RECOVERY_INVALID: "Verification code is invalid.",
     ERROR_TOTP_SETUP_REQUIRED: (
-        "Set up TOTP before continuing, or choose to bypass this step."
+        "Set up an authenticator before continuing, or choose to bypass this step."
     ),
     ERROR_VERIFICATION_CODE_INVALID: "Verification code is invalid.",
 }
-TOTP_CODE_REPLAY_MESSAGE: Final[str] = "TOTP code has already been used."
+TOTP_CODE_REPLAY_MESSAGE: Final[str] = "Authenticator code has already been used."
 TOTP_SETUP_PAGE_MESSAGES: Final[dict[str, str]] = {
     "complete": "Your authenticator has been enabled.",
     "store_recovery_codes": "Store these recovery codes in a secure location:",
@@ -75,12 +76,12 @@ TOTP_SETUP_PAGE_MESSAGES: Final[dict[str, str]] = {
     "setup_uri": "Setup URI:",
     "show_secret": "Show secret",
     "secret": "Secret:",
-    "verification_code": "Verification code",
+    "verification_code": "Authenticator code",
     "confirm_setup": "Confirm setup",
-    "verify_email": "Verify your email before setting up TOTP.",
-    "initialise_error": "Unable to initialise TOTP setup.",
+    "verify_email": "Verify your email before setting up an authenticator.",
+    "initialise_error": "Unable to initialise authenticator setup.",
     "code_required": "Enter a verification code.",
-    "invalid_code": "Invalid TOTP code.",
+    "invalid_code": "Invalid authenticator code.",
     "code_replay": TOTP_CODE_REPLAY_MESSAGE,
 }
 
@@ -196,7 +197,6 @@ def login_context(
         challenge_required=(challenge_step is not None),
         requires_email_password=requires_email_password,
         totp_code_length=DEFAULT_TOTP_DIGITS,
-        recovery_code_length=RECOVERY_CODE_LENGTH,
     )
 
 
