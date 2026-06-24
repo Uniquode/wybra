@@ -14,7 +14,7 @@
   <p role="alert">{{ form_error }}</p>
   {% endif %}
   <form class="wybra-form" method="post" action="">
-    {{ render_csrf_field() }}
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}" />
     {% if "return_to" in profile_form.fields %}
     {{ render_field(profile_form, "return_to") }}
     {% endif %}
