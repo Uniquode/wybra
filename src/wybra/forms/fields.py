@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -10,6 +11,13 @@ from typing import Any, Literal, Protocol, Self, runtime_checkable
 
 type UnknownFieldPolicy = Literal["ignore", "error"]
 type FormErrorKey = str | None
+
+MARKUP_ERROR = "Enter plain text without HTML or markup."
+UNSAFE_CONTROL_CHARACTER_ERROR = "Enter text without unsafe control characters."
+_MARKUP_PATTERN = re.compile(
+    r"<!--|--!?>|<![A-Za-z]|<\?|\?>|</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>"
+)
+_ALLOWED_CONTROL_CHARACTERS = {"\t", "\n", "\r"}
 
 
 @runtime_checkable
@@ -157,6 +165,10 @@ class TextField(Field):
 
     def to_python(self, raw_value: object) -> str:
         value = text_value(raw_value)
+        if has_unsafe_control_character(value):
+            raise ValueError(UNSAFE_CONTROL_CHARACTER_ERROR)
+        if not self.allow_html and has_markup(value):
+            raise ValueError(MARKUP_ERROR)
         max_length = getattr(self, "max_length", None)
         if isinstance(max_length, int) and len(value) > max_length:
             raise ValueError(f"Must be {max_length} characters or fewer.")
@@ -171,6 +183,7 @@ class TextField(Field):
         help_text: str | None = None,
         widget: str | None = None,
         max_length: int | None = None,
+        allow_html: bool = False,
     ) -> None:
         super().__init__(
             label=label,
@@ -180,6 +193,7 @@ class TextField(Field):
             widget=widget,
         )
         self.max_length = max_length
+        self.allow_html = allow_html
 
 
 class TextAreaField(TextField):
@@ -556,6 +570,18 @@ def text_value(raw_value: object) -> str:
     if raw_value is None:
         return ""
     return str(raw_value)
+
+
+def has_markup(value: str) -> bool:
+    return _MARKUP_PATTERN.search(value) is not None
+
+
+def has_unsafe_control_character(value: str) -> bool:
+    return any(
+        character not in _ALLOWED_CONTROL_CHARACTERS
+        and (ord(character) < 32 or 127 <= ord(character) <= 159)
+        for character in value
+    )
 
 
 def bool_value(raw_value: object) -> bool:
