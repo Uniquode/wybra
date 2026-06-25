@@ -224,6 +224,8 @@ _.dispatch
 _.filename
 _.exception_message
 _.traceback
+_.htmx
+_.normalised_phone_contact
 
 # Alembic revision module metadata.
 _.down_revision

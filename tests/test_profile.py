@@ -98,7 +98,7 @@ class ProfileTemplateStub:
         )
 
     def _render(self, template_name: str, context: dict[str, object]) -> str:
-        profile_form = context["profile_form"]
+        profile_form = context.get("profile_form") or context["form"]
         preferred_name = ""
         field_errors = ""
         phone_states = ""
@@ -757,7 +757,7 @@ def test_profile_edit_template_renders_declarative_form_fields() -> None:
     csrf = {"csrf_field_name": "csrf_token", "csrf_token": "token"}
     profile_form = ProfileEditForm(
         settings=ProfileSettings(),
-        values={"preferred_name": "David"},
+        values={"preferred_name": "David", "phone_country_code": "AU"},
     )
 
     html = templates.render_template(
@@ -771,8 +771,6 @@ def test_profile_edit_template_renders_declarative_form_fields() -> None:
             "page_title": "Edit profile",
             "phone_contact_status": "Not verified",
             "phone_contacts": (),
-            "phone_prefix": "🇦🇺 +61",
-            "phone_prefix_path": "/profile/phone-fields",
             "profile_form": profile_form,
             "profile_settings": ProfileSettings(),
             "route_name": "profile:edit",
@@ -782,7 +780,7 @@ def test_profile_edit_template_renders_declarative_form_fields() -> None:
 
     assert 'class="wybra-form"' in html
     assert "styles/forms.css" in html
-    assert "styles/profile.css" in html
+    assert "styles/profile.css" not in html
     assert 'method="post"' in html
     assert 'name="csrf_token"' in html
     assert 'name="preferred_name"' in html
@@ -790,13 +788,32 @@ def test_profile_edit_template_renders_declarative_form_fields() -> None:
     assert 'name="phone_country_code"' in html
     assert ">Australia<" in html
     assert "🇦🇺 Australia +61" not in html
-    assert 'class="wybra-profile-phone-control"' in html
-    assert 'id="phone-dial-prefix"' in html
+    assert 'class="wybra-phone-contact-control"' in html
+    assert 'id="phone_number_dial_prefix"' in html
     assert 'name="phone_subdivision_code"' in html
-    assert "disabled" in html
+    assert "disabled" not in html
     assert "🇦🇺 +61</span>" in html
     assert ">Not verified<" in html
     assert "Phone contacts" not in html
+
+
+def test_profile_edit_form_uses_phone_contact_control_for_normalisation() -> None:
+    form = ProfileEditForm(settings=ProfileSettings())
+
+    result = form.parse(
+        {
+            "phone_country_code": "AU",
+            "phone_subdivision_code": "AU-VIC",
+            "phone_number": "0412 345 678",
+        }
+    )
+
+    normalised = form.normalised_phone_contact()
+    assert result.is_valid
+    assert normalised is not None
+    assert normalised.country_code == "AU"
+    assert normalised.subdivision_code == "AU-VIC"
+    assert normalised.normalised_number == "+61412345678"
 
 
 @pytest.mark.anyio
@@ -808,10 +825,10 @@ async def test_profile_phone_fields_fragment_uses_selected_country(
     await _create_site_schema(site)
     client = TestClient(site.app)
 
-    response = client.get("/profile/phone-fields?phone_country_code=AU")
+    response = client.get("/phone-contact/fields?phone_country_code=AU")
 
     assert response.status_code == 200
-    assert "profile/components/phone_fields.html" in response.text
+    assert "forms/widgets/phone_contact_fields.html" in response.text
     assert "phone_prefix=🇦🇺 +61" in response.text
     assert "Victoria" in response.text
     assert "phone_disabled" not in response.text

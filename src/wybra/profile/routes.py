@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response
 
 from wybra.auth import login_required
 from wybra.db import DatabaseCapability
 from wybra.forms import (
     FormsCapability,
-    forms_rendering_context,
+    register_phone_contact_field_handlers,
     request_form_data,
     validate_csrf,
 )
@@ -17,9 +17,8 @@ from wybra.profile.capabilities import ProfileCapability
 from wybra.profile.exceptions import ProfileInputError
 from wybra.profile.forms import ProfileEditForm, profile_form_values
 from wybra.profile.models import UserPhoneContact
-from wybra.profile.phone import country_choices
 from wybra.profile.settings import ProfileSettings
-from wybra.profile.utils import normalise_form_text, normalise_return_to
+from wybra.profile.utils import normalise_return_to
 from wybra.site import get_site
 from wybra.template import TemplateCapability
 
@@ -129,10 +128,6 @@ async def edit_profile(
         "editable_fields": settings.editable_fields,
         "phone_contacts": phone_contacts,
         "phone_contact_status": _phone_contact_status(current_phone_contact),
-        "phone_prefix": _phone_prefix_for_country(
-            normalise_form_text(profile_form.values.get("phone_country_code"))
-        ),
-        "phone_prefix_path": str(request.url_for("profile:phone-fields")),
         "form_error": form_error,
     }
     return templates.render_page(
@@ -143,35 +138,28 @@ async def edit_profile(
     )
 
 
-@profile_router.get(
-    "/profile/phone-fields",
-    include_in_schema=False,
-    name="profile:phone-fields",
-)
-async def phone_fields(
-    request: Request,
-    user: Any = LOGIN_REQUIRED,
-) -> Response:
-    del user
-    country_code = request.query_params.get("phone_country_code")
+def _profile_phone_contact_form(request: Request) -> ProfileEditForm:
     site = get_site(request.app)
     settings = ProfileSettings.load_settings(site.config)
-    templates = site.require_capability(TemplateCapability)
-    profile_form = ProfileEditForm(
+    country_code = request.query_params.get(ProfileEditForm.phone_contact.country_field)
+    return ProfileEditForm(
         settings=settings,
         values={"phone_country_code": country_code or ""},
     )
-    return HTMLResponse(
-        templates.render_template(
-            "profile/components/phone_fields.html",
-            {
-                **forms_rendering_context(templates),
-                "phone_contact_status": None,
-                "phone_prefix": _phone_prefix_for_country(country_code),
-                "profile_form": profile_form,
-            },
-        )
-    )
+
+
+def _template_capability(request: Request) -> TemplateCapability:
+    return get_site(request.app).require_capability(TemplateCapability)
+
+
+register_phone_contact_field_handlers(
+    profile_router,
+    control=ProfileEditForm.phone_contact,
+    form_factory=_profile_phone_contact_form,
+    templates=_template_capability,
+    target_id="profile-phone-fields",
+    dependencies=(LOGIN_REQUIRED,),
+)
 
 
 module_routers = {"profile": profile_router}
@@ -201,16 +189,6 @@ def _form_value(form_data: Any, name: str, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
-def _phone_prefix_for_country(country_code: str | None) -> str:
-    if not country_code:
-        return ""
-    normalised_country_code = country_code.strip().upper()
-    for country in country_choices():
-        if country.code == normalised_country_code:
-            return f"{country.flag} {country.dial_prefix}".strip()
-    return ""
-
-
 def _current_phone_contact(
     phone_contacts: tuple[UserPhoneContact, ...],
 ) -> UserPhoneContact | None:
@@ -235,6 +213,5 @@ __all__ = (
     "PROFILE_EDIT_TEMPLATE",
     "edit_profile",
     "module_routers",
-    "phone_fields",
     "profile_router",
 )

@@ -203,6 +203,79 @@ field rendering uses the same widget/component templates and override
 semantics. Forms containing `FileUploadField` render with
 `multipart/form-data` by default.
 
+### Phone Contact Widgets
+
+Phone contact entry is a compound form concern: country, subdivision, and phone
+number are submitted as separate fields, but they must be rendered and validated
+together. Wybra's reusable phone contact widget is intended to make the common
+case painless while still allowing applications to apply their own business
+filters.
+
+The recommended application-facing shape is a phone contact control that
+sources countries and subdivisions from Wybra's standard country data, applies
+optional filters, validates submitted values against the filtered options, and
+normalises the phone number using the selected country:
+
+```python
+from wybra.forms import Form, PhoneContactControl, SelectField, TextField, field_handler
+
+
+def delivery_country_filter(country):
+    return country.code in {"AU", "NZ"}
+
+
+def delivery_subdivision_filter(subdivision, country):
+    return subdivision.code in allowed_delivery_subdivisions(country.code)
+
+
+class DeliveryAddressForm(Form):
+    delivery_country = SelectField(label="Country", required=False)
+    delivery_region = SelectField(label="State or region", required=False)
+    delivery_phone = TextField(label="Phone number", required=False)
+
+    phone_contact = PhoneContactControl(
+        country_field="delivery_country",
+        subdivision_field="delivery_region",
+        phone_field="delivery_phone",
+        handlers=(
+            field_handler(
+                "/phone-contact/fields",
+                name="phone-contact-fields",
+                methods={"GET"},
+            ),
+        ),
+        country_filter=delivery_country_filter,
+        subdivision_filter=delivery_subdivision_filter,
+    )
+```
+
+With no filters, the control should expose all supported countries and all
+subdivisions for the selected country. With filters, rendering and validation
+must agree: a country or subdivision omitted by the filter is not a valid
+submitted value. Phone number validation and normalisation are then performed
+against the validated country, without requiring the application to duplicate
+that logic.
+
+The field handler declares the HTMX fragment endpoint the control needs. The
+handler is metadata until the form is attached to a router/application; route
+registration applies the application's routing and security policy.
+
+Templates can render through the declared control:
+
+```jinja
+{{ render_phone_contact(
+  form,
+  control=form.phone_contact,
+  target_id="delivery-phone-fields"
+) }}
+```
+
+The widget owns the coordinated rendering, country-change refresh hook, prefix
+display, disabled state, and field error placement. Applications own business
+filters and persistence. Verification ceremonies, such as SMS, voice, or email
+fallback verification, are capability-owned workflows layered on top of the
+validated and normalised phone contact.
+
 ## Project Commands
 
 Wybra publishes prefixed console scripts to avoid collisions with host

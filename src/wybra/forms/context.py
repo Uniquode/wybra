@@ -17,7 +17,7 @@ def forms_context(request: Request, context: TemplateContext) -> TemplateContext
     csrf = capability.token_context(request)
     templates = request.app.state.site.require_capability(TemplateCapability)
     return context.with_layer(csrf).with_layer(
-        forms_rendering_context(templates, csrf),
+        forms_rendering_context(templates, csrf, url_context=request),
     )
 
 

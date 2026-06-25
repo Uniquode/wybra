@@ -3,7 +3,6 @@
 {% block styles %}
 {{ super() }}
 <link href="{{ asset_url('styles/forms.css') }}" rel="stylesheet">
-<link href="{{ asset_url('styles/profile.css') }}" rel="stylesheet">
 {% endblock %}
 
 {% block content %}
@@ -34,34 +33,12 @@
     {{ render_field(profile_form, "bio") }}
     {% endif %}
     {% if "phone_country_code" in profile_form.fields or "phone_number" in profile_form.fields %}
-    <section class="wybra-form-section">
-      <h2>Phone contact</h2>
-      {% if "phone_country_code" in profile_form.fields %}
-      {% set country_field = profile_form.fields.get("phone_country_code") %}
-      <div class="wybra-form-field{% if country_field.errors %} wybra-form-field--error{% endif %}">
-        <label class="wybra-form-label" for="phone_country_code">{{ country_field.label }}</label>
-        <select
-          class="wybra-form-control"
-          id="phone_country_code"
-          name="phone_country_code"
-          hx-get="{{ phone_prefix_path }}"
-          hx-target="#profile-phone-fields"
-          hx-trigger="change"
-          hx-include="this"
-          hx-swap="outerHTML"
-          {% if country_field.errors %}aria-invalid="true" aria-describedby="phone_country_code_errors"{% endif %}
-        >
-          <option value=""></option>
-          {% for option in country_field.options() %}
-          <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
-          {% endfor %}
-        </select>
-        {% set field = country_field %}
-        {% include "forms/widgets/_field_errors.html" %}
-      </div>
-      {% endif %}
-      {% include "profile/components/phone_fields.html" %}
-    </section>
+    {{ render_phone_contact(
+      profile_form,
+      control=profile_form.phone_contact,
+      phone_contact_status=phone_contact_status,
+      target_id="profile-phone-fields"
+    ) }}
     {% endif %}
     <div class="wybra-form-actions">
       <button class="wybra-form-action wybra-form-action--submit" type="submit">Submit</button>

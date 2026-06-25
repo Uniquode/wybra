@@ -6,18 +6,17 @@ from wybra.forms import (
     Form,
     FormResult,
     HiddenField,
+    NormalisedPhoneContact,
+    PhoneContactControl,
+    PhoneContactValidation,
     SelectField,
     TextAreaField,
     TextField,
+    field_handler,
 )
 from wybra.profile.editing import PROFILE_BIO_MAX_LENGTH
 from wybra.profile.exceptions import ProfileInputError
 from wybra.profile.models import UserProfile
-from wybra.profile.phone import (
-    country_choices,
-    normalise_phone_contact,
-    subdivision_choices,
-)
 from wybra.profile.settings import (
     BIO_FIELD,
     DISPLAY_NAME_FIELD,
@@ -80,6 +79,18 @@ class ProfileEditForm(Form):
         label="Phone number",
         required=False,
     )
+    phone_contact = PhoneContactControl(
+        country_field="phone_country_code",
+        subdivision_field="phone_subdivision_code",
+        phone_field="phone_number",
+        handlers=(
+            field_handler(
+                "/phone-contact/fields",
+                name="phone-contact-fields",
+                methods={"GET"},
+            ),
+        ),
+    )
 
     def __init__(
         self,
@@ -89,6 +100,7 @@ class ProfileEditForm(Form):
     ) -> None:
         self.settings = settings
         self._profile_field_data: dict[str, object] = {}
+        self._phone_contact_validation: PhoneContactValidation | None = None
         form_values = values or {}
         phone_country_code = normalise_form_text(form_values.get("phone_country_code"))
         super().__init__(
@@ -97,14 +109,14 @@ class ProfileEditForm(Form):
                 "pronoun_pair": {
                     option.value: option.label for option in settings.pronoun_options
                 },
-                "phone_country_code": {
-                    country.code: country.name for country in country_choices()
-                },
-                "phone_subdivision_code": _subdivision_options(phone_country_code),
+                "phone_country_code": self.phone_contact.country_options(),
+                "phone_subdivision_code": (
+                    self.phone_contact.subdivision_options(phone_country_code)
+                ),
             },
         )
         self._apply_editability()
-        self._apply_phone_country_state(phone_country_code)
+        self.phone_contact.apply_state(self, phone_country_code)
 
     def validate(self, field_name: str | None = None) -> bool:
         base_result = super().validate(field_name)
@@ -129,12 +141,15 @@ class ProfileEditForm(Form):
                 local_result = self._validate_pronouns()
             case "profile_link_website":
                 local_result = self._validate_profile_link()
+            case "phone_country_code" | "phone_subdivision_code":
+                local_result = self._validate_phone_contact()
             case "phone_number":
                 local_result = self._validate_phone_contact()
         return base_result and local_result
 
     def parse(self, data: Mapping[str, object]) -> FormResult:
         self._profile_field_data = {}
+        self._phone_contact_validation = None
         self._apply_phone_country_options(
             normalise_form_text(data.get("phone_country_code"))
         )
@@ -156,6 +171,11 @@ class ProfileEditForm(Form):
             ),
         }
 
+    def normalised_phone_contact(self) -> NormalisedPhoneContact | None:
+        """Return the normalised phone contact after parse/validation succeeds."""
+        validation = self._phone_contact_validation
+        return validation.normalised if validation is not None else None
+
     def _apply_editability(self) -> None:
         editable_fields = set(self.settings.editable_fields)
         for profile_field, form_fields in PROFILE_FORM_FIELD_MAP.items():
@@ -167,17 +187,11 @@ class ProfileEditForm(Form):
                     self.field_results.pop(form_field, None)
         self._result = FormResult(fields=self.field_results)
 
-    def _apply_phone_country_state(self, country_code: str | None) -> None:
-        country_selected = _is_country_choice(country_code)
-        for form_field in ("phone_subdivision_code", "phone_number"):
-            if form_field in self.fields:
-                self.fields[form_field].disabled = not country_selected
-
     def _apply_phone_country_options(self, country_code: str | None) -> None:
         field = self.fields.get("phone_subdivision_code")
         if isinstance(field, SelectField):
-            field.choices = dict(_subdivision_options(country_code))
-        self._apply_phone_country_state(country_code)
+            field.choices = dict(self.phone_contact.subdivision_options(country_code))
+        self.phone_contact.apply_state(self, country_code)
 
     def _validate_text_profile_field(
         self,
@@ -246,19 +260,8 @@ class ProfileEditForm(Form):
         return True
 
     def _validate_phone_contact(self) -> bool:
-        if not self.has_phone_contact_data():
-            return True
-        phone_contact = self.phone_contact_data()
-        try:
-            normalise_phone_contact(
-                phone_contact["number"] or "",
-                country_code=phone_contact["country_code"],
-                subdivision_code=phone_contact["subdivision_code"],
-            )
-        except ProfileInputError as exc:
-            self.add_error(_phone_error_field(str(exc)), str(exc))
-            return False
-        return True
+        self._phone_contact_validation = self.phone_contact.validate(self)
+        return self._phone_contact_validation.is_valid
 
     def _pronouns_data(self) -> dict[str, str] | None:
         result = self.field_results.get("pronoun_pair")
@@ -299,31 +302,6 @@ def _profile_pronoun_pair(pronouns: Mapping[str, object]) -> str:
     if isinstance(direct, str) and isinstance(possessive, str):
         return f"{direct}|{possessive}"
     return ""
-
-
-def _is_country_choice(country_code: str | None) -> bool:
-    if country_code is None:
-        return False
-    normalised_country_code = country_code.strip().upper()
-    return any(country.code == normalised_country_code for country in country_choices())
-
-
-def _subdivision_options(country_code: str | None) -> Mapping[str, str]:
-    if not _is_country_choice(country_code):
-        return {}
-    return {
-        subdivision.code: subdivision.name
-        for subdivision in subdivision_choices(country_code or "")
-    }
-
-
-def _phone_error_field(message: str) -> str:
-    lower_message = message.casefold()
-    if "country" in lower_message:
-        return "phone_country_code"
-    if "subdivision" in lower_message or "state or region" in lower_message:
-        return "phone_subdivision_code"
-    return "phone_number"
 
 
 __all__ = ("ProfileEditForm", "profile_form_values")

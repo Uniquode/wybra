@@ -1,0 +1,29 @@
+<section class="wybra-form-section wybra-phone-contact">
+  <h2>Phone contact</h2>
+  {% if country_field in form.fields %}
+  {% set country = form.fields.get(country_field) %}
+  <div class="wybra-form-field{% if country.errors %} wybra-form-field--error{% endif %}{% if country.required %} wybra-form-field--required{% endif %}{% if country.disabled %} wybra-form-field--disabled{% endif %}">
+    <label class="wybra-form-label" for="{{ country.name }}">{{ country.label }}</label>
+    <select
+      class="wybra-form-control"
+      id="{{ country.name }}"
+      name="{{ country.name }}"
+      {% if dependent_url %}hx-get="{{ dependent_url }}" hx-target="#{{ target_id }}" hx-trigger="change" hx-include="this" hx-swap="outerHTML"{% endif %}
+      {% if country.required %}required{% endif %}
+      {% if country.disabled %}disabled{% endif %}
+      {% if country.errors %}aria-invalid="true" aria-describedby="{{ country.name }}_errors"{% endif %}
+    >
+      {% if not country.required %}
+        <option value=""></option>
+      {% endif %}
+      {% for option in country.options() %}
+        <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+    {% set field = country %}
+    {% include "forms/widgets/_help.html" %}
+    {% include "forms/widgets/_field_errors.html" %}
+  </div>
+  {% endif %}
+  {% include "forms/widgets/phone_contact_fields.html" %}
+</section>
