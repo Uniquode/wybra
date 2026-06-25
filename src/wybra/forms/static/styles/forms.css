@@ -55,3 +55,56 @@
   flex-wrap: wrap;
   gap: 0.5rem;
 }
+
+.wybra-phone-contact-fields {
+  display: grid;
+  gap: 1rem;
+}
+
+.wybra-phone-contact-control {
+  align-items: stretch;
+  column-gap: 0.5rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  width: 100%;
+}
+
+.wybra-phone-contact-prefix {
+  align-items: center;
+  border-right: 1px solid currentColor;
+  display: inline-flex;
+  min-width: 0;
+  opacity: 0.75;
+  padding: 0 0.75rem;
+  white-space: nowrap;
+}
+
+.wybra-phone-contact-prefix.is-empty {
+  display: none;
+}
+
+.wybra-phone-contact-control .wybra-form-control {
+  margin: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.wybra-phone-contact-inline-status {
+  margin: 0.5rem 0 0;
+}
+
+.wybra-phone-contact-status {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+}
+
+.wybra-phone-contact-status--verified {
+  color: #027a48;
+}
+
+.wybra-phone-contact-status--unverified {
+  color: #b42318;
+}

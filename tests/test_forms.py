@@ -19,6 +19,7 @@ from wybra.forms import (
     ChoiceField,
     DateField,
     DateTimeField,
+    FieldHandler,
     FieldResult,
     FileUploadField,
     Form,
@@ -26,6 +27,9 @@ from wybra.forms import (
     FormsSettings,
     HiddenField,
     MultiSelectField,
+    PhoneContactControl,
+    PhoneContactError,
+    PhoneContactWidgetError,
     PositiveIntegerField,
     RadioField,
     SelectField,
@@ -38,10 +42,16 @@ from wybra.forms import (
     UnknownInitialFieldError,
     UnknownWidgetError,
     csrf_exempt,
+    field_handler,
+    form_control,
     forms_rendering_context,
+    normalise_phone_contact,
+    register_phone_contact_field_handlers,
     render_csrf_field,
     render_field,
     render_form,
+    render_phone_contact,
+    render_phone_contact_fields,
     request_csrf_response_finalisation,
     request_form_data,
     validate_csrf,
@@ -61,6 +71,7 @@ PRONOUN_CHOICES = {
 COUNTRY_OPTIONS = {"AU": "Australia", "NZ": "New Zealand"}
 CONTACT_METHOD_OPTIONS = {"email": "Email", "sms": "SMS"}
 INTEREST_OPTIONS = {"forms": "Forms", "auth": "Auth"}
+SUBDIVISION_OPTIONS = {"NSW": "New South Wales", "VIC": "Victoria"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +122,24 @@ class ExampleForm(Form):
     priority = SliderField(min_value=1, max_value=5, required=False)
     attachment = FileUploadField(required=False)
     csrf_token = HiddenField(required=False)
+
+
+class PhoneContactForm(Form):
+    country = SelectField(required=False)
+    region = SelectField(label="State or region", required=False)
+    mobile = TextField(label="Phone number", required=False)
+    phone_contact = PhoneContactControl(
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+        handlers=(
+            field_handler(
+                "/phone-contact/fields",
+                name="phone-contact-fields",
+                methods={"GET"},
+            ),
+        ),
+    )
 
 
 def _forms_templates() -> DefaultTemplateCapability:
@@ -817,6 +846,458 @@ def test_template_rendering_helpers_return_safe_html() -> None:
     assert 'value="secure-token"' in csrf_html
 
 
+def test_phone_contact_renderer_outputs_mapped_fields_and_state() -> None:
+    form = PhoneContactForm(
+        options={
+            "country": COUNTRY_OPTIONS,
+            "region": SUBDIVISION_OPTIONS,
+        },
+        values={"country": "AU", "region": "VIC", "mobile": "0412345678"},
+    )
+    form.parse({"country": "AU", "region": "VIC", "mobile": "<script>"})
+    renderer = TemplateFormRenderer(_forms_templates())
+
+    html = renderer.render_phone_contact(
+        form,
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+        dependent_url="/phone-fields",
+        phone_prefix="🇦🇺 +61",
+        phone_contact_status="Not verified",
+        target_id="account-phone-fields",
+    )
+
+    assert 'class="wybra-form-section wybra-phone-contact"' in html
+    assert 'name="country"' in html
+    assert 'value="AU" selected' in html
+    assert 'hx-get="/phone-fields"' in html
+    assert 'hx-target="#account-phone-fields"' in html
+    assert 'name="region"' in html
+    assert ">Victoria<" in html
+    assert 'name="mobile"' in html
+    assert "Enter plain text without HTML or markup." in html
+    assert "🇦🇺 +61</span>" in html
+    assert ">Not verified<" in html
+
+
+def test_phone_contact_fragment_preserves_disabled_fields_and_mapped_names() -> None:
+    form = PhoneContactForm(
+        options={"region": SUBDIVISION_OPTIONS},
+        values={"mobile": "0412345678"},
+    )
+    form.fields["region"].disabled = True
+    form.fields["mobile"].disabled = True
+    renderer = TemplateFormRenderer(_forms_templates())
+
+    html = renderer.render_phone_contact_fields(
+        form,
+        subdivision_field="region",
+        phone_field="mobile",
+        phone_prefix="🇦🇺 +61",
+        target_id="account-phone-fields",
+    )
+
+    assert 'id="account-phone-fields"' in html
+    assert 'name="region"' in html
+    assert 'name="mobile"' in html
+    assert html.count("disabled") >= 2
+    assert "0412345678" in html
+    assert "🇦🇺 +61</span>" in html
+
+
+def test_phone_contact_rendering_helpers_return_safe_html() -> None:
+    templates = _forms_templates()
+    form = PhoneContactForm(options={"country": COUNTRY_OPTIONS})
+
+    widget_html = render_phone_contact(
+        templates,
+        form,
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+    )
+    fragment_html = render_phone_contact_fields(
+        templates,
+        form,
+        subdivision_field="region",
+        phone_field="mobile",
+    )
+
+    assert 'class="wybra-form-section wybra-phone-contact"' in widget_html
+    assert 'class="wybra-phone-contact-fields"' in fragment_html
+
+
+def test_phone_contact_renderer_rejects_unknown_field_mapping() -> None:
+    renderer = TemplateFormRenderer(_forms_templates())
+    form = PhoneContactForm()
+
+    with pytest.raises(
+        PhoneContactWidgetError,
+        match="country_field='missing_country'",
+    ):
+        renderer.render_phone_contact(
+            form,
+            country_field="missing_country",
+            subdivision_field="region",
+            phone_field="mobile",
+        )
+
+
+def test_phone_contact_fragment_rejects_unknown_field_mapping() -> None:
+    renderer = TemplateFormRenderer(_forms_templates())
+    form = PhoneContactForm()
+
+    with pytest.raises(PhoneContactWidgetError, match="phone_field='missing_mobile'"):
+        renderer.render_phone_contact_fields(
+            form,
+            subdivision_field="region",
+            phone_field="missing_mobile",
+        )
+
+
+def test_phone_contact_renderer_rejects_wrong_field_type() -> None:
+    class WrongPhoneContactForm(Form):
+        country = TextField(required=False)
+        region = SelectField(required=False)
+        mobile = TextField(required=False)
+
+    renderer = TemplateFormRenderer(_forms_templates())
+
+    with pytest.raises(PhoneContactWidgetError, match="country.*SelectField"):
+        renderer.render_phone_contact(
+            WrongPhoneContactForm(),
+            country_field="country",
+            subdivision_field="region",
+            phone_field="mobile",
+        )
+
+
+def test_phone_contact_prefix_uses_template_driven_empty_class() -> None:
+    renderer = TemplateFormRenderer(_forms_templates())
+    form = PhoneContactForm()
+
+    html = renderer.render_phone_contact_fields(
+        form,
+        subdivision_field="region",
+        phone_field="mobile",
+        phone_prefix="  ",
+    )
+
+    assert 'class="wybra-phone-contact-prefix is-empty"' in html
+    assert 'id="mobile_dial_prefix"' in html
+
+
+def test_phone_contact_control_sources_unfiltered_options() -> None:
+    control = PhoneContactControl(
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+    )
+
+    country_options = control.country_options()
+    subdivision_options = control.subdivision_options("AU")
+
+    assert country_options["AU"] == "Australia"
+    assert country_options["NZ"] == "New Zealand"
+    assert subdivision_options["AU-VIC"] == "Victoria"
+
+
+def test_phone_contact_control_filters_options_and_rejects_filtered_country() -> None:
+    control = PhoneContactControl(
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+        country_filter=lambda country: country.code == "AU",
+    )
+    form = PhoneContactForm(
+        options={
+            "country": control.country_options(),
+            "region": control.subdivision_options("NZ"),
+        },
+    )
+    form.parse({"country": "NZ", "mobile": "+64211234567"})
+
+    validation = control.validate(form)
+
+    assert control.country_options() == {"AU": "Australia"}
+    assert not validation.is_valid
+    assert "country" in form.errors
+    assert "Choose a valid country." in form.errors["country"]
+
+
+def test_phone_contact_control_filters_and_rejects_filtered_subdivision() -> None:
+    control = PhoneContactControl(
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+        subdivision_filter=lambda subdivision, _country: subdivision.code == "AU-VIC",
+    )
+    form = PhoneContactForm(
+        options={
+            "country": control.country_options(),
+            "region": control.subdivision_options("AU"),
+        },
+    )
+    control.apply_state(form, "AU")
+    form.parse({"country": "AU", "region": "AU-NSW", "mobile": "0412 345 678"})
+
+    validation = control.validate(form)
+
+    assert control.subdivision_options("AU") == {"AU-VIC": "Victoria"}
+    assert not validation.is_valid
+    assert "region" in form.errors
+
+
+def test_phone_contact_control_validates_and_normalises_phone_number() -> None:
+    control = PhoneContactControl(
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+    )
+    form = PhoneContactForm(
+        options={
+            "country": control.country_options(),
+            "region": control.subdivision_options("AU"),
+        },
+    )
+    control.apply_state(form, "AU")
+    form.parse({"country": "AU", "region": "AU-VIC", "mobile": "0412 345 678"})
+
+    validation = control.validate(form)
+
+    assert validation.is_valid
+    assert validation.normalised is not None
+    assert validation.normalised.country_code == "AU"
+    assert validation.normalised.subdivision_code == "AU-VIC"
+    assert validation.normalised.normalised_number == "+61412345678"
+    assert (
+        normalise_phone_contact(
+            "0412 345 678",
+            country_code="AU",
+        ).normalised_number
+        == "+61412345678"
+    )
+
+
+def test_phone_contact_control_rejects_invalid_phone_number() -> None:
+    control = PhoneContactControl(
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+    )
+    form = PhoneContactForm(
+        options={
+            "country": control.country_options(),
+            "region": control.subdivision_options("AU"),
+        },
+    )
+    control.apply_state(form, "AU")
+    form.parse({"country": "AU", "region": "AU-VIC", "mobile": "not a phone"})
+
+    validation = control.validate(form)
+
+    assert not validation.is_valid
+    assert form.errors["mobile"] == ["Phone contact number is invalid."]
+
+
+def test_phone_contact_control_declares_default_htmx_field_handler() -> None:
+    handler = PhoneContactForm.phone_contact.dependent_fields_handler()
+
+    assert isinstance(handler, FieldHandler)
+    assert handler.path == "/phone-contact/fields"
+    assert handler.name == "phone-contact-fields"
+    assert handler.methods == frozenset({"GET"})
+    assert handler.htmx is True
+    assert handler.include_in_schema is False
+
+
+def test_phone_contact_control_rejects_empty_handler_tuple() -> None:
+    with pytest.raises(
+        PhoneContactError,
+        match="requires at least one field handler",
+    ):
+        PhoneContactControl(
+            country_field="country",
+            subdivision_field="region",
+            phone_field="mobile",
+            handlers=(),
+        )
+
+
+def test_form_control_discovers_declared_phone_contact_control() -> None:
+    assert (
+        form_control(PhoneContactForm, "phone_contact")
+        is PhoneContactForm.phone_contact
+    )
+
+
+def test_phone_contact_handler_declaration_does_not_register_routes() -> None:
+    app = FastAPI()
+
+    PhoneContactForm().parse({"country": "AU"})
+
+    assert [route.path for route in app.routes] == [
+        "/openapi.json",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
+    ]
+
+
+def test_phone_contact_field_handler_registers_htmx_fragment_route() -> None:
+    router = APIRouter()
+
+    register_phone_contact_field_handlers(
+        router,
+        control=PhoneContactForm.phone_contact,
+        form_factory=lambda request: PhoneContactForm(
+            options={
+                "country": PhoneContactForm.phone_contact.country_options(),
+                "region": PhoneContactForm.phone_contact.subdivision_options(
+                    request.query_params.get("country")
+                ),
+            },
+            values={"country": request.query_params.get("country") or ""},
+        ),
+        templates=lambda _request: _forms_templates(),
+        target_id="test-phone-fields",
+    )
+    app = FastAPI()
+    app.include_router(router)
+    route = router.routes[0]
+
+    response = TestClient(app).get(
+        "/phone-contact/fields?country=AU",
+        headers={"HX-Request": "true"},
+    )
+
+    assert getattr(route, "include_in_schema", True) is False
+    assert "GET" in getattr(route, "methods", set())
+    assert response.status_code == 200
+    assert 'id="test-phone-fields"' in response.text
+    assert "Victoria" in response.text
+    assert "🇦🇺 +61" in response.text
+
+
+def test_phone_contact_field_handler_rejects_non_htmx_request() -> None:
+    router = APIRouter()
+    register_phone_contact_field_handlers(
+        router,
+        control=PhoneContactForm.phone_contact,
+        form_factory=lambda _request: PhoneContactForm(),
+        templates=lambda _request: _forms_templates(),
+    )
+    app = FastAPI()
+    app.include_router(router)
+
+    response = TestClient(app).get("/phone-contact/fields?country=AU")
+
+    assert response.status_code == 404
+
+
+def test_phone_contact_renderer_resolves_control_handler_url() -> None:
+    router = APIRouter()
+
+    register_phone_contact_field_handlers(
+        router,
+        control=PhoneContactForm.phone_contact,
+        form_factory=lambda _request: PhoneContactForm(),
+        templates=lambda _request: _forms_templates(),
+    )
+
+    @router.get("/form")
+    async def form_view(request: Request) -> PlainTextResponse:
+        form = PhoneContactForm(
+            options={
+                "country": PhoneContactForm.phone_contact.country_options(),
+            },
+        )
+        html = TemplateFormRenderer(
+            _forms_templates(),
+            url_context=request,
+        ).render_phone_contact(form, control=PhoneContactForm.phone_contact)
+        return PlainTextResponse(str(html))
+
+    app = FastAPI()
+    app.include_router(router)
+
+    response = TestClient(app).get("/form")
+
+    assert response.status_code == 200
+    assert 'hx-get="http://testserver/phone-contact/fields"' in response.text
+
+
+def test_phone_contact_renderer_scopes_duplicate_control_handler_names() -> None:
+    class BillingPhoneContactForm(Form):
+        billing_country = SelectField(required=False)
+        billing_region = SelectField(label="State or region", required=False)
+        billing_mobile = TextField(label="Phone number", required=False)
+        phone_contact = PhoneContactControl(
+            country_field="billing_country",
+            subdivision_field="billing_region",
+            phone_field="billing_mobile",
+            handlers=(
+                field_handler(
+                    "/billing-phone-contact/fields",
+                    name="phone-contact-fields",
+                    methods={"GET"},
+                ),
+            ),
+        )
+
+    router = APIRouter()
+    register_phone_contact_field_handlers(
+        router,
+        control=PhoneContactForm.phone_contact,
+        form_factory=lambda _request: PhoneContactForm(),
+        templates=lambda _request: _forms_templates(),
+    )
+    register_phone_contact_field_handlers(
+        router,
+        control=BillingPhoneContactForm.phone_contact,
+        form_factory=lambda _request: BillingPhoneContactForm(),
+        templates=lambda _request: _forms_templates(),
+    )
+
+    @router.get("/delivery")
+    async def delivery_view(request: Request) -> PlainTextResponse:
+        html = TemplateFormRenderer(
+            _forms_templates(),
+            url_context=request,
+        ).render_phone_contact(
+            PhoneContactForm(),
+            control=PhoneContactForm.phone_contact,
+        )
+        return PlainTextResponse(str(html))
+
+    @router.get("/billing")
+    async def billing_view(request: Request) -> PlainTextResponse:
+        html = TemplateFormRenderer(
+            _forms_templates(),
+            url_context=request,
+        ).render_phone_contact(
+            BillingPhoneContactForm(),
+            control=BillingPhoneContactForm.phone_contact,
+        )
+        return PlainTextResponse(str(html))
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    delivery_response = client.get("/delivery")
+    billing_response = client.get("/billing")
+
+    assert delivery_response.status_code == 200
+    assert billing_response.status_code == 200
+    assert 'hx-get="http://testserver/phone-contact/fields"' in delivery_response.text
+    assert (
+        'hx-get="http://testserver/billing-phone-contact/fields"'
+        in billing_response.text
+    )
+
+
 def test_forms_rendering_context_rejects_incomplete_csrf_context() -> None:
     with pytest.raises(ValueError, match="csrf_token"):
         forms_rendering_context(
@@ -862,6 +1343,19 @@ def test_forms_static_css_resource_is_available() -> None:
     )
 
     assert resource is not None
+
+
+def test_forms_static_css_contains_phone_contact_widget_styles() -> None:
+    resource = first_existing_resource(
+        (PackageResourceSource(package="wybra.forms", directory="static"),),
+        "styles/forms.css",
+    )
+    assert resource is not None
+    css = resource.read_text(encoding="utf-8")
+
+    assert ".wybra-phone-contact-control" in css
+    assert ".wybra-phone-contact-prefix" in css
+    assert ".wybra-phone-contact-status--unverified" in css
 
 
 def test_csrf_form_validation_rejects_non_form_content_type() -> None:
