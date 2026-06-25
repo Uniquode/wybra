@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 import phonenumbers
 import pycountry
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.routing import APIRouter
 from phonenumbers import NumberParseException, PhoneNumberFormat, PhoneNumberType
@@ -99,13 +99,19 @@ class PhoneContactControl:
         self.country_field = country_field
         self.subdivision_field = subdivision_field
         self.phone_field = phone_field
-        self.handlers = handlers or (
-            field_handler(
-                "/phone-contact/fields",
-                name="phone-contact-fields",
-                methods={"GET"},
-            ),
-        )
+        if handlers is None:
+            handlers = (
+                field_handler(
+                    "/phone-contact/fields",
+                    name="phone-contact-fields",
+                    methods={"GET"},
+                ),
+            )
+        if not handlers:
+            raise PhoneContactError(
+                "Phone contact control requires at least one field handler."
+            )
+        self.handlers = handlers
         self.country_filter = country_filter
         self.subdivision_filter = subdivision_filter
         self._registered_handler_names: dict[str, str] = {}
@@ -168,9 +174,11 @@ class PhoneContactControl:
                 field.disabled = not valid_country
 
     def validate(self, form: Form) -> PhoneContactValidation:
-        country_value = _form_text_value(form, self.country_field)
-        subdivision_value = _form_text_value(form, self.subdivision_field)
-        number_value = _form_text_value(form, self.phone_field)
+        from wybra.forms.phone_contact_rendering import form_text_value
+
+        country_value = form_text_value(form, self.country_field)
+        subdivision_value = form_text_value(form, self.subdivision_field)
+        number_value = form_text_value(form, self.phone_field)
         normalised_country_code = optional_country_code(country_value)
         normalised_subdivision_code = optional_subdivision_code(subdivision_value)
         country = self.country(normalised_country_code)
@@ -269,6 +277,8 @@ def register_phone_contact_field_handlers(
     control._registered_handler_names[handler.name] = registered_name
 
     async def dependent_fields(request: Request) -> HTMLResponse:
+        if handler.htmx and request.headers.get("HX-Request", "").lower() != "true":
+            raise HTTPException(status_code=404)
         form = form_factory(request)
         country_code = request.query_params.get(control.country_field)
         return HTMLResponse(
@@ -465,18 +475,6 @@ def _filtered_country(
         if country.code == normalised_country_code:
             return country
     raise PhoneContactError("Choose a valid country.")
-
-
-def _form_text_value(form: Form, field_name: str) -> str | None:
-    result = form.field_results.get(field_name)
-    if result is not None:
-        if isinstance(result.value, str):
-            return result.value
-        if isinstance(result.raw_value, str):
-            return result.raw_value
-        return None
-    value = form.values.get(field_name)
-    return value if isinstance(value, str) else None
 
 
 __all__ = (

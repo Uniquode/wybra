@@ -111,6 +111,13 @@ def dependent_url(
 
 
 def form_text_value(form: Form, field_name: str) -> str | None:
+    result = form.field_results.get(field_name)
+    if result is not None:
+        if isinstance(result.value, str):
+            return result.value
+        if isinstance(result.raw_value, str):
+            return result.raw_value
+        return None
     value = form.values.get(field_name)
     return value if isinstance(value, str) else None
 

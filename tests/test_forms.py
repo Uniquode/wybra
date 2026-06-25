@@ -28,6 +28,7 @@ from wybra.forms import (
     HiddenField,
     MultiSelectField,
     PhoneContactControl,
+    PhoneContactError,
     PhoneContactWidgetError,
     PositiveIntegerField,
     RadioField,
@@ -1111,6 +1112,19 @@ def test_phone_contact_control_declares_default_htmx_field_handler() -> None:
     assert handler.include_in_schema is False
 
 
+def test_phone_contact_control_rejects_empty_handler_tuple() -> None:
+    with pytest.raises(
+        PhoneContactError,
+        match="requires at least one field handler",
+    ):
+        PhoneContactControl(
+            country_field="country",
+            subdivision_field="region",
+            phone_field="mobile",
+            handlers=(),
+        )
+
+
 def test_form_control_discovers_declared_phone_contact_control() -> None:
     assert (
         form_control(PhoneContactForm, "phone_contact")
@@ -1153,7 +1167,10 @@ def test_phone_contact_field_handler_registers_htmx_fragment_route() -> None:
     app.include_router(router)
     route = router.routes[0]
 
-    response = TestClient(app).get("/phone-contact/fields?country=AU")
+    response = TestClient(app).get(
+        "/phone-contact/fields?country=AU",
+        headers={"HX-Request": "true"},
+    )
 
     assert getattr(route, "include_in_schema", True) is False
     assert "GET" in getattr(route, "methods", set())
@@ -1161,6 +1178,22 @@ def test_phone_contact_field_handler_registers_htmx_fragment_route() -> None:
     assert 'id="test-phone-fields"' in response.text
     assert "Victoria" in response.text
     assert "🇦🇺 +61" in response.text
+
+
+def test_phone_contact_field_handler_rejects_non_htmx_request() -> None:
+    router = APIRouter()
+    register_phone_contact_field_handlers(
+        router,
+        control=PhoneContactForm.phone_contact,
+        form_factory=lambda _request: PhoneContactForm(),
+        templates=lambda _request: _forms_templates(),
+    )
+    app = FastAPI()
+    app.include_router(router)
+
+    response = TestClient(app).get("/phone-contact/fields?country=AU")
+
+    assert response.status_code == 404
 
 
 def test_phone_contact_renderer_resolves_control_handler_url() -> None:

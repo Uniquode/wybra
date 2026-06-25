@@ -825,7 +825,10 @@ async def test_profile_phone_fields_fragment_uses_selected_country(
     await _create_site_schema(site)
     client = TestClient(site.app)
 
-    response = client.get("/phone-contact/fields?phone_country_code=AU")
+    response = client.get(
+        "/phone-contact/fields?phone_country_code=AU",
+        headers={"HX-Request": "true"},
+    )
 
     assert response.status_code == 200
     assert "forms/widgets/phone_contact_fields.html" in response.text
