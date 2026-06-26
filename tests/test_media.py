@@ -469,6 +469,36 @@ async def test_media_capability_cleans_temp_file_for_upload_read_failures(
 
 
 @pytest.mark.anyio
+async def test_media_capability_removes_destination_if_register_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = _capability(tmp_path)
+    destination = tmp_path / "profile" / "ab" / "cd" / "user.png"
+
+    async def failing_register(
+        self: FilesystemMediaCapability,
+        *args: object,
+        **kwargs: object,
+    ) -> MediaItem:
+        raise RuntimeError("register failed")
+
+    monkeypatch.setattr(FilesystemMediaCapability, "register", failing_register)
+
+    with pytest.raises(RuntimeError, match="register failed"):
+        await capability.store(
+            category="profile",
+            storage_key="profile/ab/cd/user.png",
+            upload=FakeUpload((b"avatar",), "image/png"),
+        )
+
+    assert not destination.exists()
+    tmp_root = tmp_path / ".tmp"
+    if tmp_root.exists():
+        assert not any(tmp_root.iterdir())
+
+
+@pytest.mark.anyio
 async def test_media_capability_rejects_invalid_upload_chunk_size(
     tmp_path: Path,
 ) -> None:

@@ -210,7 +210,7 @@ class FilesystemMediaCapability:
                 size=size,
                 resource_key=resource_key,
             )
-        except Exception:
+        except BaseException:
             with suppress(FileNotFoundError):
                 destination.unlink()
             raise
