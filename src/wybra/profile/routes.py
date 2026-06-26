@@ -23,6 +23,7 @@ from wybra.site import get_site
 from wybra.template import TemplateCapability
 
 PROFILE_EDIT_TEMPLATE = "profile/pages/edit.html"
+PROFILE_EDIT_ROUTE_NAME = "profile:edit"
 LOGIN_REQUIRED = Depends(login_required)
 
 profile_router = APIRouter(dependencies=[Depends(validate_csrf)])
@@ -32,7 +33,7 @@ profile_router = APIRouter(dependencies=[Depends(validate_csrf)])
     "/profile",
     methods=["GET", "POST"],
     include_in_schema=False,
-    name="profile:edit",
+    name=PROFILE_EDIT_ROUTE_NAME,
 )
 async def edit_profile(
     request: Request,
@@ -44,7 +45,7 @@ async def edit_profile(
     templates = site.require_capability(TemplateCapability)
     profile_capability = site.require_capability(ProfileCapability)
     database = site.require_capability(DatabaseCapability)
-    default_return_to = str(request.url_for("profile:edit"))
+    default_return_to = str(request.url_for(PROFILE_EDIT_ROUTE_NAME))
     return_to = _normalise_return_to(
         request.query_params.get("return_to"),
         default=default_return_to,
@@ -141,10 +142,20 @@ async def edit_profile(
 def _profile_phone_contact_form(request: Request) -> ProfileEditForm:
     site = get_site(request.app)
     settings = ProfileSettings.load_settings(site.config)
-    country_code = request.query_params.get(ProfileEditForm.phone_contact.country_field)
+    country_code = request.query_params.get(
+        ProfileEditForm.phone_contact.country_field,
+    )
+    subdivision_code = request.query_params.get(
+        ProfileEditForm.phone_contact.subdivision_field,
+    )
+    phone_number = request.query_params.get(ProfileEditForm.phone_contact.phone_field)
     return ProfileEditForm(
         settings=settings,
-        values={"phone_country_code": country_code or ""},
+        values={
+            "phone_country_code": country_code or "",
+            "phone_subdivision_code": subdivision_code or "",
+            "phone_number": phone_number or "",
+        },
     )
 
 
@@ -159,6 +170,7 @@ register_phone_contact_field_handlers(
     templates=_template_capability,
     target_id="profile-phone-fields",
     dependencies=(LOGIN_REQUIRED,),
+    form_route_name=PROFILE_EDIT_ROUTE_NAME,
 )
 
 
@@ -211,6 +223,7 @@ def _normalise_return_to(value: str | None, *, default: str) -> str:
 
 __all__ = (
     "PROFILE_EDIT_TEMPLATE",
+    "PROFILE_EDIT_ROUTE_NAME",
     "edit_profile",
     "module_routers",
     "profile_router",

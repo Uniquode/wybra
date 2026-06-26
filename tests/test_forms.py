@@ -878,6 +878,30 @@ def test_phone_contact_renderer_outputs_mapped_fields_and_state() -> None:
     assert 'name="mobile"' in html
     assert "Enter plain text without HTML or markup." in html
     assert "🇦🇺 +61</span>" in html
+    assert "Not verified" not in html
+
+
+def test_phone_contact_renderer_outputs_status_without_phone_errors() -> None:
+    form = PhoneContactForm(
+        options={
+            "country": COUNTRY_OPTIONS,
+            "region": SUBDIVISION_OPTIONS,
+        },
+        values={"country": "AU", "region": "VIC", "mobile": "0412345678"},
+    )
+    renderer = TemplateFormRenderer(_forms_templates())
+
+    html = renderer.render_phone_contact(
+        form,
+        country_field="country",
+        subdivision_field="region",
+        phone_field="mobile",
+        dependent_url="/phone-fields",
+        phone_prefix="🇦🇺 +61",
+        phone_contact_status="Not verified",
+        target_id="account-phone-fields",
+    )
+
     assert ">Not verified<" in html
 
 
@@ -1180,6 +1204,40 @@ def test_phone_contact_field_handler_registers_htmx_fragment_route() -> None:
     assert "🇦🇺 +61" in response.text
 
 
+def test_phone_contact_field_handler_mounts_relative_to_form_route() -> None:
+    router = APIRouter()
+
+    @router.get("/delivery", name="delivery:form")
+    async def delivery_form() -> PlainTextResponse:
+        return PlainTextResponse("delivery")
+
+    register_phone_contact_field_handlers(
+        router,
+        control=PhoneContactForm.phone_contact,
+        form_factory=lambda request: PhoneContactForm(
+            options={
+                "country": PhoneContactForm.phone_contact.country_options(),
+                "region": PhoneContactForm.phone_contact.subdivision_options(
+                    request.query_params.get("country")
+                ),
+            },
+            values={"country": request.query_params.get("country") or ""},
+        ),
+        templates=lambda _request: _forms_templates(),
+        form_route_name="delivery:form",
+    )
+    app = FastAPI()
+    app.include_router(router)
+
+    response = TestClient(app).get(
+        "/delivery/phone-contact/fields?country=AU",
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "Victoria" in response.text
+
+
 def test_phone_contact_field_handler_rejects_non_htmx_request() -> None:
     router = APIRouter()
     register_phone_contact_field_handlers(
@@ -1226,6 +1284,7 @@ def test_phone_contact_renderer_resolves_control_handler_url() -> None:
 
     assert response.status_code == 200
     assert 'hx-get="http://testserver/phone-contact/fields"' in response.text
+    assert 'hx-include="closest .wybra-phone-contact"' in response.text
 
 
 def test_phone_contact_renderer_scopes_duplicate_control_handler_names() -> None:

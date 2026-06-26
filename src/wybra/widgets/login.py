@@ -11,11 +11,13 @@ from wybra.auth.capabilities import AuthCapability
 from wybra.profile import ProfileCapability, ProfileImage
 from wybra.profile.utils import extract_return_to_query, normalise_return_to
 from wybra.site import SiteCapabilityError, get_site
+from wybra.widgets.navigation import DropdownPanel, NavigationItem, NavigationMenu
 
 logger = logging.getLogger(__name__)
 LOGIN_TEMPLATE = "components/login_control.html"
 LOGIN_ROUTE_NAME = "auth:login"
 LOGOUT_ROUTE_NAME = "auth:logout"
+ACCOUNT_ROUTE_NAME = "auth:account"
 PROFILE_EDIT_ROUTE_NAME = "profile:edit"
 
 
@@ -26,7 +28,7 @@ class LoginWidgetState:
     logout_path: str | None
     profile_image: ProfileImage | None = None
     profile_path: str | None = None
-    settings_path: str | None = None
+    settings_menu: DropdownPanel | None = None
 
 
 async def login_widget_state(request: Any) -> LoginWidgetState | None:
@@ -51,13 +53,17 @@ async def login_widget_state(request: Any) -> LoginWidgetState | None:
         return None
 
     profile_path = _profile_path(request)
+    account_path = _route_path(request, ACCOUNT_ROUTE_NAME)
     return LoginWidgetState(
         authenticated=True,
         login_path=None,
         logout_path=logout_path,
         profile_image=await _profile_image(request, user),
         profile_path=profile_path,
-        settings_path=profile_path,
+        settings_menu=_settings_menu(
+            profile_path=profile_path,
+            account_path=account_path,
+        ),
     )
 
 
@@ -88,6 +94,36 @@ def _route_path(request: Any, route_name: str) -> str | None:
         return str(request.app.url_path_for(route_name))
     except NoMatchFound:
         return None
+
+
+def _settings_menu(
+    *,
+    profile_path: str | None,
+    account_path: str | None,
+) -> DropdownPanel | None:
+    items: list[NavigationItem] = []
+    if account_path is not None:
+        items.extend(
+            (
+                NavigationItem(label="Account", path=account_path),
+                NavigationItem(label="Login & Security", path=account_path),
+            )
+        )
+    if profile_path is not None:
+        items.append(NavigationItem(label="Profile", path=profile_path))
+    if not items:
+        return None
+
+    return DropdownPanel(
+        label="Settings",
+        menu=NavigationMenu(
+            label="Settings",
+            items=tuple(items),
+            shortcut_scope="settings-menu",
+        ),
+        dom_id="login-settings-menu",
+        css_class="login-widget__settings-menu",
+    )
 
 
 def _profile_path(request: Any) -> str | None:
@@ -130,6 +166,7 @@ def _current_path(request: Any) -> str:
 
 
 __all__ = (
+    "ACCOUNT_ROUTE_NAME",
     "LOGIN_ROUTE_NAME",
     "LOGIN_TEMPLATE",
     "LOGOUT_ROUTE_NAME",

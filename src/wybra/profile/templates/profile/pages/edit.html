@@ -12,7 +12,7 @@
   {% if form_error %}
   <p role="alert">{{ form_error }}</p>
   {% endif %}
-  <form class="wybra-form" method="post" action="">
+  <form class="wybra-form" method="post" action="" data-wybra-profile-form>
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}" />
     {% if "return_to" in profile_form.fields %}
     {{ render_field(profile_form, "return_to") }}
@@ -41,8 +41,79 @@
     ) }}
     {% endif %}
     <div class="wybra-form-actions">
-      <button class="wybra-form-action wybra-form-action--submit" type="submit">Submit</button>
+      <button
+        class="wybra-form-action wybra-form-action--submit"
+        type="submit"
+        data-wybra-profile-save
+        disabled
+      >Save Changes</button>
+      <button
+        class="wybra-form-action wybra-form-action--cancel"
+        type="button"
+        data-wybra-profile-cancel
+        disabled
+      >Cancel</button>
     </div>
   </form>
 </section>
+<script>
+  (() => {
+    const form = document.querySelector("[data-wybra-profile-form]");
+    if (!(form instanceof HTMLFormElement)) {
+      return;
+    }
+
+    const actions = form.querySelectorAll(
+      "[data-wybra-profile-save], [data-wybra-profile-cancel]",
+    );
+    const cancel = form.querySelector("[data-wybra-profile-cancel]");
+    const initialEntries = Array.from(new FormData(form).entries());
+    const serialise = () => JSON.stringify(
+      Array.from(new FormData(form).entries()),
+    );
+    const initial = serialise();
+    const restoreInitialValues = () => {
+      const values = new Map(initialEntries);
+      form.querySelectorAll("input, select, textarea").forEach((field) => {
+        if (
+          field instanceof HTMLInputElement ||
+          field instanceof HTMLSelectElement ||
+          field instanceof HTMLTextAreaElement
+        ) {
+          const value = values.get(field.name);
+          if (typeof value === "string") {
+            field.value = value;
+          } else if (field.type !== "hidden") {
+            field.value = "";
+          }
+        }
+      });
+    };
+    const setActionState = () => {
+      const disabled = serialise() === initial;
+      actions.forEach((action) => {
+        if (action instanceof HTMLButtonElement) {
+          action.disabled = disabled;
+        }
+      });
+    };
+
+    form.addEventListener("input", setActionState);
+    form.addEventListener("change", setActionState);
+    if (cancel instanceof HTMLButtonElement) {
+      cancel.addEventListener("click", () => {
+        restoreInitialValues();
+        form.querySelectorAll("[hx-get]").forEach((field) => {
+          field.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        setActionState();
+      });
+    }
+    form.addEventListener("htmx:afterSwap", () => {
+      restoreInitialValues();
+      setActionState();
+    });
+    setActionState();
+  })();
+</script>
 {% endblock %}

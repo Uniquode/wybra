@@ -7,6 +7,12 @@ from wybra.site import Site
 from wybra.template import TemplateCapability
 from wybra.widgets.config import THEME_FEATURE, WidgetsSettings, module_config
 from wybra.widgets.features import configure_widgets
+from wybra.widgets.navigation import (
+    DropdownPanel,
+    KeyboardShortcut,
+    NavigationItem,
+    NavigationMenu,
+)
 
 
 async def setup_site(site: Site) -> None:
@@ -23,6 +29,10 @@ async def post_setup_site(site: Site) -> None:
 
 
 __all__ = (
+    "DropdownPanel",
+    "KeyboardShortcut",
+    "NavigationItem",
+    "NavigationMenu",
     "WidgetsSettings",
     "module_config",
     "post_setup_site",

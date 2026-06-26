@@ -1,0 +1,45 @@
+{% macro render_dropdown(panel, trigger_class="", trigger_content="") %}
+{% if panel and panel.has_items %}
+{% set trigger_label = panel.label or "Open menu" %}
+<span class="wybra-dropdown-panel wybra-dropdown-panel--align-{{ panel.alignment }}{% if panel.css_class %} {{ panel.css_class }}{% endif %}">
+  <button
+    class="wybra-dropdown-panel__trigger {{ trigger_class }}"
+    style="anchor-name: --{{ panel.dom_id }}-trigger;"
+    type="button"
+    popovertarget="{{ panel.dom_id }}"
+    aria-label="{{ trigger_label }}"
+    title="{{ trigger_label }}"
+  >
+    {{ trigger_content | safe }}
+  </button>
+  <nav
+    id="{{ panel.dom_id }}"
+    class="wybra-dropdown-panel__content wybra-navigation-menu wybra-navigation-menu--{{ panel.menu.layout }} wybra-navigation-menu--spacing-{{ panel.menu.spacing }} wybra-navigation-menu--align-{{ panel.menu.alignment }}{% if panel.menu.css_class %} {{ panel.menu.css_class }}{% endif %}"
+    style="position-anchor: --{{ panel.dom_id }}-trigger;"
+    aria-label="{{ panel.menu.label }}"
+    popover
+    {% if panel.menu.shortcut_scope %}data-shortcut-scope="{{ panel.menu.shortcut_scope }}"{% endif %}
+  >
+    {% for item in panel.menu.items %}
+    <a
+      class="wybra-navigation-menu__item wybra-navigation-menu__item--align-{{ panel.menu.item_alignment }}{% if item.active %} is-active{% endif %}{% if item.disabled %} is-disabled{% endif %}{% if item.css_class %} {{ item.css_class }}{% endif %}"
+      href="{{ item.path }}"
+      {% if item.active %}aria-current="page"{% endif %}
+      {% if item.disabled %}aria-disabled="true"{% endif %}
+      {% if item.shortcut %}data-shortcut-key="{{ item.shortcut.key }}"{% endif %}
+    >
+      <span class="wybra-navigation-menu__item-text">
+        <span class="wybra-navigation-menu__item-label">{{ item.label }}</span>
+        {% if item.description %}
+        <span class="wybra-navigation-menu__item-description">{{ item.description }}</span>
+        {% endif %}
+      </span>
+      {% if item.shortcut %}
+      <kbd class="wybra-navigation-menu__shortcut">{{ item.shortcut.display_label }}</kbd>
+      {% endif %}
+    </a>
+    {% endfor %}
+  </nav>
+</span>
+{% endif %}
+{% endmacro %}

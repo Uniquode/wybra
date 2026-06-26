@@ -55,6 +55,12 @@ from wybra.site import Site, SiteCapabilityError, start
 from wybra.template import DefaultTemplateCapability, TemplateCapability
 from wybra.widgets.config import WidgetsSettings
 from wybra.widgets.login import login_widget_state
+from wybra.widgets.navigation import (
+    DropdownPanel,
+    KeyboardShortcut,
+    NavigationItem,
+    NavigationMenu,
+)
 
 _CREATED_SITES: list[Site] = []
 
@@ -248,6 +254,7 @@ def _widget_site(user: ProfileUser, *, profile_route: bool = True) -> Site:
 
     app.add_api_route("/login", endpoint, name="auth:login")
     app.add_api_route("/logout", endpoint, name="auth:logout")
+    app.add_api_route("/account", endpoint, name="auth:account")
     if profile_route:
         app.add_api_route("/profile", endpoint, name="profile:edit")
     site = Site(
@@ -760,11 +767,16 @@ def test_profile_edit_template_renders_declarative_form_fields() -> None:
         values={"preferred_name": "David", "phone_country_code": "AU"},
     )
 
+    class ProfileUrlContext:
+        def url_for(self, name: str) -> str:
+            assert name.startswith("phone-contact-fields")
+            return "/profile/phone-contact/fields"
+
     html = templates.render_template(
         "profile/pages/edit.html",
         {
             **csrf,
-            **forms_rendering_context(templates, csrf),
+            **forms_rendering_context(templates, csrf, url_context=ProfileUrlContext()),
             "asset_url": lambda path: f"/static/{path}",
             "editable_fields": DEFAULT_EDITABLE_PROFILE_FIELDS,
             "form_error": None,
@@ -788,13 +800,69 @@ def test_profile_edit_template_renders_declarative_form_fields() -> None:
     assert 'name="phone_country_code"' in html
     assert ">Australia<" in html
     assert "🇦🇺 Australia +61" not in html
+    assert 'hx-get="/profile/phone-contact/fields"' in html
     assert 'class="wybra-phone-contact-control"' in html
     assert 'id="phone_number_dial_prefix"' in html
     assert 'name="phone_subdivision_code"' in html
-    assert "disabled" not in html
+    assert not re.search(r'id="phone_number"[^>]*disabled', html)
     assert "🇦🇺 +61</span>" in html
     assert ">Not verified<" in html
     assert "Phone contacts" not in html
+    assert "data-wybra-profile-form" in html
+    assert "data-wybra-profile-save" in html
+    assert ">Save Changes</button>" in html
+    assert re.search(
+        r"<button[^>]*data-wybra-profile-save[^>]*disabled",
+        html,
+    )
+    assert "data-wybra-profile-cancel" in html
+    assert ">Cancel</button>" in html
+    assert re.search(
+        r"<button[^>]*data-wybra-profile-cancel[^>]*disabled",
+        html,
+    )
+    assert 'form.addEventListener("input", setActionState)' in html
+    assert 'cancel.addEventListener("click"' in html
+    assert "restoreInitialValues();" in html
+    assert 'form.addEventListener("htmx:afterSwap"' in html
+    assert 'querySelectorAll("[hx-get]")' in html
+
+
+def test_profile_edit_template_suppresses_phone_status_when_phone_has_error() -> None:
+    templates = DefaultTemplateCapability(
+        template_sources=(
+            PackageResourceSource(package="wybra.template", directory="templates"),
+            PackageResourceSource(package="wybra.forms", directory="templates"),
+            PackageResourceSource(package="wybra.profile", directory="templates"),
+        )
+    )
+    csrf = {"csrf_field_name": "csrf_token", "csrf_token": "token"}
+    profile_form = ProfileEditForm(
+        settings=ProfileSettings(),
+        values={"phone_country_code": "AU", "phone_number": "not-a-number"},
+    )
+    profile_form.parse({"phone_country_code": "AU", "phone_number": "not-a-number"})
+
+    html = templates.render_template(
+        "profile/pages/edit.html",
+        {
+            **csrf,
+            **forms_rendering_context(templates, csrf),
+            "asset_url": lambda path: f"/static/{path}",
+            "editable_fields": DEFAULT_EDITABLE_PROFILE_FIELDS,
+            "form_error": None,
+            "page_title": "Edit profile",
+            "phone_contact_status": "Not verified",
+            "phone_contacts": (),
+            "profile_form": profile_form,
+            "profile_settings": ProfileSettings(),
+            "route_name": "profile:edit",
+            "theme_attribute": None,
+        },
+    )
+
+    assert "Phone contact number is invalid." in html
+    assert "Not verified" not in html
 
 
 def test_profile_edit_form_uses_phone_contact_control_for_normalisation() -> None:
@@ -826,7 +894,10 @@ async def test_profile_phone_fields_fragment_uses_selected_country(
     client = TestClient(site.app)
 
     response = client.get(
-        "/phone-contact/fields?phone_country_code=AU",
+        "/profile/phone-contact/fields?"
+        "phone_country_code=AU&"
+        "phone_subdivision_code=AU-VIC&"
+        "phone_number=%2B61412345678",
         headers={"HX-Request": "true"},
     )
 
@@ -834,11 +905,13 @@ async def test_profile_phone_fields_fragment_uses_selected_country(
     assert "forms/widgets/phone_contact_fields.html" in response.text
     assert "phone_prefix=🇦🇺 +61" in response.text
     assert "Victoria" in response.text
+    assert "subdivision=AU-VIC" in response.text
+    assert "phone_number=+61412345678" in response.text
     assert "phone_disabled" not in response.text
 
 
 @pytest.mark.anyio
-async def test_login_widget_state_links_avatar_to_profile_edit_route() -> None:
+async def test_login_widget_state_builds_settings_menu() -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
     site = _widget_site(user)
 
@@ -848,7 +921,18 @@ async def test_login_widget_state_links_avatar_to_profile_edit_route() -> None:
 
     assert state is not None
     assert state.profile_path == "/profile?return_to=%2Faccount"
-    assert state.settings_path == "/profile?return_to=%2Faccount"
+    assert state.settings_menu is not None
+    assert state.settings_menu.label == "Settings"
+    assert tuple(item.label for item in state.settings_menu.menu.items) == (
+        "Account",
+        "Login & Security",
+        "Profile",
+    )
+    assert tuple(item.path for item in state.settings_menu.menu.items) == (
+        "/account",
+        "/account",
+        "/profile?return_to=%2Faccount",
+    )
     assert state.logout_path == "/logout"
 
 
@@ -869,7 +953,8 @@ async def test_login_widget_state_does_not_nest_profile_return_to() -> None:
 
     assert state is not None
     assert state.profile_path == "/profile?return_to=%2Faccount"
-    assert state.settings_path == "/profile?return_to=%2Faccount"
+    assert state.settings_menu is not None
+    assert state.settings_menu.menu.items[-1].path == "/profile?return_to=%2Faccount"
 
 
 @pytest.mark.anyio
@@ -881,7 +966,15 @@ async def test_login_widget_state_omits_profile_link_when_route_missing() -> Non
 
     assert state is not None
     assert state.profile_path is None
-    assert state.settings_path is None
+    assert state.settings_menu is not None
+    assert tuple(item.label for item in state.settings_menu.menu.items) == (
+        "Account",
+        "Login & Security",
+    )
+    assert tuple(item.path for item in state.settings_menu.menu.items) == (
+        "/account",
+        "/account",
+    )
 
 
 @pytest.mark.anyio
@@ -896,7 +989,11 @@ async def test_login_widget_state_omits_profile_link_when_navigation_disabled() 
 
     assert state is not None
     assert state.profile_path is None
-    assert state.settings_path is None
+    assert state.settings_menu is not None
+    assert tuple(item.label for item in state.settings_menu.menu.items) == (
+        "Account",
+        "Login & Security",
+    )
 
 
 @pytest.mark.anyio
@@ -909,7 +1006,11 @@ async def test_login_widget_state_omits_profile_link_when_settings_missing() -> 
 
     assert state is not None
     assert state.profile_path is None
-    assert state.settings_path is None
+    assert state.settings_menu is not None
+    assert tuple(item.label for item in state.settings_menu.menu.items) == (
+        "Account",
+        "Login & Security",
+    )
 
 
 def test_login_widget_template_renders_avatar_after_logout() -> None:
@@ -932,7 +1033,23 @@ def test_login_widget_template_renders_avatar_after_logout() -> None:
                     fallback_text="D",
                 ),
                 profile_path="/profile",
-                settings_path="/profile",
+                settings_menu=DropdownPanel(
+                    label="Settings",
+                    menu=NavigationMenu(
+                        label="Settings",
+                        items=(
+                            NavigationItem(
+                                label="Account",
+                                path="/account",
+                            ),
+                            NavigationItem(
+                                label="Login & Security",
+                                path="/account",
+                            ),
+                            NavigationItem(label="Profile", path="/profile"),
+                        ),
+                    ),
+                ),
             ),
             "route_name": "home",
         },
@@ -942,6 +1059,14 @@ def test_login_widget_template_renders_avatar_after_logout() -> None:
     logout_position = html.index("Logout")
     avatar_position = html.index("login-widget__avatar")
     assert settings_position < logout_position < avatar_position
+    assert '<span class="wybra-dropdown-panel' in html
+    assert 'type="button"' in html
+    assert "anchor-name: --wybra-dropdown-panel-trigger;" in html
+    assert 'popovertarget="wybra-dropdown-panel"' in html
+    assert "position-anchor: --wybra-dropdown-panel-trigger;" in html
+    assert "popover" in html
+    assert "Account" in html
+    assert "Login &amp; Security" in html
     assert 'href="/profile"' in html
 
 
@@ -989,7 +1114,7 @@ def test_login_widget_template_renders_logout_control_for_context(
             logout_path=logout_path,
             profile_image=None,
             profile_path=None,
-            settings_path=None,
+            settings_menu=None,
         ),
         "route_name": "home",
     } | csrf_context
@@ -1020,6 +1145,57 @@ def test_login_widget_template_renders_logout_control_for_context(
         assert 'action="/logout"' not in html
 
 
+def test_dropdown_menu_template_renders_shortcut_metadata() -> None:
+    templates = DefaultTemplateCapability(
+        template_sources=(
+            PackageResourceSource(package="wybra.widgets", directory="templates"),
+        )
+    )
+    menu = DropdownPanel(
+        label="Settings",
+        menu=NavigationMenu(
+            label="Settings",
+            items=(
+                NavigationItem(
+                    label="Profile",
+                    path="/profile",
+                    shortcut=KeyboardShortcut(key="p", label="P", modifiers=("Ctrl",)),
+                ),
+            ),
+            shortcut_scope="settings-menu",
+        ),
+    )
+
+    html = templates.render_template(
+        "components/login_control.html",
+        {
+            "login_widget": SimpleNamespace(
+                authenticated=True,
+                login_path=None,
+                logout_path=None,
+                profile_image=None,
+                profile_path="/profile",
+                settings_menu=menu,
+            ),
+            "route_name": "home",
+        },
+    )
+
+    assert 'data-shortcut-scope="settings-menu"' in html
+    assert 'data-shortcut-key="p"' in html
+    assert '<kbd class="wybra-navigation-menu__shortcut">Ctrl P</kbd>' in html
+
+
+def test_navigation_item_records_optional_icon_token() -> None:
+    item = NavigationItem(
+        label="Profile",
+        path="/profile",
+        icon_token="user",
+    )
+
+    assert item.icon_token == "user"
+
+
 def test_widget_layout_renders_continuous_header_row() -> None:
     templates = DefaultTemplateCapability(
         template_sources=(
@@ -1045,6 +1221,7 @@ def test_widget_layout_renders_continuous_header_row() -> None:
 
     assert '<header class="page-header" aria-label="Page header">' in html
     assert '<div class="page-tools" aria-label="Page controls">' in html
+    assert "scripts/widgets.js" not in html
     assert 'href="/login"' in html
 
 
@@ -1078,6 +1255,7 @@ def test_foundation_styles_expose_header_and_control_tokens() -> None:
         "--web-core-font-size-base",
         "--web-core-colour-link",
         "--web-core-colour-highlight",
+        "--web-core-colour-secondary",
         "--web-core-colour-header-surface",
         "--web-core-colour-header-border",
         "--web-core-colour-header-text",
@@ -1109,6 +1287,59 @@ def test_widget_styles_use_header_and_control_tokens() -> None:
         ("min-height", "var(--web-core-control-size)"),
     ):
         assert _css_declaration_exists(css, property_name, value)
+
+    assert "position: fixed" in css
+    assert "inset: auto" in css
+    assert ".wybra-dropdown-panel__content[popover]:not(:popover-open)" in css
+    assert ".wybra-dropdown-panel__content:popover-open" in css
+    assert "left: anchor(right)" in css
+    assert "transform: translateX(-100%)" in css
+
+
+def test_form_styles_right_align_phone_contact_status() -> None:
+    css = _resource_text("wybra.forms", "static/styles/forms.css")
+
+    assert re.search(
+        r"\.wybra-form-actions\s*\{[^}]*display\s*:\s*grid\s*;",
+        css,
+    )
+    assert re.search(
+        r"\.wybra-form-actions\s*\{[^}]*"
+        r"grid-template-columns\s*:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;",
+        css,
+    )
+    assert re.search(
+        r"\.wybra-form-action\s*\{[^}]*"
+        r"background\s*:\s*var\(--web-core-colour-accent\)\s*;",
+        css,
+    )
+    assert re.search(
+        r"\.wybra-form-action--cancel,\s*"
+        r"\.wybra-form-action--clear\s*\{[^}]*"
+        r"background\s*:\s*var\(--web-core-colour-secondary\)\s*;",
+        css,
+    )
+    assert re.search(
+        r"\.wybra-form-action\s*\{[^}]*"
+        r"border-radius\s*:\s*var\(--web-core-radius-button\)\s*;",
+        css,
+    )
+    assert re.search(
+        r"\.wybra-form-action\s*\{[^}]*"
+        r"width\s*:\s*auto\s*;",
+        css,
+    )
+    assert ".wybra-form-actions button.wybra-form-action" in css
+    assert re.search(
+        r"\.wybra-phone-contact-inline-status\s*\{[^}]*"
+        r"justify-content\s*:\s*flex-end\s*;",
+        css,
+    )
+    assert re.search(
+        r"\.wybra-phone-contact-inline-status\s*\{[^}]*"
+        r"text-align\s*:\s*right\s*;",
+        css,
+    )
 
 
 @pytest.mark.anyio

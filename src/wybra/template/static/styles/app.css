@@ -1,6 +1,7 @@
 html {
   --web-core-font-size-base: 16px;
   --web-core-colour-accent: #4b5c92;
+  --web-core-colour-secondary: #667085;
   --web-core-colour-page-bg: #faf8ff;
   --web-core-colour-page-bg-strong: #f4f3fa;
   --web-core-colour-surface: rgba(255, 255, 255, 0.82);
@@ -32,6 +33,7 @@ html[data-theme="light"] {
 html[data-theme="dark"] {
   color-scheme: dark;
   --web-core-colour-accent: #b4c5ff;
+  --web-core-colour-secondary: #98a2b3;
   --web-core-colour-page-bg: #121318;
   --web-core-colour-page-bg-strong: #1a1b21;
   --web-core-colour-surface: rgba(30, 31, 37, 0.9);
@@ -52,6 +54,7 @@ html[data-theme="dark"] {
   html:not([data-theme]) {
     color-scheme: dark;
     --web-core-colour-accent: #b4c5ff;
+    --web-core-colour-secondary: #98a2b3;
     --web-core-colour-page-bg: #121318;
     --web-core-colour-page-bg-strong: #1a1b21;
     --web-core-colour-surface: rgba(30, 31, 37, 0.9);

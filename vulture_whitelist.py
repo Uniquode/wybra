@@ -179,6 +179,7 @@ _.fallback_text
 _.authenticated
 _.profile_image
 _.profile_path
+_.settings_menu
 _.root
 _.mount_path
 _.serve
@@ -226,6 +227,16 @@ _.exception_message
 _.traceback
 _.htmx
 _.normalised_phone_contact
+_.display_label
+_.icon_token
+_.shortcut
+_.css_class
+_.layout
+_.spacing
+_.alignment
+_.item_alignment
+_.shortcut_scope
+_.dom_id
 
 # Alembic revision module metadata.
 _.down_revision

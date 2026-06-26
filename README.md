@@ -123,6 +123,29 @@ for theme form routes, and routes that explicitly require template rendering.
 Soft dependencies include profile images on media, templates on assets for
 `asset_url(...)`, and widgets on auth/profile enrichment.
 
+`wybra.widgets` includes small reusable navigation and dropdown primitives for
+server-rendered controls:
+
+```python
+from wybra.widgets import DropdownPanel, NavigationItem, NavigationMenu
+
+
+settings_menu = DropdownPanel(
+    label="Settings",
+    menu=NavigationMenu(
+        label="Settings",
+        items=(
+            NavigationItem(label="Profile", path="/profile"),
+            NavigationItem(label="Login & Security", path="/account"),
+        ),
+        shortcut_scope="settings-menu",
+    ),
+)
+```
+
+Shortcut metadata is carried with the rendered menu for local panel behaviour,
+but Wybra does not install a global keyboard shortcut dispatcher.
+
 Auth is exposed through `AuthCapability`, so applications can depend on public
 helpers rather than auth internals:
 

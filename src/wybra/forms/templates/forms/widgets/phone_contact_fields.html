@@ -22,14 +22,14 @@
         {% if phone.errors %}aria-invalid="true" aria-describedby="{{ phone.name }}_errors"{% endif %}
       >
     </div>
-    {% if phone_contact_status %}
+    {% set field = phone %}
+    {% include "forms/widgets/_help.html" %}
+    {% include "forms/widgets/_field_errors.html" %}
+    {% if phone_contact_status and not phone.errors %}
     <p class="wybra-phone-contact-inline-status">
       <span class="wybra-phone-contact-status{% if phone_contact_status == 'Verified' %} wybra-phone-contact-status--verified{% else %} wybra-phone-contact-status--unverified{% endif %}">{{ phone_contact_status }}</span>
     </p>
     {% endif %}
-    {% set field = phone %}
-    {% include "forms/widgets/_help.html" %}
-    {% include "forms/widgets/_field_errors.html" %}
   </div>
   {% endif %}
 </div>

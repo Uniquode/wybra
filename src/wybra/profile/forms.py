@@ -12,7 +12,6 @@ from wybra.forms import (
     SelectField,
     TextAreaField,
     TextField,
-    field_handler,
 )
 from wybra.profile.editing import PROFILE_BIO_MAX_LENGTH
 from wybra.profile.exceptions import ProfileInputError
@@ -83,13 +82,6 @@ class ProfileEditForm(Form):
         country_field="phone_country_code",
         subdivision_field="phone_subdivision_code",
         phone_field="phone_number",
-        handlers=(
-            field_handler(
-                "/phone-contact/fields",
-                name="phone-contact-fields",
-                methods={"GET"},
-            ),
-        ),
     )
 
     def __init__(
