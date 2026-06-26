@@ -269,10 +269,16 @@ def register_phone_contact_field_handlers(
     templates: TemplateFactory,
     target_id: str = "wybra-phone-contact-fields",
     dependencies: Sequence[Any] = (),
+    form_route_name: str | None = None,
 ) -> None:
     from wybra.forms.rendering import render_phone_contact_fields
 
     handler = control.dependent_fields_handler()
+    handler_path = _field_handler_path(
+        router,
+        handler,
+        form_route_name=form_route_name,
+    )
     registered_name = _registered_handler_name(control, handler)
     control._registered_handler_names[handler.name] = registered_name
 
@@ -293,7 +299,7 @@ def register_phone_contact_field_handlers(
         )
 
     router.add_api_route(
-        handler.path,
+        handler_path,
         dependent_fields,
         methods=sorted(handler.methods),
         name=registered_name,
@@ -307,6 +313,36 @@ def _registered_handler_name(
     handler: FieldHandler,
 ) -> str:
     return f"{handler.name}:{id(control):x}"
+
+
+def _field_handler_path(
+    router: APIRouter,
+    handler: FieldHandler,
+    *,
+    form_route_name: str | None,
+) -> str:
+    if form_route_name is None:
+        return handler.path
+    return _join_route_paths(_route_path(router, form_route_name), handler.path)
+
+
+def _route_path(router: APIRouter, route_name: str) -> str:
+    for route in router.routes:
+        if getattr(route, "name", None) == route_name:
+            path = getattr(route, "path", None)
+            if isinstance(path, str):
+                return path
+    raise PhoneContactError(f"Form route {route_name!r} is not registered.")
+
+
+def _join_route_paths(base_path: str, relative_path: str) -> str:
+    base = base_path.rstrip("/")
+    relative = relative_path.lstrip("/")
+    if not base:
+        return f"/{relative}"
+    if not relative:
+        return base
+    return f"{base}/{relative}"
 
 
 def country_choices(

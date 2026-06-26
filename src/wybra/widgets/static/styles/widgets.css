@@ -70,6 +70,146 @@
     width: var(--web-core-control-size);
 }
 
+.wybra-dropdown-panel {
+    display: inline-flex;
+    line-height: 1;
+    margin: 0;
+    position: relative;
+}
+
+.wybra-dropdown-panel__trigger {
+    align-items: center;
+    appearance: none;
+    cursor: pointer;
+    display: inline-flex;
+    height: var(--web-core-control-size);
+    justify-content: center;
+    list-style: none;
+    margin: 0;
+    min-height: var(--web-core-control-size);
+    min-width: var(--web-core-control-size);
+    padding: 0;
+    width: var(--web-core-control-size);
+}
+
+.wybra-dropdown-panel__content {
+    background: var(--web-core-colour-surface);
+    border: 1px solid var(--web-core-colour-border);
+    border-radius: var(--web-core-radius-panel);
+    box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.18);
+    inset: auto;
+    margin: 0;
+    max-width: calc(100vw - 2rem);
+    min-width: 14rem;
+    padding: 0.35rem;
+    position: fixed;
+    top: calc(anchor(bottom) + 0.4rem);
+    z-index: calc(var(--web-core-page-header-z-index) + 1);
+}
+
+.wybra-dropdown-panel__content[popover]:not(:popover-open) {
+    display: none;
+}
+
+.wybra-dropdown-panel__content:popover-open {
+    display: flex;
+}
+
+.wybra-dropdown-panel--align-end .wybra-dropdown-panel__content {
+    left: anchor(right);
+    transform: translateX(-100%);
+}
+
+.wybra-dropdown-panel--align-start .wybra-dropdown-panel__content {
+    left: anchor(left);
+}
+
+.wybra-dropdown-panel--align-centre .wybra-dropdown-panel__content {
+    left: anchor(center);
+    transform: translateX(-50%);
+}
+
+.wybra-navigation-menu {
+    display: flex;
+}
+
+.wybra-navigation-menu--vertical {
+    flex-direction: column;
+}
+
+.wybra-navigation-menu--horizontal {
+    flex-direction: row;
+}
+
+.wybra-navigation-menu--spacing-compact {
+    gap: 0.15rem;
+}
+
+.wybra-navigation-menu--spacing-normal {
+    gap: 0.3rem;
+}
+
+.wybra-navigation-menu--spacing-relaxed {
+    gap: 0.55rem;
+}
+
+.wybra-navigation-menu__item {
+    align-items: center;
+    border-radius: var(--web-core-radius-button);
+    color: var(--web-core-colour-accent);
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    min-height: 2.5rem;
+    padding: 0.45rem 0.65rem;
+    text-decoration: none;
+}
+
+.wybra-navigation-menu__item:hover,
+.wybra-navigation-menu__item:focus-visible {
+    background: var(--web-core-colour-accent-soft);
+}
+
+.wybra-navigation-menu__item.is-active {
+    background: var(--web-core-colour-accent-soft);
+    font-weight: 700;
+}
+
+.wybra-navigation-menu__item.is-disabled {
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+.wybra-navigation-menu__item--align-centre {
+    text-align: center;
+}
+
+.wybra-navigation-menu__item--align-end {
+    text-align: right;
+}
+
+.wybra-navigation-menu__item-text {
+    display: grid;
+    gap: 0.1rem;
+}
+
+.wybra-navigation-menu__item-label {
+    line-height: 1.2;
+}
+
+.wybra-navigation-menu__item-description,
+.wybra-navigation-menu__shortcut {
+    color: var(--web-core-colour-text-muted);
+    font-size: 0.8rem;
+}
+
+.wybra-navigation-menu__shortcut {
+    background: transparent;
+    border: 1px solid var(--web-core-colour-border);
+    border-radius: calc(var(--web-core-radius-button) / 2);
+    padding: 0.05rem 0.35rem;
+}
+
 .login-widget__icon {
     display: block;
     height: 3.1rem;

@@ -51,9 +51,64 @@
 }
 
 .wybra-form-actions {
-  display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  display: grid;
   gap: 0.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 34rem) {
+  .wybra-form-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wybra-form-actions .wybra-form-action {
+  width: 100%;
+}
+
+.wybra-form-actions:has(.wybra-form-action:only-child) {
+  grid-template-columns: 1fr;
+}
+
+.wybra-form-actions:has(.wybra-form-action:only-child) .wybra-form-action {
+  justify-self: start;
+  width: auto;
+}
+
+.wybra-form-action {
+  align-items: center;
+  background: var(--web-core-colour-accent);
+  border: 1px solid var(--web-core-colour-accent);
+  border-radius: var(--web-core-radius-button);
+  color: var(--web-core-colour-page-bg);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-weight: 700;
+  justify-content: center;
+  margin: 0;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  width: auto;
+}
+
+.wybra-form-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.wybra-form-action--cancel,
+.wybra-form-action--clear {
+  background: var(--web-core-colour-secondary);
+  border-color: var(--web-core-colour-secondary);
+}
+
+.wybra-form-actions .wybra-form-action,
+.wybra-form-actions button.wybra-form-action,
+.wybra-form-actions input[type="submit"].wybra-form-action,
+.wybra-form-actions input[type="reset"].wybra-form-action,
+.wybra-form-actions input[type="button"].wybra-form-action {
+  width: 100%;
 }
 
 .wybra-phone-contact-fields {
@@ -90,7 +145,10 @@
 }
 
 .wybra-phone-contact-inline-status {
+  display: flex;
+  justify-content: flex-end;
   margin: 0.5rem 0 0;
+  text-align: right;
 }
 
 .wybra-phone-contact-status {

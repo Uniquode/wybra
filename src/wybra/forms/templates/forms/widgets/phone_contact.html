@@ -8,7 +8,7 @@
       class="wybra-form-control"
       id="{{ country.name }}"
       name="{{ country.name }}"
-      {% if dependent_url %}hx-get="{{ dependent_url }}" hx-target="#{{ target_id }}" hx-trigger="change" hx-include="this" hx-swap="outerHTML"{% endif %}
+      {% if dependent_url %}hx-get="{{ dependent_url }}" hx-target="#{{ target_id }}" hx-trigger="change" hx-include="closest .wybra-phone-contact" hx-swap="outerHTML"{% endif %}
       {% if country.required %}required{% endif %}
       {% if country.disabled %}disabled{% endif %}
       {% if country.errors %}aria-invalid="true" aria-describedby="{{ country.name }}_errors"{% endif %}

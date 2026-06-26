@@ -23,7 +23,11 @@ THEME_WIDGET = WidgetFeature(
 )
 LOGIN_WIDGET = WidgetFeature(
     name=LOGIN_FEATURE,
-    templates=("layouts/page.html", "components/login_control.html"),
+    templates=(
+        "layouts/page.html",
+        "components/login_control.html",
+        "components/dropdown_menu.html",
+    ),
     static_assets=("styles/widgets.css",),
 )
 WIDGET_FEATURES: tuple[WidgetFeature, ...] = (THEME_WIDGET, LOGIN_WIDGET)

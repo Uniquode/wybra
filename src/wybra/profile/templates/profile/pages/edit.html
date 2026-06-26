@@ -12,7 +12,7 @@
   {% if form_error %}
   <p role="alert">{{ form_error }}</p>
   {% endif %}
-  <form class="wybra-form" method="post" action="">
+  <form class="wybra-form" method="post" action="" data-wybra-profile-form>
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}" />
     {% if "return_to" in profile_form.fields %}
     {{ render_field(profile_form, "return_to") }}
@@ -41,8 +41,114 @@
     ) }}
     {% endif %}
     <div class="wybra-form-actions">
-      <button class="wybra-form-action wybra-form-action--submit" type="submit">Submit</button>
+      <button
+        class="wybra-form-action wybra-form-action--submit"
+        type="submit"
+        data-wybra-profile-save
+        disabled
+      >Save Changes</button>
+      <button
+        class="wybra-form-action wybra-form-action--cancel"
+        type="button"
+        data-wybra-profile-cancel
+        disabled
+      >Cancel</button>
     </div>
   </form>
 </section>
+<script>
+  (() => {
+    const entryMap = (entries) => {
+      const values = new Map();
+      entries.forEach(([name, value]) => {
+        const existing = values.get(name) || [];
+        existing.push(value);
+        values.set(name, existing);
+      });
+      return values;
+    };
+
+    const nextFieldValue = (field, values, offsets) => {
+      const offset = offsets.get(field.name) || 0;
+      offsets.set(field.name, offset + 1);
+      return values[offset] || "";
+    };
+
+    const restoreChoiceField = (field, values, offsets) => {
+      if (field instanceof HTMLSelectElement && field.multiple) {
+        Array.from(field.options).forEach((option) => {
+          option.selected = values.includes(option.value);
+        });
+        return;
+      }
+      if (
+        field instanceof HTMLInputElement &&
+        ["checkbox", "radio"].includes(field.type)
+      ) {
+        field.checked = values.includes(field.value);
+        return;
+      }
+      field.value = nextFieldValue(field, values, offsets);
+    };
+
+    const bindProfileForm = (form) => {
+      const actions = form.querySelectorAll(
+        "[data-wybra-profile-save], [data-wybra-profile-cancel]",
+      );
+      const cancel = form.querySelector("[data-wybra-profile-cancel]");
+      const initialEntries = Array.from(new FormData(form).entries());
+      const initialValues = entryMap(initialEntries);
+      const serialise = () => JSON.stringify(
+        Array.from(new FormData(form).entries()),
+      );
+      const initial = serialise();
+      const restoreInitialValues = () => {
+        const offsets = new Map();
+        form.querySelectorAll("input, select, textarea").forEach((field) => {
+          if (
+            field instanceof HTMLInputElement ||
+            field instanceof HTMLSelectElement ||
+            field instanceof HTMLTextAreaElement
+          ) {
+            const values = initialValues.get(field.name) || [];
+            if (values.length || field.type !== "hidden") {
+              restoreChoiceField(field, values, offsets);
+            }
+          }
+        });
+      };
+      const setActionState = () => {
+        const disabled = serialise() === initial;
+        actions.forEach((action) => {
+          if (action instanceof HTMLButtonElement) {
+            action.disabled = disabled;
+          }
+        });
+      };
+
+      form.addEventListener("input", setActionState);
+      form.addEventListener("change", setActionState);
+      if (cancel instanceof HTMLButtonElement) {
+        cancel.addEventListener("click", () => {
+          restoreInitialValues();
+          form.querySelectorAll("[hx-get]").forEach((field) => {
+            field.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+          setActionState();
+        });
+      }
+      form.addEventListener("htmx:afterSwap", () => {
+        restoreInitialValues();
+        setActionState();
+      });
+      setActionState();
+    };
+
+    document.querySelectorAll("[data-wybra-profile-form]").forEach((form) => {
+      if (form instanceof HTMLFormElement) {
+        bindProfileForm(form);
+      }
+    });
+  })();
+</script>
 {% endblock %}
