@@ -31,6 +31,7 @@ from wybra.media import (
     FilesystemMediaCapability,
     MediaCapability,
     MediaCapabilityError,
+    MediaNotFoundError,
     MediaSettings,
 )
 from wybra.profile import (
@@ -1683,16 +1684,16 @@ async def test_profile_image_descriptor_falls_back_when_media_is_unavailable(
             raise MediaCapabilityError("store not supported for fallback test.")
 
         async def get(self, media_id: uuid.UUID) -> object:  # pylint: disable=unused-argument
-            raise MediaCapabilityError(f"Unknown media item: media_id={media_id}.")
+            raise MediaNotFoundError(f"Unknown media item: media_id={media_id}.")
 
         async def path_for(self, media_id: uuid.UUID) -> Path:  # pylint: disable=unused-argument
-            raise MediaCapabilityError(f"Unknown media item: media_id={media_id}.")
+            raise MediaNotFoundError(f"Unknown media item: media_id={media_id}.")
 
         async def url_for(self, media_id: uuid.UUID) -> str:  # pylint: disable=unused-argument
-            raise MediaCapabilityError(f"Unknown media item: media_id={media_id}.")
+            raise MediaNotFoundError(f"Unknown media item: media_id={media_id}.")
 
         async def get_by_resource_key(self, resource_key: str) -> object:  # pylint: disable=unused-argument
-            raise MediaCapabilityError(f"Unknown media resource key: {resource_key}.")
+            raise MediaNotFoundError(f"Unknown media resource key: {resource_key}.")
 
         async def assign_resource_key(  # pylint: disable=unused-argument
             self,

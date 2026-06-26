@@ -10,7 +10,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from wybra.media import MediaCapability, MediaCapabilityError
+from wybra.media import MediaCapability, MediaError
 from wybra.profile.editing import profile_field_values
 from wybra.profile.exceptions import ProfileCapabilityError, ProfileInputError
 from wybra.profile.models import UserPhoneContact, UserProfile
@@ -242,7 +242,7 @@ class SiteProfileCapability:
                     alt="Profile picture",
                     fallback_text=None,
                 )
-            except (MediaCapabilityError, SiteCapabilityError):
+            except (MediaError, SiteCapabilityError):
                 logger.warning(
                     "Profile image resolution via media capability failed; "
                     "using fallback profile initial.",

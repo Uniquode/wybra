@@ -430,7 +430,7 @@ def test_migrate_init_reports_missing_postgresql_admin_url(
 
     captured = capsys.readouterr()
     assert exit_code == 1
-    assert "provisioning: failed" in captured.err
+    assert "configuration: failed" in captured.err
     assert "--admin-database-url" in captured.err
     assert "SA_DATABASE_URL" in captured.err
     assert "secret" not in captured.err
@@ -460,6 +460,7 @@ def test_migrate_init_rejects_blank_admin_database_url_without_env_fallback(
 
     captured = capsys.readouterr()
     assert exit_code == 1
+    assert "configuration: failed" in captured.err
     assert "--admin-database-url must not be blank" in captured.err
     assert "env-secret" not in captured.err
 
@@ -517,6 +518,47 @@ def test_postgresql_provisioning_uses_dbscripts_with_sync_urls(
         observed["admin_url"] == "postgresql://admin:admin-secret@db.example/postgres"
     )
     assert "SA_DATABASE_URL" not in provisioning_module.os.environ
+
+
+def test_postgresql_provisioning_rejects_unsupported_database_url() -> None:
+    with pytest.raises(
+        provisioning_module.DatabaseProvisioningConfigurationError,
+        match="requires a postgresql database URL",
+    ) as excinfo:
+        migrate_module.provision_postgresql_database(
+            "sqlite+aiosqlite:///:memory:",
+            "postgresql+asyncpg://admin:admin-secret@db.example/postgres",
+        )
+
+    assert isinstance(excinfo.value, provisioning_module.DatabaseProvisioningError)
+
+
+def test_postgresql_provisioning_reports_dbscripts_failures_as_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def pg_db_info(*, url: str):
+        return SimpleNamespace(name="app", url=url)
+
+    def pg_setup(_db: object) -> None:
+        raise RuntimeError("could not connect")
+
+    monkeypatch.setattr(
+        provisioning_module,
+        "_dbscripts_dblib",
+        lambda: SimpleNamespace(pg_db_info=pg_db_info, pg_setup=pg_setup),
+        raising=False,
+    )
+
+    with pytest.raises(
+        provisioning_module.DatabaseProvisioningOperationError,
+        match="could not connect",
+    ) as excinfo:
+        migrate_module.provision_postgresql_database(
+            "postgresql+asyncpg://app:secret@db.example/app",
+            "postgresql+asyncpg://admin:admin-secret@db.example/postgres",
+        )
+
+    assert isinstance(excinfo.value, provisioning_module.DatabaseProvisioningError)
 
 
 def test_migrate_upgrade_rejects_uninitialised_sqlite_database(

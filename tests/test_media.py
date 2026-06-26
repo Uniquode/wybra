@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import re
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+import anyio
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import wybra.media as media_module
+import wybra.media.capabilities as media_capabilities
 from wybra.auth import models as auth_models  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core import InputValidationError
@@ -19,8 +23,12 @@ from wybra.media import (
     FilesystemMediaCapability,
     MediaCapability,
     MediaCapabilityError,
+    MediaError,
     MediaInputError,
+    MediaNotFoundError,
     MediaSettings,
+    MediaStorageOperationError,
+    MediaStorageReadinessError,
 )
 from wybra.media.models import MediaItem
 from wybra.media.validation import validate_media
@@ -137,6 +145,17 @@ def test_media_metadata_exposes_media_resource_key_table() -> None:
     assert table.c.resource_key.nullable is False
 
 
+def test_media_exceptions_inherit_from_media_error() -> None:
+    for exception_type in (
+        MediaCapabilityError,
+        MediaInputError,
+        MediaNotFoundError,
+        MediaStorageOperationError,
+        MediaStorageReadinessError,
+    ):
+        assert issubclass(exception_type, MediaError)
+
+
 def test_media_capability_resolves_safe_key_paths(tmp_path: Path) -> None:
     capability = _capability(tmp_path)
 
@@ -155,7 +174,6 @@ def test_media_capability_rejects_unsafe_paths(tmp_path: Path, key: str) -> None
         capability.path_for_key(key)
 
     assert isinstance(excinfo.value, MediaInputError)
-    assert not isinstance(excinfo.value, MediaCapabilityError)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +195,6 @@ async def test_media_capability_rejects_invalid_categories(
         await capability.register(category=category, storage_key="profiles/avatar.png")
 
     assert isinstance(excinfo.value, MediaInputError)
-    assert not isinstance(excinfo.value, MediaCapabilityError)
 
 
 @pytest.mark.anyio
@@ -212,7 +229,6 @@ async def test_media_capability_rejects_invalid_resource_keys(
 
     assert "Media resource key" in str(excinfo.value)
     assert isinstance(excinfo.value, MediaInputError)
-    assert not isinstance(excinfo.value, MediaCapabilityError)
 
 
 def test_media_capability_validates_writable_root(tmp_path: Path) -> None:
@@ -228,8 +244,25 @@ def test_media_capability_rejects_missing_writable_root(tmp_path: Path) -> None:
         database=site.capability_proxy(DatabaseCapability),
     )
 
-    with pytest.raises(MediaCapabilityError, match="does not exist"):
+    with pytest.raises(MediaStorageReadinessError, match="does not exist") as excinfo:
         capability.validate_writable()
+    assert isinstance(excinfo.value, MediaStorageReadinessError)
+
+
+def test_media_capability_reports_writable_root_probe_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = _capability(tmp_path)
+
+    def fail_touch(self: Path, *args: object, **kwargs: object) -> None:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "touch", fail_touch)
+
+    with pytest.raises(MediaStorageOperationError, match="not writable") as excinfo:
+        capability.validate_writable()
+    assert isinstance(excinfo.value, MediaStorageOperationError)
 
 
 @pytest.mark.anyio
@@ -351,6 +384,91 @@ async def test_media_capability_stores_upload_and_registers_catalogue_item(
 
 
 @pytest.mark.anyio
+async def test_media_capability_reports_upload_write_failures_as_storage_operations(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = _capability(tmp_path)
+    await create_database_schema(capability)
+    media_uuid = uuid.UUID("12345678-1234-5678-1234-567812345678")
+    temp_destination = tmp_path / ".tmp" / f"{media_uuid.hex}.user.png.tmp"
+
+    class FailingOutput:
+        async def __aenter__(self) -> FailingOutput:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def write(self, _chunk: bytes) -> None:
+            temp_destination.write_bytes(b"partial")
+            raise OSError("disk unavailable")
+
+    async def fail_open_file(*args: object, **kwargs: object) -> object:
+        return FailingOutput()
+
+    monkeypatch.setattr(media_capabilities.uuid, "uuid4", lambda: media_uuid)
+    monkeypatch.setattr(anyio, "open_file", fail_open_file)
+
+    with pytest.raises(
+        MediaStorageOperationError,
+        match="Media storage operation failed",
+    ) as excinfo:
+        await capability.store(
+            category="profile",
+            storage_key="profile/ab/cd/user.png",
+            upload=FakeUpload((b"avatar",), "image/png"),
+        )
+
+    assert isinstance(excinfo.value, MediaStorageOperationError)
+    assert not (tmp_path / "profile" / "ab" / "cd" / "user.png").exists()
+    assert not temp_destination.exists()
+    tmp_root = tmp_path / ".tmp"
+    if tmp_root.exists():
+        assert not any(tmp_root.iterdir())
+
+
+@pytest.mark.anyio
+async def test_media_capability_cleans_temp_file_for_upload_read_failures(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = _capability(tmp_path)
+    await create_database_schema(capability)
+    media_uuid = uuid.UUID("87654321-4321-8765-4321-876543218765")
+    temp_destination = tmp_path / ".tmp" / f"{media_uuid.hex}.user.png.tmp"
+
+    class FailingReadUpload:
+        content_type = "image/png"
+
+        def __init__(self) -> None:
+            self._read_count = 0
+
+        async def read(self, _size: int = -1) -> bytes:
+            self._read_count += 1
+            if self._read_count == 1:
+                return b"partial"
+            raise RuntimeError("upload stream failed")
+
+    monkeypatch.setattr(media_capabilities.uuid, "uuid4", lambda: media_uuid)
+
+    with pytest.raises(RuntimeError, match="upload stream failed"):
+        await capability.store(
+            category="profile",
+            storage_key="profile/ab/cd/user.png",
+            upload=FailingReadUpload(),
+        )
+
+    assert not (tmp_path / "profile" / "ab" / "cd" / "user.png").exists()
+    assert not temp_destination.exists()
+    tmp_root = tmp_path / ".tmp"
+    if tmp_root.exists():
+        assert not any(tmp_root.iterdir())
+
+
+@pytest.mark.anyio
 async def test_media_capability_rejects_invalid_upload_chunk_size(
     tmp_path: Path,
 ) -> None:
@@ -391,8 +509,85 @@ async def test_media_capability_rejects_unknown_resource_key(
     capability = _capability(tmp_path)
     await create_database_schema(capability)
 
-    with pytest.raises(MediaCapabilityError):
+    with pytest.raises(MediaNotFoundError) as excinfo:
         await capability.get_by_resource_key("missing")
+    assert isinstance(excinfo.value, MediaNotFoundError)
+
+
+@pytest.mark.anyio
+async def test_media_item_route_returns_not_found_for_missing_media(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+) -> None:
+    app = FastAPI()
+    capability = _capability(tmp_path, url_mode="id")
+    await create_database_schema(capability)
+    site = Site(app=app, config=_config(tmp_path))
+
+    media_module._register_media_item_route(site, capability)
+
+    response = TestClient(app).get(f"/media/items/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_media_item_route_returns_not_found_for_missing_file(
+    tmp_path: Path,
+) -> None:
+    app = FastAPI()
+    site = Site(app=app, config=_config(tmp_path))
+    media_id = uuid.uuid4()
+
+    class MissingFileMediaCapability:
+        root = tmp_path
+        mount_path = "/media"
+        serve = True
+        url_mode = "id"
+
+        async def get(self, _media_id: uuid.UUID) -> MediaItem:
+            return MediaItem(
+                id=media_id,
+                category="profile",
+                storage_key="profile/ab/cd/user.png",
+                content_type="image/png",
+                size=123,
+            )
+
+        async def path_for(self, _media_id: uuid.UUID) -> Path:
+            raise FileNotFoundError("profile/ab/cd/user.png")
+
+    media_module._register_media_item_route(site, MissingFileMediaCapability())
+
+    response = TestClient(app).get(f"/media/items/{media_id}")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_media_item_route_does_not_mask_storage_failures(tmp_path: Path) -> None:
+    app = FastAPI()
+    site = Site(app=app, config=_config(tmp_path))
+
+    class FailingMediaCapability:
+        root = tmp_path
+        mount_path = "/media"
+        serve = True
+        url_mode = "id"
+
+        async def get(self, _media_id: uuid.UUID):
+            raise MediaStorageReadinessError("storage unavailable")
+
+        async def path_for(self, _media_id: uuid.UUID) -> Path:
+            raise AssertionError("path_for should not be called")
+
+    media_module._register_media_item_route(site, FailingMediaCapability())
+
+    response = TestClient(app, raise_server_exceptions=False).get(
+        f"/media/items/{uuid.uuid4()}"
+    )
+
+    assert response.status_code == 500
 
 
 def test_validate_media_reports_missing_root(tmp_path: Path) -> None:

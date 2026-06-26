@@ -19,6 +19,14 @@ class DatabaseProvisioningError(RuntimeError):
     """Raised when database infrastructure provisioning fails."""
 
 
+class DatabaseProvisioningConfigurationError(DatabaseProvisioningError, ValueError):
+    """Raised when database provisioning input or configuration is invalid."""
+
+
+class DatabaseProvisioningOperationError(DatabaseProvisioningError):
+    """Raised when database infrastructure provisioning fails during execution."""
+
+
 def is_postgresql_database_url(database_url: str) -> bool:
     return urlsplit(database_url).scheme in POSTGRESQL_SCHEMES
 
@@ -28,14 +36,18 @@ def provision_postgresql_database(
     admin_database_url: str | None = None,
 ) -> None:
     if admin_database_url is not None and not admin_database_url.strip():
-        raise DatabaseProvisioningError("--admin-database-url must not be blank.")
+        raise DatabaseProvisioningConfigurationError(
+            "--admin-database-url must not be blank."
+        )
 
     admin_url = admin_database_url or os.environ.get(ADMIN_DATABASE_URL_ENV)
     if admin_url is not None and not admin_url.strip():
-        raise DatabaseProvisioningError(f"{ADMIN_DATABASE_URL_ENV} must not be blank.")
+        raise DatabaseProvisioningConfigurationError(
+            f"{ADMIN_DATABASE_URL_ENV} must not be blank."
+        )
 
     if not admin_url:
-        raise DatabaseProvisioningError(
+        raise DatabaseProvisioningConfigurationError(
             "PostgreSQL init requires --admin-database-url or SA_DATABASE_URL "
             "for database, user, role, and privilege provisioning."
         )
@@ -48,13 +60,15 @@ def provision_postgresql_database(
     except DatabaseProvisioningError:
         raise
     except Exception as exc:
-        raise DatabaseProvisioningError(safe_database_error_message(exc)) from exc
+        raise DatabaseProvisioningOperationError(
+            safe_database_error_message(exc)
+        ) from exc
 
 
 def _postgresql_sync_url(database_url: str) -> str:
     parsed = urlsplit(database_url)
     if parsed.scheme not in POSTGRESQL_SCHEMES:
-        raise DatabaseProvisioningError(
+        raise DatabaseProvisioningConfigurationError(
             "PostgreSQL provisioning requires a postgresql database URL."
         )
     if parsed.scheme == POSTGRESQL_SYNC_SCHEME:

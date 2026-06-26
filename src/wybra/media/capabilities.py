@@ -16,12 +16,28 @@ from wybra.media.models import MediaItem, MediaResourceKey
 from wybra.site import SiteCapabilityProxy
 
 
-class MediaCapabilityError(RuntimeError):
-    """Raised when a media capability operation cannot be completed."""
+class MediaError(RuntimeError):
+    """Base for media-domain failures."""
 
 
-class MediaInputError(InputValidationError):
+class MediaCapabilityError(MediaError):
+    """Raised when a media capability cannot be resolved or used."""
+
+
+class MediaInputError(InputValidationError, MediaError):
     """Raised when caller-provided media input is invalid."""
+
+
+class MediaNotFoundError(MediaError):
+    """Raised when a requested media item or resource key does not exist."""
+
+
+class MediaStorageReadinessError(MediaError):
+    """Raised when media storage is not configured or ready for use."""
+
+
+class MediaStorageOperationError(MediaError):
+    """Raised when media storage IO fails during an operation."""
 
 
 @runtime_checkable
@@ -155,13 +171,15 @@ class FilesystemMediaCapability:
         media_key = _storage_key(storage_key)
         self.validate_writable()
         destination = self.path_for_key(media_key)
-        destination.parent.mkdir(parents=True, exist_ok=True)
         temp_root = self.root.resolve() / ".tmp"
-        temp_root.mkdir(parents=True, exist_ok=True)
         temp_destination = temp_root / f"{uuid.uuid4().hex}.{destination.name}.tmp"
 
         size = 0
+        # Filesystem writes and the atomic replace are storage operations; keep
+        # non-IO failures unchanged while still removing any temporary upload.
         try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temp_root.mkdir(parents=True, exist_ok=True)
             async with await anyio.open_file(temp_destination, "wb") as output:
                 while True:
                     chunk = await upload.read(chunk_size)
@@ -171,21 +189,30 @@ class FilesystemMediaCapability:
                     await output.write(chunk)
 
             temp_destination.replace(destination)
-            try:
-                return await self.register(
-                    category=media_category,
-                    storage_key=media_key,
-                    content_type=upload.content_type,
-                    size=size,
-                    resource_key=resource_key,
-                )
-            except BaseException:
-                with suppress(FileNotFoundError):
-                    destination.unlink()
-                raise
+        except OSError as exc:
+            with suppress(FileNotFoundError):
+                temp_destination.unlink()
+            raise MediaStorageOperationError(
+                f"Media storage operation failed: key={media_key}."
+            ) from exc
         except BaseException:
             with suppress(FileNotFoundError):
                 temp_destination.unlink()
+            raise
+
+        # Registration completes the store operation. If catalogue registration
+        # fails, remove the written file so callers do not inherit an orphan.
+        try:
+            return await self.register(
+                category=media_category,
+                storage_key=media_key,
+                content_type=upload.content_type,
+                size=size,
+                resource_key=resource_key,
+            )
+        except Exception:
+            with suppress(FileNotFoundError):
+                destination.unlink()
             raise
 
     async def get(self, media_id: uuid.UUID) -> MediaItem:
@@ -194,7 +221,7 @@ class FilesystemMediaCapability:
                 select(MediaItem).where(MediaItem.id == media_id)
             )
         if item is None:
-            raise MediaCapabilityError(f"Unknown media item: media_id={media_id}.")
+            raise MediaNotFoundError(f"Unknown media item: media_id={media_id}.")
         return item
 
     async def path_for(self, media_id: uuid.UUID) -> Path:
@@ -218,7 +245,7 @@ class FilesystemMediaCapability:
                 .where(MediaResourceKey.resource_key == validated_resource_key)
             )
         if media is None:
-            raise MediaCapabilityError(
+            raise MediaNotFoundError(
                 f"Unknown media resource key: resource_key={resource_key}."
             )
         return media
@@ -252,9 +279,7 @@ class FilesystemMediaCapability:
         root = self.root.resolve()
         resolved = (root / key_path).resolve()
         if not resolved.is_relative_to(root):
-            raise MediaCapabilityError(
-                f"Media key escapes media root: key={storage_key!s}."
-            )
+            raise MediaInputError(f"Media key escapes media root: key={storage_key!s}.")
         return resolved
 
     def url_for_key(self, storage_key: str | Path) -> str:
@@ -267,16 +292,18 @@ class FilesystemMediaCapability:
         if self._writable_root_validated:
             return
         if not root.exists():
-            raise MediaCapabilityError(f"Media root does not exist: root={self.root}.")
+            raise MediaStorageReadinessError(
+                f"Media root does not exist: root={self.root}."
+            )
         if not root.is_dir():
-            raise MediaCapabilityError(
+            raise MediaStorageReadinessError(
                 f"Media root is not a directory: root={self.root}."
             )
         probe = root / f".wybra-media-write-test-{uuid.uuid4().hex}"
         try:
             probe.touch(exist_ok=True)
         except OSError as exc:
-            raise MediaCapabilityError(
+            raise MediaStorageOperationError(
                 f"Media root is not writable: root={self.root}."
             ) from exc
         finally:
@@ -328,6 +355,10 @@ __all__ = (
     "FilesystemMediaCapability",
     "MediaCapability",
     "MediaCapabilityError",
+    "MediaError",
     "MediaInputError",
+    "MediaNotFoundError",
+    "MediaStorageOperationError",
+    "MediaStorageReadinessError",
     "MediaUpload",
 )

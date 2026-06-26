@@ -11,7 +11,11 @@ from wybra.media.capabilities import (
     FilesystemMediaCapability,
     MediaCapability,
     MediaCapabilityError,
+    MediaError,
     MediaInputError,
+    MediaNotFoundError,
+    MediaStorageOperationError,
+    MediaStorageReadinessError,
 )
 from wybra.media.config import MediaSettings, module_config
 from wybra.media.validation import MediaValidationSettings, validate_media
@@ -49,7 +53,7 @@ def _register_media_item_route(site: Site, capability: MediaCapability) -> None:
                 await capability.path_for(media_id),
                 media_type=item.content_type,
             )
-        except (FileNotFoundError, MediaCapabilityError) as exc:
+        except (FileNotFoundError, MediaNotFoundError) as exc:
             raise HTTPException(status_code=404) from exc
 
     site.app.add_api_route(
@@ -64,7 +68,11 @@ __all__ = (
     "FilesystemMediaCapability",
     "MediaCapability",
     "MediaCapabilityError",
+    "MediaError",
     "MediaInputError",
+    "MediaNotFoundError",
+    "MediaStorageOperationError",
+    "MediaStorageReadinessError",
     "MediaSettings",
     "MediaValidationSettings",
     "module_config",
