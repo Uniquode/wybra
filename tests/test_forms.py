@@ -96,7 +96,7 @@ class ExampleRecord:
 
 
 @dataclass(slots=True)
-class TransactionProbe:
+class PersistenceProbeRecord(ExampleRecord):
     commit_called: bool = False
     flush_called: bool = False
     rollback_called: bool = False
@@ -372,18 +372,17 @@ def test_model_form_rejects_unsupported_binding_declarations() -> None:
 
 
 def test_model_form_does_not_manage_persistence_transactions() -> None:
-    record = ExampleRecord()
-    probe = TransactionProbe()
+    record = PersistenceProbeRecord()
     form = ExampleModelForm()
     form.parse({"preferred_name": "David", "bio": "Bio"})
 
     form.apply(record)
 
     assert record.preferred_name == "David"
-    assert not probe.commit_called
-    assert not probe.flush_called
-    assert not probe.rollback_called
-    assert not probe.add_called
+    assert not record.commit_called
+    assert not record.flush_called
+    assert not record.rollback_called
+    assert not record.add_called
 
 
 def test_model_form_remains_plain_object_compatible() -> None:
