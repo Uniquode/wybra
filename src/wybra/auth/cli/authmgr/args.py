@@ -30,10 +30,6 @@ class AuthmgrArgs:
     is_superuser: bool | None = None
     is_verified: bool | None = None
     no_revoke: bool = False
-    display_name: str | None = None
-    clear_display_name: bool = False
-    preferred_name: str | None = None
-    clear_preferred_name: bool = False
     preferred_timezone: str | None = None
     clear_preferred_timezone: bool = False
     expires_at: float | None = None

@@ -25,8 +25,6 @@ def register_user_commands(root_command: click.Group) -> None:
     @click.option("--admin", is_flag=True)
     @click.option("--superuser", is_flag=True)
     @click.option("--unverified", is_flag=True)
-    @click.option("--display-name")
-    @click.option("--preferred-name")
     @click.option("--timezone", "preferred_timezone")
     @click.option("--expires-at", callback=_timestamp_callback)
     @click.option("--group", "groups", multiple=True)
@@ -56,8 +54,6 @@ def register_user_commands(root_command: click.Group) -> None:
         admin: bool,
         superuser: bool,
         unverified: bool,
-        display_name: str | None,
-        preferred_name: str | None,
         preferred_timezone: str | None,
         expires_at: float | None,
         groups: tuple[str, ...],
@@ -74,8 +70,6 @@ def register_user_commands(root_command: click.Group) -> None:
                 admin=admin,
                 superuser=superuser,
                 unverified=unverified,
-                display_name=display_name,
-                preferred_name=preferred_name,
                 preferred_timezone=preferred_timezone,
                 expires_at=expires_at,
                 add_groups=groups,
@@ -95,10 +89,6 @@ def register_user_commands(root_command: click.Group) -> None:
     @click.option("--no-verify", "no_verify", is_flag=True)
     @_password_source_option(default=None)
     @click.option("--no-revoke", is_flag=True)
-    @click.option("--display-name")
-    @click.option("--no-display-name", "clear_display_name", is_flag=True)
-    @click.option("--preferred-name")
-    @click.option("--no-preferred-name", "clear_preferred_name", is_flag=True)
     @click.option("--timezone", "preferred_timezone")
     @click.option("--no-timezone", "clear_preferred_timezone", is_flag=True)
     @click.option("--expires-at", callback=_timestamp_callback)
@@ -147,10 +137,6 @@ def register_user_commands(root_command: click.Group) -> None:
         no_verify: bool,
         password: PasswordSource | None,
         no_revoke: bool,
-        display_name: str | None,
-        clear_display_name: bool,
-        preferred_name: str | None,
-        clear_preferred_name: bool,
         preferred_timezone: str | None,
         clear_preferred_timezone: bool,
         expires_at: float | None,
@@ -174,13 +160,6 @@ def register_user_commands(root_command: click.Group) -> None:
             raise click.UsageError(
                 "--set-group cannot be used with --add-group or --rm-group."
             )
-        _ensure_mutually_exclusive(
-            (display_name, "--display-name"), (clear_display_name, "--no-display-name")
-        )
-        _ensure_mutually_exclusive(
-            (preferred_name, "--preferred-name"),
-            (clear_preferred_name, "--no-preferred-name"),
-        )
         _ensure_mutually_exclusive(
             (preferred_timezone, "--timezone"),
             (clear_preferred_timezone, "--no-timezone"),
@@ -216,10 +195,6 @@ def register_user_commands(root_command: click.Group) -> None:
                 ),
                 password=password,
                 no_revoke=no_revoke,
-                display_name=display_name,
-                clear_display_name=clear_display_name,
-                preferred_name=preferred_name,
-                clear_preferred_name=clear_preferred_name,
                 preferred_timezone=preferred_timezone,
                 clear_preferred_timezone=clear_preferred_timezone,
                 expires_at=expires_at,

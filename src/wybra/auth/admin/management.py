@@ -81,8 +81,6 @@ USER_RECORD_FIELDS: tuple[str, ...] = (
     "is_superuser",
     "is_verified",
     *USER_TIMESTAMP_FIELDS,
-    "display_name",
-    "preferred_name",
     "preferred_timezone",
 )
 SCOPE_RECORD_FIELDS: tuple[str, ...] = ("scope", "description")
@@ -112,8 +110,6 @@ def user_record(user: User, *, now: float | None = None) -> dict[str, Any]:
         "last_login_at": user.last_login_at,
         "expires_at": user.expires_at,
         "email_verification_sent_at": user.email_verification_sent_at,
-        "display_name": user.display_name,
-        "preferred_name": user.preferred_name,
         "preferred_timezone": user.preferred_timezone,
     }
     return {field_name: record.get(field_name) for field_name in USER_RECORD_FIELDS}
@@ -792,8 +788,6 @@ async def create_local_user_for_management(
     is_admin: bool = False,
     is_superuser: bool = False,
     is_verified: bool = True,
-    display_name: str | None = None,
-    preferred_name: str | None = None,
     preferred_timezone: str | None = None,
     expires_at: float | None = None,
     delivery: IdentityDelivery | None = None,
@@ -820,8 +814,6 @@ async def create_local_user_for_management(
         return Result.failure(ERROR_ALREADY_EXISTS, "User already exists.")
 
     user.is_admin = is_admin
-    user.display_name = display_name
-    user.preferred_name = preferred_name
     user.preferred_timezone = preferred_timezone
     user.expires_at = expires_at
     user.modified_at = current_timestamp()
@@ -922,10 +914,6 @@ async def update_local_user_for_management(
     is_verified: bool | None = None,
     password: str | None = None,
     revoke_sessions: bool = True,
-    display_name: str | None = None,
-    clear_display_name: bool = False,
-    preferred_name: str | None = None,
-    clear_preferred_name: bool = False,
     preferred_timezone: str | None = None,
     clear_preferred_timezone: bool = False,
     expires_at: float | None = None,
@@ -963,19 +951,12 @@ async def update_local_user_for_management(
         user.is_superuser = is_superuser
         has_changes = True
 
-    for field_name, field_value, clear_field in (
-        ("display_name", display_name, clear_display_name),
-        ("preferred_name", preferred_name, clear_preferred_name),
-        ("preferred_timezone", preferred_timezone, clear_preferred_timezone),
-    ):
-        if clear_field and getattr(user, field_name) is not None:
-            setattr(user, field_name, None)
-            has_changes = True
-            continue
-
-        if field_value is not None:
-            setattr(user, field_name, field_value)
-            has_changes = True
+    if clear_preferred_timezone and user.preferred_timezone is not None:
+        user.preferred_timezone = None
+        has_changes = True
+    elif preferred_timezone is not None:
+        user.preferred_timezone = preferred_timezone
+        has_changes = True
 
     if clear_expires_at and user.expires_at is not None:
         user.expires_at = None
