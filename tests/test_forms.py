@@ -15,6 +15,7 @@ from wybra.core.resources import PackageResourceSource, first_existing_resource
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
+    Attr,
     CheckboxField,
     ChoiceField,
     DateField,
@@ -26,12 +27,17 @@ from wybra.forms import (
     FormsCapability,
     FormsSettings,
     HiddenField,
+    JsonPath,
+    ModelBindingError,
+    ModelForm,
+    ModelFormDeclarationError,
     MultiSelectField,
     PhoneContactControl,
     PhoneContactError,
     PhoneContactWidgetError,
     PositiveIntegerField,
     RadioField,
+    ReadOnly,
     SelectField,
     SliderField,
     SwitchField,
@@ -78,6 +84,50 @@ SUBDIVISION_OPTIONS = {"NSW": "New South Wales", "VIC": "Victoria"}
 class UploadedFile:
     filename: str
     content_type: str = "application/octet-stream"
+
+
+@dataclass(slots=True)
+class ExampleRecord:
+    preferred_name: str = ""
+    bio: str = ""
+    website_links: dict[str, object] | None = None
+    created_by: str = "system"
+    disabled_value: str = "stored"
+
+
+@dataclass(slots=True)
+class PersistenceProbeRecord(ExampleRecord):
+    commit_called: bool = False
+    flush_called: bool = False
+    rollback_called: bool = False
+    add_called: bool = False
+
+    def commit(self) -> None:
+        self.commit_called = True
+
+    def flush(self) -> None:
+        self.flush_called = True
+
+    def rollback(self) -> None:
+        self.rollback_called = True
+
+    def add(self, _record: object) -> None:
+        self.add_called = True
+
+
+class ExampleModelForm(ModelForm):
+    preferred_name = TextField(max_length=64)
+    bio = TextAreaField(required=False)
+    website = TextField(required=False)
+    owner = TextField(required=False)
+    disabled_value = TextField(disabled=True, required=False)
+
+    class Meta:
+        model = ExampleRecord
+        bindings = {
+            "website": JsonPath("website_links", "website"),
+            "owner": ReadOnly(Attr("created_by")),
+        }
 
 
 def csrf_request(
@@ -183,6 +233,175 @@ def test_form_values_override_defaults_for_rendering() -> None:
 
     assert form.fields["preferred_name"].value == "David"
     assert form.fields["bio"].value == "Default bio"
+
+
+def test_model_form_requires_meta_model() -> None:
+    class MissingModelForm(ModelForm):
+        name = TextField()
+
+    with pytest.raises(ModelFormDeclarationError, match="Meta.model"):
+        MissingModelForm()
+
+
+def test_model_form_rejects_unknown_binding_field() -> None:
+    class UnknownBindingForm(ModelForm):
+        name = TextField()
+
+        class Meta:
+            model = ExampleRecord
+            bindings = {"missing": Attr("missing")}
+
+    with pytest.raises(ModelFormDeclarationError, match="Unknown binding field"):
+        UnknownBindingForm()
+
+
+def test_model_form_loads_instance_values_with_explicit_value_precedence() -> None:
+    record = ExampleRecord(
+        preferred_name="Model",
+        bio="Model bio",
+        website_links={"website": "https://example.test", "other": "preserved"},
+    )
+
+    form = ExampleModelForm(
+        instance=record,
+        defaults={"preferred_name": "Default", "bio": "Default bio"},
+        values={"preferred_name": "Submitted"},
+    )
+
+    assert form.fields["preferred_name"].value == "Submitted"
+    assert form.fields["bio"].value == "Model bio"
+    assert form.fields["website"].value == "https://example.test"
+    assert form.fields["owner"].value == "system"
+
+
+def test_model_form_applies_valid_values_to_existing_instance() -> None:
+    record = ExampleRecord(
+        preferred_name="Before",
+        bio="Before bio",
+        website_links={"website": "https://old.example", "other": "preserved"},
+    )
+    form = ExampleModelForm(instance=record)
+
+    result = form.parse(
+        {
+            "preferred_name": "After",
+            "bio": "After bio",
+            "website": "https://new.example",
+            "owner": "attacker",
+            "disabled_value": "submitted",
+        }
+    )
+    applied = form.apply()
+
+    assert result.is_valid
+    assert applied is record
+    assert record.preferred_name == "After"
+    assert record.bio == "After bio"
+    assert record.website_links == {
+        "website": "https://new.example",
+        "other": "preserved",
+    }
+    assert record.created_by == "system"
+    assert record.disabled_value == "stored"
+
+
+def test_model_form_applies_valid_values_to_new_instance_for_create_flow() -> None:
+    record = ExampleRecord()
+    form = ExampleModelForm()
+
+    form.parse(
+        {
+            "preferred_name": "Created",
+            "bio": "Created bio",
+            "website": "https://created.example",
+        }
+    )
+
+    assert form.is_valid()
+    assert form.apply(record) is record
+    assert record.preferred_name == "Created"
+    assert record.bio == "Created bio"
+    assert record.website_links == {"website": "https://created.example"}
+
+
+def test_model_form_does_not_write_invalid_values() -> None:
+    record = ExampleRecord(preferred_name="Before")
+    form = ExampleModelForm(instance=record)
+
+    result = form.parse({"preferred_name": "<script>alert(1)</script>"})
+    applied = form.apply()
+
+    assert not result.is_valid
+    assert applied is record
+    assert record.preferred_name == "Before"
+
+
+def test_model_form_missing_same_name_attribute_fails_clearly() -> None:
+    @dataclass(slots=True)
+    class PartialRecord:
+        bio: str = ""
+
+    class MissingAttributeForm(ModelForm):
+        preferred_name = TextField()
+
+        class Meta:
+            model = PartialRecord
+
+    with pytest.raises(ModelBindingError, match="preferred_name"):
+        MissingAttributeForm(instance=PartialRecord())
+
+
+def test_model_form_apply_requires_instance() -> None:
+    form = ExampleModelForm()
+    form.parse({"preferred_name": "David"})
+
+    with pytest.raises(ModelBindingError, match="instance"):
+        form.apply()
+
+
+def test_model_form_rejects_unsupported_binding_declarations() -> None:
+    class UnsupportedBindingForm(ModelForm):
+        name = TextField()
+
+        class Meta:
+            model = ExampleRecord
+            bindings = {"name": object()}
+
+    with pytest.raises(ModelFormDeclarationError, match="Unsupported binding"):
+        UnsupportedBindingForm()
+
+
+def test_model_form_does_not_manage_persistence_transactions() -> None:
+    record = PersistenceProbeRecord()
+    form = ExampleModelForm()
+    form.parse({"preferred_name": "David", "bio": "Bio"})
+
+    form.apply(record)
+
+    assert record.preferred_name == "David"
+    assert not record.commit_called
+    assert not record.flush_called
+    assert not record.rollback_called
+    assert not record.add_called
+
+
+def test_model_form_remains_plain_object_compatible() -> None:
+    class PlainRecord:
+        preferred_name = ""
+
+    class PlainModelForm(ModelForm):
+        preferred_name = TextField()
+
+        class Meta:
+            model = PlainRecord
+
+    record = PlainRecord()
+    form = PlainModelForm()
+    form.parse({"preferred_name": "Plain"})
+
+    form.apply(record)
+
+    assert record.preferred_name == "Plain"
 
 
 @pytest.mark.parametrize(
