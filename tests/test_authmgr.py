@@ -20,7 +20,11 @@ import pytest
 from click.testing import CliRunner
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Request
-from fastapi_users.exceptions import UserAlreadyExists, UserNotExists
+from fastapi_users.exceptions import (
+    InvalidPasswordException,
+    UserAlreadyExists,
+    UserNotExists,
+)
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -1457,11 +1461,11 @@ def test_authmgr_preserves_help_as_option_value(
 
     result = CliRunner().invoke(
         authmgr.authmgr_command,
-        ["user", "update", "alice@example.com", "--display-name", "help"],
+        ["user", "update", "alice@example.com", "--timezone", "help"],
     )
 
     assert result.exit_code == 0
-    assert captured_args[0].display_name == "help"
+    assert captured_args[0].preferred_timezone == "help"
 
 
 @pytest.mark.parametrize(
@@ -1594,21 +1598,25 @@ def test_authmgr_rejects_conflicting_expiry_update_options(expires_at: str) -> N
     assert "not allowed with option '--expires-at'" in result.output
 
 
-def test_authmgr_rejects_conflicting_display_name_update_with_empty_value() -> None:
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ["user", "create", "person@example.com", "--display-name", "Name"],
+        ["user", "create", "person@example.com", "--preferred-name", "Name"],
+        ["user", "update", "person@example.com", "--display-name", "Name"],
+        ["user", "update", "person@example.com", "--no-display-name"],
+        ["user", "update", "person@example.com", "--preferred-name", "Name"],
+        ["user", "update", "person@example.com", "--no-preferred-name"],
+    ),
+)
+def test_authmgr_rejects_removed_profile_name_options(argv: list[str]) -> None:
     result = CliRunner().invoke(
         authmgr.authmgr_command,
-        [
-            "user",
-            "update",
-            "person@example.com",
-            "--display-name",
-            "",
-            "--no-display-name",
-        ],
+        argv,
     )
 
     assert result.exit_code == 2
-    assert "not allowed with option '--display-name'" in result.output
+    assert "No such option" in result.output
 
 
 def test_authmgr_accepts_flexible_expiry_timestamp_values() -> None:
@@ -1649,10 +1657,10 @@ def test_user_model_exposes_management_metadata_columns() -> None:
         "last_login_at",
         "expires_at",
         "email_verification_sent_at",
-        "display_name",
-        "preferred_name",
         "preferred_timezone",
     }.issubset(user_columns)
+    assert "display_name" not in user_columns
+    assert "preferred_name" not in user_columns
     assert {
         "ix_identity_user_is_active_expires_at",
         "ix_identity_user_last_login_at",
@@ -1701,12 +1709,58 @@ def test_user_management_metadata_defaults() -> None:
             assert user.last_login_at is None
             assert user.expires_at is None
             assert user.email_verification_sent_at is None
-            assert user.display_name is None
-            assert user.preferred_name is None
             assert user.preferred_timezone is None
 
     try:
         asyncio.run(assert_defaults())
+    finally:
+        asyncio.run(close_database(engine))
+
+
+def test_user_manager_password_policy_uses_profile_fragments_when_available() -> None:
+    settings = AuthTestSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
+    engine = create_database_engine(settings)
+    session_factory = create_session_factory(engine)
+
+    async def assert_profile_fragment_is_rejected() -> None:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(session_factory) as session:
+            manager = create_user_manager(session, settings.identity_options)
+            user = await manager.create(
+                UserCreate(
+                    email="profile-fragment@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+
+        async with session_scope(session_factory) as session:
+            user = (
+                await session.execute(
+                    select(User).where(User.email == "profile-fragment@example.com")
+                )
+            ).scalar_one()
+
+            async def profile_lookup(_user: User) -> object:
+                return SimpleNamespace(
+                    display_name="Operator Example",
+                    preferred_name="Operator",
+                )
+
+            manager = create_user_manager(
+                session,
+                settings.identity_options,
+                profile_lookup=profile_lookup,
+            )
+
+            with pytest.raises(InvalidPasswordException) as exc_info:
+                await manager.validate_password("operator account 123!", user)
+            assert "strength requirement" in str(exc_info.value.reason)
+
+    try:
+        asyncio.run(assert_profile_fragment_is_rejected())
     finally:
         asyncio.run(close_database(engine))
 
@@ -2192,10 +2246,10 @@ def test_migrate_upgrade_creates_user_management_metadata_columns(
             "last_login_at",
             "expires_at",
             "email_verification_sent_at",
-            "display_name",
-            "preferred_name",
             "preferred_timezone",
         }.issubset(columns)
+        assert "display_name" not in columns
+        assert "preferred_name" not in columns
         indexes = {index["name"] for index in inspector.get_indexes("identity_user")}
         assert {
             "ix_identity_user_is_active_expires_at",
@@ -2835,10 +2889,6 @@ def test_authmgr_create_user_with_metadata_from_stdin_password(
             "--admin",
             "--superuser",
             "--unverified",
-            "--display-name",
-            "Operator Example",
-            "--preferred-name",
-            "Operator",
             "--timezone",
             "Australia/Melbourne",
             "--expires-at",
@@ -2854,8 +2904,6 @@ def test_authmgr_create_user_with_metadata_from_stdin_password(
     assert user.is_admin is True
     assert user.is_superuser is True
     assert user.is_verified is False
-    assert user.display_name == "Operator Example"
-    assert user.preferred_name == "Operator"
     assert user.preferred_timezone == "Australia/Melbourne"
     assert user.expires_at == 4102444800.0
 
@@ -3826,8 +3874,6 @@ def test_authmgr_list_json_omits_null_fields(
                 "listed@example.com",
                 "--password",
                 "-",
-                "--display-name",
-                "Listed User",
             ]
         )
         == 0
@@ -3839,7 +3885,7 @@ def test_authmgr_list_json_omits_null_fields(
     assert exit_code == 0
     [record] = json.loads(capsys.readouterr().out)
     assert record["email"] == "listed@example.com"
-    assert record["display_name"] == "Listed User"
+    assert "display_name" not in record
     assert "preferred_name" not in record
     assert "preferred_timezone" not in record
     assert "hashed_password" not in record
@@ -3866,10 +3912,6 @@ def test_authmgr_update_resolves_id_and_updates_user_fields(
             "--admin",
             "--superuser",
             "--no-verify",
-            "--display-name",
-            "Updated User",
-            "--preferred-name",
-            "Updated",
             "--timezone",
             "UTC",
             "--expires-at",
@@ -3882,8 +3924,6 @@ def test_authmgr_update_resolves_id_and_updates_user_fields(
     assert user.is_admin is True
     assert user.is_superuser is True
     assert user.is_verified is False
-    assert user.display_name == "Updated User"
-    assert user.preferred_name == "Updated"
     assert user.preferred_timezone == "UTC"
     assert user.expires_at == 4102444800.0
 
@@ -3915,7 +3955,7 @@ def test_authmgr_update_no_expires_at_without_existing_expiry_is_noop(
     assert user.modified_at == created_user.modified_at
 
 
-def test_authmgr_update_can_clear_optional_string_fields(
+def test_authmgr_update_can_clear_optional_account_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3930,10 +3970,6 @@ def test_authmgr_update_can_clear_optional_string_fields(
                 "user",
                 "update",
                 "clear@example.com",
-                "--display-name",
-                "Clear Example",
-                "--preferred-name",
-                "Clear",
                 "--timezone",
                 "UTC",
             ]
@@ -3946,16 +3982,12 @@ def test_authmgr_update_can_clear_optional_string_fields(
             "user",
             "update",
             "clear@example.com",
-            "--no-display-name",
-            "--no-preferred-name",
             "--no-timezone",
         ]
     )
 
     assert exit_code == 0
     [user] = identity_users_from_database(database_url)
-    assert user.display_name is None
-    assert user.preferred_name is None
     assert user.preferred_timezone is None
 
 

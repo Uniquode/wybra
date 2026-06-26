@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import chain
 from typing import Any, Final, Literal, Protocol
 
 from wybra.auth.result import (
@@ -90,7 +91,7 @@ class DefaultPasswordPolicy:
         lowered_password = password.casefold()
         if any(
             fragment in lowered_password
-            for fragment in (*self.common_fragments, *personal_fragments)
+            for fragment in _blocked_fragments(self, personal_fragments)
         ):
             score = min(score, COMMON_PASSWORD_SCORE_CAP)
 
@@ -170,7 +171,7 @@ def _strength_feedback(
         feedback.append(f"Use at least {policy.minimum_length} characters.")
     if len(categories) < policy.minimum_character_categories:
         feedback.append("Use more character variety.")
-    if any(fragment in password.casefold() for fragment in policy.common_fragments):
+    if any(fragment in password.casefold() for fragment in _common_fragments(policy)):
         feedback.append("Avoid common password words.")
     if any(fragment in password.casefold() for fragment in personal_fragments):
         feedback.append("Avoid using account details.")
@@ -181,6 +182,24 @@ def _strength_feedback(
     if len(set(password)) < minimum_unique_characters:
         feedback.append("Avoid repeated characters.")
     return feedback
+
+
+def _blocked_fragments(
+    policy: DefaultPasswordPolicy,
+    personal_fragments: frozenset[str],
+) -> frozenset[str]:
+    return frozenset(chain(_common_fragments(policy), personal_fragments))
+
+
+def _common_fragments(policy: DefaultPasswordPolicy) -> frozenset[str]:
+    fragments: set[str] = set()
+    for fragment in policy.common_fragments:
+        normalised = fragment.casefold().strip()
+        if not normalised:
+            continue
+        fragments.add(normalised)
+        fragments.add(normalised[::-1])
+    return frozenset(fragments)
 
 
 def _personal_fragments(user: Any | None) -> frozenset[str]:

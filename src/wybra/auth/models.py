@@ -192,11 +192,6 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
         Float,
         nullable=True,
     )
-    display_name: Mapped[str | None] = mapped_column(String(length=320), nullable=True)
-    preferred_name: Mapped[str | None] = mapped_column(
-        String(length=120),
-        nullable=True,
-    )
     preferred_timezone: Mapped[str | None] = mapped_column(
         String(length=64),
         nullable=True,

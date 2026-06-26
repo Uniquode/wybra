@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Final
 
@@ -107,13 +107,34 @@ def _delivery_from_request(request: Request) -> IdentityDelivery:
     return delivery
 
 
+def _profile_lookup_from_request(
+    request: Request,
+    session: AsyncSession,
+) -> Callable[[User], Awaitable[object | None]] | None:
+    from wybra.profile.capabilities import ProfileCapability
+
+    profile_capability = get_site(request.app).optional_capability(ProfileCapability)
+    if profile_capability is None:
+        return None
+
+    async def lookup(user: User) -> object | None:
+        return await profile_capability.get_profile(session, user.id)
+
+    return lookup
+
+
 def create_user_manager_dependency(
     options: IdentityOptions,
 ) -> Callable[[Request], AsyncIterator[UserManager]]:
     async def get_user_manager(request: Request) -> AsyncIterator[UserManager]:
         database = _database_from_request(request)
         async with database.session() as session:
-            yield create_user_manager(session, options, _delivery_from_request(request))
+            yield create_user_manager(
+                session,
+                options,
+                _delivery_from_request(request),
+                _profile_lookup_from_request(request, session),
+            )
 
     return get_user_manager
 
@@ -318,6 +339,7 @@ async def resolve_current_user(request: Request) -> User | None:
             session,
             options,
             _delivery_from_request(request),
+            _profile_lookup_from_request(request, session),
         )
         strategy = create_database_strategy(session, options)
         now = current_timestamp()
@@ -366,6 +388,7 @@ async def authenticate_user(
             session,
             options,
             _delivery_from_request(request),
+            _profile_lookup_from_request(request, session),
         )
         now = current_timestamp()
         user = await manager.authenticate(credentials)
@@ -389,6 +412,7 @@ async def create_local_user_from_signup(
             session,
             options,
             _delivery_from_request(request),
+            _profile_lookup_from_request(request, session),
         )
         try:
             user_create = UserCreate(
@@ -464,6 +488,7 @@ async def request_password_reset(request: Request, email: str) -> None:
             session,
             options,
             _delivery_from_request(request),
+            _profile_lookup_from_request(request, session),
         )
         try:
             user = await manager.get_by_email(email)
@@ -491,6 +516,7 @@ async def reset_password(request: Request, token: str, password: str) -> bool:
             session,
             options,
             _delivery_from_request(request),
+            _profile_lookup_from_request(request, session),
         )
         if not await _reset_token_user_is_effectively_active(manager, token):
             return False

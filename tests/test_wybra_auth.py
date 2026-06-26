@@ -897,6 +897,7 @@ def test_wybra_auth_default_password_policy_scores_and_accepts_passphrases() -> 
         ("pass phrase 123!", ERROR_PASSWORD_TOO_WEAK),
         ("tester account 123!", ERROR_PASSWORD_TOO_WEAK),
         ("test account 123!", ERROR_PASSWORD_TOO_WEAK),
+        ("drowssap account 123!", ERROR_PASSWORD_TOO_WEAK),
         ("abcdefghijkl", ERROR_PASSWORD_TOO_WEAK),
     ],
 )

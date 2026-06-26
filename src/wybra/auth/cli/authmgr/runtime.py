@@ -132,8 +132,6 @@ async def _handle_user_create(
         is_admin=args.admin,
         is_superuser=args.superuser,
         is_verified=not args.unverified,
-        display_name=args.display_name,
-        preferred_name=args.preferred_name,
         preferred_timezone=args.preferred_timezone,
         expires_at=args.expires_at,
     )
@@ -194,10 +192,6 @@ async def _handle_user_update(
             is_verified=args.is_verified,
             password=password,
             revoke_sessions=not args.no_revoke,
-            display_name=args.display_name,
-            clear_display_name=args.clear_display_name,
-            preferred_name=args.preferred_name,
-            clear_preferred_name=args.clear_preferred_name,
             preferred_timezone=args.preferred_timezone,
             clear_preferred_timezone=args.clear_preferred_timezone,
             expires_at=args.expires_at,
@@ -724,15 +718,11 @@ def _user_metadata_update_requested(
             args.is_superuser,
             args.is_verified,
             password,
-            args.display_name,
-            args.preferred_name,
             args.preferred_timezone,
             args.expires_at,
         )
     ) or any(
         (
-            args.clear_display_name,
-            args.clear_preferred_name,
             args.clear_preferred_timezone,
             args.no_expires_at,
         )

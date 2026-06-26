@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import cast
 
 from fastapi import Request
@@ -34,6 +36,7 @@ from wybra.auth.result import (
 )
 
 logger = logging.getLogger(__name__)
+type PasswordProfileLookup = Callable[[User], Awaitable[object | None]]
 _IDENTITY_USER_EMAIL_UNIQUE_CONSTRAINTS: frozenset[str] = frozenset(
     {
         "uq_identity_user_email_email",
@@ -53,6 +56,16 @@ PUBLIC_PASSWORD_POLICY_MESSAGES = frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class PasswordPolicySubject:
+    """Password-policy view combining account and optional profile fragments."""
+
+    email: str
+    id: uuid.UUID
+    display_name: str | None = None
+    preferred_name: str | None = None
+
+
 class PasswordPolicyException(InvalidPasswordException):
     """Invalid-password boundary carrying a branchable policy error type."""
 
@@ -70,19 +83,24 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         options: IdentityOptions,
         delivery: IdentityDelivery | None = None,
         password_helper: PasswordHelper | None = None,
+        profile_lookup: PasswordProfileLookup | None = None,
     ) -> None:
         super().__init__(user_db, password_helper)
         self.delivery = delivery or NullIdentityDelivery()
         self.password_policy = options.resolved_password_policy()
         self.reset_password_token_secret = options.reset_password_token_secret
         self.verification_token_secret = options.verification_token_secret
+        self.profile_lookup = profile_lookup
 
     async def validate_password(
         self,
         password: str,
         user: UserCreate | User,
     ) -> None:
-        validation = self.password_policy.validate(password, user)
+        validation = self.password_policy.validate(
+            password,
+            await self._password_policy_subject(user),
+        )
         if validation.is_failure():
             logger.warning(
                 "Password policy validation failed",
@@ -95,6 +113,24 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             # Do not expose arbitrary policy messages here: custom policies may
             # include internal checks or vendor-specific detail in Result.message.
             raise PasswordPolicyException(validation.error_type)
+
+    async def _password_policy_subject(
+        self,
+        user: UserCreate | User,
+    ) -> UserCreate | User | PasswordPolicySubject:
+        if not isinstance(user, User) or self.profile_lookup is None:
+            return user
+
+        profile = await self.profile_lookup(user)
+        if profile is None:
+            return user
+
+        return PasswordPolicySubject(
+            email=user.email,
+            id=user.id,
+            display_name=_optional_profile_text(profile, "display_name"),
+            preferred_name=_optional_profile_text(profile, "preferred_name"),
+        )
 
     async def get_by_email(self, user_email: str) -> User:
         database = cast(SQLAlchemyUserDatabase[User, uuid.UUID], self.user_db)
@@ -209,13 +245,20 @@ def create_user_manager(
     session: AsyncSession,
     options: IdentityOptions,
     delivery: IdentityDelivery | None = None,
+    profile_lookup: PasswordProfileLookup | None = None,
 ) -> UserManager:
     return UserManager(
         create_user_database(session),
         options,
         delivery,
         create_password_helper(),
+        profile_lookup,
     )
+
+
+def _optional_profile_text(profile: object, attribute: str) -> str | None:
+    value = getattr(profile, attribute, None)
+    return value if isinstance(value, str) else None
 
 
 def _is_identity_email_unique_violation(exc: IntegrityError) -> bool:
