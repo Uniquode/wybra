@@ -52,8 +52,8 @@ class NavigationMenu:
 class DropdownPanel:
     label: str
     menu: NavigationMenu
+    id: str
     alignment: MenuAlignment = "end"
-    dom_id: str = "wybra-dropdown-panel"
     css_class: str | None = None
 
     @property

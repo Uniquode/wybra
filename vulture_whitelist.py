@@ -236,7 +236,7 @@ _.spacing
 _.alignment
 _.item_alignment
 _.shortcut_scope
-_.dom_id
+_.id
 
 # Alembic revision module metadata.
 _.down_revision

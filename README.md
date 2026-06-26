@@ -132,6 +132,7 @@ from wybra.widgets import DropdownPanel, NavigationItem, NavigationMenu
 
 settings_menu = DropdownPanel(
     label="Settings",
+    id="account-settings-menu",
     menu=NavigationMenu(
         label="Settings",
         items=(

@@ -821,8 +821,14 @@ def test_profile_edit_template_renders_declarative_form_fields() -> None:
         r"<button[^>]*data-wybra-profile-cancel[^>]*disabled",
         html,
     )
+    assert "const bindProfileForm = (form) =>" in html
+    assert 'document.querySelectorAll("[data-wybra-profile-form]")' in html
     assert 'form.addEventListener("input", setActionState)' in html
     assert 'cancel.addEventListener("click"' in html
+    assert "const entryMap = (entries) =>" in html
+    assert "const restoreChoiceField = (field, values, offsets) =>" in html
+    assert "field.checked = values.includes(field.value)" in html
+    assert "option.selected = values.includes(option.value)" in html
     assert "restoreInitialValues();" in html
     assert 'form.addEventListener("htmx:afterSwap"' in html
     assert 'querySelectorAll("[hx-get]")' in html
@@ -1035,6 +1041,7 @@ def test_login_widget_template_renders_avatar_after_logout() -> None:
                 profile_path="/profile",
                 settings_menu=DropdownPanel(
                     label="Settings",
+                    id="account-settings-menu",
                     menu=NavigationMenu(
                         label="Settings",
                         items=(
@@ -1061,9 +1068,9 @@ def test_login_widget_template_renders_avatar_after_logout() -> None:
     assert settings_position < logout_position < avatar_position
     assert '<span class="wybra-dropdown-panel' in html
     assert 'type="button"' in html
-    assert "anchor-name: --wybra-dropdown-panel-trigger;" in html
-    assert 'popovertarget="wybra-dropdown-panel"' in html
-    assert "position-anchor: --wybra-dropdown-panel-trigger;" in html
+    assert "anchor-name: --account-settings-menu-trigger;" in html
+    assert 'popovertarget="account-settings-menu"' in html
+    assert "position-anchor: --account-settings-menu-trigger;" in html
     assert "popover" in html
     assert "Account" in html
     assert "Login &amp; Security" in html
@@ -1153,6 +1160,7 @@ def test_dropdown_menu_template_renders_shortcut_metadata() -> None:
     )
     menu = DropdownPanel(
         label="Settings",
+        id="account-settings-menu",
         menu=NavigationMenu(
             label="Settings",
             items=(

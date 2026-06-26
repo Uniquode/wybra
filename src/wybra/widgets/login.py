@@ -121,7 +121,7 @@ def _settings_menu(
             items=tuple(items),
             shortcut_scope="settings-menu",
         ),
-        dom_id="login-settings-menu",
+        id="login-settings-menu",
         css_class="login-widget__settings-menu",
     )
 
