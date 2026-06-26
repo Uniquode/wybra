@@ -26,6 +26,7 @@ from wybra.db.alembic_attributes import LOGGING_CONFIG_ATTRIBUTE
 from wybra.db.migration_metadata import MigrationConfigError
 from wybra.db.persistence import close_database, create_database_engine
 from wybra.db.provisioning import (
+    DatabaseProvisioningConfigurationError,
     DatabaseProvisioningError,
     is_postgresql_database_url,
     provision_postgresql_database,
@@ -315,7 +316,11 @@ def _run_migration(
 
     try:
         operation(config)
-    except (MigrationConfigurationError, MigrationConfigError) as exc:
+    except (
+        MigrationConfigurationError,
+        MigrationConfigError,
+        DatabaseProvisioningConfigurationError,
+    ) as exc:
         print("configuration: failed", file=sys.stderr)
         print(f"- {exc}", file=sys.stderr)
         return 1
