@@ -46,6 +46,7 @@ _.url_for
 _.store
 _.get_by_resource_key
 _.assign_resource_key
+_.apply
 _.validate_writable
 _.get_profile
 _.ensure_profile

@@ -227,6 +227,50 @@ field rendering uses the same widget/component templates and override
 semantics. Forms containing `FileUploadField` render with
 `multipart/form-data` by default.
 
+### Model Forms
+
+`ModelForm` layers declarative field binding onto `Form` without owning
+persistence. It can read initial values from a caller-owned record and apply
+validated values back to that record, but it does not add, flush, commit, or
+roll back anything.
+
+```python
+from wybra.forms import Attr, JsonPath, ModelForm, ReadOnly, TextAreaField, TextField
+
+
+class ProfileForm(ModelForm):
+    preferred_name = TextField(max_length=64)
+    bio = TextAreaField(max_length=1024, required=False)
+    website = TextField(required=False)
+    created_by = TextField(disabled=True, required=False)
+
+    class Meta:
+        model = Profile
+        bindings = {
+            "website": JsonPath("website_links", "website"),
+            "created_by": ReadOnly(Attr("created_by")),
+        }
+```
+
+Fields bind to same-named record attributes by default. `Meta.bindings` is only
+needed for overrides such as JSON mapping paths or read-only fields. Construct
+the form with `instance=record` when editing an existing record; explicit
+`values` still take precedence over instance-derived values when re-rendering a
+submitted form.
+
+```python
+form = ProfileForm(instance=profile)
+form.parse(await forms.request_form_data(request))
+if form.is_valid():
+    form.apply()
+    await profile_repository.save(profile)
+```
+
+For create flows, construct the form without an instance, then pass the new
+record to `apply(record)` after validation. This keeps the API independent of
+the persistence backend; records only need normal readable and writable Python
+attributes.
+
 ### Phone Contact Widgets
 
 Phone contact entry is a compound form concern: country, subdivision, and phone
