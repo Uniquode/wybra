@@ -87,7 +87,8 @@ class JsonPath(Binding):
             raise ModelBindingError(
                 f"Model attribute is not a mapping for JsonPath: {self.attribute}."
             )
-        setattr(instance, self.attribute, self._updated_mapping(current, value))
+        current_mapping = cast(Mapping[str, object], current)
+        setattr(instance, self.attribute, self._updated_mapping(current_mapping, value))
 
     def _read_path(self, value: Mapping[str, object]) -> object:
         current: object = value
@@ -104,10 +105,10 @@ class JsonPath(Binding):
 
     def _updated_mapping(
         self,
-        source: Mapping[object, object],
+        source: Mapping[str, object],
         value: object,
-    ) -> dict[object, object]:
-        updated: dict[object, object] = dict(source)
+    ) -> dict[str, object]:
+        updated: dict[str, object] = dict(source)
         cursor = updated
         for key in self.keys[:-1]:
             nested = cursor.get(key)
@@ -154,7 +155,7 @@ class ModelForm(Form):
         unknown_fields: UnknownFieldPolicy = "ignore",
     ) -> None:
         self.instance = instance
-        self.model = self._declared_model()
+        self._declared_model()
         self.bindings = self._declared_bindings()
         bound_defaults = self._bound_defaults(defaults or {}, instance)
         super().__init__(
