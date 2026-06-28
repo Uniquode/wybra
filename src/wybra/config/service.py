@@ -44,6 +44,10 @@ class ConfigService:
     def diagnostics(self) -> tuple[ConfigDiagnostic, ...]:
         return self._config.diagnostics
 
+    @property
+    def environ(self) -> Mapping[str, str] | None:
+        return self._environ
+
     def get_config(self, section: str) -> Mapping[str, Any] | None:
         return self._config.get_config(section)
 

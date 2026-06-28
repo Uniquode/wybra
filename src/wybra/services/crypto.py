@@ -9,11 +9,18 @@ import hmac
 import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from wybra.core.exceptions import ConfigurationError
+from wybra.services.secrets import (
+    MissingSecretError,
+    SecretsError,
+    SecretSource,
+    SecretValue,
+    normalise_secret_source,
+)
 
 ENVELOPE_PREFIX: Final = "WYBRA:SECRET"
 VERIFIER_PREFIX: Final = "WYBRA:VERIFIER"
@@ -21,7 +28,7 @@ PLAIN_TEXT_VERSION: Final = "__wybra_plaintext__"
 SECRET_KEY_LENGTH: Final = 32
 ENVELOPE_SEPARATOR: Final = "|"
 ENV_WYBRA_SECRET_KEY_CURRENT: Final = "WYBRA_SECRET_KEY_CURRENT"
-ENV_WYBRA_SECRET_KEY_LEGACY: Final = "WYBRA_SECRET_KEY_LEGACY"
+ENV_WYBRA_SECRET_KEYS_PREVIOUS: Final = "WYBRA_SECRET_KEYS_PREVIOUS"
 
 
 class SecretDataError(ConfigurationError):
@@ -34,6 +41,16 @@ class SecretMaterialMissingError(ConfigurationError):
 
 class SecretVersionError(SecretDataError):
     """Raised when an envelope references an unknown key version."""
+
+
+class SecretKeySecretSource(Protocol):
+    """Secret source for text key-entry material.
+
+    Crypto keys resolved through this protocol use the same
+    ``version:base64-key:checksum`` text format as environment-backed keys.
+    """
+
+    def resolve(self, source: SecretSource, key: str) -> SecretValue: ...
 
 
 def _checksum(value: bytes) -> str:
@@ -112,7 +129,7 @@ def parse_secret_key_entry(raw_entry: str) -> tuple[str, bytes]:
 
 def parse_secret_key_bundle(
     current: str | None,
-    legacy: str | None = None,
+    previous: str | None = None,
 ) -> SecretKeyRing:
     """Parse key material into a runtime key ring."""
 
@@ -122,12 +139,12 @@ def parse_secret_key_bundle(
 
     ring_entries: list[tuple[str, bytes]] = [parse_secret_key_entry(current_key)]
 
-    legacy_value = _normalise_environment_value(legacy)
-    if legacy_value is not None:
-        for raw_entry in legacy_value.split(","):
+    previous_value = _normalise_environment_value(previous)
+    if previous_value is not None:
+        for raw_entry in previous_value.split(","):
             if not raw_entry.strip():
                 raise SecretDataError(
-                    "Legacy secret key entries must be comma-separated and non-empty."
+                    "Previous secret key entries must be comma-separated and non-empty."
                 )
             ring_entries.append(parse_secret_key_entry(raw_entry))
 
@@ -148,19 +165,54 @@ def parse_secret_key_ring_from_env(
 ) -> SecretKeyRing | None:
     """Create a key ring from environment-style settings.
 
-    Returns ``None`` when neither current nor legacy key is configured.
+    Returns ``None`` when neither current nor previous key material is configured.
     """
 
     if env is None:
         return None
 
     current = _normalise_environment_value(env.get(ENV_WYBRA_SECRET_KEY_CURRENT))
-    legacy = _normalise_environment_value(env.get(ENV_WYBRA_SECRET_KEY_LEGACY))
+    previous = _normalise_environment_value(env.get(ENV_WYBRA_SECRET_KEYS_PREVIOUS))
 
-    if current is None and legacy is None:
+    if current is None and previous is None:
         return None
 
-    return parse_secret_key_bundle(current=current, legacy=legacy)
+    return parse_secret_key_bundle(current=current, previous=previous)
+
+
+def parse_secret_key_ring_from_secrets(
+    secrets: SecretKeySecretSource | None,
+    *,
+    source: SecretSource | str | None,
+    current_key: str = ENV_WYBRA_SECRET_KEY_CURRENT,
+    previous_keys: str | None = None,
+) -> SecretKeyRing | None:
+    """Create a key ring from a configured runtime secrets source.
+
+    Resolved key values must use the same ``version:base64-key:checksum`` text
+    entry format as environment-backed key material.
+
+    Returns ``None`` when no source or secrets capability is available so callers
+    can use the environment-backed key loader.
+    """
+
+    if secrets is None or source is None:
+        return None
+
+    source_name = normalise_secret_source(source)
+    current = _resolve_required_secret_key(
+        secrets,
+        source=source_name,
+        key=current_key,
+        name="current secret key",
+    )
+    previous = _resolve_optional_secret_key(
+        secrets,
+        source=source_name,
+        key=previous_keys,
+        name="previous secret keys",
+    )
+    return parse_secret_key_bundle(current=current, previous=previous)
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +323,73 @@ def _decode_verifier(value: str) -> tuple[str, str] | None:
     return version, digest
 
 
+def _secret_key_reference(value: str | None, *, name: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise SecretMaterialMissingError(f"{name} reference must be a non-blank string.")
+
+
+def _resolve_secret_key(
+    secrets: SecretKeySecretSource,
+    *,
+    source: SecretSource,
+    key: str | None,
+    name: str,
+    required: bool,
+) -> str | None:
+    key_reference = _secret_key_reference(key, name=name)
+    if key_reference is None:
+        return None
+    try:
+        return secrets.resolve(source, key_reference).reveal()
+    except MissingSecretError as exc:
+        if not required:
+            return None
+        raise SecretMaterialMissingError(
+            f"{name} is not configured in the selected secrets source: {exc}"
+        ) from exc
+    except SecretsError as exc:
+        raise SecretMaterialMissingError(
+            f"{name} could not be resolved from the selected secrets source: {exc}"
+        ) from exc
+
+
+def _resolve_required_secret_key(
+    secrets: SecretKeySecretSource,
+    *,
+    source: SecretSource,
+    key: str,
+    name: str,
+) -> str:
+    value = _resolve_secret_key(
+        secrets,
+        source=source,
+        key=key,
+        name=name,
+        required=True,
+    )
+    assert value is not None
+    return value
+
+
+def _resolve_optional_secret_key(
+    secrets: SecretKeySecretSource,
+    *,
+    source: SecretSource,
+    key: str | None,
+    name: str,
+) -> str | None:
+    return _resolve_secret_key(
+        secrets,
+        source=source,
+        key=key,
+        name=name,
+        required=False,
+    )
+
+
 def _verifier_digest(*, key: bytes, context: str, value: str) -> str:
     payload = f"{context}\0{value}".encode()
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
@@ -290,10 +409,29 @@ class SecretEnvelopeService:
         return cls(lambda: parse_secret_key_ring_from_env(env))
 
     @classmethod
+    def from_secrets(
+        cls,
+        secrets: SecretKeySecretSource | None,
+        *,
+        source: SecretSource | str | None,
+        current_key: str = ENV_WYBRA_SECRET_KEY_CURRENT,
+        previous_keys: str | None = None,
+    ) -> SecretEnvelopeService:
+        """Create a service from a configured runtime secrets source."""
+        return cls(
+            lambda: parse_secret_key_ring_from_secrets(
+                secrets,
+                source=source,
+                current_key=current_key,
+                previous_keys=previous_keys,
+            )
+        )
+
+    @classmethod
     def from_key_bundle(
         cls,
         current: str | None,
-        legacy: str | None = None,
+        previous: str | None = None,
     ) -> SecretEnvelopeService:
         """Create a service from explicit key entries.
 
@@ -302,10 +440,10 @@ class SecretEnvelopeService:
         constructor is for already-resolved configuration and test injection,
         where callers deliberately provide concrete key entries.
         """
-        if current is None and legacy is None:
+        if current is None and previous is None:
             return cls(lambda: None)
 
-        return cls(lambda: parse_secret_key_bundle(current=current, legacy=legacy))
+        return cls(lambda: parse_secret_key_bundle(current=current, previous=previous))
 
     @classmethod
     def for_testing(cls, *, version: str = "test") -> SecretEnvelopeService:
@@ -429,15 +567,17 @@ __all__ = [
     "VERIFIER_PREFIX",
     "PLAIN_TEXT_VERSION",
     "ENV_WYBRA_SECRET_KEY_CURRENT",
-    "ENV_WYBRA_SECRET_KEY_LEGACY",
+    "ENV_WYBRA_SECRET_KEYS_PREVIOUS",
     "SecretDataError",
     "SecretEnvelope",
     "SecretMaterialMissingError",
     "SecretVersionError",
     "SecretEnvelopeService",
+    "SecretKeySecretSource",
     "SecretKey",
     "SecretKeyRing",
     "parse_secret_key_bundle",
     "parse_secret_key_ring_from_env",
+    "parse_secret_key_ring_from_secrets",
     "parse_secret_key_entry",
 ]

@@ -41,6 +41,8 @@ Repository: <https://github.com/Uniquode/wybra>
   HATEOAS-style paging metadata, streaming responses, and API validation.
 - `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
   URL handling, and Alembic command/configuration support.
+- `wybra.secrets`: runtime secret lookup from consumer-selected sources,
+  including environment variables, AWS Secrets Manager, OS keychains, and Vault.
 - `wybra.tools`: generic project command adapters and validation target
   discovery. Host applications provide concrete runtime settings through their
   app config.
@@ -355,6 +357,7 @@ application or environment-specific tooling:
 - `wybra-routes`: inspect the configured application's installed route tree.
 - `wybra-validate`: run configured project validation targets.
 - `wybra-authmgr`: manage local identity users, scopes, and groups.
+- `wybra-secret`: manage Wybra-known secrets in the OS keychain.
 
 Host applications may add their own short aliases when appropriate, but the
 portable package-owned command names are the `wybra-*` commands.
@@ -524,6 +527,127 @@ explicit route smoke checks. Use `--check --quiet` when only the exit status is
 needed. It is separate from `wybra-validate`, which remains the broad
 project-structure validation command.
 
+## Secrets Configuration
+
+`wybra.secrets` provides a source-selected runtime lookup capability for values
+that must not be stored in app configuration. Add it to the configured module
+list before modules that validate or use secret references:
+
+```toml
+[app]
+modules = [
+    "wybra.secrets",
+    "wybra.auth",
+]
+```
+
+Consumers choose their own source and key reference. There is no global
+`[secrets].backend`; mixed deployments can use different sources for different
+features:
+
+```toml
+[auth.providers.google]
+enabled = true
+client_id = "google-client-id"
+secrets = "keychain"
+client_secret_key = "auth/providers/google/client-secret"
+```
+
+Source-specific sections hold only lookup metadata, never resolved secret
+values:
+
+```toml
+[secrets.crypto]
+source = "keychain"
+current_key = "WYBRA_SECRET_KEY_CURRENT"
+previous_keys = "WYBRA_SECRET_KEYS_PREVIOUS"
+
+[secrets.kms]
+region_name = "ap-southeast-2"
+base_path = "/production/wybra"
+
+[secrets.vault]
+url = "https://vault.example.com"
+mount_point = "secret"
+secrets_path = "apps/wybra"
+
+[secrets.keychain]
+appname = "wybra"
+username = "uniquode.io"
+```
+
+`[secrets.crypto]` is optional. When it is configured and `wybra.secrets` is
+available, Wybra resolves the system secret keyring through the selected
+source before parsing the existing `version:base64-key:checksum` key-entry
+format. If `[secrets.crypto]` is absent, the crypto service uses
+`WYBRA_SECRET_KEY_CURRENT` and `WYBRA_SECRET_KEYS_PREVIOUS` from the resolved
+environment. The previous-keys reference is optional; if the selected source
+does not contain it, only the current key is loaded.
+
+The `environment` source reads from the resolved process environment and needs
+no optional dependency:
+
+```toml
+[auth.providers.github]
+enabled = true
+client_id = "github-client-id"
+secrets = "environment"
+client_secret_key = "GITHUB_CLIENT_SECRET"
+```
+
+External authentication remains deployment-owned. AWS uses the runtime AWS
+credential chain, Vault uses deployment-provided Vault connection and token
+state, macOS keychain access uses the host Keychain policy, Windows keychain
+access uses Windows Credential Manager, and Linux keychain access uses a
+Freedesktop Secret Service provider such as GNOME Keyring, KWallet, KeePassXC,
+or another Secret Service-compatible provider. `oo7` is a Rust Secret
+Service/keyring implementation in this ecosystem, but Wybra does not depend on
+it directly. The `keychain` optional dependency uses the Python `keyring`
+package as the platform adapter; on Linux, that still requires a D-Bus session
+and Secret Service provider at runtime.
+Install only the optional driver clients a deployment needs:
+
+```sh
+uv add 'wybra[kms]'
+uv add 'wybra[keychain]'
+uv add 'wybra[vault]'
+```
+
+`wybra-secret` manages OS keychain-backed entries through the same Python
+`keyring` adapter used by the runtime keychain source. It does not write
+environment variables:
+
+```sh
+printf '%s' "$GOOGLE_CLIENT_SECRET" \
+  | uv run wybra-secret --config config/app.toml set auth/providers/google/client-secret
+
+uv run wybra-secret --config config/app.toml get --json auth/providers/google/client-secret
+uv run wybra-secret --config config/app.toml list --json
+```
+
+Use `APP_CONFIG=config/app.toml` instead of `--config` when the selected app
+config should come from the environment. `list` is a list of known keys, not
+platform keychain enumeration: it includes Wybra's built-in crypto key
+references and configured keychain-backed references such as enabled auth
+provider client secret keys.
+
+For Linux keychain verification in the repository development container, start
+the root `wybra-dev` Compose shell. The container starts commands inside a
+D-Bus session, installs GNOME Keyring and `secret-tool`, and persists keyring
+files in a Docker volume. Unlock the keyring in the shell before using
+`secret-tool` or running Secret Service integration checks:
+
+```sh
+docker compose run --rm dev
+printf '%s\n' "$WYBRA_KEYRING_PASSWORD" \
+  | gnome-keyring-daemon --unlock --components=secrets > /tmp/wybra-keyring-env
+. /tmp/wybra-keyring-env
+
+cd /Users/davidn/Code/wybra-dev/wybra
+uv sync --extra keychain
+uv run pytest tests/test_secrets.py -k linux_secret_service
+```
+
 ## Auth Configuration
 
 Wybra-hosted applications configure auth through the host application's
@@ -535,6 +659,7 @@ other package-owned project commands, then reads `[auth]` from that file. Use
 [app]
 database_url = "sqlite+aiosqlite:///app.sqlite3"
 modules = [
+    "wybra.secrets",
     "wybra.assets",
     "wybra.security",
     "wybra.forms",

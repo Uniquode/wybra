@@ -21,6 +21,7 @@ _.create_fastapi_users
 _.optional_current_user
 _.require_current_user
 _.require_anonymous_user
+_.resolve_provider_client_secret
 _.login_required
 _.anonymous_required
 _.has_module
@@ -77,6 +78,7 @@ _.list_command
 _.password_command
 _.init_command
 _.revision_command
+_.set_command
 _.upgrade_command
 _.downgrade_command
 _.current_command

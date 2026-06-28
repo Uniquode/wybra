@@ -117,7 +117,7 @@ def load_app_config(
             "app.deployment_environment",
         ),
         auth=_optional_table(data, "auth"),
-        raw_config=_raw_config_sections(data),
+        raw_config=raw_config_sections(data),
     )
 
 
@@ -216,39 +216,53 @@ def _optional_table(data: dict[str, Any], name: str) -> dict[str, Any]:
     raise CompositionError(f"App config {name} must be a table.")
 
 
-def _raw_config_sections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Flatten known app config subsections for module settings loaders."""
+
     sections: dict[str, dict[str, Any]] = {}
     app_data = data.get("app")
-    if isinstance(app_data, dict):
+    if isinstance(app_data, Mapping):
         sections["app"] = {
-            key: value for key, value in app_data.items() if not isinstance(value, dict)
+            key: value
+            for key, value in app_data.items()
+            if not isinstance(value, Mapping)
         }
         for nested_name in ("assets", "routes", "runserver", "templates"):
             nested_value = app_data.get(nested_name)
-            if isinstance(nested_value, dict):
+            if isinstance(nested_value, Mapping):
                 sections[f"app.{nested_name}"] = dict(nested_value)
                 if nested_name == "assets":
                     cors_value = nested_value.get("cors")
-                    if isinstance(cors_value, dict):
+                    if isinstance(cors_value, Mapping):
                         sections["app.assets.cors"] = {
                             key: value
                             for key, value in cors_value.items()
-                            if not isinstance(value, dict)
+                            if not isinstance(value, Mapping)
                         }
 
     auth_data = data.get("auth")
-    if isinstance(auth_data, dict):
+    if isinstance(auth_data, Mapping):
         sections["auth"] = {
             key: value
             for key, value in auth_data.items()
-            if not isinstance(value, dict)
+            if not isinstance(value, Mapping)
         }
         for nested_name, nested_value in auth_data.items():
-            if isinstance(nested_value, dict):
+            if isinstance(nested_value, Mapping):
                 sections[f"auth.{nested_name}"] = dict(nested_value)
     log_data = data.get("log")
-    if isinstance(log_data, dict):
+    if isinstance(log_data, Mapping):
         sections["log"] = dict(log_data)
+    secrets_data = data.get("secrets")
+    if isinstance(secrets_data, Mapping):
+        sections["secrets"] = {
+            key: value
+            for key, value in secrets_data.items()
+            if not isinstance(value, Mapping)
+        }
+        for nested_name, nested_value in secrets_data.items():
+            if isinstance(nested_value, Mapping):
+                sections[f"secrets.{nested_name}"] = dict(nested_value)
     return sections
 
 
@@ -464,5 +478,6 @@ __all__ = [
     "load_app_config",
     "load_app_config_modules",
     "load_modules",
+    "raw_config_sections",
     "resolve_project_root",
 ]

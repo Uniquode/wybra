@@ -45,6 +45,7 @@ def test_wybra_package_command_scripts_are_prefixed() -> None:
         "wybra-migrate": "wybra.tools.migrate:main",
         "wybra-routes": "wybra.tools.routes:main",
         "wybra-runserver": "wybra.tools.runserver:main",
+        "wybra-secret": "wybra.secrets.cli:main",
         "wybra-validate": "wybra.tools.validate:main",
     }
 
