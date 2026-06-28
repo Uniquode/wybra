@@ -19,6 +19,14 @@ from wybra.auth.options import (
     is_generate_local_identity_secret,
 )
 from wybra.auth.persistence.database import resolve_database_url
+from wybra.auth.provider_secrets import (
+    AUTH_PROVIDERS_CONFIG_SECTION,
+    PROVIDERS_SECTION_FIELD,
+    AuthProviderSecretReference,
+    provider_secret_reference,
+    provider_secret_references_from_config,
+    reject_unknown_provider_options,
+)
 from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup, to_bool
 from wybra.config.service import ConfigService
 from wybra.config.sources import AppConfigSource
@@ -38,10 +46,7 @@ from wybra.core.settings import (
 from wybra.services.secrets import (
     SecretsCapability,
     SecretsError,
-    SecretSource,
     SecretValue,
-    normalise_secret_source,
-    secret_key_value,
 )
 
 DATABASE_URL_ENV = "DATABASE_URL"
@@ -52,11 +57,6 @@ APP_CONFIG_SECTION: Final = "app"
 AUTH_CONFIG_SECTION: Final = "auth"
 PASSWORD_SECTION_FIELD = "password"
 PASSWORD_POLICY_SECTION_FIELD = "policy"
-PROVIDERS_SECTION_FIELD = "providers"
-PROVIDER_ENABLED_FIELD = "enabled"
-PROVIDER_SECRETS_FIELD = "secrets"
-PROVIDER_CLIENT_SECRET_KEY_FIELD = "client_secret_key"
-PROVIDER_CLIENT_ID_FIELD = "client_id"
 PASSWORD_POLICY_CONFIG_SECTION: Final = (
     f"{AUTH_CONFIG_SECTION}.{PASSWORD_SECTION_FIELD}.{PASSWORD_POLICY_SECTION_FIELD}"
 )
@@ -88,14 +88,6 @@ AUTH_OPTION_FIELDS = IDENTITY_OPTION_FIELDS | {
     PASSWORD_SECTION_FIELD,
     PROVIDERS_SECTION_FIELD,
 }
-PROVIDER_SECRET_OPTION_FIELDS = frozenset(
-    {
-        PROVIDER_ENABLED_FIELD,
-        PROVIDER_SECRETS_FIELD,
-        PROVIDER_CLIENT_SECRET_KEY_FIELD,
-        PROVIDER_CLIENT_ID_FIELD,
-    }
-)
 ENV_ACCOUNT_CREATION_POLICY: Final = "ACCOUNT_CREATION_POLICY"
 ENV_RESET_SECRET: Final = "RESET_SECRET"
 ENV_SESSION_COOKIE: Final = "SESSION_COOKIE"
@@ -221,7 +213,7 @@ module_config: Final = ConfigDef(
                 ),
             ),
         ),
-        f"{AUTH_CONFIG_SECTION}.{PROVIDERS_SECTION_FIELD}": ConfigGroup(),
+        AUTH_PROVIDERS_CONFIG_SECTION: ConfigGroup(),
         PASSWORD_POLICY_CONFIG_SECTION: ConfigGroup(
             fields=tuple(
                 ConfigField(name=field_name)
@@ -230,67 +222,6 @@ module_config: Final = ConfigDef(
         ),
     }
 )
-
-
-@dataclass(frozen=True, slots=True)
-class AuthProviderSecretReference:
-    name: str
-    enabled: bool = True
-    secrets: str | None = None
-    client_secret_key: str | None = None
-    client_id: str | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "name", _provider_name_value(self.name))
-        object.__setattr__(self, "enabled", _provider_enabled_value(self.enabled))
-        if self.secrets is not None:
-            object.__setattr__(
-                self,
-                "secrets",
-                _optional_provider_string(
-                    self.secrets,
-                    field_name=PROVIDER_SECRETS_FIELD,
-                ),
-            )
-        if self.client_secret_key is not None:
-            object.__setattr__(
-                self,
-                "client_secret_key",
-                _optional_provider_string(
-                    self.client_secret_key,
-                    field_name=PROVIDER_CLIENT_SECRET_KEY_FIELD,
-                ),
-            )
-        if self.client_id is not None:
-            object.__setattr__(
-                self,
-                "client_id",
-                _optional_provider_string(
-                    self.client_id,
-                    field_name=PROVIDER_CLIENT_ID_FIELD,
-                ),
-            )
-
-    def required_client_secret_reference(self) -> tuple[SecretSource, str] | None:
-        if not self.enabled:
-            return None
-        if self.secrets is None and self.client_secret_key is None:
-            return None
-        if self.secrets is None or self.client_secret_key is None:
-            raise ConfigurationError(
-                f"Auth provider {self.name!r} must configure both "
-                f"{PROVIDER_SECRETS_FIELD!r} and "
-                f"{PROVIDER_CLIENT_SECRET_KEY_FIELD!r}, or neither."
-            )
-        source = normalise_secret_source(
-            self.secrets,
-            name=f"auth provider {self.name!r} secrets",
-        )
-        key = secret_key_value(
-            self.client_secret_key,
-            name=f"auth provider {self.name!r} client secret key",
-        )
-        return source, key
 
 
 class AuthProviderSecretResolutionError(ConfigurationError):
@@ -348,9 +279,7 @@ class AuthSettings(BaseSettings):
             auth_config,
             env,
         )
-        provider_secret_references = _provider_secret_references_from_config(
-            auth_config
-        )
+        provider_secret_references = provider_secret_references_from_config(auth_config)
 
         return cls(
             database_url=resolve_database_url(
@@ -454,7 +383,10 @@ def resolve_provider_client_secret(
     provider_name: str,
     secrets: SecretsCapability,
 ) -> SecretValue:
-    provider = _provider_reference(settings, provider_name)
+    provider = provider_secret_reference(
+        settings.provider_secret_references,
+        provider_name,
+    )
     reference = provider.required_client_secret_reference()
     if reference is None:
         raise ConfigurationError(
@@ -651,7 +583,7 @@ def _reject_unknown_auth_options(auth_config: Mapping[str, Any]) -> None:
     unknown_fields = sorted(set(auth_config) - AUTH_OPTION_FIELDS)
     if not unknown_fields:
         _reject_unknown_password_options(auth_config)
-        _reject_unknown_provider_options(auth_config)
+        reject_unknown_provider_options(auth_config)
         return
 
     allowed_fields = ", ".join(sorted(AUTH_OPTION_FIELDS))
@@ -697,19 +629,6 @@ def _reject_unknown_password_options(auth_config: Mapping[str, Any]) -> None:
         )
 
 
-def _reject_unknown_provider_options(auth_config: Mapping[str, Any]) -> None:
-    for provider_name, provider_config in _provider_configs(auth_config):
-        unknown_fields = sorted(set(provider_config) - PROVIDER_SECRET_OPTION_FIELDS)
-        if unknown_fields:
-            unknown_list = ", ".join(unknown_fields)
-            allowed_fields = ", ".join(sorted(PROVIDER_SECRET_OPTION_FIELDS))
-            raise ConfigurationError(
-                f"Unknown option(s) in [auth.providers.{provider_name}] "
-                f"configuration: {unknown_list}. Allowed options are: "
-                f"{allowed_fields}."
-            )
-
-
 def _configured_database_url(
     config: ConfigService | Mapping[str, Mapping[str, Any]],
     app_config: AppConfig,
@@ -749,83 +668,6 @@ def _identity_options_from_config(
     }
     identity_kwargs.update(_password_policy_options_from_config(config, auth_config))
     return IdentityOptions(**identity_kwargs)
-
-
-def _provider_secret_references_from_config(
-    auth_config: Mapping[str, Any],
-) -> tuple[AuthProviderSecretReference, ...]:
-    return tuple(
-        AuthProviderSecretReference(
-            name=provider_name,
-            enabled=provider_config.get(PROVIDER_ENABLED_FIELD, True),
-            secrets=cast(str | None, provider_config.get(PROVIDER_SECRETS_FIELD)),
-            client_secret_key=cast(
-                str | None,
-                provider_config.get(PROVIDER_CLIENT_SECRET_KEY_FIELD),
-            ),
-            client_id=cast(str | None, provider_config.get(PROVIDER_CLIENT_ID_FIELD)),
-        )
-        for provider_name, provider_config in _provider_configs(auth_config)
-    )
-
-
-def _provider_configs(
-    auth_config: Mapping[str, Any],
-) -> tuple[tuple[str, Mapping[str, Any]], ...]:
-    providers_config = auth_config.get(PROVIDERS_SECTION_FIELD)
-    if providers_config is None:
-        return ()
-    if not isinstance(providers_config, Mapping):
-        raise ConfigurationError(
-            "Auth providers config must be an [auth.providers] table."
-        )
-
-    configs: list[tuple[str, Mapping[str, Any]]] = []
-    for provider_name, provider_config in providers_config.items():
-        name = _provider_name_value(provider_name)
-        if not isinstance(provider_config, Mapping):
-            raise ConfigurationError(f"Auth provider {name!r} config must be a table.")
-        configs.append((name, provider_config))
-    return tuple(configs)
-
-
-def _provider_reference(
-    settings: AuthSettings,
-    provider_name: str,
-) -> AuthProviderSecretReference:
-    name = _provider_name_value(provider_name)
-    for provider in settings.provider_secret_references:
-        if provider.name == name:
-            return provider
-    raise ConfigurationError(f"Unknown auth provider configuration: {name}.")
-
-
-def _provider_name_value(value: object) -> str:
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    raise ConfigurationError("Auth provider name must be a non-blank string.")
-
-
-def _provider_enabled_value(value: object) -> bool:
-    try:
-        return to_bool(value)
-    except (TypeError, ValueError) as exc:
-        raise ConfigurationError(
-            "Auth provider enabled value must be boolean."
-        ) from exc
-
-
-def _optional_provider_string(value: object, *, field_name: str) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            return stripped
-        raise ConfigurationError(
-            f"Auth provider {field_name} must not be blank or whitespace-only."
-        )
-    raise ConfigurationError(f"Auth provider {field_name} must be a string.")
 
 
 def _password_policy_options_from_config(

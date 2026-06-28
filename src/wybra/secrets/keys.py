@@ -4,11 +4,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
-from wybra.auth.settings import (
-    PROVIDER_CLIENT_SECRET_KEY_FIELD,
-    PROVIDER_ENABLED_FIELD,
-    PROVIDER_SECRETS_FIELD,
-    AuthProviderSecretReference,
+from wybra.auth.provider_secrets import (
+    AUTH_PROVIDERS_CONFIG_SECTION,
+    PROVIDERS_SECTION_FIELD,
+    provider_secret_references_from_config,
 )
 from wybra.core.exceptions import ConfigurationError
 from wybra.secrets.config import SecretsSettings
@@ -90,7 +89,7 @@ def _configured_crypto_keys(
 def _configured_auth_provider_keys(
     raw_config: Mapping[str, Mapping[str, Any]],
 ) -> Iterable[KnownSecretKey]:
-    providers_config = raw_config.get("auth.providers")
+    providers_config = raw_config.get(AUTH_PROVIDERS_CONFIG_SECTION)
     if providers_config is None:
         return ()
     if not isinstance(providers_config, Mapping):
@@ -99,17 +98,9 @@ def _configured_auth_provider_keys(
         )
 
     keys: list[KnownSecretKey] = []
-    for provider_name, provider_config in providers_config.items():
-        if not isinstance(provider_config, Mapping):
-            raise ConfigurationError(
-                f"Auth provider {provider_name!r} config must be a table."
-            )
-        reference = AuthProviderSecretReference(
-            name=str(provider_name),
-            enabled=provider_config.get(PROVIDER_ENABLED_FIELD, True),
-            secrets=provider_config.get(PROVIDER_SECRETS_FIELD),
-            client_secret_key=provider_config.get(PROVIDER_CLIENT_SECRET_KEY_FIELD),
-        )
+    for reference in provider_secret_references_from_config(
+        {PROVIDERS_SECTION_FIELD: providers_config}
+    ):
         required_reference = reference.required_client_secret_reference()
         if required_reference is None:
             continue

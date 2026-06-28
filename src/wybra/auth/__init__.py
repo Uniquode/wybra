@@ -11,7 +11,7 @@ _EXPORTS = {
     "AUTH_SETTINGS_OWNER": "wybra.auth.settings",
     "AuthCapability": "wybra.auth.capabilities",
     "AuthProviderSecretResolutionError": "wybra.auth.settings",
-    "AuthProviderSecretReference": "wybra.auth.settings",
+    "AuthProviderSecretReference": "wybra.auth.provider_secrets",
     "AuthSettings": "wybra.auth.settings",
     "ChallengeDecision": "wybra.auth.mfa.challenges",
     "ChallengeKind": "wybra.auth.mfa.challenges",
