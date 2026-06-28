@@ -39,24 +39,12 @@ class AuthProviderSecretReference:
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", provider_name_value(self.name))
         object.__setattr__(self, "enabled", _provider_enabled_value(self.enabled))
-        if self.secrets is not None:
-            object.__setattr__(
-                self,
-                "secrets",
-                _optional_provider_string(
-                    self.secrets,
-                    field_name=PROVIDER_SECRETS_FIELD,
-                ),
-            )
-        if self.client_secret_key is not None:
-            object.__setattr__(
-                self,
-                "client_secret_key",
-                _optional_provider_string(
-                    self.client_secret_key,
-                    field_name=PROVIDER_CLIENT_SECRET_KEY_FIELD,
-                ),
-            )
+        secrets, client_secret_key = _normalise_provider_client_secret_fields(
+            secrets=self.secrets,
+            client_secret_key=self.client_secret_key,
+        )
+        object.__setattr__(self, "secrets", secrets)
+        object.__setattr__(self, "client_secret_key", client_secret_key)
         if self.client_id is not None:
             object.__setattr__(
                 self,
@@ -68,25 +56,12 @@ class AuthProviderSecretReference:
             )
 
     def required_client_secret_reference(self) -> tuple[SecretSource, str] | None:
-        if not self.enabled:
-            return None
-        if self.secrets is None and self.client_secret_key is None:
-            return None
-        if self.secrets is None or self.client_secret_key is None:
-            raise ConfigurationError(
-                f"Auth provider {self.name!r} must configure both "
-                f"{PROVIDER_SECRETS_FIELD!r} and "
-                f"{PROVIDER_CLIENT_SECRET_KEY_FIELD!r}, or neither."
-            )
-        source = normalise_secret_source(
-            self.secrets,
-            name=f"auth provider {self.name!r} secrets",
+        return _required_provider_client_secret_reference(
+            name=self.name,
+            enabled=self.enabled,
+            secrets=self.secrets,
+            client_secret_key=self.client_secret_key,
         )
-        key = secret_key_value(
-            self.client_secret_key,
-            name=f"auth provider {self.name!r} client secret key",
-        )
-        return source, key
 
 
 def provider_secret_references_from_config(
@@ -155,6 +130,51 @@ def provider_name_value(value: object) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     raise ConfigurationError("Auth provider name must be a non-blank string.")
+
+
+def _required_provider_client_secret_reference(
+    *,
+    name: str,
+    enabled: bool,
+    secrets: str | None,
+    client_secret_key: str | None,
+) -> tuple[SecretSource, str] | None:
+    if not enabled:
+        return None
+    if secrets is None and client_secret_key is None:
+        return None
+    if secrets is None or client_secret_key is None:
+        raise ConfigurationError(
+            f"Auth provider {name!r} must configure both "
+            f"{PROVIDER_SECRETS_FIELD!r} and "
+            f"{PROVIDER_CLIENT_SECRET_KEY_FIELD!r}, or neither."
+        )
+    source = normalise_secret_source(
+        secrets,
+        name=f"auth provider {name!r} secrets",
+    )
+    key = secret_key_value(
+        client_secret_key,
+        name=f"auth provider {name!r} client secret key",
+    )
+    return source, key
+
+
+def _normalise_provider_client_secret_fields(
+    *,
+    secrets: object,
+    client_secret_key: object,
+) -> tuple[str | None, str | None]:
+    return (
+        _optional_provider_string(
+            secrets,
+            field_name=PROVIDER_SECRETS_FIELD,
+        ),
+        _optional_provider_string(
+            client_secret_key,
+            field_name=PROVIDER_CLIENT_SECRET_KEY_FIELD,
+        ),
+    )
 
 
 def _provider_enabled_value(value: object) -> bool:

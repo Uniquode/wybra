@@ -50,6 +50,13 @@ from wybra.secrets import (
     module_config,
 )
 from wybra.secrets.capabilities import setup_site as setup_secrets_site
+from wybra.secrets.source_errors import (
+    aws_error_code,
+    aws_secret_missing,
+    keyring_reports_missing_secret,
+    vault_secret_missing,
+    vault_secret_value,
+)
 from wybra.services.crypto import ENVELOPE_PREFIX, SecretEnvelopeService
 from wybra.site import Site, start
 
@@ -190,6 +197,12 @@ class FakeAwsClientError(Exception):
 
 
 class TestAwsSecretsManagerSource:
+    def test_error_helpers_classify_missing_secret(self) -> None:
+        exc = FakeAwsClientError("ResourceNotFoundException")
+
+        assert aws_error_code(exc) == "ResourceNotFoundException"
+        assert aws_secret_missing(exc) is True
+
     def test_resolves_with_base_path(self) -> None:
         client = FakeAwsClient({"production/wybra/client-secret": "secret"})
         driver = AwsSecretsManagerSourceDriver(
@@ -265,6 +278,10 @@ class FakeVaultMissing(Exception):
 
 
 class TestVaultSource:
+    def test_error_helpers_classify_missing_secret_and_parse_values(self) -> None:
+        assert vault_secret_missing(FakeVaultMissing()) is True
+        assert vault_secret_value({"data": {"data": {"value": "secret"}}}) == "secret"
+
     def test_resolves_with_secrets_path(self) -> None:
         driver = VaultSecretSourceDriver(
             VaultSecretSourceSettings(secrets_path="apps/wybra"),
@@ -321,6 +338,13 @@ class FakeMacosMissingKeyring:
 
 
 class TestKeychainSource:
+    def test_error_helper_classifies_macos_missing_item(self) -> None:
+        exc = FakeMacosMissingKeyring.KeyringError(
+            "Can't get password from keychain: (-50, 'Unknown Error')"
+        )
+
+        assert keyring_reports_missing_secret(exc) is True
+
     def test_driver_uses_keyring_backend(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -653,6 +677,18 @@ class TestAuthProviderSecretIntegration:
             "environment",
             "GOOGLE_SECRET",
         )
+
+    def test_enabled_provider_secret_reference_requires_source_and_key_pair(
+        self,
+    ) -> None:
+        reference = AuthProviderSecretReference(
+            name="google",
+            enabled=True,
+            secrets="environment",
+        )
+
+        with pytest.raises(ConfigurationError, match="secrets.*client_secret_key"):
+            reference.required_client_secret_reference()
 
     @pytest.mark.parametrize(
         "field_name",

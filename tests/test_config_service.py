@@ -30,6 +30,7 @@ from wybra.core.composition import (
     AssetOptions,
     RouteOptions,
     TemplateOptions,
+    raw_config_sections,
 )
 from wybra.core.settings import EnvironmentSetting, EnvironmentValueType
 from wybra.security import CorsPolicy, CorsPolicySet
@@ -76,6 +77,39 @@ def test_config_service_loads_required_sources() -> None:
 
     assert config is not None
     assert config["totp_mode"] == "required"
+
+
+def test_raw_config_sections_flattens_runtime_module_subsections() -> None:
+    sections = raw_config_sections(
+        {
+            "app": {
+                "modules": ["wybra.secrets", "wybra.auth"],
+                "assets": {
+                    "url_path": "/static",
+                    "cors": {"allow_origins": ["https://example.test"]},
+                },
+            },
+            "auth": {
+                "session_cookie_name": "session",
+                "providers": {"google": {"secrets": "keychain"}},
+            },
+            "secrets": {
+                "crypto": {"source": "keychain"},
+                "keychain": {"appname": "wybra"},
+            },
+        }
+    )
+
+    assert sections["app"] == {"modules": ["wybra.secrets", "wybra.auth"]}
+    assert sections["app.assets"] == {
+        "url_path": "/static",
+        "cors": {"allow_origins": ["https://example.test"]},
+    }
+    assert sections["app.assets.cors"] == {"allow_origins": ["https://example.test"]}
+    assert sections["auth"] == {"session_cookie_name": "session"}
+    assert sections["auth.providers"] == {"google": {"secrets": "keychain"}}
+    assert sections["secrets.crypto"] == {"source": "keychain"}
+    assert sections["secrets.keychain"] == {"appname": "wybra"}
 
 
 def test_required_source_failure_fails_loading() -> None:

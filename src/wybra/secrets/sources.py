@@ -12,6 +12,15 @@ from wybra.secrets.config import (
     KmsSecretSourceSettings,
     VaultSecretSourceSettings,
 )
+from wybra.secrets.source_errors import (
+    aws_secret_missing,
+    keyring_reports_missing_secret,
+    raise_aws_secret_source_error,
+    raise_keyring_secret_source_error,
+    raise_vault_secret_source_error,
+    vault_secret_missing,
+    vault_secret_value,
+)
 from wybra.services.secrets import (
     ENVIRONMENT_SOURCE,
     KEYCHAIN_SOURCE,
@@ -21,7 +30,6 @@ from wybra.services.secrets import (
     MissingSecretError,
     MissingSecretSourceDependencyError,
     SecretSource,
-    SecretSourceOperationError,
     SecretSourceUnavailableError,
     SecretValue,
     secret_key_value,
@@ -68,7 +76,12 @@ class AwsSecretsManagerSourceDriver:
         try:
             response = client.get_secret_value(SecretId=secret_id)
         except Exception as exc:
-            _raise_aws_error(exc, source=self.source, key=secret_id, operation="get")
+            raise_aws_secret_source_error(
+                exc,
+                source=self.source,
+                key=secret_id,
+                operation="get",
+            )
         value = response.get("SecretString")
         if value is None and response.get("SecretBinary") is not None:
             value = _binary_secret_value(response["SecretBinary"])
@@ -82,9 +95,14 @@ class AwsSecretsManagerSourceDriver:
         try:
             client.describe_secret(SecretId=secret_id)
         except Exception as exc:
-            if _aws_error_code(exc) == "ResourceNotFoundException":
+            if aws_secret_missing(exc):
                 return False
-            _raise_aws_error(exc, source=self.source, key=secret_id, operation="exists")
+            raise_aws_secret_source_error(
+                exc,
+                source=self.source,
+                key=secret_id,
+                operation="exists",
+            )
         return True
 
     def _client(self) -> Any:
@@ -116,8 +134,13 @@ class VaultSecretSourceDriver:
                 mount_point=self.settings.mount_point,
             )
         except Exception as exc:
-            _raise_vault_error(exc, source=self.source, key=path, operation="get")
-        value = _vault_secret_value(response)
+            raise_vault_secret_source_error(
+                exc,
+                source=self.source,
+                key=path,
+                operation="get",
+            )
+        value = vault_secret_value(response)
         if value is None:
             raise MissingSecretError(source=self.source, key=path)
         return SecretValue(value, source=self.source, key=path)
@@ -131,9 +154,14 @@ class VaultSecretSourceDriver:
                 mount_point=self.settings.mount_point,
             )
         except Exception as exc:
-            if _vault_error_missing(exc):
+            if vault_secret_missing(exc):
                 return False
-            _raise_vault_error(exc, source=self.source, key=path, operation="exists")
+            raise_vault_secret_source_error(
+                exc,
+                source=self.source,
+                key=path,
+                operation="exists",
+            )
         return True
 
     def _client(self) -> Any:
@@ -211,9 +239,14 @@ class KeychainSecretSourceDriver:
                 self._keyring_username(key),
             )
         except Exception as exc:
-            if _keyring_reports_missing_secret(exc):
+            if keyring_reports_missing_secret(exc):
                 raise MissingSecretError(source=self.source, key=key) from exc
-            _raise_keyring_error(exc, source=self.source, key=key, operation="read")
+            raise_keyring_secret_source_error(
+                exc,
+                source=self.source,
+                key=key,
+                operation="read",
+            )
         if value is None:
             raise MissingSecretError(source=self.source, key=key)
         return SecretValue(str(value), source=self.source, key=key)
@@ -229,9 +262,14 @@ class KeychainSecretSourceDriver:
                 is not None
             )
         except Exception as exc:
-            if _keyring_reports_missing_secret(exc):
+            if keyring_reports_missing_secret(exc):
                 return False
-            _raise_keyring_error(exc, source=self.source, key=key, operation="exists")
+            raise_keyring_secret_source_error(
+                exc,
+                source=self.source,
+                key=key,
+                operation="exists",
+            )
         return False
 
     def _store_keyring(self, key: str, value: str) -> None:
@@ -243,7 +281,12 @@ class KeychainSecretSourceDriver:
                 value,
             )
         except Exception as exc:
-            _raise_keyring_error(exc, source=self.source, key=key, operation="write")
+            raise_keyring_secret_source_error(
+                exc,
+                source=self.source,
+                key=key,
+                operation="write",
+            )
 
     def _keyring(self) -> Any:
         if self.keyring_module is not None:
@@ -334,118 +377,6 @@ def _binary_secret_value(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode()
     return str(value)
-
-
-def _aws_error_code(exc: Exception) -> str | None:
-    response = getattr(exc, "response", None)
-    if isinstance(response, Mapping):
-        error = response.get("Error")
-        if isinstance(error, Mapping):
-            code = error.get("Code")
-            if isinstance(code, str):
-                return code
-    return None
-
-
-def _raise_aws_error(
-    exc: Exception,
-    *,
-    source: str,
-    key: str,
-    operation: str,
-) -> None:
-    code = _aws_error_code(exc)
-    if code == "ResourceNotFoundException":
-        raise MissingSecretError(source=source, key=key) from exc
-    if type(exc).__name__ in {"NoCredentialsError", "PartialCredentialsError"}:
-        raise SecretSourceUnavailableError(
-            source=source,
-            key=key,
-            reason=type(exc).__name__,
-        ) from exc
-    if code in {"AccessDeniedException", "UnrecognizedClientException"}:
-        raise SecretSourceUnavailableError(
-            source=source,
-            key=key,
-            reason=code,
-        ) from exc
-    raise SecretSourceOperationError(
-        source=source,
-        key=key,
-        operation=operation,
-        reason=code or type(exc).__name__,
-    ) from exc
-
-
-def _vault_secret_value(response: Mapping[str, Any]) -> str | None:
-    data = response.get("data")
-    if isinstance(data, Mapping):
-        nested = data.get("data")
-        if isinstance(nested, Mapping):
-            if "value" in nested:
-                return str(nested["value"])
-            if len(nested) == 1:
-                return str(next(iter(nested.values())))
-        if "value" in data:
-            return str(data["value"])
-    return None
-
-
-def _vault_error_missing(exc: Exception) -> bool:
-    if type(exc).__name__ == "InvalidPath":
-        return True
-    response = getattr(exc, "response", None)
-    return getattr(response, "status_code", None) == 404
-
-
-def _raise_vault_error(
-    exc: Exception,
-    *,
-    source: str,
-    key: str,
-    operation: str,
-) -> None:
-    if _vault_error_missing(exc):
-        raise MissingSecretError(source=source, key=key) from exc
-    if type(exc).__name__ in {"Forbidden", "Unauthorized"}:
-        raise SecretSourceUnavailableError(
-            source=source,
-            key=key,
-            reason=type(exc).__name__,
-        ) from exc
-    raise SecretSourceOperationError(
-        source=source,
-        key=key,
-        operation=operation,
-        reason=type(exc).__name__,
-    ) from exc
-
-
-def _raise_keyring_error(
-    exc: Exception,
-    *,
-    source: str,
-    key: str,
-    operation: str,
-) -> None:
-    if type(exc).__name__ in {"InitError", "KeyringLocked", "NoKeyringError"}:
-        raise SecretSourceUnavailableError(
-            source=source,
-            key=key,
-            reason=f"keyring backend unavailable: {type(exc).__name__}",
-        ) from exc
-    raise SecretSourceOperationError(
-        source=source,
-        key=key,
-        operation=operation,
-        reason=type(exc).__name__,
-    ) from exc
-
-
-def _keyring_reports_missing_secret(exc: Exception) -> bool:
-    """Return whether a keyring read error is a platform missing-item response."""
-
-    return type(exc).__name__ == "KeyringError" and "(-50," in str(exc)
 
 
 __all__ = (

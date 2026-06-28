@@ -15,6 +15,7 @@ from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.composition import (
     APP_CONFIG_ENV,
     CompositionError,
+    raw_config_sections,
 )
 from wybra.core.exceptions import ConfigurationError
 from wybra.secrets.config import KeychainSecretSourceSettings, SecretsSettings
@@ -240,7 +241,7 @@ def _load_optional_raw_config(
 
     if not isinstance(data, Mapping):
         raise CompositionError(f"App config {config_path} must be a TOML table.")
-    return _raw_secret_sections(data)
+    return raw_config_sections(data)
 
 
 def _config_path(config_source: str) -> Path:
@@ -248,25 +249,6 @@ def _config_path(config_source: str) -> Path:
     if not path.is_absolute():
         path = runtime_project_root() / path
     return path.resolve()
-
-
-def _raw_secret_sections(data: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
-    sections: dict[str, dict[str, Any]] = {}
-    for section_name in ("auth", "secrets"):
-        section_data = data.get(section_name)
-        if section_data is None:
-            continue
-        if not isinstance(section_data, Mapping):
-            raise CompositionError(f"App config [{section_name}] must be a table.")
-        sections[section_name] = {
-            key: value
-            for key, value in section_data.items()
-            if not isinstance(value, dict)
-        }
-        for nested_name, nested_value in section_data.items():
-            if isinstance(nested_value, Mapping):
-                sections[f"{section_name}.{nested_name}"] = dict(nested_value)
-    return sections
 
 
 def _secrets_settings_from_raw_config(
