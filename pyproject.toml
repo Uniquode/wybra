@@ -28,12 +28,24 @@ dependencies = [
     "uvicorn>=0.49.0",
 ]
 
+[project.optional-dependencies]
+kms = [
+    "boto3>=1.43.36",
+]
+keychain = [
+    "keyring>=25.7.0",
+]
+vault = [
+    "hvac>=2.4.0",
+]
+
 [project.scripts]
 wybra-authmgr = "wybra.auth.cli.authmgr:main"
 wybra-collect = "wybra.tools.collect:main"
 wybra-migrate = "wybra.tools.migrate:main"
 wybra-routes = "wybra.tools.routes:main"
 wybra-runserver = "wybra.tools.runserver:main"
+wybra-secret = "wybra.secrets.cli:main"
 wybra-validate = "wybra.tools.validate:main"
 
 [build-system]

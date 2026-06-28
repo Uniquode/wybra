@@ -249,6 +249,16 @@ def _raw_config_sections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     log_data = data.get("log")
     if isinstance(log_data, dict):
         sections["log"] = dict(log_data)
+    secrets_data = data.get("secrets")
+    if isinstance(secrets_data, dict):
+        sections["secrets"] = {
+            key: value
+            for key, value in secrets_data.items()
+            if not isinstance(value, dict)
+        }
+        for nested_name, nested_value in secrets_data.items():
+            if isinstance(nested_value, dict):
+                sections[f"secrets.{nested_name}"] = dict(nested_value)
     return sections
 
 

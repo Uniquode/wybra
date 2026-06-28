@@ -6,7 +6,7 @@ from cryptography.fernet import Fernet
 
 from wybra.services.crypto import (
     ENV_WYBRA_SECRET_KEY_CURRENT,
-    ENV_WYBRA_SECRET_KEY_LEGACY,
+    ENV_WYBRA_SECRET_KEYS_PREVIOUS,
     ENVELOPE_PREFIX,
     PLAIN_TEXT_VERSION,
     VERIFIER_PREFIX,
@@ -19,7 +19,9 @@ from wybra.services.crypto import (
     parse_secret_key_bundle,
     parse_secret_key_entry,
     parse_secret_key_ring_from_env,
+    parse_secret_key_ring_from_secrets,
 )
+from wybra.services.secrets import MissingSecretError, SecretValue
 
 
 def _key_entry(version: str, key: bytes) -> str:
@@ -35,11 +37,24 @@ def _key_bundle_key() -> bytes:
 def _service_with_keys(
     *,
     current: bytes,
-    legacy: bytes | None = None,
+    previous: bytes | None = None,
 ) -> SecretEnvelopeService:
     current_entry = _key_entry("current", current)
-    legacy_entry = _key_entry("legacy", legacy) if legacy is not None else None
-    return SecretEnvelopeService.from_key_bundle(current_entry, legacy=legacy_entry)
+    previous_entry = _key_entry("previous", previous) if previous is not None else None
+    return SecretEnvelopeService.from_key_bundle(current_entry, previous=previous_entry)
+
+
+class FakeSecretsCapability:
+    def __init__(self, values: dict[tuple[str, str], str] | None = None) -> None:
+        self.values = dict(values or {})
+        self.requests: list[tuple[str, str]] = []
+
+    def resolve(self, source: str, key: str) -> SecretValue:
+        self.requests.append((source, key))
+        try:
+            return SecretValue(self.values[(source, key)], source=source, key=key)
+        except KeyError as exc:
+            raise MissingSecretError(source=source, key=key) from exc
 
 
 def test_parse_secret_key_entry_parses_checksummed_keys() -> None:
@@ -72,13 +87,13 @@ def test_parse_secret_key_bundle_rejects_missing_current() -> None:
         parse_secret_key_bundle(current=None)
 
 
-def test_parse_secret_key_bundle_accepts_current_and_legacy_keys() -> None:
+def test_parse_secret_key_bundle_accepts_current_and_previous_keys() -> None:
     current = _key_bundle_key()
-    legacy = _key_bundle_key()
+    previous = _key_bundle_key()
 
     key_ring = parse_secret_key_bundle(
         current=_key_entry("v2", current),
-        legacy=_key_entry("v1", legacy),
+        previous=_key_entry("v1", previous),
     )
 
     assert key_ring.current.version == "v2"
@@ -91,7 +106,7 @@ def test_parse_secret_key_bundle_rejects_duplicate_versions() -> None:
     with pytest.raises(SecretDataError, match="unique"):
         parse_secret_key_bundle(
             current=_key_entry("v1", key),
-            legacy=_key_entry("v1", _key_bundle_key()),
+            previous=_key_entry("v1", _key_bundle_key()),
         )
 
 
@@ -110,35 +125,136 @@ def test_parse_secret_key_ring_from_env_ignores_blank_values() -> None:
     )
 
 
-def test_parse_secret_key_ring_from_env_rejects_legacy_without_current() -> None:
+def test_parse_secret_key_ring_from_env_rejects_previous_keys_without_current() -> None:
     with pytest.raises(SecretMaterialMissingError):
         parse_secret_key_ring_from_env(
             {
-                ENV_WYBRA_SECRET_KEY_LEGACY: _key_entry(
-                    "legacy",
+                ENV_WYBRA_SECRET_KEYS_PREVIOUS: _key_entry(
+                    "previous",
                     _key_bundle_key(),
                 ),
             }
         )
 
 
-def test_encrypt_and_decrypt_current_and_legacy_versions() -> None:
+def test_parse_secret_key_ring_from_secrets_reads_current_and_previous_keys() -> None:
+    current = _key_entry("current", _key_bundle_key())
+    previous = _key_entry("previous", _key_bundle_key())
+    secrets = FakeSecretsCapability(
+        {
+            ("keychain", "current-key"): current,
+            ("keychain", "previous-keys"): previous,
+        }
+    )
+
+    key_ring = parse_secret_key_ring_from_secrets(
+        secrets,
+        source="keychain",
+        current_key="current-key",
+        previous_keys="previous-keys",
+    )
+
+    assert key_ring is not None
+    assert key_ring.current.version == "current"
+    assert {key.version for key in key_ring.keys} == {"current", "previous"}
+    assert secrets.requests == [
+        ("keychain", "current-key"),
+        ("keychain", "previous-keys"),
+    ]
+
+
+def test_parse_secret_key_ring_from_secrets_treats_missing_previous_as_optional() -> (
+    None
+):
+    current = _key_entry("current", _key_bundle_key())
+    secrets = FakeSecretsCapability({("vault", "current-key"): current})
+
+    key_ring = parse_secret_key_ring_from_secrets(
+        secrets,
+        source="vault",
+        current_key="current-key",
+        previous_keys="previous-keys",
+    )
+
+    assert key_ring is not None
+    assert key_ring.current.version == "current"
+    assert [key.version for key in key_ring.keys] == ["current"]
+
+
+def test_parse_secret_key_ring_from_secrets_returns_none_without_source() -> None:
+    assert parse_secret_key_ring_from_secrets(None, source="keychain") is None
+    assert (
+        parse_secret_key_ring_from_secrets(FakeSecretsCapability(), source=None) is None
+    )
+
+
+def test_parse_secret_key_ring_from_secrets_rejects_missing_current() -> None:
+    secrets = FakeSecretsCapability()
+
+    with pytest.raises(
+        SecretMaterialMissingError,
+        match=(
+            "current secret key is not configured in the selected secrets source: "
+            "Missing secret: source=keychain, key=current-key"
+        ),
+    ):
+        parse_secret_key_ring_from_secrets(
+            secrets,
+            source="keychain",
+            current_key="current-key",
+        )
+
+
+def test_parse_secret_key_ring_from_secrets_rejects_blank_current_reference() -> None:
+    secrets = FakeSecretsCapability()
+
+    with pytest.raises(
+        SecretMaterialMissingError,
+        match="current secret key reference must be a non-blank string",
+    ):
+        parse_secret_key_ring_from_secrets(
+            secrets,
+            source="keychain",
+            current_key=" ",
+        )
+
+
+def test_secret_envelope_service_loads_secrets_backed_keys_lazily() -> None:
+    current = _key_entry("current", _key_bundle_key())
+    secrets = FakeSecretsCapability({("environment", "SYSTEM_SECRET_KEY"): current})
+    service = SecretEnvelopeService.from_secrets(
+        secrets,
+        source="environment",
+        current_key="SYSTEM_SECRET_KEY",
+    )
+
+    assert secrets.requests == []
+
+    encrypted = service.encrypt_required("secret")
+
+    assert encrypted.startswith(f"{ENVELOPE_PREFIX}|current|")
+    assert secrets.requests == [("environment", "SYSTEM_SECRET_KEY")]
+
+
+def test_encrypt_and_decrypt_current_and_previous_versions() -> None:
     current = _key_bundle_key()
-    legacy = _key_bundle_key()
+    previous = _key_bundle_key()
 
-    legacy_service = SecretEnvelopeService.from_key_bundle(_key_entry("legacy", legacy))
-    legacy_blob = legacy_service.encrypt("legacy-token")
+    previous_service = SecretEnvelopeService.from_key_bundle(
+        _key_entry("previous", previous)
+    )
+    previous_blob = previous_service.encrypt("previous-token")
 
-    service = _service_with_keys(current=current, legacy=legacy)
+    service = _service_with_keys(current=current, previous=previous)
     current_blob = service.encrypt("current-token")
-    legacy_plaintext, legacy_version = service.decrypt(legacy_blob)
+    previous_plaintext, previous_version = service.decrypt(previous_blob)
     current_plaintext, current_version = service.decrypt(current_blob)
 
     assert current_version == "current"
     assert current_plaintext == "current-token"
     assert current_blob.startswith(f"{ENVELOPE_PREFIX}|current|")
-    assert legacy_version == "legacy"
-    assert legacy_plaintext == "legacy-token"
+    assert previous_version == "previous"
+    assert previous_plaintext == "previous-token"
 
 
 def test_secret_envelope_wraps_encrypted_values_without_hiding_service() -> None:
@@ -174,17 +290,19 @@ def test_secret_envelope_rejects_optional_plaintext_fallback() -> None:
         )
 
 
-def test_create_and_verify_current_and_legacy_verifiers() -> None:
+def test_create_and_verify_current_and_previous_verifiers() -> None:
     current = _key_bundle_key()
-    legacy = _key_bundle_key()
+    previous = _key_bundle_key()
 
-    legacy_service = SecretEnvelopeService.from_key_bundle(_key_entry("legacy", legacy))
-    legacy_verifier = legacy_service.create_verifier_required(
+    previous_service = SecretEnvelopeService.from_key_bundle(
+        _key_entry("previous", previous)
+    )
+    previous_verifier = previous_service.create_verifier_required(
         "recovery-code",
         context="test",
     )
 
-    service = _service_with_keys(current=current, legacy=legacy)
+    service = _service_with_keys(current=current, previous=previous)
     current_verifier = service.create_verifier_required(
         "recovery-code",
         context="test",
@@ -198,7 +316,7 @@ def test_create_and_verify_current_and_legacy_verifiers() -> None:
     )
     assert service.verify_verifier_required(
         "recovery-code",
-        legacy_verifier,
+        previous_verifier,
         context="test",
     )
     assert not service.verify_verifier_required(

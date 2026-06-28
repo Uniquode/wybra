@@ -281,6 +281,14 @@ root = "static"
 
 [auth]
 account_creation_policy = "closed"
+
+[secrets.crypto]
+source = "keychain"
+current_key = "WYBRA_SECRET_KEY_CURRENT"
+
+[secrets.keychain]
+appname = "wybra"
+username = "deployment"
 """.strip(),
         encoding="utf-8",
     )
@@ -302,6 +310,14 @@ account_creation_policy = "closed"
         "root": None,
     }
     assert service.get_config("auth") == {"account_creation_policy": "closed"}
+    assert service.get_config("secrets.crypto") == {
+        "source": "keychain",
+        "current_key": "WYBRA_SECRET_KEY_CURRENT",
+    }
+    assert service.get_config("secrets.keychain") == {
+        "appname": "wybra",
+        "username": "deployment",
+    }
 
 
 def test_file_source_reports_parse_diagnostic(tmp_path: Path) -> None:

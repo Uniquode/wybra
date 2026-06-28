@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -27,13 +28,18 @@ from wybra.auth.sessions import (
 from wybra.auth.sessions import (
     require_current_user as _require_current_user,
 )
-from wybra.auth.settings import AuthSettings
+from wybra.auth.settings import AuthSettings, validate_auth_provider_secret_settings
+from wybra.core.exceptions import ConfigurationError
 from wybra.db.capabilities import DatabaseCapability
 from wybra.forms import FormsCapability
+from wybra.secrets import SecretsSettings
+from wybra.services.crypto import SecretEnvelopeService
+from wybra.services.secrets import SecretsCapability
 from wybra.site import Site, get_site
 from wybra.site_config import app_config_from_site
 
 logger = logging.getLogger(__name__)
+SECRETS_SETTINGS_STATE_ATTRIBUTE = "wybra_auth_secrets_settings"
 OptionalCurrentUserDependency = Callable[[Request], Awaitable[User | None]]
 RequiredCurrentUserDependency = Callable[[Request], Awaitable[User]]
 AnonymousUserDependency = Callable[[Request], Awaitable[None]]
@@ -103,11 +109,16 @@ async def setup_site(site: Site) -> None:
         app_config=app_config,
         deployment_environment=app_config.deployment_environment,
     )
+    secrets_settings = _cached_secrets_settings(site)
     capability = SiteAuthCapability.from_settings(settings)
 
     site.app.state.auth_settings = settings
     site.app.state.identity_delivery = NullIdentityDelivery()
     site.app.state.fastapi_users = capability.fastapi_users
+    site.app.state.secret_envelope_service = _secret_envelope_service(
+        site,
+        secrets_settings,
+    )
     site.provide_capability(AuthCapability, capability)
     _register_session_cookie_cleanup_middleware(site, settings)
 
@@ -115,6 +126,62 @@ async def setup_site(site: Site) -> None:
 async def post_setup_site(site: Site) -> None:
     site.require_capability(DatabaseCapability)
     site.require_capability(FormsCapability)
+    settings = site.require_capability(AuthCapability).settings
+    validate_auth_provider_secret_settings(
+        settings,
+        site.optional_capability(SecretsCapability),
+    )
+    site.app.state.secret_envelope_service = _secret_envelope_service(
+        site,
+        _cached_secrets_settings(site),
+    )
+
+
+def _cached_secrets_settings(site: Site) -> SecretsSettings:
+    settings = getattr(site.app.state, SECRETS_SETTINGS_STATE_ATTRIBUTE, None)
+    if isinstance(settings, SecretsSettings):
+        return settings
+    settings = SecretsSettings.load_settings(site.config)
+    setattr(site.app.state, SECRETS_SETTINGS_STATE_ATTRIBUTE, settings)
+    return settings
+
+
+def _secret_envelope_service(
+    site: Site,
+    secrets_settings: SecretsSettings,
+) -> SecretEnvelopeService:
+    secrets = site.optional_capability(SecretsCapability)
+    if secrets_settings.crypto.source is not None:
+        if secrets is None:
+            raise ConfigurationError(
+                "Crypto secrets source is configured, but no SecretsCapability is "
+                "available. Add `wybra.secrets` to the configured app modules or "
+                "remove [secrets.crypto].source."
+            )
+        logger.info(
+            "Initialising SecretEnvelopeService from secrets source",
+            extra={
+                "crypto_source": secrets_settings.crypto.source,
+                "current_key": secrets_settings.crypto.current_key,
+                "previous_keys_configured": secrets_settings.crypto.previous_keys
+                is not None,
+            },
+        )
+        return SecretEnvelopeService.from_secrets(
+            secrets,
+            source=secrets_settings.crypto.source,
+            current_key=secrets_settings.crypto.current_key,
+            previous_keys=secrets_settings.crypto.previous_keys,
+        )
+    logger.info(
+        "Initialising SecretEnvelopeService from environment variables because "
+        "no crypto secrets source is configured"
+    )
+    return SecretEnvelopeService.from_env(_resolved_environ(site))
+
+
+def _resolved_environ(site: Site) -> Mapping[str, str]:
+    return site.config.environ if site.config.environ is not None else os.environ
 
 
 def _register_session_cookie_cleanup_middleware(
