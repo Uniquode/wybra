@@ -4,12 +4,12 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
-from wybra.auth.provider_secrets import (
-    AUTH_PROVIDERS_CONFIG_SECTION,
-    PROVIDERS_SECTION_FIELD,
-    provider_secret_references_from_config,
-)
 from wybra.core.exceptions import ConfigurationError
+from wybra.providers.secrets import provider_keychain_secret_references
+from wybra.providers.settings import (
+    PROVIDERS_CONFIG_SECTION,
+    provider_settings_from_config,
+)
 from wybra.secrets.config import SecretsSettings
 from wybra.services.crypto import (
     ENV_WYBRA_SECRET_KEY_CURRENT,
@@ -18,7 +18,7 @@ from wybra.services.crypto import (
 from wybra.services.secrets import KEYCHAIN_SOURCE, SecretSource
 
 SECRET_KEY_OWNER_CRYPTO: Final = "crypto"
-SECRET_KEY_OWNER_AUTH: Final = "auth"
+SECRET_KEY_OWNER_PROVIDERS: Final = "providers"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +57,7 @@ def known_keychain_secret_keys(
 
     keys: list[KnownSecretKey] = []
     keys.extend(_configured_crypto_keys(secrets_settings))
-    keys.extend(_configured_auth_provider_keys(raw_config))
+    keys.extend(_configured_provider_keys(raw_config))
     return _deduplicate_keys(keys)
 
 
@@ -86,32 +86,25 @@ def _configured_crypto_keys(
     return tuple(keys)
 
 
-def _configured_auth_provider_keys(
+def _configured_provider_keys(
     raw_config: Mapping[str, Mapping[str, Any]],
 ) -> Iterable[KnownSecretKey]:
-    providers_config = raw_config.get(AUTH_PROVIDERS_CONFIG_SECTION)
+    providers_config = raw_config.get(PROVIDERS_CONFIG_SECTION)
     if providers_config is None:
         return ()
     if not isinstance(providers_config, Mapping):
         raise ConfigurationError(
-            "Auth providers config must be an [auth.providers] table."
+            f"Providers config must be a [{PROVIDERS_CONFIG_SECTION}] table."
         )
 
     keys: list[KnownSecretKey] = []
-    for reference in provider_secret_references_from_config(
-        {PROVIDERS_SECTION_FIELD: providers_config}
-    ):
-        required_reference = reference.required_client_secret_reference()
-        if required_reference is None:
-            continue
-        source, key = required_reference
-        if source != KEYCHAIN_SOURCE:
-            continue
+    providers = provider_settings_from_config(providers_config)
+    for provider_name, key in provider_keychain_secret_references(providers):
         keys.append(
             KnownSecretKey(
                 key=key,
-                owner=SECRET_KEY_OWNER_AUTH,
-                description=f"Auth provider {reference.name} client secret.",
+                owner=SECRET_KEY_OWNER_PROVIDERS,
+                description=f"Provider {provider_name} client secret.",
                 required=True,
             )
         )
@@ -138,7 +131,7 @@ def _deduplicate_keys(keys: Iterable[KnownSecretKey]) -> tuple[KnownSecretKey, .
 __all__ = (
     "BUILTIN_CRYPTO_SECRET_KEYS",
     "KnownSecretKey",
-    "SECRET_KEY_OWNER_AUTH",
     "SECRET_KEY_OWNER_CRYPTO",
+    "SECRET_KEY_OWNER_PROVIDERS",
     "known_keychain_secret_keys",
 )

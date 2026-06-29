@@ -22,6 +22,8 @@ _.optional_current_user
 _.require_current_user
 _.require_anonymous_user
 _.resolve_provider_client_secret
+_.evaluate_login
+_.evaluate_linking
 _.login_required
 _.anonymous_required
 _.has_module

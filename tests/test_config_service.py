@@ -30,6 +30,7 @@ from wybra.core.composition import (
     AssetOptions,
     RouteOptions,
     TemplateOptions,
+    load_app_config,
     raw_config_sections,
 )
 from wybra.core.settings import EnvironmentSetting, EnvironmentValueType
@@ -110,6 +111,42 @@ def test_raw_config_sections_flattens_runtime_module_subsections() -> None:
     assert sections["auth.providers"] == {"google": {"secrets": "keychain"}}
     assert sections["secrets.crypto"] == {"source": "keychain"}
     assert sections["secrets.keychain"] == {"appname": "wybra"}
+
+
+def test_load_app_config_preserves_auth_policy_and_flattens_auth_providers(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+[app]
+modules = ["wybra.auth", "wybra.providers"]
+
+[app.templates]
+auto_reload = true
+cache_size = 0
+
+[app.assets]
+url_path = "/static/"
+
+[auth.password.policy]
+minimum_length = 8
+
+[auth.providers.google]
+enabled = true
+client_id = "client-id"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    app_config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    assert app_config.auth == {
+        "password": {"policy": {"minimum_length": 8}},
+    }
+    assert app_config.raw_config["auth.providers"] == {
+        "google": {"enabled": True, "client_id": "client-id"},
+    }
 
 
 def test_required_source_failure_fails_loading() -> None:

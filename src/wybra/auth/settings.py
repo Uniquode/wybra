@@ -19,14 +19,6 @@ from wybra.auth.options import (
     is_generate_local_identity_secret,
 )
 from wybra.auth.persistence.database import resolve_database_url
-from wybra.auth.provider_secrets import (
-    AUTH_PROVIDERS_CONFIG_SECTION,
-    PROVIDERS_SECTION_FIELD,
-    AuthProviderSecretReference,
-    provider_secret_reference,
-    provider_secret_references_from_config,
-    reject_unknown_provider_options,
-)
 from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup, to_bool
 from wybra.config.service import ConfigService
 from wybra.config.sources import AppConfigSource
@@ -42,11 +34,6 @@ from wybra.core.settings import (
     EnvironmentSetting,
     env_setting_is_set,
     values_from_env_settings,
-)
-from wybra.services.secrets import (
-    SecretsCapability,
-    SecretsError,
-    SecretValue,
 )
 
 DATABASE_URL_ENV = "DATABASE_URL"
@@ -86,7 +73,6 @@ PASSWORD_POLICY_OPTION_MAP = {
 PASSWORD_OPTION_FIELDS = frozenset({PASSWORD_POLICY_SECTION_FIELD})
 AUTH_OPTION_FIELDS = IDENTITY_OPTION_FIELDS | {
     PASSWORD_SECTION_FIELD,
-    PROVIDERS_SECTION_FIELD,
 }
 ENV_ACCOUNT_CREATION_POLICY: Final = "ACCOUNT_CREATION_POLICY"
 ENV_RESET_SECRET: Final = "RESET_SECRET"
@@ -213,7 +199,6 @@ module_config: Final = ConfigDef(
                 ),
             ),
         ),
-        AUTH_PROVIDERS_CONFIG_SECTION: ConfigGroup(),
         PASSWORD_POLICY_CONFIG_SECTION: ConfigGroup(
             fields=tuple(
                 ConfigField(name=field_name)
@@ -224,14 +209,6 @@ module_config: Final = ConfigDef(
 )
 
 
-class AuthProviderSecretResolutionError(ConfigurationError):
-    """Raised when an enabled provider's secret lookup fails.
-
-    Enabled provider secret lookup failures are treated as deployment
-    configuration failures during startup validation.
-    """
-
-
 @dataclass(frozen=True, slots=True)
 class AuthSettings(BaseSettings):
     module_config: ClassVar[ConfigDef] = module_config
@@ -239,7 +216,6 @@ class AuthSettings(BaseSettings):
 
     database_url: str
     identity_options: IdentityOptions = field(default_factory=IdentityOptions)
-    provider_secret_references: tuple[AuthProviderSecretReference, ...] = ()
     deployment_environment: DeploymentEnvironment = LOCAL_ENVIRONMENT
 
     @classmethod
@@ -279,15 +255,12 @@ class AuthSettings(BaseSettings):
             auth_config,
             env,
         )
-        provider_secret_references = provider_secret_references_from_config(auth_config)
-
         return cls(
             database_url=resolve_database_url(
                 database_url,
                 app_config.config_path.resolve().parent,
             ),
             identity_options=identity_options,
-            provider_secret_references=provider_secret_references,
             deployment_environment=normalise_deployment_environment(
                 deployment_environment
             ),
@@ -347,59 +320,6 @@ def validate_auth_settings(
             "Non-local deployments must force secure session cookies; set "
             "SESSION_FORCE_SECURE=true or auth.session_cookie_force_secure = true."
         )
-
-
-def validate_auth_provider_secret_settings(
-    settings: AuthSettings,
-    secrets: SecretsCapability | None,
-) -> None:
-    for provider in settings.provider_secret_references:
-        reference = provider.required_client_secret_reference()
-        if reference is None:
-            continue
-        source, key = reference
-        if secrets is None:
-            raise ConfigurationError(
-                f"Auth provider {provider.name!r} uses secrets source {source!r}, "
-                "but no SecretsCapability is configured. Add `wybra.secrets` to "
-                "the configured app modules or disable the provider."
-            )
-        try:
-            secret_exists = secrets.exists(source, key)
-        except SecretsError as exc:
-            raise AuthProviderSecretResolutionError(
-                f"Auth provider {provider.name!r} client secret validation failed: "
-                f"{exc}"
-            ) from exc
-        if not secret_exists:
-            raise AuthProviderSecretResolutionError(
-                f"Auth provider {provider.name!r} client secret is missing: "
-                f"source={source}, key={key}."
-            )
-
-
-def resolve_provider_client_secret(
-    settings: AuthSettings,
-    provider_name: str,
-    secrets: SecretsCapability,
-) -> SecretValue:
-    provider = provider_secret_reference(
-        settings.provider_secret_references,
-        provider_name,
-    )
-    reference = provider.required_client_secret_reference()
-    if reference is None:
-        raise ConfigurationError(
-            f"Auth provider {provider.name!r} does not configure a client secret "
-            "reference."
-        )
-    source, key = reference
-    try:
-        return secrets.resolve(source, key)
-    except SecretsError as exc:
-        raise AuthProviderSecretResolutionError(
-            f"Auth provider {provider.name!r} client secret resolution failed: {exc}"
-        ) from exc
 
 
 def load_auth_settings(
@@ -583,7 +503,6 @@ def _reject_unknown_auth_options(auth_config: Mapping[str, Any]) -> None:
     unknown_fields = sorted(set(auth_config) - AUTH_OPTION_FIELDS)
     if not unknown_fields:
         _reject_unknown_password_options(auth_config)
-        reject_unknown_provider_options(auth_config)
         return
 
     allowed_fields = ", ".join(sorted(AUTH_OPTION_FIELDS))
