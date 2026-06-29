@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from wybra.core.exceptions import ConfigurationError
 from wybra.providers.settings import ProviderSettings, ProvidersSettings
-from wybra.services.secrets import SecretsCapability, SecretsError, SecretValue
+from wybra.services.secrets import (
+    KEYCHAIN_SOURCE,
+    SecretsCapability,
+    SecretsError,
+    SecretValue,
+)
 
 
 class ProviderSecretResolutionError(ConfigurationError):
@@ -66,7 +71,7 @@ def provider_keychain_secret_references(
         if reference is None:
             continue
         source, key = reference
-        if source == "keychain":
+        if source == KEYCHAIN_SOURCE:
             references.append((provider.name, key))
     return tuple(references)
 

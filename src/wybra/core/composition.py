@@ -218,6 +218,7 @@ def _optional_table(data: dict[str, Any], name: str) -> dict[str, Any]:
 
 def _optional_auth_table(data: dict[str, Any]) -> dict[str, Any]:
     table = _optional_table(data, "auth")
+    # Provider config is owned by wybra.providers through raw_config_sections().
     return {key: value for key, value in table.items() if key != "providers"}
 
 
