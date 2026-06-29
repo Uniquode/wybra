@@ -116,7 +116,7 @@ def load_app_config(
             app_data,
             "app.deployment_environment",
         ),
-        auth=_optional_table(data, "auth"),
+        auth=_optional_auth_table(data),
         raw_config=raw_config_sections(data),
     )
 
@@ -214,6 +214,11 @@ def _optional_table(data: dict[str, Any], name: str) -> dict[str, Any]:
         return value
 
     raise CompositionError(f"App config {name} must be a table.")
+
+
+def _optional_auth_table(data: dict[str, Any]) -> dict[str, Any]:
+    table = _optional_table(data, "auth")
+    return {key: value for key, value in table.items() if key != "providers"}
 
 
 def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:

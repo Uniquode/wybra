@@ -34,7 +34,7 @@ def _app_config(path: Path) -> Path:
     path.write_text(
         """
 [app]
-modules = ["wybra.secrets", "wybra.auth"]
+modules = ["wybra.secrets", "wybra.auth", "wybra.providers"]
 
 [secrets.keychain]
 appname = "uniquode.io"

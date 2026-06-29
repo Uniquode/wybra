@@ -538,6 +538,7 @@ list before modules that validate or use secret references:
 modules = [
     "wybra.secrets",
     "wybra.auth",
+    "wybra.providers",
 ]
 ```
 
@@ -628,8 +629,11 @@ uv run wybra-secret --config config/app.toml list --json
 Use `APP_CONFIG=config/app.toml` instead of `--config` when the selected app
 config should come from the environment. `list` is a list of known keys, not
 platform keychain enumeration: it includes Wybra's built-in crypto key
-references and configured keychain-backed references such as enabled auth
-provider client secret keys.
+references and configured keychain-backed references such as enabled external
+provider client secret keys. External identity providers are implemented by the
+opt-in `wybra.providers` module, with provider authentication configuration
+under `[auth.providers.<name>]`. WebAuthn and passkeys are separate future
+`wybra.passkeys` work, not provider behaviour.
 
 For Linux keychain verification in the repository development container, start
 the root `wybra-dev` Compose shell. The container starts commands inside a

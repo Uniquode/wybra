@@ -10,8 +10,6 @@ _EXPORTS = {
     "AuthenticationMethod": "wybra.auth.mfa.challenges",
     "AUTH_SETTINGS_OWNER": "wybra.auth.settings",
     "AuthCapability": "wybra.auth.capabilities",
-    "AuthProviderSecretResolutionError": "wybra.auth.settings",
-    "AuthProviderSecretReference": "wybra.auth.provider_secrets",
     "AuthSettings": "wybra.auth.settings",
     "ChallengeDecision": "wybra.auth.mfa.challenges",
     "ChallengeKind": "wybra.auth.mfa.challenges",
@@ -68,12 +66,10 @@ _EXPORTS = {
     "load_runtime_auth_settings": "wybra.auth.settings",
     "module_config": "wybra.auth.settings",
     "required_authentication_methods_for_totp_policy": "wybra.auth.mfa.challenges",
-    "resolve_provider_client_secret": "wybra.auth.settings",
     "optional_current_user": "wybra.auth.capabilities",
     "post_setup_site": "wybra.auth.capabilities",
     "setup_site": "wybra.auth.capabilities",
     "validate_auth_settings": "wybra.auth.settings",
-    "validate_auth_provider_secret_settings": "wybra.auth.settings",
     "supported_auth_environment_names": "wybra.auth.settings",
 }
 

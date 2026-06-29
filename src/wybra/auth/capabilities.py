@@ -28,7 +28,7 @@ from wybra.auth.sessions import (
 from wybra.auth.sessions import (
     require_current_user as _require_current_user,
 )
-from wybra.auth.settings import AuthSettings, validate_auth_provider_secret_settings
+from wybra.auth.settings import AuthSettings
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.capabilities import DatabaseCapability
 from wybra.forms import FormsCapability
@@ -126,11 +126,7 @@ async def setup_site(site: Site) -> None:
 async def post_setup_site(site: Site) -> None:
     site.require_capability(DatabaseCapability)
     site.require_capability(FormsCapability)
-    settings = site.require_capability(AuthCapability).settings
-    validate_auth_provider_secret_settings(
-        settings,
-        site.optional_capability(SecretsCapability),
-    )
+    site.require_capability(AuthCapability)
     site.app.state.secret_envelope_service = _secret_envelope_service(
         site,
         _cached_secrets_settings(site),
