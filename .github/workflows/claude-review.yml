@@ -6,8 +6,8 @@ on:
 
 jobs:
   review:
-    # Skip draft PRs - only review when ready
-    if: github.event.pull_request.draft == false
+    # Skip draft and Dependabot PRs; Dependabot updates are handled separately.
+    if: github.event.pull_request.draft == false && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
