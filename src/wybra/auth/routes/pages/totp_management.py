@@ -46,6 +46,7 @@ from .shared import (
     _load_user_by_id,
     _login_error_response,
     _require_authenticated_user,
+    _route_path,
     _session_factory_from_request,
     _totp_setup_return_to,
     account_router,
@@ -286,7 +287,10 @@ async def disable_totp(request: Request) -> Response:
         store = totp_credential_store(request, session)
         active_credential_id = await store.get_active_totp_credential(str(user.id))
         if active_credential_id is None:
-            return RedirectResponse(url="/account/security", status_code=303)
+            return RedirectResponse(
+                url=_route_path(request, "auth:security"),
+                status_code=303,
+            )
 
         if request.method != "POST":
             return _totp_action_confirmation_page(
@@ -324,7 +328,7 @@ async def disable_totp(request: Request) -> Response:
         await store.disable_totp_credential(active_credential_id)
         await session.commit()
 
-    return RedirectResponse(url="/account/security", status_code=303)
+    return RedirectResponse(url=_route_path(request, "auth:security"), status_code=303)
 
 
 def _user_has_usable_sign_in_after_totp(user: object) -> bool:
@@ -346,7 +350,10 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
         store = totp_credential_store(request, session)
         active_credential_id = await store.get_active_totp_credential(str(user.id))
         if active_credential_id is None:
-            return RedirectResponse(url="/account/security", status_code=303)
+            return RedirectResponse(
+                url=_route_path(request, "auth:security"),
+                status_code=303,
+            )
 
         if request.method != "POST":
             return _totp_action_confirmation_page(
@@ -409,6 +416,7 @@ def _totp_action_confirmation_page(
             "page_title": page_title,
             "action_path": action_path,
             "button_label": button_label,
+            "confirmation_message": TOTP_CONFIRMATION_MESSAGE,
             "confirmation_error": error,
             "single_confirmation_field": single_confirmation_field,
             "recovery_codes": recovery_codes,

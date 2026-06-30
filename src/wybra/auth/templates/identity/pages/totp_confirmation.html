@@ -24,7 +24,7 @@
   </p>
   <p><a href="{{ request.url_for('auth:security') }}">Return to Login &amp; Security</a></p>
   {% else %}
-  <p class="muted-copy">Confirm this action with one of your existing sign-in methods.</p>
+  <p class="muted-copy">{{ confirmation_message }}</p>
   <form action="{{ action_path }}" method="post">
     <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
     {% if single_confirmation_field %}

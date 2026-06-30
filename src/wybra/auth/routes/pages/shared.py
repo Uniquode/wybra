@@ -98,6 +98,10 @@ def normalise_return_to(value: str | None, default: str = "/account") -> str:
     return urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
 
 
+def _route_path(request: Request, route_name: str) -> str:
+    return urlsplit(str(request.url_for(route_name))).path
+
+
 def _session_factory_from_request(
     request: Request,
 ) -> Callable[[], AbstractAsyncContextManager[AsyncSession]]:

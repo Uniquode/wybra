@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from secrets import token_urlsafe
 from typing import Any, Final
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import qrcode
 import qrcode.image.svg
@@ -456,7 +456,7 @@ def render_totp_setup_page(
 ) -> Response:
     setup_return_label = (
         TOTP_SETUP_PAGE_MESSAGES["return_to_security"]
-        if return_to == "/account/security"
+        if _return_to_matches_route(request, return_to, "auth:security")
         else TOTP_SETUP_PAGE_MESSAGES["return_to_account"]
     )
     return render_page(
@@ -483,6 +483,10 @@ def render_totp_setup_page(
         ),
         status_code=200,
     )
+
+
+def _return_to_matches_route(request: Request, return_to: str, route_name: str) -> bool:
+    return urlsplit(return_to).path == urlsplit(str(request.url_for(route_name))).path
 
 
 def recovery_codes_download_href(recovery_codes: tuple[str, ...]) -> str:

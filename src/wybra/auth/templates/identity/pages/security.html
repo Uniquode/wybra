@@ -19,9 +19,9 @@
       </a>
     </p>
     {% else %}
-    <p class="muted-copy">Add an authenticator app to protect this account.</p>
+  <p class="muted-copy">Add an authenticator app to protect this account.</p>
   <p>
-    <a href="{{ request.url_for('auth:totp-setup') }}?return_to=/account/security">
+    <a href="{{ totp.setup_path }}">
       Set up authenticator
     </a>
   </p>

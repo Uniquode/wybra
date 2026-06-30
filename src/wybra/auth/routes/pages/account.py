@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
@@ -23,6 +25,7 @@ from .shared import (
     _identity_options,
     _load_active_totp_credential_id,
     _public_signup_enabled,
+    _route_path,
     _session_factory_from_request,
     account_router,
 )
@@ -130,7 +133,14 @@ async def _security_totp_section(request: Request, user: User) -> dict[str, obje
     return {
         "available": True,
         "enabled": active_credential_id is not None,
+        "setup_path": _totp_setup_path(request),
     }
+
+
+def _totp_setup_path(request: Request) -> str:
+    security_path = _route_path(request, "auth:security")
+    setup_query = urlencode({"return_to": security_path})
+    return f"{_route_path(request, 'auth:totp-setup')}?{setup_query}"
 
 
 @account_router.api_route(

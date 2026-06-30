@@ -36,6 +36,7 @@ def _site_config_source(
     *,
     modules: tuple[str, ...] = ("wybra.forms", "wybra.db", "wybra.auth"),
     auth_config: dict[str, object] | None = None,
+    account_prefix: str = "/account",
 ) -> MappingConfigSource:
     config: dict[str, object] = {
         "app": {
@@ -46,7 +47,7 @@ def _site_config_source(
         },
         "app.routes": {
             "prefixes": {
-                "wybra.auth": {"account": "/account", "api": ""},
+                "wybra.auth": {"account": account_prefix, "api": ""},
             }
         },
         "app.templates": {"auto_reload": True, "cache_size": 0},
@@ -106,12 +107,14 @@ def _authenticated_security_site(
     tmp_path: Path,
     *,
     auth_config: dict[str, object] | None = None,
+    account_prefix: str = "/account",
 ):
     app = FastAPI()
     return app, _site_config_source(
         tmp_path,
         modules=PAGE_MODULES,
         auth_config=auth_config,
+        account_prefix=account_prefix,
     )
 
 
@@ -153,11 +156,13 @@ async def _start_security_site(
     tmp_path: Path,
     *,
     auth_config: dict[str, object] | None = None,
+    account_prefix: str = "/account",
     user_id: uuid.UUID | None = None,
 ):
     app, config_source = _authenticated_security_site(
         tmp_path,
         auth_config=auth_config,
+        account_prefix=account_prefix,
     )
     site = await start(app, config_source=config_source)
     _override_current_user(site.app, user_id=user_id)
@@ -292,7 +297,25 @@ async def test_security_page_shows_totp_setup_when_totp_enabled_without_credenti
     assert response.status_code == 200
     assert "Authenticator app" in response.text
     assert "Set up authenticator" in response.text
-    assert "/account/totp/setup?return_to=/account/security" in response.text
+    assert "/account/totp/setup?return_to=%2Faccount%2Fsecurity" in response.text
+
+
+@pytest.mark.anyio
+async def test_security_page_totp_setup_link_uses_configured_account_prefix(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        account_prefix="/identity",
+        auth_config={"totp_mode": "opt_in"},
+    )
+    await _create_auth_schema(site)
+
+    response = _security_page_client(site).get("/identity/security")
+
+    assert response.status_code == 200
+    assert "/identity/totp/setup?return_to=%2Fidentity%2Fsecurity" in response.text
+    assert "/account/security" not in response.text
 
 
 @pytest.mark.anyio
@@ -364,7 +387,7 @@ async def test_totp_setup_completion_returns_to_security_page(
         current_user,
     )
     client = _security_page_client(site)
-    setup = client.get("/account/totp/setup?return_to=/account/security")
+    setup = client.get("/account/totp/setup?return_to=/account/security?tab=totp")
     secret_match = re.search(
         r"<strong>Secret:</strong> <code>([^<]+)</code>",
         setup.text,
@@ -375,7 +398,7 @@ async def test_totp_setup_completion_returns_to_security_page(
         "/account/totp/setup",
         data={
             "csrf_token": _csrf_token(setup.text),
-            "return_to": "/account/security",
+            "return_to": "/account/security?tab=totp",
             "setup_challenge_id": "",
             "setup_totp_code": generate_totp(secret_match.group(1)),
         },
@@ -384,7 +407,7 @@ async def test_totp_setup_completion_returns_to_security_page(
     assert response.status_code == 200
     assert "Store these recovery codes" in response.text
     assert "Return to Login &amp; Security" in response.text
-    assert 'href="/account/security"' in response.text
+    assert 'href="/account/security?tab=totp"' in response.text
     _assert_recovery_codes_download(response.text)
 
 
@@ -700,6 +723,8 @@ async def test_totp_recovery_code_replacement_requires_confirmation(
     confirmation = client.get("/account/totp/recovery-codes/regenerate")
 
     assert confirmation.status_code == 200
+    assert "Confirm this action with your password" in confirmation.text
+    assert "one of your existing sign-in methods" not in confirmation.text
     assert 'name="confirmation"' in confirmation.text
     assert 'name="password"' not in confirmation.text
     assert 'name="totp_code"' not in confirmation.text
