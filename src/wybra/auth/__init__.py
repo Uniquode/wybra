@@ -19,6 +19,7 @@ _EXPORTS = {
     "ERROR_ALREADY_EXISTS": "wybra.auth.result",
     "ERROR_ALREADY_VERIFIED": "wybra.auth.result",
     "ERROR_AUTHENTICATION_METHOD_REQUIRED": "wybra.auth.result",
+    "ERROR_EMAIL_VERIFICATION_REQUIRED": "wybra.auth.result",
     "ERROR_IDENTITY_CHANGED": "wybra.auth.result",
     "ERROR_INACTIVE_USER": "wybra.auth.result",
     "ERROR_INVALID_EMAIL": "wybra.auth.result",

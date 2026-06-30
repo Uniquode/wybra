@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from wybra.auth import AuthCapability, anonymous_required, login_required
+from wybra.auth.accounts.manager import create_user_manager
+from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.delivery import NullIdentityDelivery
 from wybra.auth.mfa.recovery import generate_recovery_codes
 from wybra.auth.mfa.storage import (
@@ -29,6 +31,7 @@ PAGE_MODULES = (
     "wybra.db",
     "wybra.auth",
 )
+STRONG_TEST_PASSWORD = "Correct horse 42!"
 
 
 def _site_config_source(
@@ -152,6 +155,26 @@ def _assert_recovery_codes_download(response_text: str) -> None:
     assert recovery_code_match.group(1) in href_match.group(1)
 
 
+async def _create_local_user(
+    site,
+    *,
+    email: str,
+    password: str = STRONG_TEST_PASSWORD,
+    is_verified: bool,
+) -> uuid.UUID:
+    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+        manager = create_user_manager(
+            db_session,
+            site.app.state.auth_settings.identity_options,
+        )
+        user = await manager.create(
+            UserCreate(email=email, password=password),
+            safe=True,
+        )
+        user.is_verified = is_verified
+        return user.id
+
+
 async def _start_security_site(
     tmp_path: Path,
     *,
@@ -251,6 +274,43 @@ async def test_security_page_requires_authenticated_user(tmp_path: Path) -> None
     )
 
     assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_login_requires_verified_email_before_session_issue(
+    tmp_path: Path,
+) -> None:
+    app = FastAPI()
+    site = await start(
+        app,
+        config_source=_site_config_source(
+            tmp_path,
+            modules=PAGE_MODULES,
+        ),
+    )
+    await _create_auth_schema(site)
+    await _create_local_user(
+        site,
+        email="unverified@example.com",
+        is_verified=False,
+    )
+
+    client = TestClient(site.app)
+    login_page = client.get("/account/login")
+    response = client.post(
+        "/account/login",
+        data={
+            "csrf_token": _csrf_token(login_page.text),
+            "email": "unverified@example.com",
+            "password": STRONG_TEST_PASSWORD,
+        },
+    )
+
+    assert response.status_code == 403
+    assert "Verify your email before signing in." in response.text
+    assert 'value="unverified@example.com"' in response.text
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name not in response.cookies
 
 
 @pytest.mark.anyio

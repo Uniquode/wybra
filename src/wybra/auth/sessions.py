@@ -49,6 +49,7 @@ from wybra.auth.result import (
     ERROR_ALREADY_EXISTS,
     ERROR_ALREADY_VERIFIED,
     ERROR_AUTHENTICATION_METHOD_REQUIRED,
+    ERROR_EMAIL_VERIFICATION_REQUIRED,
     ERROR_IDENTITY_CHANGED,
     ERROR_INACTIVE_USER,
     ERROR_INVALID_EMAIL,
@@ -79,6 +80,7 @@ SECURE_SCHEME_ALIASES: Final = {
 }
 FORWARDED_PROTO_HEADER: Final = "x-forwarded-proto"
 FORWARDED_HEADER: Final = "forwarded"
+EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS: Final = 300
 # Process-scoped warning suppression. A race can only emit a duplicate warning,
 # which is acceptable for this diagnostic path.
 _logged_forward_header_misconfig = False
@@ -453,6 +455,8 @@ async def complete_authentication_ceremony(
             now=now,
         ):
             return Result.failure(ERROR_INACTIVE_USER)
+        if not current_user.is_verified:
+            return Result.failure(ERROR_EMAIL_VERIFICATION_REQUIRED)
         if required_methods and ceremony_id is None:
             return Result.failure(ERROR_AUTHENTICATION_METHOD_REQUIRED)
         if not assertions_satisfy_required_methods(
@@ -548,6 +552,11 @@ async def request_verification(request: Request, email: str) -> None:
 
         if user.is_verified:
             return
+
+        if user.email_verification_sent_at is not None:
+            elapsed_seconds = now - user.email_verification_sent_at
+            if elapsed_seconds < EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS:
+                return
 
         user.email_verification_sent_at = now
         await session.commit()

@@ -19,6 +19,9 @@ ERROR_PASSWORD_TOO_WEAK: Final[ResultErrorType] = "password_too_weak"
 ERROR_AUTHENTICATION_METHOD_REQUIRED: Final[ResultErrorType] = (
     "authentication_method_required"
 )
+ERROR_EMAIL_VERIFICATION_REQUIRED: Final[ResultErrorType] = (
+    "email_verification_required"
+)
 ERROR_POLICY_DISABLED: Final[ResultErrorType] = "policy_disabled"
 ERROR_TOTP_CODE_REQUIRED: Final[ResultErrorType] = "totp_code_required"
 ERROR_TOTP_INVALID: Final[ResultErrorType] = "totp_invalid"
@@ -38,6 +41,7 @@ __all__ = [
     "ERROR_PASSWORD_TOO_SHORT",
     "ERROR_PASSWORD_TOO_WEAK",
     "ERROR_AUTHENTICATION_METHOD_REQUIRED",
+    "ERROR_EMAIL_VERIFICATION_REQUIRED",
     "ERROR_POLICY_DISABLED",
     "ERROR_TOTP_CODE_REQUIRED",
     "ERROR_TOTP_INVALID",

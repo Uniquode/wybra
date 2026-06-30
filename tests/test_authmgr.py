@@ -42,7 +42,7 @@ import wybra.auth.cli.authmgr.timestamps as authmgr_timestamps
 import wybra.auth.cli.authmgr.users as authmgr_users
 import wybra.auth.sessions as identity_sessions
 import wybra.db.migrate as migrate_module
-from wybra.auth import ERROR_INACTIVE_USER
+from wybra.auth import ERROR_EMAIL_VERIFICATION_REQUIRED, ERROR_INACTIVE_USER
 from wybra.auth.accounts.manager import UserManager, create_user_manager
 from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.models import (
@@ -2592,6 +2592,8 @@ def test_authentication_finalisation_updates_last_login_timestamp() -> None:
                 ),
                 safe=True,
             )
+            user.is_verified = True
+            await session.commit()
             assert user.last_login_at is None
 
         result = await identity_sessions.complete_authentication_ceremony(
@@ -2632,6 +2634,7 @@ def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
                 ),
                 safe=True,
             )
+            user.is_verified = True
             user.expires_at = time() - 60
             await session.commit()
 
@@ -2673,6 +2676,7 @@ def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
                 ),
                 safe=True,
             )
+            user.is_verified = True
             user.is_active = False
             await session.commit()
 
@@ -2691,6 +2695,46 @@ def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
 
     try:
         asyncio.run(assert_inactive_user_rejected())
+    finally:
+        asyncio.run(close_database(_database_from_app(web_app)))
+
+
+def test_unverified_user_is_rejected_during_authentication_finalisation() -> None:
+    web_app = create_auth_test_app()
+
+    async def assert_unverified_user_rejected() -> None:
+        async with _database_from_app(web_app).engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.auth_settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="unverified-login@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            assert user.is_verified is False
+
+        result = await identity_sessions.complete_authentication_ceremony(
+            Request({"type": "http", "app": web_app}),
+            user,
+        )
+
+        assert result.is_failure() is True
+        assert result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
+
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            refreshed_user = await session.get(User, user.id)
+            assert refreshed_user is not None
+            assert refreshed_user.last_login_at is None
+
+    try:
+        asyncio.run(assert_unverified_user_rejected())
     finally:
         asyncio.run(close_database(_database_from_app(web_app)))
 
@@ -2813,6 +2857,52 @@ def test_request_verification_ignores_missing_users_without_modifying_rows() -> 
 
     try:
         asyncio.run(assert_missing_user_is_ignored())
+    finally:
+        asyncio.run(close_database(_database_from_app(web_app)))
+
+
+def test_request_verification_rate_limits_recent_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    web_app = create_auth_test_app()
+    web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
+
+    async def assert_recent_delivery_is_rate_limited() -> None:
+        async with _database_from_app(web_app).engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.auth_settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="verify-limited@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            user.email_verification_sent_at = 1_000.0
+            await session.commit()
+
+        monkeypatch.setattr(identity_sessions, "current_timestamp", lambda: 1_120.0)
+        await identity_sessions.request_verification(
+            Request({"type": "http", "app": web_app}),
+            "verify-limited@example.com",
+        )
+
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            user = (
+                await session.execute(
+                    select(User).where(User.email == "verify-limited@example.com")
+                )
+            ).scalar_one()
+            assert user.email_verification_sent_at == 1_000.0
+            assert web_app.state.identity_delivery.verification_tokens == []
+
+    try:
+        asyncio.run(assert_recent_delivery_is_rate_limited())
     finally:
         asyncio.run(close_database(_database_from_app(web_app)))
 

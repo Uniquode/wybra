@@ -229,14 +229,14 @@ class KeychainSecretSourceDriver:
 
     def identity(self, key: str) -> tuple[str, str]:
         key_value = secret_key_value(key)
-        return self._keyring_service(), self._keyring_username(key_value)
+        return self._keyring_service(), key_value
 
     def _resolve_keyring(self, key: str) -> SecretValue:
         keyring = self._keyring()
         try:
             value = keyring.get_password(
                 self._keyring_service(),
-                self._keyring_username(key),
+                key,
             )
         except Exception as exc:
             if keyring_reports_missing_secret(exc):
@@ -257,7 +257,7 @@ class KeychainSecretSourceDriver:
             return (
                 keyring.get_password(
                     self._keyring_service(),
-                    self._keyring_username(key),
+                    key,
                 )
                 is not None
             )
@@ -277,7 +277,7 @@ class KeychainSecretSourceDriver:
         try:
             keyring.set_password(
                 self._keyring_service(),
-                self._keyring_username(key),
+                key,
                 value,
             )
         except Exception as exc:
@@ -295,11 +295,6 @@ class KeychainSecretSourceDriver:
 
     def _keyring_service(self) -> str:
         return self.settings.appname
-
-    def _keyring_username(self, key: str) -> str:
-        if self.settings.username is None:
-            return key
-        return f"{self.settings.username}:{key}"
 
 
 def environment_key_name(key: str) -> str:
