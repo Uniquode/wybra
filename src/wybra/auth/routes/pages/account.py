@@ -1,7 +1,11 @@
-from fastapi import HTTPException, Request
+from urllib.parse import urlencode
+
+from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
-from wybra.auth.options import TOTP_REQUIRED
+from wybra.auth.capabilities import login_required
+from wybra.auth.models import User
+from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
 from wybra.auth.sessions import (
     clear_session_cookie,
     create_local_user_from_signup,
@@ -21,9 +25,12 @@ from .shared import (
     _identity_options,
     _load_active_totp_credential_id,
     _public_signup_enabled,
+    _route_path,
     _session_factory_from_request,
     account_router,
 )
+
+LOGIN_REQUIRED = Depends(login_required)
 
 
 @account_router.api_route(
@@ -94,6 +101,46 @@ async def account(request: Request) -> Response:
         return render_page(request, "identity/pages/account.html", context)
 
     return render_page(request, "identity/pages/account.html", context)
+
+
+@account_router.get(
+    "/security",
+    include_in_schema=False,
+    name="auth:security",
+)
+async def security(
+    request: Request,
+    user: User = LOGIN_REQUIRED,
+) -> Response:
+    context = _identity_context(
+        request,
+        page_title="Login & Security",
+        user=user,
+        totp=await _security_totp_section(request, user),
+    )
+    return render_page(request, "identity/pages/security.html", context)
+
+
+async def _security_totp_section(request: Request, user: User) -> dict[str, object]:
+    options = _identity_options(request)
+    if options.totp_mode == TOTP_DISABLED:
+        return {"available": False}
+
+    session_factory = _session_factory_from_request(request)
+    async with session_factory() as session:
+        active_credential_id = await _load_active_totp_credential_id(session, user.id)
+
+    return {
+        "available": True,
+        "enabled": active_credential_id is not None,
+        "setup_path": _totp_setup_path(request),
+    }
+
+
+def _totp_setup_path(request: Request) -> str:
+    security_path = _route_path(request, "auth:security")
+    setup_query = urlencode({"return_to": security_path})
+    return f"{_route_path(request, 'auth:totp-setup')}?{setup_query}"
 
 
 @account_router.api_route(

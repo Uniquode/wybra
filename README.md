@@ -166,6 +166,22 @@ App-side Wybra database, auth, route, template, static, or runtime-state setup
 is not supported. Configure modules and settings once, then use
 `wybra.start_site(...)` to initialise the Wybra-owned concerns.
 
+### Login And Security Page
+
+`wybra.auth` registers an authenticated `auth:security` account route at
+`/account/security` when the auth browser routes are configured. The page is a
+capability-backed shell: it renders the authenticator section only when TOTP is
+enabled by auth settings, links inactive users to the existing authenticator
+setup flow, and shows active users controls for disabling authenticator
+verification or generating replacement recovery codes.
+
+Disabling authenticator verification and replacing recovery codes are protected
+POST actions. Each action first renders a confirmation page and accepts one of
+the user's existing confirmation methods: password, active authenticator code,
+or recovery code. Recovery-code replacement invalidates previous unused codes
+and displays the generated replacement codes only once. Provider and passkey
+management controls are intentionally left to later feature iterations.
+
 ## Declarative Forms
 
 `wybra.forms` provides CSRF protection and a small declarative forms API.

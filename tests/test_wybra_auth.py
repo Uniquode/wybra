@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -92,6 +93,7 @@ from wybra.auth.persistence.database import (
 )
 from wybra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
 from wybra.auth.routes import normalise_return_to
+from wybra.auth.routes.totp import verify_totp_code_for_credential
 from wybra.core.exceptions import ConfigurationError
 from wybra.services.crypto import (
     ENVELOPE_PREFIX,
@@ -1376,6 +1378,60 @@ def test_wybra_auth_totp_seed_storage_uses_encrypted_envelope(
             await close_database(database)
 
     asyncio.run(assert_encrypted_storage())
+
+
+def test_wybra_auth_totp_verification_fails_closed_without_secret_keys(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def assert_missing_keys_handled() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "totp-missing-keys.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                user = User(
+                    email="totp-missing-key@example.com",
+                    hashed_password="hash",
+                    is_active=True,
+                    is_superuser=False,
+                    is_verified=True,
+                )
+                session.add(user)
+                await session.flush()
+
+                secret_service = make_test_only_secret_service()
+                store = SqlAlchemyTOTPCredentialStore(session, secret_service)
+                secret = "JBSWY3DPEHPK3PXP"
+                credential_id = await store.create_pending_totp_credential(
+                    str(user.id),
+                    secret,
+                )
+                await store.activate_totp_credential(credential_id)
+
+                missing_key_store = SqlAlchemyTOTPCredentialStore(
+                    session,
+                    SecretEnvelopeService.from_env({}),
+                )
+                accepted, counter, error = await verify_totp_code_for_credential(
+                    session=session,
+                    store=missing_key_store,
+                    credential_id=credential_id,
+                    user_id=str(user.id),
+                    code=generate_totp(secret),
+                    options=IdentityOptions(totp_mode="opt_in"),
+                )
+
+                assert accepted is False
+                assert counter is None
+                assert error is None
+        finally:
+            await close_database(database)
+
+    caplog.set_level(logging.ERROR, logger="wybra.auth.routes.totp")
+    asyncio.run(assert_missing_keys_handled())
+
+    assert "Unable to verify TOTP credential" in caplog.text
 
 
 def test_wybra_auth_recovery_codes_use_keyed_verifiers(

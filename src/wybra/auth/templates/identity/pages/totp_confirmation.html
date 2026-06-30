@@ -1,0 +1,58 @@
+{% extends "layouts/page.html" %}
+
+{% block content %}
+<section class="surface-panel">
+  <p class="eyebrow">Two-factor authentication</p>
+  <h1>{{ page_title }}</h1>
+  {% if confirmation_error %}
+  <p role="alert">{{ confirmation_error }}</p>
+  {% endif %}
+  {% if recovery_codes %}
+  <p role="status">Store these recovery codes in a secure location:</p>
+  <ul>
+    {% for recovery_code in recovery_codes %}
+    <li><code>{{ recovery_code }}</code></li>
+    {% endfor %}
+  </ul>
+  <p>
+    <a
+      download="{{ recovery_codes_download_filename }}"
+      href="{{ recovery_codes_download_href }}"
+    >
+      Download {{ recovery_codes_download_filename }}
+    </a>
+  </p>
+  <p><a href="{{ request.url_for('auth:security') }}">Return to Login &amp; Security</a></p>
+  {% else %}
+  <p class="muted-copy">{{ confirmation_message }}</p>
+  <form action="{{ action_path }}" method="post">
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    {% if single_confirmation_field %}
+    <label>
+      Password, authenticator code, or recovery code
+      <input
+        autocomplete="one-time-code"
+        name="confirmation"
+        required
+        type="text"
+      >
+    </label>
+    {% else %}
+    <label>
+      Password
+      <input autocomplete="current-password" name="password" type="password">
+    </label>
+    <label>
+      Authenticator code
+      <input autocomplete="one-time-code" inputmode="numeric" name="totp_code" type="text">
+    </label>
+    <label>
+      Recovery code
+      <input autocomplete="one-time-code" name="recovery_code" type="text">
+    </label>
+    {% endif %}
+    <button type="submit">{{ button_label }}</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}
