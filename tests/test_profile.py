@@ -247,7 +247,12 @@ def _profile_route_site(
     return site
 
 
-def _widget_site(user: ProfileUser, *, profile_route: bool = True) -> Site:
+def _widget_site(
+    user: ProfileUser,
+    *,
+    profile_route: bool = True,
+    security_route: bool = False,
+) -> Site:
     app = FastAPI()
 
     async def endpoint() -> dict[str, bool]:
@@ -256,6 +261,8 @@ def _widget_site(user: ProfileUser, *, profile_route: bool = True) -> Site:
     app.add_api_route("/login", endpoint, name="auth:login")
     app.add_api_route("/logout", endpoint, name="auth:logout")
     app.add_api_route("/account", endpoint, name="auth:account")
+    if security_route:
+        app.add_api_route("/account/security", endpoint, name="auth:security")
     if profile_route:
         app.add_api_route("/profile", endpoint, name="profile:edit")
     site = Site(
@@ -941,6 +948,24 @@ async def test_login_widget_state_builds_settings_menu() -> None:
         "/profile?return_to=%2Faccount",
     )
     assert state.logout_path == "/logout"
+
+
+@pytest.mark.anyio
+async def test_login_widget_state_routes_security_item_to_security_page() -> None:
+    user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+    site = _widget_site(user, security_route=True)
+
+    state = await login_widget_state(
+        SimpleNamespace(app=site.app, url=SimpleNamespace(path="/account", query=""))
+    )
+
+    assert state is not None
+    assert state.settings_menu is not None
+    assert tuple(item.path for item in state.settings_menu.menu.items) == (
+        "/account",
+        "/account/security",
+        "/profile?return_to=%2Faccount",
+    )
 
 
 @pytest.mark.anyio

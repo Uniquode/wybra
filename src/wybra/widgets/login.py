@@ -18,6 +18,7 @@ LOGIN_TEMPLATE = "components/login_control.html"
 LOGIN_ROUTE_NAME = "auth:login"
 LOGOUT_ROUTE_NAME = "auth:logout"
 ACCOUNT_ROUTE_NAME = "auth:account"
+SECURITY_ROUTE_NAME = "auth:security"
 PROFILE_EDIT_ROUTE_NAME = "profile:edit"
 
 
@@ -54,6 +55,7 @@ async def login_widget_state(request: Any) -> LoginWidgetState | None:
 
     profile_path = _profile_path(request)
     account_path = _route_path(request, ACCOUNT_ROUTE_NAME)
+    security_path = _route_path(request, SECURITY_ROUTE_NAME)
     return LoginWidgetState(
         authenticated=True,
         login_path=None,
@@ -63,6 +65,7 @@ async def login_widget_state(request: Any) -> LoginWidgetState | None:
         settings_menu=_settings_menu(
             profile_path=profile_path,
             account_path=account_path,
+            security_path=security_path,
         ),
     )
 
@@ -100,13 +103,17 @@ def _settings_menu(
     *,
     profile_path: str | None,
     account_path: str | None,
+    security_path: str | None,
 ) -> DropdownPanel | None:
     items: list[NavigationItem] = []
     if account_path is not None:
         items.extend(
             (
                 NavigationItem(label="Account", path=account_path),
-                NavigationItem(label="Login & Security", path=account_path),
+                NavigationItem(
+                    label="Login & Security",
+                    path=security_path or account_path,
+                ),
             )
         )
     if profile_path is not None:
@@ -172,5 +179,6 @@ __all__ = (
     "LOGOUT_ROUTE_NAME",
     "LoginWidgetState",
     "PROFILE_EDIT_ROUTE_NAME",
+    "SECURITY_ROUTE_NAME",
     "login_widget_state",
 )

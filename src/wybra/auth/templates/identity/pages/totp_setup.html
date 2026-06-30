@@ -18,12 +18,26 @@
     <li><code>{{ recovery_code }}</code></li>
     {% endfor %}
   </ul>
+  <p>
+    <a
+      download="{{ recovery_codes_download_filename }}"
+      href="{{ setup_recovery_codes_download_href }}"
+    >
+      {{ setup_messages.download_recovery_codes }}
+    </a>
+  </p>
   {% endif %}
   <p>
-    <a href="{{ request.url_for('auth:account') }}">{{ setup_messages.return_to_account }}</a>
+    <a href="{{ return_to or request.url_for('auth:account') }}">{{ setup_return_label }}</a>
   </p>
   {% else %}
   <p>{{ setup_messages.instructions }}</p>
+  {% if setup_totp_qr_svg %}
+  <figure aria-label="{{ setup_messages.show_setup_qr_code }}">
+    <figcaption>{{ setup_messages.show_setup_qr_code }}</figcaption>
+    {{ setup_totp_qr_svg }}
+  </figure>
+  {% endif %}
   {% if setup_totp_uri %}
   <details>
     <summary>{{ setup_messages.show_setup_uri }}</summary>

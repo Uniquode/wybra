@@ -6,17 +6,18 @@ from wybra.auth.mfa.recovery import generate_recovery_codes
 from wybra.auth.mfa.storage import (
     TOTP_PENDING_STATUS,
     SqlAlchemyChallengeStore,
-    SqlAlchemyTOTPCredentialStore,
 )
 from wybra.auth.mfa.totp import generate_totp_secret, totp_auth_uri
 from wybra.auth.options import TOTP_REQUIRED
 from wybra.auth.result import ERROR_TOTP_SETUP_REQUIRED
 from wybra.auth.routes.totp import (
+    RECOVERY_CODES_DOWNLOAD_FILENAME,
     TOTP_SETUP_PAGE_MESSAGES,
     clear_totp_setup_nonce_cookie,
     ensure_totp_setup_supported,
     is_totp_setup_challenge,
     recovery_code_store,
+    recovery_codes_download_href,
     render_totp_setup_page,
     setup_totp_error_page,
     totp_assertion,
@@ -33,10 +34,13 @@ from wybra.auth.sessions import (
 )
 from wybra.auth.timestamps import current_timestamp
 from wybra.forms import request_form_data
+from wybra.template import render_page
 
 from .shared import (
     _form_value,
     _fresh_primary_assertion_satisfied,
+    _fresh_security_assertion_satisfied,
+    _fresh_single_security_assertion_satisfied,
     _identity_options,
     _is_effectively_active_user,
     _load_user_by_id,
@@ -47,6 +51,13 @@ from .shared import (
     account_router,
     logger,
     normalise_return_to,
+)
+
+TOTP_CONFIRMATION_MESSAGE = (
+    "Confirm this action with your password, authenticator code, or a recovery code."
+)
+TOTP_LAST_METHOD_MESSAGE = (
+    "Add another sign-in method before disabling authenticator verification."
 )
 
 
@@ -137,6 +148,7 @@ async def totp_setup(request: Request) -> Response:
                 str(user.id),
                 generate_totp_secret(),
             )
+            await session.commit()
 
         credential = await store.get_totp_credential(pending_credential_id)
         if credential is None:
@@ -259,26 +271,154 @@ async def totp_setup(request: Request) -> Response:
         return response
 
 
-@account_router.post(
+@account_router.api_route(
     "/totp/disable",
+    methods=["GET", "POST"],
     include_in_schema=False,
     name="auth:totp-disable",
 )
 async def disable_totp(request: Request) -> Response:
     ensure_totp_setup_supported(request)
     user = await _require_authenticated_user(request)
-    if not await _fresh_primary_assertion_satisfied(request, user):
-        return RedirectResponse(url="/account", status_code=303)
 
     session_factory = _session_factory_from_request(request)
     async with session_factory() as session:
-        store = SqlAlchemyTOTPCredentialStore(session)
+        store = totp_credential_store(request, session)
         active_credential_id = await store.get_active_totp_credential(str(user.id))
-        if active_credential_id is not None:
-            await store.disable_totp_credential(active_credential_id)
-            await session.commit()
+        if active_credential_id is None:
+            return RedirectResponse(url="/account/security", status_code=303)
 
-    return RedirectResponse(url="/account", status_code=303)
+        if request.method != "POST":
+            return _totp_action_confirmation_page(
+                request,
+                page_title="Disable authenticator",
+                action_path=str(request.url_for("auth:totp-disable")),
+                button_label="Disable authenticator",
+            )
+
+        if not _user_has_usable_sign_in_after_totp(user):
+            return _totp_action_confirmation_page(
+                request,
+                page_title="Disable authenticator",
+                action_path=str(request.url_for("auth:totp-disable")),
+                button_label="Disable authenticator",
+                error=TOTP_LAST_METHOD_MESSAGE,
+                status_code=400,
+            )
+
+        if not await _fresh_security_assertion_satisfied(
+            request,
+            user,
+            session,
+            active_credential_id=active_credential_id,
+        ):
+            return _totp_action_confirmation_page(
+                request,
+                page_title="Disable authenticator",
+                action_path=str(request.url_for("auth:totp-disable")),
+                button_label="Disable authenticator",
+                error=TOTP_CONFIRMATION_MESSAGE,
+                status_code=400,
+            )
+
+        await store.disable_totp_credential(active_credential_id)
+        await session.commit()
+
+    return RedirectResponse(url="/account/security", status_code=303)
+
+
+def _user_has_usable_sign_in_after_totp(user: object) -> bool:
+    return bool(getattr(user, "hashed_password", None))
+
+
+@account_router.api_route(
+    "/totp/recovery-codes/regenerate",
+    methods=["GET", "POST"],
+    include_in_schema=False,
+    name="auth:totp-recovery-codes-regenerate",
+)
+async def regenerate_totp_recovery_codes(request: Request) -> Response:
+    ensure_totp_setup_supported(request)
+    user = await _require_authenticated_user(request)
+
+    session_factory = _session_factory_from_request(request)
+    async with session_factory() as session:
+        store = totp_credential_store(request, session)
+        active_credential_id = await store.get_active_totp_credential(str(user.id))
+        if active_credential_id is None:
+            return RedirectResponse(url="/account/security", status_code=303)
+
+        if request.method != "POST":
+            return _totp_action_confirmation_page(
+                request,
+                page_title="Generate replacement recovery codes",
+                action_path=str(request.url_for("auth:totp-recovery-codes-regenerate")),
+                button_label="Generate recovery codes",
+                single_confirmation_field=True,
+            )
+
+        if not await _fresh_single_security_assertion_satisfied(
+            request,
+            user,
+            session,
+            active_credential_id=active_credential_id,
+        ):
+            return _totp_action_confirmation_page(
+                request,
+                page_title="Generate replacement recovery codes",
+                action_path=str(request.url_for("auth:totp-recovery-codes-regenerate")),
+                button_label="Generate recovery codes",
+                error=TOTP_CONFIRMATION_MESSAGE,
+                single_confirmation_field=True,
+                status_code=400,
+            )
+
+        recovery_codes = generate_recovery_codes()
+        recovery_store = recovery_code_store(request, session)
+        await recovery_store.replace_recovery_codes(
+            str(user.id),
+            active_credential_id,
+            recovery_codes,
+        )
+        await session.commit()
+
+    return _totp_action_confirmation_page(
+        request,
+        page_title="Recovery codes",
+        action_path=str(request.url_for("auth:totp-recovery-codes-regenerate")),
+        button_label="Generate recovery codes",
+        recovery_codes=recovery_codes,
+    )
+
+
+def _totp_action_confirmation_page(
+    request: Request,
+    *,
+    page_title: str,
+    action_path: str,
+    button_label: str,
+    error: str | None = None,
+    recovery_codes: tuple[str, ...] = (),
+    single_confirmation_field: bool = False,
+    status_code: int = 200,
+) -> Response:
+    return render_page(
+        request,
+        "identity/pages/totp_confirmation.html",
+        {
+            "page_title": page_title,
+            "action_path": action_path,
+            "button_label": button_label,
+            "confirmation_error": error,
+            "single_confirmation_field": single_confirmation_field,
+            "recovery_codes": recovery_codes,
+            "recovery_codes_download_href": recovery_codes_download_href(
+                recovery_codes
+            ),
+            "recovery_codes_download_filename": RECOVERY_CODES_DOWNLOAD_FILENAME,
+        },
+        status_code=status_code,
+    )
 
 
 @account_router.post(

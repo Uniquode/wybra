@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import FormData
 
 from wybra.auth.ids import parse_uuid
+from wybra.auth.mfa.recovery import RECOVERY_CODE_LENGTH
 from wybra.auth.mfa.storage import (
     SqlAlchemyChallengeStore,
     SqlAlchemyTOTPCredentialStore,
@@ -27,6 +28,9 @@ from wybra.auth.routes.totp import (
     generate_totp_login_nonce,
     generate_totp_setup_nonce,
     login_context,
+    recovery_code_store,
+    totp_credential_store,
+    verify_totp_code_for_credential,
 )
 from wybra.auth.sessions import (
     authenticate_user,
@@ -157,6 +161,81 @@ async def _fresh_primary_assertion_satisfied(
 
     asserted_user = await authenticate_user(request, user.email, password)
     return bool(asserted_user is not None and asserted_user.id == user.id)
+
+
+async def _fresh_security_assertion_satisfied(
+    request: Request,
+    user: User,
+    session: AsyncSession,
+    *,
+    active_credential_id: str | None,
+) -> bool:
+    form_data = await request_form_data(request)
+    password = _form_value(form_data, "password")
+    if password:
+        asserted_user = await authenticate_user(request, user.email, password)
+        if asserted_user is not None and asserted_user.id == user.id:
+            return True
+
+    totp_code = _form_value(form_data, "totp_code").strip()
+    if totp_code and active_credential_id is not None:
+        store = totp_credential_store(request, session)
+        accepted, _counter, _error = await verify_totp_code_for_credential(
+            session=session,
+            store=store,
+            credential_id=active_credential_id,
+            user_id=str(user.id),
+            code=totp_code,
+            options=_identity_options(request),
+        )
+        if accepted:
+            return True
+
+    recovery_code = _form_value(form_data, "recovery_code").strip().upper()
+    if recovery_code and len(recovery_code) == RECOVERY_CODE_LENGTH:
+        store = recovery_code_store(request, session)
+        return await store.consume_recovery_code(str(user.id), recovery_code)
+
+    return False
+
+
+async def _fresh_single_security_assertion_satisfied(
+    request: Request,
+    user: User,
+    session: AsyncSession,
+    *,
+    active_credential_id: str | None,
+) -> bool:
+    form_data = await request_form_data(request)
+    credential = _form_value(form_data, "confirmation").strip()
+    if not credential:
+        return False
+
+    if credential.isdigit():
+        if active_credential_id is None:
+            return False
+
+        store = totp_credential_store(request, session)
+        accepted, _counter, _error = await verify_totp_code_for_credential(
+            session=session,
+            store=store,
+            credential_id=active_credential_id,
+            user_id=str(user.id),
+            code=credential,
+            options=_identity_options(request),
+        )
+        return accepted
+
+    asserted_user = await authenticate_user(request, user.email, credential)
+    if asserted_user is not None and asserted_user.id == user.id:
+        return True
+
+    recovery_code = credential.upper()
+    if len(recovery_code) == RECOVERY_CODE_LENGTH:
+        store = recovery_code_store(request, session)
+        return await store.consume_recovery_code(str(user.id), recovery_code)
+
+    return False
 
 
 async def _create_totp_login_challenge(

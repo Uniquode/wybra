@@ -1,0 +1,31 @@
+{% extends "layouts/page.html" %}
+
+{% block content %}
+<section class="surface-panel">
+  <p class="eyebrow">Account security</p>
+  <h1>Login &amp; Security</h1>
+  <p class="muted-copy">Signed in as {{ user.email }}.</p>
+</section>
+{% if totp.available %}
+<section class="surface-panel">
+  <p class="eyebrow">Two-factor authentication</p>
+  <h2>Authenticator app</h2>
+    {% if totp.enabled %}
+    <p class="muted-copy">Authenticator verification is enabled for this account.</p>
+    <p><a href="{{ request.url_for('auth:totp-disable') }}">Disable authenticator</a></p>
+    <p>
+      <a href="{{ request.url_for('auth:totp-recovery-codes-regenerate') }}">
+        Generate replacement recovery codes
+      </a>
+    </p>
+    {% else %}
+    <p class="muted-copy">Add an authenticator app to protect this account.</p>
+  <p>
+    <a href="{{ request.url_for('auth:totp-setup') }}?return_to=/account/security">
+      Set up authenticator
+    </a>
+  </p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
