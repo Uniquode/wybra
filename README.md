@@ -590,7 +590,6 @@ secrets_path = "apps/wybra"
 
 [secrets.keychain]
 appname = "wybra"
-username = "uniquode.io"
 ```
 
 `[secrets.crypto]` is optional. When it is configured and `wybra.secrets` is

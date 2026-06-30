@@ -144,10 +144,10 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
 ) -> None:
     keyring = FakeKeyring(
         {
-            ("uniquode.io", "deployment:SYSTEM_SECRET_KEY"): "current",
+            ("uniquode.io", "SYSTEM_SECRET_KEY"): "current",
             (
                 "uniquode.io",
-                "deployment:auth/providers/google/client-secret",
+                "auth/providers/google/client-secret",
             ): "google",
         }
     )
@@ -162,7 +162,7 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     assert result.exit_code == 0
     records = {item["key"]: item for item in json.loads(result.output)["keys"]}
     assert records["SYSTEM_SECRET_KEY"]["service"] == "uniquode.io"
-    assert records["SYSTEM_SECRET_KEY"]["username"] == "deployment:SYSTEM_SECRET_KEY"
+    assert records["SYSTEM_SECRET_KEY"]["username"] == "SYSTEM_SECRET_KEY"
     assert records["SYSTEM_SECRET_KEY"]["exists"] is True
     assert records["SYSTEM_SECRET_KEYS_PREVIOUS"]["exists"] is False
     assert records["auth/providers/google/client-secret"]["exists"] is True
@@ -201,9 +201,7 @@ current_key = "SYSTEM_SECRET_KEY"
 
 
 def test_get_honours_app_config_environment(monkeypatch, tmp_path: Path) -> None:
-    keyring = FakeKeyring(
-        {("uniquode.io", "deployment:SYSTEM_SECRET_KEY"): "configured-secret"}
-    )
+    keyring = FakeKeyring({("uniquode.io", "SYSTEM_SECRET_KEY"): "configured-secret"})
     _install_fake_keyring(monkeypatch, keyring)
     monkeypatch.setenv("APP_CONFIG", _app_config(tmp_path / "app.toml").as_posix())
 

@@ -336,7 +336,7 @@ class TestKeychainSource:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(sys, "platform", "linux")
-        keyring = FakeKeyring({("wybra", "deployment:api-token"): "keyring-secret"})
+        keyring = FakeKeyring({("wybra", "api-token"): "keyring-secret"})
         driver = KeychainSecretSourceDriver(
             KeychainSecretSourceSettings(appname="wybra", username="deployment"),
             keyring_module=keyring,
@@ -345,8 +345,8 @@ class TestKeychainSource:
         assert driver.exists("api-token") is True
         assert driver.resolve("api-token").reveal() == "keyring-secret"
         assert keyring.requests == [
-            ("wybra", "deployment:api-token"),
-            ("wybra", "deployment:api-token"),
+            ("wybra", "api-token"),
+            ("wybra", "api-token"),
         ]
 
     def test_windows_driver_uses_keyring_backend(

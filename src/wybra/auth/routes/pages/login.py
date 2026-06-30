@@ -9,6 +9,7 @@ from wybra.auth.mfa.totp import is_valid_totp_code
 from wybra.auth.models import User
 from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
 from wybra.auth.result import (
+    ERROR_EMAIL_VERIFICATION_REQUIRED,
     ERROR_TOTP_CODE_REQUIRED,
     ERROR_TOTP_INVALID,
     ERROR_TOTP_SETUP_REQUIRED,
@@ -55,6 +56,7 @@ from .shared import (
     _session_factory_from_request,
     _totp_login_error_response,
     _totp_setup_return_to,
+    _verification_required_response,
     account_router,
     logger,
     normalise_return_to,
@@ -254,6 +256,14 @@ async def _handle_login_totp_challenge(
                     request,
                     challenge_user,
                 )
+                if ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
+                    response = _verification_required_response(
+                        request,
+                        email=challenge_user.email,
+                    )
+                    clear_totp_setup_nonce_cookie(response, request)
+                    return response
+
                 if ceremony_result.is_failure() or ceremony_result.value is None:
                     return _totp_login_error_response(
                         request,
@@ -460,6 +470,11 @@ async def _handle_login_totp_challenge(
         else (),
     )
     if ceremony_result.is_failure() or ceremony_result.value is None:
+        if ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
+            response = _verification_required_response(request, email=user.email)
+            clear_totp_login_nonce_cookie(response, request)
+            return response
+
         return _totp_login_error_response(
             request,
             email=email,

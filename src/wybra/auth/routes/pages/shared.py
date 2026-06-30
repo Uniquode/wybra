@@ -18,7 +18,10 @@ from wybra.auth.mfa.storage import (
 )
 from wybra.auth.models import User
 from wybra.auth.options import IdentityOptions
-from wybra.auth.result import ERROR_TOTP_CODE_REQUIRED
+from wybra.auth.result import (
+    ERROR_EMAIL_VERIFICATION_REQUIRED,
+    ERROR_TOTP_CODE_REQUIRED,
+)
 from wybra.auth.routes.totp import (
     TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE,
     TOTP_LOGIN_FORM_ERROR_BY_MESSAGE,
@@ -346,6 +349,9 @@ async def _complete_login_ceremony(
     return_to: str,
 ) -> Response:
     ceremony_result = await complete_authentication_ceremony(request, user)
+    if ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
+        return _verification_required_response(request, email=user.email)
+
     if ceremony_result.is_failure() or ceremony_result.value is None:
         return _login_error_response(
             request,
@@ -359,6 +365,26 @@ async def _complete_login_ceremony(
         response, request, ceremony_result.value, _identity_options(request)
     )
     return response
+
+
+def _verification_required_response(
+    request: Request,
+    *,
+    email: str,
+    status_code: int = 403,
+) -> Response:
+    context = _identity_context(
+        request,
+        page_title="Verify email",
+        email=email,
+        form_error="Verify your email before signing in.",
+    )
+    return render_page(
+        request,
+        "identity/pages/verify.html",
+        context,
+        status_code=status_code,
+    )
 
 
 def _login_error_response(
