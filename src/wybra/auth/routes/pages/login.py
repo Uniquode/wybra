@@ -256,7 +256,10 @@ async def _handle_login_totp_challenge(
                     request,
                     challenge_user,
                 )
-                if ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
+                if (
+                    ceremony_result.is_failure()
+                    and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
+                ):
                     response = _verification_required_response(
                         request,
                         email=challenge_user.email,
@@ -470,7 +473,10 @@ async def _handle_login_totp_challenge(
         else (),
     )
     if ceremony_result.is_failure() or ceremony_result.value is None:
-        if ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
+        if (
+            ceremony_result.is_failure()
+            and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
+        ):
             response = _verification_required_response(request, email=user.email)
             clear_totp_login_nonce_cookie(response, request)
             return response

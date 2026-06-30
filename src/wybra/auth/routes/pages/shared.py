@@ -349,7 +349,10 @@ async def _complete_login_ceremony(
     return_to: str,
 ) -> Response:
     ceremony_result = await complete_authentication_ceremony(request, user)
-    if ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
+    if (
+        ceremony_result.is_failure()
+        and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
+    ):
         return _verification_required_response(request, email=user.email)
 
     if ceremony_result.is_failure() or ceremony_result.value is None:

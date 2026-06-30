@@ -80,7 +80,7 @@ SECURE_SCHEME_ALIASES: Final = {
 }
 FORWARDED_PROTO_HEADER: Final = "x-forwarded-proto"
 FORWARDED_HEADER: Final = "forwarded"
-EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS: Final = 300.0
+EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS: Final = 300
 # Process-scoped warning suppression. A race can only emit a duplicate warning,
 # which is acceptable for this diagnostic path.
 _logged_forward_header_misconfig = False
@@ -553,12 +553,10 @@ async def request_verification(request: Request, email: str) -> None:
         if user.is_verified:
             return
 
-        if (
-            user.email_verification_sent_at is not None
-            and now - user.email_verification_sent_at
-            < EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS
-        ):
-            return
+        if user.email_verification_sent_at is not None:
+            elapsed_seconds = now - user.email_verification_sent_at
+            if elapsed_seconds < EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS:
+                return
 
         user.email_verification_sent_at = now
         await session.commit()
