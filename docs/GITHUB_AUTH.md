@@ -1,18 +1,11 @@
 # GitHub Authentication
 
-This guide is for operators and implementers enabling GitHub login in a
-Wybra-based web application. It assumes the application already has Wybra auth,
-forms, template, database, migrations, secrets, and provider policy support
-working.
+This guide is for operators enabling GitHub login in a Wybra-based web
+application. It assumes the application already has Wybra auth, forms, template,
+database, migrations, secrets, and provider policy support working.
 
-The GitHub provider is different from the Google provider. GitHub OAuth Apps do
-not return a signed OpenID Connect ID token for this web flow. Wybra must treat
-the OAuth access token as a temporary way to call GitHub's REST API, revalidate
-the authenticated GitHub user, and then map the immutable GitHub user ID to a
-local provider identity link.
-
-The route names and configuration below describe the implementation contract
-for the `github-authentication` slice.
+The sections below describe the GitHub OAuth App settings, Wybra configuration,
+secret storage, and smoke checks needed to operate GitHub authentication.
 
 ## Prerequisites
 
@@ -48,36 +41,7 @@ Do not request repository, package, workflow, or organisation scopes for basic
 login. Add broader GitHub API access only under a separate requirement with its
 own consent and storage model.
 
-## Required OAuth Behaviour
-
-Wybra's GitHub provider should use the OAuth web application flow:
-
-1. Redirect the user to `https://github.com/login/oauth/authorize`.
-2. Include `client_id`, explicit scopes, `redirect_uri`, CSRF `state`, and PKCE
-   `code_challenge` with method `S256`.
-3. Receive `code` and `state` on the callback route.
-4. Validate state, purpose, expiry, redirect URI, same-browser state cookie, and
-   PKCE verifier before accepting the callback.
-5. Exchange the code at `https://github.com/login/oauth/access_token` with
-   `Accept: application/json`.
-6. Validate the token response, token type, and granted scopes.
-7. Call GitHub's REST API with the access token to revalidate identity.
-8. Resolve the provider assertion through Wybra's provider account policy.
-
-GitHub users can grant fewer scopes than requested and can later edit granted
-scopes. The implementation must check the token response `scope` value and
-reject callbacks that do not grant the configured required scopes.
-
-## Identity And Email Requirements
-
-Use the GitHub REST API, not profile page data, for identity:
-
-- `GET https://api.github.com/user` supplies the GitHub user record.
-- The immutable numeric `id`, converted to a string, is the provider subject
-  key.
-- `login` is display metadata only because GitHub usernames can change.
-- `GET https://api.github.com/user/emails` supplies email addresses and their
-  `primary`, `verified`, and `visibility` fields.
+## Scopes And Email Requirements
 
 Use the default scopes:
 
@@ -85,15 +49,22 @@ Use the default scopes:
 read:user user:email
 ```
 
-`read:user` allows profile reads. `user:email` is required for the emails API
-and lets Wybra see verified private email addresses. Do not rely on the
-`email` field from `/user`; it can be null when the user's public profile email
-is hidden.
+`read:user` allows Wybra to read the signed-in user's basic GitHub profile.
+`user:email` lets Wybra see verified private email addresses when the user's
+public profile email is hidden.
 
-For account creation or email-match auto-linking, choose a verified email from
-the `/user/emails` response. Prefer the primary verified email. If no verified
-email is available, the provider assertion must not satisfy Wybra's verified
-email policy, and email-match linking must not proceed.
+For account creation or email-match auto-linking, Wybra requires a verified
+GitHub email address. If no verified email is available, Wybra will not treat
+the GitHub account as satisfying local verified-email policy, and email-match
+linking will not proceed.
+
+GitHub users can grant fewer scopes than requested and can later edit granted
+scopes. If a user removes one of the required scopes, GitHub login or linking
+will fail until they re-authorise the OAuth App with the required scopes.
+
+GitHub usernames can change. Wybra may show the current GitHub username as
+display information, but account matching uses GitHub account and verified email
+data instead.
 
 Successful GitHub login is a primary sign-in method. It does not bypass Wybra
 email verification or local TOTP. If the local account is unverified, Wybra
@@ -250,10 +221,9 @@ Policy options:
 - `allowed_emails = ["person@example.com"]`: restrict provider-created
   accounts to specific verified GitHub emails.
 
-Implementation-specific defaults should provide the GitHub endpoints and
-default scopes. Configuration should not require operators to repeat them
-unless a later requirement adds GitHub Enterprise Server support or custom
-endpoint support.
+Wybra provides the GitHub OAuth endpoints and default scopes. Operators usually
+only need to configure the route mount, client ID, client secret source, and
+provider policy options.
 
 ## Secret Store Setup
 
@@ -321,32 +291,6 @@ required_claims = ["id", "email", "email_verified"]
 With that configuration, set `GITHUB_CLIENT_SECRET` in the process environment
 instead of using `wybra-secret`.
 
-## Implementation Requirements
-
-The GitHub provider implementation should:
-
-- keep GitHub-specific code in focused modules such as
-  `wybra.providers.github`, not in package `__init__.py` files;
-- derive callback URLs from named routes and configured route prefixes;
-- use signed, short-lived, HTTP-only state cookies for login and link starts;
-- include PKCE `S256` challenge/verifier handling in state;
-- validate callback purpose, expiry, state, redirect URI, PKCE verifier, and
-  same-browser state before exchanging a code;
-- resolve the client secret through `SecretsCapability`;
-- exchange tokens through an injectable token-client boundary;
-- request JSON token responses from GitHub;
-- validate `token_type = "bearer"` and granted scopes;
-- fetch `/user` and `/user/emails` through an injectable GitHub API-client
-  boundary;
-- use the stringified GitHub `id` as the provider subject;
-- use only verified emails for local email verification, email-match linking,
-  allowed-domain checks, and allowed-email checks;
-- persist provider metadata as non-authoritative display data;
-- encrypt provider token material if it is retained;
-- complete successful login through Wybra's shared login ceremony;
-- reject or degrade cleanly when GitHub is disabled, misconfigured, missing its
-  client secret, or returns unusable identity/email data.
-
 ## Smoke Checks
 
 Inspect the configured route tree:
@@ -370,22 +314,20 @@ Start the app and check:
    enabled.
 2. GitHub redirects back to the configured callback without a callback URL
    error.
-3. The callback rejects missing or mismatched state.
-4. The callback rejects tokens that do not include the required scopes.
-5. A GitHub account with private email still works when the emails API returns
+3. A GitHub account with private email still works when GitHub returns
    a verified email.
-6. A GitHub account without a verified email does not satisfy email-match
+4. A GitHub account without a verified email does not satisfy email-match
    linking or local email verification.
-7. A new GitHub login behaves according to `account_creation_enabled`.
-8. Login & Security shows Link GitHub or Unlink GitHub for signed-in users.
-9. Unlink GitHub is rejected if it would remove the last usable primary sign-in
+5. A new GitHub login behaves according to `account_creation_enabled`.
+6. Login & Security shows Link GitHub or Unlink GitHub for signed-in users.
+7. Unlink GitHub is rejected if it would remove the last usable primary sign-in
    method.
-10. If username/password login is enabled and GitHub is linked, Login &
-    Security offers an action to disable username/password login.
+8. If username/password login is enabled and GitHub is linked, Login & Security
+   offers an action to disable username/password login.
 
 If the GitHub provider is configured but its keychain client secret is missing,
-Wybra should log the provider-specific secret availability problem, disable
-GitHub for the effective runtime settings, and continue application startup.
+GitHub sign-in should be unavailable and the logs should identify the missing
+provider secret reference.
 
 ## References
 
@@ -395,7 +337,3 @@ GitHub for the effective runtime settings, and continue application startup.
   `https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps`
 - GitHub OAuth App scopes:
   `https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps`
-- GitHub REST API authenticated user endpoint:
-  `https://docs.github.com/en/rest/users/users`
-- GitHub REST API authenticated user emails endpoint:
-  `https://docs.github.com/en/rest/users/emails`
