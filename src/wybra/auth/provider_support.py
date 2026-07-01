@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -12,6 +13,10 @@ from wybra.auth.provider_credentials import (
 from wybra.auth.routes.paths import normalise_return_to, optional_route_path
 from wybra.core.exceptions import ConfigurationError
 from wybra.providers.capabilities import ProvidersCapability
+from wybra.providers.github import (
+    GITHUB_PROVIDER_NAME,
+    github_oauth_settings_from_provider,
+)
 from wybra.providers.google import (
     GOOGLE_PROVIDER_NAME,
     google_oauth_settings_from_provider,
@@ -21,6 +26,27 @@ from wybra.site import SiteCapabilityError, get_site
 
 
 def enabled_google_provider(request: Request) -> ProviderSettings | None:
+    return _enabled_provider(
+        request,
+        provider_name=GOOGLE_PROVIDER_NAME,
+        settings_factory=google_oauth_settings_from_provider,
+    )
+
+
+def enabled_github_provider(request: Request) -> ProviderSettings | None:
+    return _enabled_provider(
+        request,
+        provider_name=GITHUB_PROVIDER_NAME,
+        settings_factory=github_oauth_settings_from_provider,
+    )
+
+
+def _enabled_provider(
+    request: Request,
+    *,
+    provider_name: str,
+    settings_factory: Callable[[ProviderSettings], object],
+) -> ProviderSettings | None:
     try:
         providers = get_site(request.app).optional_capability(ProvidersCapability)
     except SiteCapabilityError:
@@ -28,13 +54,13 @@ def enabled_google_provider(request: Request) -> ProviderSettings | None:
     if providers is None:
         return None
     try:
-        provider = providers.settings.provider(GOOGLE_PROVIDER_NAME)
+        provider = providers.settings.provider(provider_name)
     except ConfigurationError:
         return None
     if not provider.enabled:
         return None
     try:
-        google_oauth_settings_from_provider(provider)
+        settings_factory(provider)
     except ConfigurationError:
         return None
     return provider
@@ -63,21 +89,54 @@ def google_link_path(request: Request, *, return_to: str | None = None) -> str |
     return f"{route_path}?{query}"
 
 
+def github_login_path(request: Request, *, return_to: str | None = None) -> str | None:
+    route_path = optional_route_path(request, "auth:github-login")
+    if route_path is None or enabled_github_provider(request) is None:
+        return None
+    query = urlencode({"return_to": normalise_return_to(return_to)})
+    return f"{route_path}?{query}"
+
+
+def github_link_path(request: Request, *, return_to: str | None = None) -> str | None:
+    route_path = optional_route_path(request, "auth:github-link")
+    if route_path is None or enabled_github_provider(request) is None:
+        return None
+    security_path = (
+        optional_route_path(request, "auth:security")
+        or optional_route_path(request, "auth:account")
+        or "/"
+    )
+    query = urlencode(
+        {"return_to": normalise_return_to(return_to, default=security_path)}
+    )
+    return f"{route_path}?{query}"
+
+
 def provider_login_options(
     request: Request,
     *,
     return_to: str | None,
 ) -> tuple[dict[str, str], ...]:
-    login_path = google_login_path(request, return_to=return_to)
-    if login_path is None:
-        return ()
-    return (
-        {
-            "name": GOOGLE_PROVIDER_NAME,
-            "label": "Google",
-            "login_path": login_path,
-        },
-    )
+    options: list[dict[str, str]] = []
+    google_path = google_login_path(request, return_to=return_to)
+    if google_path is not None:
+        options.append(
+            {
+                "name": GOOGLE_PROVIDER_NAME,
+                "label": "Google",
+                "login_path": google_path,
+            }
+        )
+    github_path = github_login_path(request, return_to=return_to)
+    if github_path is not None:
+        options.append(
+            {
+                "name": GITHUB_PROVIDER_NAME,
+                "label": "GitHub",
+                "login_path": github_path,
+            }
+        )
+    return tuple(options)
 
 
 async def user_has_usable_account_sign_in(
@@ -102,6 +161,8 @@ def usable_provider_names(request: Request) -> tuple[str, ...]:
     names: list[str] = []
     if enabled_google_provider(request) is not None:
         names.append(GOOGLE_PROVIDER_NAME)
+    if enabled_github_provider(request) is not None:
+        names.append(GITHUB_PROVIDER_NAME)
     return tuple(names)
 
 

@@ -7,7 +7,13 @@ from wybra.auth.capabilities import login_required
 from wybra.auth.models import User
 from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
 from wybra.auth.provider_support import (
+    enabled_github_provider as _enabled_github_provider,
+)
+from wybra.auth.provider_support import (
     enabled_google_provider as _enabled_google_provider,
+)
+from wybra.auth.provider_support import (
+    github_link_path as _github_link_path,
 )
 from wybra.auth.provider_support import (
     google_link_path as _google_link_path,
@@ -17,6 +23,9 @@ from wybra.auth.provider_support import (
 )
 from wybra.auth.provider_support import (
     provider_credential_store_from_request as _provider_credential_store,
+)
+from wybra.auth.provider_support import (
+    usable_provider_names as _usable_provider_names,
 )
 from wybra.auth.provider_support import (
     user_has_usable_account_sign_in as _user_has_usable_account_sign_in,
@@ -38,6 +47,7 @@ from wybra.auth.sessions import (
     verify_user,
 )
 from wybra.forms import request_form_data
+from wybra.providers.github import GITHUB_PROVIDER_NAME
 from wybra.providers.google import GOOGLE_PROVIDER_NAME
 from wybra.template import render_page
 
@@ -146,6 +156,38 @@ async def unlink_google_provider(
     request: Request,
     user: User = LOGIN_REQUIRED,
 ) -> Response:
+    return await _unlink_provider_response(
+        request,
+        user,
+        provider_name=GOOGLE_PROVIDER_NAME,
+        provider_label="Google",
+    )
+
+
+@account_router.post(
+    "/security/providers/github/unlink",
+    include_in_schema=False,
+    name="auth:security-github-unlink",
+)
+async def unlink_github_provider(
+    request: Request,
+    user: User = LOGIN_REQUIRED,
+) -> Response:
+    return await _unlink_provider_response(
+        request,
+        user,
+        provider_name=GITHUB_PROVIDER_NAME,
+        provider_label="GitHub",
+    )
+
+
+async def _unlink_provider_response(
+    request: Request,
+    user: User,
+    *,
+    provider_name: str,
+    provider_label: str,
+) -> Response:
     form_data = await request_form_data(request)
     provider_id = _form_value(form_data, "provider_id")
     session_factory = _session_factory_from_request(request)
@@ -161,7 +203,7 @@ async def unlink_google_provider(
                 user_id=db_user.id,
                 provider_id=provider_id,
             )
-            if provider is None or provider.provider_name != GOOGLE_PROVIDER_NAME:
+            if provider is None or provider.provider_name != provider_name:
                 return RedirectResponse(
                     url=_route_path(request, "auth:security"),
                     status_code=303,
@@ -173,7 +215,7 @@ async def unlink_google_provider(
                 db_user,
                 exclude_provider_id=provider.id,
             ):
-                error = "Add another sign-in method before unlinking Google."
+                error = f"Add another sign-in method before unlinking {provider_label}."
             else:
                 await store.unlink_user_provider(
                     user_id=db_user.id,
@@ -288,11 +330,7 @@ async def _security_password_section(
     enabled = _local_password_login_usable(user)
     disable_path = _optional_route_path(request, "auth:security-password-disable")
     disable_available = False
-    if (
-        enabled
-        and disable_path is not None
-        and _enabled_google_provider(request) is not None
-    ):
+    if enabled and disable_path is not None and _usable_provider_names(request):
         session_factory = _session_factory_from_request(request)
         async with session_factory() as session:
             db_user = await _load_user_by_id(session, user.id)
@@ -318,28 +356,50 @@ async def _security_provider_section(
     request: Request,
     user: User,
 ) -> dict[str, object]:
-    google_section = await _security_google_provider_section(request, user)
-    providers = (google_section,) if google_section["available"] else ()
+    sections = (
+        await _security_named_provider_section(
+            request,
+            user,
+            provider_name=GOOGLE_PROVIDER_NAME,
+            provider_label="Google",
+            link_path=_google_link_path(
+                request,
+                return_to=_optional_route_path(request, "auth:security"),
+            ),
+            unlink_path=_optional_route_path(request, "auth:security-google-unlink"),
+            enabled=_enabled_google_provider(request) is not None,
+        ),
+        await _security_named_provider_section(
+            request,
+            user,
+            provider_name=GITHUB_PROVIDER_NAME,
+            provider_label="GitHub",
+            link_path=_github_link_path(
+                request,
+                return_to=_optional_route_path(request, "auth:security"),
+            ),
+            unlink_path=_optional_route_path(request, "auth:security-github-unlink"),
+            enabled=_enabled_github_provider(request) is not None,
+        ),
+    )
+    providers = tuple(section for section in sections if section["available"])
     return {
         "available": bool(providers),
         "providers": providers,
     }
 
 
-async def _security_google_provider_section(
+async def _security_named_provider_section(
     request: Request,
     user: User,
+    *,
+    provider_name: str,
+    provider_label: str,
+    link_path: str | None,
+    unlink_path: str | None,
+    enabled: bool,
 ) -> dict[str, object]:
-    link_path = _google_link_path(
-        request,
-        return_to=_optional_route_path(request, "auth:security"),
-    )
-    unlink_path = _optional_route_path(request, "auth:security-google-unlink")
-    if (
-        _enabled_google_provider(request) is None
-        or link_path is None
-        or unlink_path is None
-    ):
+    if not enabled or link_path is None or unlink_path is None:
         return {"available": False}
 
     linked_accounts: list[dict[str, str]] = []
@@ -348,7 +408,7 @@ async def _security_google_provider_section(
         store = _provider_credential_store(request, session)
         providers = await store.get_user_providers(
             user_id=user.id,
-            provider_name=GOOGLE_PROVIDER_NAME,
+            provider_name=provider_name,
         )
         for provider in providers:
             if not provider.provider_enabled:
@@ -362,8 +422,8 @@ async def _security_google_provider_section(
 
     return {
         "available": True,
-        "name": GOOGLE_PROVIDER_NAME,
-        "label": "Google",
+        "name": provider_name,
+        "label": provider_label,
         "linked": bool(linked_accounts),
         "linked_accounts": tuple(linked_accounts),
         "link_path": link_path,

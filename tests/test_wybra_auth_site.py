@@ -1,5 +1,7 @@
 import re
+import sys
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -26,6 +28,19 @@ from wybra.auth.routes.pages import totp_management as totp_management_pages
 from wybra.auth.routes.totp import TOTP_LOGIN_NONCE_COOKIE
 from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability
+from wybra.providers.github import (
+    GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+    GITHUB_OAUTH_STATE_COOKIE,
+    GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+    GitHubAPIError,
+    GitHubIdentityRequest,
+    GitHubOAuthState,
+    GitHubTokenExchangeError,
+    GitHubTokenExchangeRequest,
+    GitHubTokenResponse,
+    GitHubUserClaims,
+    decode_github_oauth_state_cookie,
+)
 from wybra.providers.google import (
     GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
     GOOGLE_OAUTH_STATE_COOKIE,
@@ -41,7 +56,7 @@ from wybra.providers.google import (
     encode_google_oauth_state_cookie,
 )
 from wybra.services.crypto import SecretEnvelopeService
-from wybra.site import SiteCapabilityError, start
+from wybra.site import Site, SiteCapabilityError, start
 
 PAGE_MODULES = (
     "wybra.forms",
@@ -53,6 +68,26 @@ PAGE_MODULES = (
 STRONG_TEST_PASSWORD = "Correct horse 42!"
 
 
+@pytest.fixture(autouse=True)
+async def close_started_sites(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[None]:
+    started_sites: list[Site] = []
+    original_start = start
+
+    async def tracked_start(*args, **kwargs) -> Site:
+        site = await original_start(*args, **kwargs)
+        started_sites.append(site)
+        return site
+
+    monkeypatch.setattr(sys.modules[__name__], "start", tracked_start)
+    try:
+        yield
+    finally:
+        for site in reversed(started_sites):
+            await site.close()
+
+
 def _site_config_source(
     tmp_path: Path,
     *,
@@ -60,12 +95,15 @@ def _site_config_source(
     auth_config: dict[str, object] | None = None,
     account_prefix: str = "/account",
     provider_route_prefix: str | None = None,
+    provider_route_prefixes: dict[str, str] | None = None,
     providers_config: dict[str, object] | None = None,
 ) -> MappingConfigSource:
     route_prefixes: dict[str, dict[str, str]] = {
         "wybra.auth": {"account": account_prefix, "api": ""},
     }
-    if provider_route_prefix is not None:
+    if provider_route_prefixes is not None:
+        route_prefixes["wybra.providers"] = provider_route_prefixes
+    elif provider_route_prefix is not None:
         route_prefixes["wybra.providers"] = {"google": provider_route_prefix}
 
     config: dict[str, object] = {
@@ -267,6 +305,30 @@ def _google_provider_config(
     return {"google": config}
 
 
+def _github_provider_config(
+    *,
+    enabled: bool = True,
+    secret_key: str | None = "GITHUB_SECRET",
+    account_creation_enabled: bool = False,
+    email_match_linking_enabled: bool = False,
+) -> dict[str, object]:
+    config: dict[str, object] = {
+        "enabled": enabled,
+        "client_id": "github-client-id",
+        "account_creation_enabled": account_creation_enabled,
+        "email_match_linking_enabled": email_match_linking_enabled,
+        "required_claims": ["id", "email", "email_verified"],
+    }
+    if secret_key is not None:
+        config.update(
+            {
+                "secrets": "environment",
+                "client_secret_key": secret_key,
+            }
+        )
+    return {"github": config}
+
+
 async def _start_google_provider_site(
     tmp_path: Path,
     *,
@@ -297,10 +359,52 @@ async def _start_google_provider_site(
     )
 
 
+async def _start_github_provider_site(
+    tmp_path: Path,
+    *,
+    auth_config: dict[str, object] | None = None,
+    account_prefix: str = "/account",
+    provider_route_prefix: str | None = None,
+    providers_config: dict[str, object] | None = None,
+):
+    return await start(
+        FastAPI(),
+        config_source=_site_config_source(
+            tmp_path,
+            modules=(
+                "wybra.secrets",
+                "wybra.forms",
+                "wybra.assets",
+                "wybra.template",
+                "wybra.db",
+                "wybra.auth",
+                "wybra.providers",
+            ),
+            account_prefix=account_prefix,
+            auth_config=auth_config,
+            provider_route_prefixes={
+                "github": provider_route_prefix or f"{account_prefix}/providers/github",
+            },
+            providers_config=providers_config or _github_provider_config(),
+        ),
+    )
+
+
 def _google_oauth_cookie_state(site, response) -> object:
     cookie = response.cookies.get(GOOGLE_OAUTH_STATE_COOKIE)
     assert cookie is not None
     state = decode_google_oauth_state_cookie(
+        cookie,
+        secret=site.app.state.auth_settings.identity_options.verification_token_secret,
+    )
+    assert state is not None
+    return state
+
+
+def _github_oauth_cookie_state(site, response) -> GitHubOAuthState:
+    cookie = response.cookies.get(GITHUB_OAUTH_STATE_COOKIE)
+    assert cookie is not None
+    state = decode_github_oauth_state_cookie(
         cookie,
         secret=site.app.state.auth_settings.identity_options.verification_token_secret,
     )
@@ -337,6 +441,31 @@ async def _create_google_provider_link(
         return provider_id
 
 
+async def _create_github_provider_link(
+    site,
+    *,
+    user_id: uuid.UUID,
+    provider_subject: str = "github-subject",
+    account_email: str = "user@example.com",
+) -> str:
+    async with site.require_capability(DatabaseCapability).transaction() as session:
+        store = SqlAlchemyProviderCredentialStore(
+            session,
+            SecretEnvelopeService.for_testing(),
+        )
+        provider_id = await store.create_provider_credential(
+            provider_name="github",
+            provider_subject=provider_subject,
+            access_token="stored-access-token",
+            account_email=account_email,
+        )
+        await store.link_provider_to_user(
+            provider_id=provider_id,
+            user_id=user_id,
+        )
+        return provider_id
+
+
 async def _google_provider_linked_user_id(
     site,
     *,
@@ -348,6 +477,23 @@ async def _google_provider_linked_user_id(
             .join(IdentityProvider)
             .where(
                 IdentityProvider.provider_name == "google",
+                IdentityProvider.provider_subject == provider_subject,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+async def _github_provider_linked_user_id(
+    site,
+    *,
+    provider_subject: str,
+) -> uuid.UUID | None:
+    async with site.require_capability(DatabaseCapability).transaction() as session:
+        result = await session.execute(
+            select(ExternalIdentityLink.user_id)
+            .join(IdentityProvider)
+            .where(
+                IdentityProvider.provider_name == "github",
                 IdentityProvider.provider_subject == provider_subject,
             )
         )
@@ -453,6 +599,61 @@ class FakeGoogleIDTokenValidator:
         self,
         request: GoogleIDTokenValidationRequest,
     ) -> GoogleIDTokenClaims:
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.claims
+
+
+class FakeGitHubTokenClient:
+    def __init__(
+        self,
+        response: GitHubTokenResponse | None = None,
+        error: GitHubTokenExchangeError | None = None,
+    ) -> None:
+        self.response = response or GitHubTokenResponse(
+            access_token="access-token",
+            token_type="bearer",
+            scope="read:user,user:email",
+        )
+        self.error = error
+        self.requests: list[GitHubTokenExchangeRequest] = []
+
+    async def exchange_code(
+        self,
+        request: GitHubTokenExchangeRequest,
+    ) -> GitHubTokenResponse:
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+class FakeGitHubAPIClient:
+    def __init__(
+        self,
+        claims: GitHubUserClaims | None = None,
+        error: GitHubAPIError | None = None,
+    ) -> None:
+        self.claims = claims or GitHubUserClaims(
+            subject="github-subject",
+            email="user@example.com",
+            email_verified=True,
+            login="octocat",
+            claims={
+                "id": "github-subject",
+                "email": "user@example.com",
+                "email_verified": True,
+                "login": "octocat",
+            },
+        )
+        self.error = error
+        self.requests: list[GitHubIdentityRequest] = []
+
+    async def fetch_identity(
+        self,
+        request: GitHubIdentityRequest,
+    ) -> GitHubUserClaims:
         self.requests.append(request)
         if self.error is not None:
             raise self.error
@@ -1628,6 +1829,286 @@ async def test_google_callback_state_cookie_is_cleared_after_use(
 
 
 @pytest.mark.anyio
+async def test_github_login_start_redirects_with_cookie_backed_pkce_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+
+    response = TestClient(site.app).get(
+        "/account/providers/github/login?return_to=/dashboard",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    location = response.headers["location"]
+    parsed_location = urlsplit(location)
+    redirect_query = parse_qs(parsed_location.query)
+    cookie_state = _github_oauth_cookie_state(site, response)
+    assert parsed_location.scheme == "https"
+    assert parsed_location.netloc == "github.com"
+    assert parsed_location.path == "/login/oauth/authorize"
+    assert redirect_query["client_id"] == ["github-client-id"]
+    assert redirect_query["redirect_uri"] == [
+        "http://testserver/account/providers/github/callback"
+    ]
+    assert redirect_query["scope"] == ["read:user user:email"]
+    assert redirect_query["state"] == [cookie_state.state]
+    assert redirect_query["code_challenge"] == [cookie_state.code_challenge]
+    assert redirect_query["code_challenge_method"] == ["S256"]
+    assert "nonce" not in redirect_query
+    assert cookie_state.provider_name == "github"
+    assert cookie_state.purpose == "login"
+    assert cookie_state.return_to == "/dashboard"
+    assert cookie_state.redirect_uri == (
+        "http://testserver/account/providers/github/callback"
+    )
+    assert cookie_state.user_id is None
+    assert GITHUB_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
+    assert "HttpOnly" in response.headers["set-cookie"]
+
+
+@pytest.mark.anyio
+async def test_github_callback_exchanges_code_and_fetches_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+    await _create_auth_schema(site)
+    token_client = FakeGitHubTokenClient()
+    api_client = FakeGitHubAPIClient()
+    setattr(
+        site.app.state,
+        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        token_client,
+    )
+    setattr(site.app.state, GITHUB_API_CLIENT_STATE_ATTRIBUTE, api_client)
+    client = TestClient(site.app)
+    start = client.get("/account/providers/github/login", follow_redirects=False)
+    cookie_state = _github_oauth_cookie_state(site, start)
+
+    response = client.get(
+        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "GitHub account is not linked."
+    assert len(token_client.requests) == 1
+    token_request = token_client.requests[0]
+    assert token_request.token_endpoint == "https://github.com/login/oauth/access_token"
+    assert token_request.client_id == "github-client-id"
+    assert token_request.client_secret == "client-secret"
+    assert token_request.code == "code"
+    assert token_request.redirect_uri == (
+        "http://testserver/account/providers/github/callback"
+    )
+    assert token_request.code_verifier == cookie_state.code_verifier
+    assert len(api_client.requests) == 1
+    identity_request = api_client.requests[0]
+    assert identity_request.settings.client_id == "github-client-id"
+    assert identity_request.access_token == "access-token"
+    assert "Max-Age=0" in response.headers["set-cookie"]
+
+
+@pytest.mark.anyio
+async def test_github_callback_rejects_missing_required_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+    token_client = FakeGitHubTokenClient(
+        response=GitHubTokenResponse(
+            access_token="access-token",
+            token_type="bearer",
+            scope="read:user",
+        )
+    )
+    api_client = FakeGitHubAPIClient()
+    setattr(site.app.state, GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
+    setattr(site.app.state, GITHUB_API_CLIENT_STATE_ATTRIBUTE, api_client)
+    client = TestClient(site.app)
+    start = client.get("/account/providers/github/login", follow_redirects=False)
+    cookie_state = _github_oauth_cookie_state(site, start)
+
+    response = client.get(
+        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "GitHub token response is invalid."
+    assert len(token_client.requests) == 1
+    assert api_client.requests == []
+    assert "Max-Age=0" in response.headers["set-cookie"]
+
+
+@pytest.mark.anyio
+async def test_github_callback_resolves_existing_provider_link(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="linked@example.com",
+        is_verified=True,
+    )
+    await _create_github_provider_link(
+        site,
+        user_id=user_id,
+        provider_subject="github-subject",
+        account_email="linked@example.com",
+    )
+    setattr(
+        site.app.state,
+        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        FakeGitHubTokenClient(),
+    )
+    setattr(
+        site.app.state,
+        GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+        FakeGitHubAPIClient(
+            claims=GitHubUserClaims(
+                subject="github-subject",
+                email="linked@example.com",
+                email_verified=True,
+            )
+        ),
+    )
+    client = TestClient(site.app)
+    start = client.get("/account/providers/github/login", follow_redirects=False)
+    cookie_state = _github_oauth_cookie_state(site, start)
+
+    response = client.get(
+        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account"
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name in response.cookies
+
+
+@pytest.mark.anyio
+async def test_github_callback_auto_links_verified_email_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(
+        tmp_path,
+        providers_config=_github_provider_config(email_match_linking_enabled=True),
+    )
+    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="match@example.com",
+        is_verified=True,
+    )
+    setattr(
+        site.app.state,
+        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        FakeGitHubTokenClient(
+            response=GitHubTokenResponse(
+                access_token="access-token",
+                token_type="bearer",
+                scope="read:user,user:email",
+                expires_in=300,
+            )
+        ),
+    )
+    setattr(
+        site.app.state,
+        GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+        FakeGitHubAPIClient(
+            claims=GitHubUserClaims(
+                subject="github-match-subject",
+                email="match@example.com",
+                email_verified=True,
+            )
+        ),
+    )
+    client = TestClient(site.app)
+    start = client.get("/account/providers/github/login", follow_redirects=False)
+    cookie_state = _github_oauth_cookie_state(site, start)
+
+    response = client.get(
+        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account"
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name in response.cookies
+    assert (
+        await _github_provider_linked_user_id(
+            site,
+            provider_subject="github-match-subject",
+        )
+        == user_id
+    )
+
+
+@pytest.mark.anyio
+async def test_github_callback_links_provider_to_authenticated_user(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="current@example.com",
+        is_verified=True,
+    )
+    setattr(
+        site.app.state,
+        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        FakeGitHubTokenClient(),
+    )
+    setattr(
+        site.app.state,
+        GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+        FakeGitHubAPIClient(
+            claims=GitHubUserClaims(
+                subject="github-link-subject",
+                email="current@example.com",
+                email_verified=True,
+            )
+        ),
+    )
+    client = _authenticated_client(site, email="current@example.com")
+    start = client.get("/account/providers/github/link", follow_redirects=False)
+    cookie_state = _github_oauth_cookie_state(site, start)
+
+    response = client.get(
+        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account/security"
+    assert (
+        await _github_provider_linked_user_id(
+            site,
+            provider_subject="github-link-subject",
+        )
+        == user_id
+    )
+
+
+@pytest.mark.anyio
 async def test_login_page_shows_google_sign_in_when_provider_available(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1640,6 +2121,21 @@ async def test_login_page_shows_google_sign_in_when_provider_available(
     assert response.status_code == 200
     assert "Sign in with Google" in response.text
     assert "/account/providers/google/login?return_to=%2Fdashboard" in response.text
+
+
+@pytest.mark.anyio
+async def test_login_page_shows_github_sign_in_when_provider_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+
+    response = TestClient(site.app).get("/account/login?return_to=/dashboard")
+
+    assert response.status_code == 200
+    assert "Sign in with GitHub" in response.text
+    assert "/account/providers/github/login?return_to=%2Fdashboard" in response.text
 
 
 @pytest.mark.anyio
@@ -1709,6 +2205,31 @@ async def test_security_page_shows_google_link_control(
 
 
 @pytest.mark.anyio
+async def test_security_page_shows_github_link_control(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+
+    response = _security_page_client(site).get("/account/security")
+
+    assert response.status_code == 200
+    assert "Provider sign-in" in response.text
+    assert "Link GitHub" in response.text
+    assert "/account/providers/github/link?return_to=%2Faccount%2Fsecurity" in (
+        response.text
+    )
+
+
+@pytest.mark.anyio
 async def test_security_page_shows_google_unlink_and_password_disable_controls(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1735,6 +2256,36 @@ async def test_security_page_shows_google_unlink_and_password_disable_controls(
     assert f'value="{provider_id}"' in response.text
     assert "Link another Google account" in response.text
     assert "Unlink Google" in response.text
+    assert "Disable username/password login" in response.text
+
+
+@pytest.mark.anyio
+async def test_security_page_shows_github_unlink_control(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    provider_id = await _create_github_provider_link(
+        site,
+        user_id=user_id,
+        account_email="github-user@example.test",
+    )
+    _override_current_user(site.app, user_id=user_id)
+
+    response = _security_page_client(site).get("/account/security")
+
+    assert response.status_code == 200
+    assert "GitHub sign-in is linked as github-user@example.test" in response.text
+    assert f'value="{provider_id}"' in response.text
+    assert "Link another GitHub account" in response.text
+    assert "Unlink GitHub" in response.text
     assert "Disable username/password login" in response.text
 
 
@@ -1814,6 +2365,49 @@ async def test_security_page_rejects_unlinking_last_sign_in_method(
         await _google_provider_linked_user_id(
             site,
             provider_subject="google-subject",
+        )
+        == user_id
+    )
+
+
+@pytest.mark.anyio
+async def test_security_page_rejects_unlinking_last_github_sign_in_method(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+    site = await _start_github_provider_site(tmp_path)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    await _set_password_login_enabled(site, user_id, False)
+    provider_id = await _create_github_provider_link(site, user_id=user_id)
+    _override_current_user(
+        site.app,
+        user_id=user_id,
+        hashed_password=None,
+        password_login_enabled=False,
+    )
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+
+    response = client.post(
+        "/account/security/providers/github/unlink",
+        data={
+            "csrf_token": _csrf_token(security_page.text),
+            "provider_id": provider_id,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Add another sign-in method before unlinking GitHub." in response.text
+    assert (
+        await _github_provider_linked_user_id(
+            site,
+            provider_subject="github-subject",
         )
         == user_id
     )
