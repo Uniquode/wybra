@@ -91,7 +91,10 @@ from wybra.auth.persistence.database import (
     create_database,
     session_scope,
 )
-from wybra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
+from wybra.auth.provider_credentials import (
+    ProviderCredentialStorageError,
+    SqlAlchemyProviderCredentialStore,
+)
 from wybra.auth.routes import normalise_return_to
 from wybra.auth.routes.totp import verify_totp_code_for_credential
 from wybra.core.exceptions import ConfigurationError
@@ -102,7 +105,6 @@ from wybra.services.crypto import (
     SecretDataError,
     SecretEnvelope,
     SecretEnvelopeService,
-    SecretMaterialMissingError,
 )
 from wybra.template.context import TemplateContext
 
@@ -1266,7 +1268,10 @@ def test_wybra_auth_provider_credential_store_requires_keys_for_secret_operation
                     SecretEnvelopeService.from_env({}),
                 )
 
-                with pytest.raises(SecretMaterialMissingError, match="no keys"):
+                with pytest.raises(
+                    ProviderCredentialStorageError,
+                    match="requires configured crypto secret material",
+                ):
                     await store.create_provider_credential(
                         provider_name="github",
                         provider_subject="subject-1",

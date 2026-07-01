@@ -10,8 +10,8 @@ from wybra.auth.routes.pages import (
     current_user_api,
     current_user_state,
     module_routers,
-    normalise_return_to,
 )
+from wybra.auth.routes.paths import normalise_return_to
 from wybra.auth.routes.wiring import RouteReplacement, RouterExtensionPlan
 
 __all__ = [

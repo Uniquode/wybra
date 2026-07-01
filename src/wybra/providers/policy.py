@@ -11,6 +11,7 @@ from wybra.providers.settings import ProviderSettings, provider_name_value
 class ProviderPolicyOutcome(StrEnum):
     LINKED_USER = "linked_user"
     LINK_ALLOWED = "link_allowed"
+    EMAIL_MATCH_LINK_ALLOWED = "email_match_link_allowed"
     ALREADY_LINKED = "already_linked"
     COLLISION = "collision"
     CREATION_ALLOWED = "creation_allowed"
@@ -51,6 +52,7 @@ class ProviderPolicyDecision:
         return self.outcome in {
             ProviderPolicyOutcome.ALREADY_LINKED,
             ProviderPolicyOutcome.CREATION_ALLOWED,
+            ProviderPolicyOutcome.EMAIL_MATCH_LINK_ALLOWED,
             ProviderPolicyOutcome.LINK_ALLOWED,
             ProviderPolicyOutcome.LINKED_USER,
         }
@@ -64,6 +66,8 @@ class ProviderAccountPolicy:
         assertion: ProviderAssertion,
         linked_user_id: str | None = None,
         linked_user_active: bool = True,
+        email_match_user_id: str | None = None,
+        email_match_user_active: bool = True,
     ) -> ProviderPolicyDecision:
         invalid_claims = _invalid_claim_reason(provider, assertion)
         if invalid_claims is not None:
@@ -90,6 +94,31 @@ class ProviderAccountPolicy:
                 ProviderPolicyOutcome.LINKED_USER,
                 assertion,
                 user_id=linked_user_id,
+            )
+        if email_match_user_id is not None:
+            if not provider.email_match_linking_enabled:
+                return _decision(
+                    ProviderPolicyOutcome.CREATION_DENIED,
+                    assertion,
+                    reason="Provider email-match linking is not allowed.",
+                )
+            if assertion.claims.get("email_verified") is not True:
+                return _decision(
+                    ProviderPolicyOutcome.INVALID_CLAIMS,
+                    assertion,
+                    reason="Provider email-match linking requires verified email.",
+                )
+            if not email_match_user_active:
+                return _decision(
+                    ProviderPolicyOutcome.INACTIVE_USER,
+                    assertion,
+                    user_id=email_match_user_id,
+                    reason="Matched local user is inactive.",
+                )
+            return _decision(
+                ProviderPolicyOutcome.EMAIL_MATCH_LINK_ALLOWED,
+                assertion,
+                user_id=email_match_user_id,
             )
         if provider.account_creation_enabled and _creation_claims_allowed(
             provider,

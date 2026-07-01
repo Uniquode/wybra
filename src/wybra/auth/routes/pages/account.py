@@ -6,6 +6,27 @@ from fastapi.responses import RedirectResponse, Response
 from wybra.auth.capabilities import login_required
 from wybra.auth.models import User
 from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
+from wybra.auth.provider_support import (
+    enabled_google_provider as _enabled_google_provider,
+)
+from wybra.auth.provider_support import (
+    google_link_path as _google_link_path,
+)
+from wybra.auth.provider_support import (
+    local_password_login_usable as _local_password_login_usable,
+)
+from wybra.auth.provider_support import (
+    provider_credential_store_from_request as _provider_credential_store,
+)
+from wybra.auth.provider_support import (
+    user_has_usable_account_sign_in as _user_has_usable_account_sign_in,
+)
+from wybra.auth.routes.paths import (
+    optional_route_path as _optional_route_path,
+)
+from wybra.auth.routes.paths import (
+    route_path as _route_path,
+)
 from wybra.auth.sessions import (
     clear_session_cookie,
     create_local_user_from_signup,
@@ -17,6 +38,7 @@ from wybra.auth.sessions import (
     verify_user,
 )
 from wybra.forms import request_form_data
+from wybra.providers.google import GOOGLE_PROVIDER_NAME
 from wybra.template import render_page
 
 from .shared import (
@@ -24,8 +46,8 @@ from .shared import (
     _identity_context,
     _identity_options,
     _load_active_totp_credential_id,
+    _load_user_by_id,
     _public_signup_enabled,
-    _route_path,
     _session_factory_from_request,
     account_router,
 )
@@ -112,13 +134,129 @@ async def security(
     request: Request,
     user: User = LOGIN_REQUIRED,
 ) -> Response:
+    return await _security_page_response(request, user)
+
+
+@account_router.post(
+    "/security/providers/google/unlink",
+    include_in_schema=False,
+    name="auth:security-google-unlink",
+)
+async def unlink_google_provider(
+    request: Request,
+    user: User = LOGIN_REQUIRED,
+) -> Response:
+    form_data = await request_form_data(request)
+    provider_id = _form_value(form_data, "provider_id")
+    session_factory = _session_factory_from_request(request)
+    error: str | None = None
+    async with session_factory() as session:
+        async with session.begin():
+            db_user = await _load_user_by_id(session, user.id)
+            if db_user is None:
+                raise HTTPException(status_code=401, detail="Authentication required.")
+
+            store = _provider_credential_store(request, session)
+            provider = await store.get_user_provider_by_id(
+                user_id=db_user.id,
+                provider_id=provider_id,
+            )
+            if provider is None or provider.provider_name != GOOGLE_PROVIDER_NAME:
+                return RedirectResponse(
+                    url=_route_path(request, "auth:security"),
+                    status_code=303,
+                )
+
+            if not await _user_has_usable_account_sign_in(
+                request,
+                session,
+                db_user,
+                exclude_provider_id=provider.id,
+            ):
+                error = "Add another sign-in method before unlinking Google."
+            else:
+                await store.unlink_user_provider(
+                    user_id=db_user.id,
+                    provider_id=provider.id,
+                )
+
+    if error is not None:
+        return await _security_page_response(
+            request,
+            user,
+            form_error=error,
+            status_code=400,
+        )
+    return RedirectResponse(url=_route_path(request, "auth:security"), status_code=303)
+
+
+@account_router.post(
+    "/security/password/disable",
+    include_in_schema=False,
+    name="auth:security-password-disable",
+)
+async def disable_password_login(
+    request: Request,
+    user: User = LOGIN_REQUIRED,
+) -> Response:
+    session_factory = _session_factory_from_request(request)
+    error: str | None = None
+    async with session_factory() as session:
+        db_user = await _load_user_by_id(session, user.id)
+        if db_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required.")
+
+        if not _local_password_login_usable(db_user):
+            return RedirectResponse(
+                url=_route_path(request, "auth:security"),
+                status_code=303,
+            )
+
+        if not await _user_has_usable_account_sign_in(
+            request,
+            session,
+            db_user,
+            exclude_password=True,
+        ):
+            error = "Add another sign-in method before disabling password sign-in."
+        else:
+            db_user.password_login_enabled = False
+            await session.commit()
+
+    if error is not None:
+        return await _security_page_response(
+            request,
+            user,
+            form_error=error,
+            status_code=400,
+        )
+    return RedirectResponse(url=_route_path(request, "auth:security"), status_code=303)
+
+
+async def _security_page_response(
+    request: Request,
+    user: User,
+    *,
+    form_error: str | None = None,
+    form_message: str | None = None,
+    status_code: int = 200,
+) -> Response:
     context = _identity_context(
         request,
         page_title="Login & Security",
         user=user,
+        form_error=form_error,
+        form_message=form_message,
+        password_login=await _security_password_section(request, user),
+        providers=await _security_provider_section(request, user),
         totp=await _security_totp_section(request, user),
     )
-    return render_page(request, "identity/pages/security.html", context)
+    return render_page(
+        request,
+        "identity/pages/security.html",
+        context,
+        status_code=status_code,
+    )
 
 
 async def _security_totp_section(request: Request, user: User) -> dict[str, object]:
@@ -141,6 +279,96 @@ def _totp_setup_path(request: Request) -> str:
     security_path = _route_path(request, "auth:security")
     setup_query = urlencode({"return_to": security_path})
     return f"{_route_path(request, 'auth:totp-setup')}?{setup_query}"
+
+
+async def _security_password_section(
+    request: Request,
+    user: User,
+) -> dict[str, object]:
+    enabled = _local_password_login_usable(user)
+    disable_path = _optional_route_path(request, "auth:security-password-disable")
+    disable_available = False
+    if (
+        enabled
+        and disable_path is not None
+        and _enabled_google_provider(request) is not None
+    ):
+        session_factory = _session_factory_from_request(request)
+        async with session_factory() as session:
+            db_user = await _load_user_by_id(session, user.id)
+            disable_available = (
+                db_user is not None
+                and await _user_has_usable_account_sign_in(
+                    request,
+                    session,
+                    db_user,
+                    exclude_password=True,
+                )
+            )
+
+    return {
+        "available": True,
+        "enabled": enabled,
+        "disable_available": disable_available,
+        "disable_path": disable_path,
+    }
+
+
+async def _security_provider_section(
+    request: Request,
+    user: User,
+) -> dict[str, object]:
+    google_section = await _security_google_provider_section(request, user)
+    providers = (google_section,) if google_section["available"] else ()
+    return {
+        "available": bool(providers),
+        "providers": providers,
+    }
+
+
+async def _security_google_provider_section(
+    request: Request,
+    user: User,
+) -> dict[str, object]:
+    link_path = _google_link_path(
+        request,
+        return_to=_optional_route_path(request, "auth:security"),
+    )
+    unlink_path = _optional_route_path(request, "auth:security-google-unlink")
+    if (
+        _enabled_google_provider(request) is None
+        or link_path is None
+        or unlink_path is None
+    ):
+        return {"available": False}
+
+    linked_accounts: list[dict[str, str]] = []
+    session_factory = _session_factory_from_request(request)
+    async with session_factory() as session:
+        store = _provider_credential_store(request, session)
+        providers = await store.get_user_providers(
+            user_id=user.id,
+            provider_name=GOOGLE_PROVIDER_NAME,
+        )
+        for provider in providers:
+            if not provider.provider_enabled:
+                continue
+            linked_accounts.append(
+                {
+                    "id": str(provider.id),
+                    "account_email": provider.account_email,
+                }
+            )
+
+    return {
+        "available": True,
+        "name": GOOGLE_PROVIDER_NAME,
+        "label": "Google",
+        "linked": bool(linked_accounts),
+        "linked_accounts": tuple(linked_accounts),
+        "link_path": link_path,
+        "unlink_path": unlink_path,
+    }
 
 
 @account_router.api_route(

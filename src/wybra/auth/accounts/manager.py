@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from fastapi import Request
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import BaseUserManager, UUIDIDMixin
 from fastapi_users.exceptions import (
     InvalidPasswordException,
@@ -25,7 +26,7 @@ from wybra.auth.emails import (
     resolve_user_by_email,
     resolve_user_by_normalised_email,
 )
-from wybra.auth.models import IdentityUserEmail, User
+from wybra.auth.models import IdentityUserEmail, LocalUser, User
 from wybra.auth.options import IdentityOptions
 from wybra.auth.persistence import create_user_database
 from wybra.auth.result import (
@@ -74,12 +75,12 @@ class PasswordPolicyException(InvalidPasswordException):
         super().__init__(_password_policy_message(error_type))
 
 
-class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
+class UserManager(UUIDIDMixin, BaseUserManager[LocalUser, uuid.UUID]):
     """FastAPI Users manager for the canonical local account model."""
 
     def __init__(
         self,
-        user_db: SQLAlchemyUserDatabase[User, uuid.UUID],
+        user_db: SQLAlchemyUserDatabase[LocalUser, uuid.UUID],
         options: IdentityOptions,
         delivery: IdentityDelivery | None = None,
         password_helper: PasswordHelper | None = None,
@@ -91,6 +92,20 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         self.reset_password_token_secret = options.reset_password_token_secret
         self.verification_token_secret = options.verification_token_secret
         self.profile_lookup = profile_lookup
+
+    async def authenticate(
+        self,
+        credentials: OAuth2PasswordRequestForm,
+    ) -> LocalUser | None:
+        try:
+            user = await self.get_by_email(credentials.username)
+        except UserNotExists:
+            return None
+
+        if not user.password_login_enabled or not user.hashed_password:
+            return None
+
+        return await super().authenticate(credentials)
 
     async def validate_password(
         self,
@@ -132,26 +147,26 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             preferred_name=_optional_profile_text(profile, "preferred_name"),
         )
 
-    async def get_by_email(self, user_email: str) -> User:
-        database = cast(SQLAlchemyUserDatabase[User, uuid.UUID], self.user_db)
+    async def get_by_email(self, user_email: str) -> LocalUser:
+        database = cast(SQLAlchemyUserDatabase[LocalUser, uuid.UUID], self.user_db)
         user = await resolve_user_by_email(database.session, user_email)
         if user is None:
             raise UserNotExists()
-        return user
+        return cast(LocalUser, user)
 
     async def create(
         self,
         user_create: UserCreate,
         safe: bool = False,
         request: Request | None = None,
-    ) -> User:
+    ) -> LocalUser:
         await self.validate_password(user_create.password, user_create)
 
         normalised_email = normalise_email_target(user_create.email)
         if normalised_email is None:
             raise UserAlreadyExists()
 
-        database = cast(SQLAlchemyUserDatabase[User, uuid.UUID], self.user_db)
+        database = cast(SQLAlchemyUserDatabase[LocalUser, uuid.UUID], self.user_db)
         if await resolve_user_by_normalised_email(database.session, normalised_email):
             raise UserAlreadyExists()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
 from fastapi_users_db_sqlalchemy import SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.access_token import SQLAlchemyBaseAccessTokenTableUUID
@@ -174,6 +175,15 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     )
 
     # Store Unix timestamps as `float` for cross-database consistency.
+    hashed_password: Mapped[str | None] = mapped_column(
+        String(length=1024),
+        nullable=True,
+    )
+    password_login_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[float] = mapped_column(
         Float,
@@ -216,6 +226,19 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+
+
+if TYPE_CHECKING:
+
+    class LocalUser(User):
+        """Local account view for the current FastAPI Users type boundary."""
+
+        # FastAPI Users currently requires a non-null hash in its user protocol.
+        # Runtime LocalUser is still User, whose password hash may be absent.
+        hashed_password: str
+
+else:
+    LocalUser = User
 
 
 class IdentityTotpCredential(Base):
@@ -430,6 +453,7 @@ __all__ = (
     "IdentityTotpRecoveryCode",
     "IdentityUserEmail",
     "IdentityProvider",
+    "LocalUser",
     "Group",
     "GroupGroup",
     "GroupScope",

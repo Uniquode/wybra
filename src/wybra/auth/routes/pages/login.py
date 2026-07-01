@@ -15,12 +15,12 @@ from wybra.auth.result import (
     ERROR_TOTP_SETUP_REQUIRED,
     ERROR_VERIFICATION_CODE_INVALID,
 )
+from wybra.auth.routes.paths import normalise_return_to
 from wybra.auth.routes.totp import (
     TOTP_SETUP_BYPASS_TOKEN,
     clear_totp_login_nonce_cookie,
     clear_totp_setup_nonce_cookie,
     is_totp_setup_challenge,
-    login_context,
     recovery_code_store,
     render_totp_login_challenge,
     render_totp_setup_prompt,
@@ -53,13 +53,13 @@ from .shared import (
     _load_active_totp_credential_id,
     _load_user_by_id,
     _login_error_response,
+    _login_page_context,
     _session_factory_from_request,
     _totp_login_error_response,
     _totp_setup_return_to,
     _verification_required_response,
     account_router,
     logger,
-    normalise_return_to,
 )
 
 
@@ -74,7 +74,7 @@ async def login(request: Request) -> Response:
         return render_page(
             request,
             "identity/pages/login.html",
-            login_context(
+            _login_page_context(
                 request,
                 return_to=normalise_return_to(request.query_params.get("return_to")),
             ),

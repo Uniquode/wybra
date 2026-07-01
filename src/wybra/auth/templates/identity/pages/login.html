@@ -89,6 +89,15 @@
   {% if challenge_error %}
   <p class="muted-copy">{{ challenge_error }}</p>
   {% endif %}
+  {% if provider_logins and not is_totp_step and not is_setup_step %}
+  {% for provider_login in provider_logins %}
+  <p>
+    <a href="{{ provider_login.login_path }}">
+      Sign in with {{ provider_login.label }}
+    </a>
+  </p>
+  {% endfor %}
+  {% endif %}
   {% endif %}
   <p class="muted-copy">
     {% if is_totp_step or is_setup_step %}

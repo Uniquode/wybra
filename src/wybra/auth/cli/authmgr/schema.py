@@ -65,16 +65,20 @@ async def _verify_identity_schema(session: AsyncSession) -> None:
             f"{SCHEMA_MIGRATION_MESSAGE} Missing {table_name} table."
         )
 
+    schema_messages: list[str] = []
+    if schema_status.missing_tables:
+        schema_messages.append(
+            f"Missing identity schema tables: "
+            f"{_missing_tables_message(schema_status.missing_tables)}"
+        )
     if schema_status.missing_columns:
-        raise ConfigurationError(
-            f"{SCHEMA_MIGRATION_MESSAGE} Missing identity schema columns: "
+        schema_messages.append(
+            "Missing identity schema columns: "
             f"{', '.join(schema_status.missing_columns)}."
         )
-
-    if schema_status.missing_tables:
+    if schema_messages:
         raise ConfigurationError(
-            f"{SCHEMA_MIGRATION_MESSAGE} "
-            f"{_missing_tables_message(schema_status.missing_tables)}"
+            f"{SCHEMA_MIGRATION_MESSAGE}\n" + "\n".join(schema_messages)
         )
 
 

@@ -149,6 +149,9 @@ _.totp_credentials
 _.account_email
 _.provider_enabled
 _.provider_metadata
+_.discovery_document_url
+_.token_type
+_.raw
 _.links
 _.emails
 _.provider_id
