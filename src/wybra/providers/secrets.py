@@ -55,7 +55,8 @@ def _provider_secret_availability_issue(
             provider_name=provider.name,
             message=(
                 "client secret cannot be checked because SecretsCapability is "
-                "not available"
+                "not available; add `wybra.secrets` to app modules or disable "
+                "the provider"
             ),
         )
 
