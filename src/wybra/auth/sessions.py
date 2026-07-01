@@ -4,7 +4,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Final
+from typing import Final, cast
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import Response
@@ -39,7 +39,7 @@ from wybra.auth.mfa.challenges import (
     AuthenticationMethod,
     assertions_satisfy_required_methods,
 )
-from wybra.auth.models import AccessToken, User
+from wybra.auth.models import AccessToken, LocalUser, User
 from wybra.auth.options import IdentityOptions
 from wybra.auth.persistence import (
     create_database_strategy,
@@ -143,10 +143,13 @@ def create_user_manager_dependency(
 
 def create_database_strategy_dependency(
     options: IdentityOptions,
-) -> Callable[[Request], AsyncIterator[DatabaseStrategy[User, uuid.UUID, AccessToken]]]:
+) -> Callable[
+    [Request],
+    AsyncIterator[DatabaseStrategy[LocalUser, uuid.UUID, AccessToken]],
+]:
     async def get_database_strategy(
         request: Request,
-    ) -> AsyncIterator[DatabaseStrategy[User, uuid.UUID, AccessToken]]:
+    ) -> AsyncIterator[DatabaseStrategy[LocalUser, uuid.UUID, AccessToken]]:
         database = _database_from_request(request)
         async with database.session() as session:
             yield create_database_strategy(session, options)
@@ -156,7 +159,7 @@ def create_database_strategy_dependency(
 
 def create_authentication_backend(
     options: IdentityOptions,
-) -> AuthenticationBackend[User, uuid.UUID]:
+) -> AuthenticationBackend[LocalUser, uuid.UUID]:
     transport = CookieTransport(
         cookie_name=options.session_cookie_name,
         cookie_max_age=options.session_lifetime_seconds,
@@ -171,7 +174,9 @@ def create_authentication_backend(
     )
 
 
-def create_fastapi_users(options: IdentityOptions) -> FastAPIUsers[User, uuid.UUID]:
+def create_fastapi_users(
+    options: IdentityOptions,
+) -> FastAPIUsers[LocalUser, uuid.UUID]:
     return FastAPIUsers(
         create_user_manager_dependency(options),
         [create_authentication_backend(options)],
@@ -404,7 +409,7 @@ async def create_local_user_from_signup(
     request: Request,
     email: str,
     password: str,
-) -> Result[dict[str, Any]]:
+) -> Result[dict[str, str]]:
     options = _identity_options_from_request(request)
     if options.account_creation_policy != "public-signup":
         return Result.failure(ERROR_POLICY_DISABLED)
@@ -470,7 +475,7 @@ async def complete_authentication_ceremony(
 
         current_user.last_login_at = now
         strategy = create_database_strategy(session, options)
-        return Result.ok(await strategy.write_token(current_user))
+        return Result.ok(await strategy.write_token(cast(LocalUser, current_user)))
 
 
 async def destroy_session_token(request: Request) -> None:
@@ -501,6 +506,8 @@ async def request_password_reset(request: Request, email: str) -> None:
 
         now = current_timestamp()
         if not is_user_effectively_active(user, now=now):
+            return
+        if not user.password_login_enabled or not user.hashed_password:
             return
 
         try:

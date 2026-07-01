@@ -13,7 +13,7 @@ from fastapi_users import FastAPIUsers
 from sqlalchemy.exc import SQLAlchemyError
 
 from wybra.auth.delivery import NullIdentityDelivery
-from wybra.auth.models import User
+from wybra.auth.models import LocalUser, User
 from wybra.auth.sessions import (
     clear_marked_session_cookie,
     create_fastapi_users,
@@ -53,7 +53,7 @@ class AuthCapability(Protocol):
     def settings(self) -> AuthSettings: ...
 
     @property
-    def fastapi_users(self) -> FastAPIUsers[User, uuid.UUID]: ...
+    def fastapi_users(self) -> FastAPIUsers[LocalUser, uuid.UUID]: ...
 
     @property
     def optional_current_user(self) -> OptionalCurrentUserDependency: ...
@@ -68,7 +68,7 @@ class AuthCapability(Protocol):
 @dataclass(frozen=True, slots=True)
 class SiteAuthCapability:
     settings: AuthSettings
-    fastapi_users: FastAPIUsers[User, uuid.UUID]
+    fastapi_users: FastAPIUsers[LocalUser, uuid.UUID]
 
     @classmethod
     def from_settings(cls, settings: AuthSettings) -> SiteAuthCapability:
