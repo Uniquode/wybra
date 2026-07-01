@@ -459,22 +459,7 @@ class TestProviderAccountPolicy:
 class TestGoogleIDTokenValidation:
     @pytest.mark.anyio
     async def test_oidc_validator_accepts_signed_google_id_token(self) -> None:
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        public_key = private_key.public_key()
-        token = jwt.encode(
-            {
-                "iss": GOOGLE_DEFAULT_ISSUER,
-                "aud": "google-client-id",
-                "exp": int(current_timestamp() + 300),
-                "sub": "google-subject",
-                "email": "user@example.com",
-                "email_verified": True,
-                "nonce": "nonce-value",
-            },
-            private_key,
-            algorithm="RS256",
-            headers={"kid": "test-key"},
-        )
+        token, public_key = self._signed_google_id_token()
         jwks_client = FakeGoogleJwksClient(public_key)
         jwks_uris: list[str] = []
 
@@ -502,6 +487,66 @@ class TestGoogleIDTokenValidation:
         assert claims.nonce == "nonce-value"
         assert jwks_uris == [GOOGLE_DEFAULT_JWKS_URI]
         assert jwks_client.tokens == [token]
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "claim_overrides",
+        (
+            {"aud": "other-client-id"},
+            {"iss": "https://accounts.example.invalid"},
+            {"exp": int(current_timestamp() - 300)},
+        ),
+    )
+    async def test_oidc_validator_rejects_invalid_trust_claims(
+        self,
+        claim_overrides: dict[str, object],
+    ) -> None:
+        token, public_key = self._signed_google_id_token(
+            claim_overrides=claim_overrides
+        )
+        validator = GoogleOIDCIDTokenValidator(
+            jwks_client_factory=lambda _jwks_uri: FakeGoogleJwksClient(public_key)
+        )
+
+        with pytest.raises(GoogleIDTokenValidationError, match="invalid"):
+            await validator.validate(
+                GoogleIDTokenValidationRequest(
+                    id_token=token,
+                    settings=GoogleOAuthSettings(
+                        provider_name="google",
+                        client_id="google-client-id",
+                        client_secret_reference=("environment", "GOOGLE_SECRET"),
+                    ),
+                    nonce="nonce-value",
+                )
+            )
+
+    @staticmethod
+    def _signed_google_id_token(
+        *,
+        claim_overrides: dict[str, object] | None = None,
+    ) -> tuple[str, object]:
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        claims: dict[str, object] = {
+            "iss": GOOGLE_DEFAULT_ISSUER,
+            "aud": "google-client-id",
+            "exp": int(current_timestamp() + 300),
+            "sub": "google-subject",
+            "email": "user@example.com",
+            "email_verified": True,
+            "nonce": "nonce-value",
+        }
+        if claim_overrides is not None:
+            claims.update(claim_overrides)
+        return (
+            jwt.encode(
+                claims,
+                private_key,
+                algorithm="RS256",
+                headers={"kid": "test-key"},
+            ),
+            private_key.public_key(),
+        )
 
     def test_claim_mapping_rejects_nonce_mismatch(self) -> None:
         with pytest.raises(GoogleIDTokenValidationError, match="nonce"):
