@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from wybra.auth.capabilities import AuthCapability
-from wybra.providers.secrets import provider_settings_with_available_secrets
+from wybra.providers.secrets import (
+    ProviderSecretAvailabilityIssue,
+    provider_settings_with_available_secrets,
+)
 from wybra.providers.settings import ProvidersSettings
 from wybra.providers.validation import validate_provider_configuration
 from wybra.services.secrets import SecretsCapability
@@ -20,9 +23,27 @@ class ProvidersCapability(Protocol):
     def settings(self) -> ProvidersSettings: ...
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class SiteProvidersCapability:
-    settings: ProvidersSettings
+    _settings: ProvidersSettings
+
+    @property
+    def settings(self) -> ProvidersSettings:
+        return self._settings
+
+    def deactivate_unavailable_providers(
+        self,
+        secrets: SecretsCapability | None,
+    ) -> tuple[ProviderSecretAvailabilityIssue, ...]:
+        settings, issues = provider_settings_with_available_secrets(
+            self._settings,
+            secrets,
+        )
+        if issues:
+            # Keep the capability surface frozen while allowing post-setup to
+            # replace configured settings with effective runtime settings.
+            object.__setattr__(self, "_settings", settings)
+        return issues
 
 
 async def setup_site(site: Site) -> None:
@@ -39,9 +60,10 @@ async def post_setup_site(site: Site) -> None:
         if capability.settings.enabled_providers
         else None
     )
-    settings, secret_issues = provider_settings_with_available_secrets(
-        capability.settings,
-        secrets,
+    secret_issues = (
+        capability.deactivate_unavailable_providers(secrets)
+        if isinstance(capability, SiteProvidersCapability)
+        else ()
     )
     for issue in secret_issues:
         logger.error(
@@ -49,8 +71,6 @@ async def post_setup_site(site: Site) -> None:
             issue.provider_name,
             issue.message,
         )
-    if isinstance(capability, SiteProvidersCapability):
-        capability.settings = settings
 
 
 __all__ = (
