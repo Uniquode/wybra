@@ -15,6 +15,7 @@ from wybra.providers import (
     ProviderSecretResolutionError,
     ProviderSettings,
     ProvidersSettings,
+    provider_settings_with_available_secrets,
     resolve_provider_client_secret,
     validate_provider_secret_settings,
 )
@@ -149,6 +150,48 @@ class TestProviderSecretValidation:
 
         with pytest.raises(ProviderSecretResolutionError, match="google.*missing"):
             validate_provider_secret_settings(settings, RecordingSecretsCapability())
+
+    def test_missing_provider_secret_disables_provider_for_runtime(self) -> None:
+        settings = _providers_settings(
+            {
+                "google": {
+                    "enabled": True,
+                    "client_id": "client-id",
+                    "secrets": "environment",
+                    "client_secret_key": "GOOGLE_SECRET",
+                }
+            }
+        )
+
+        effective, issues = provider_settings_with_available_secrets(
+            settings,
+            RecordingSecretsCapability(),
+        )
+
+        assert effective.provider("google").enabled is False
+        assert len(issues) == 1
+        assert issues[0].provider_name == "google"
+        assert "missing" in issues[0].message
+
+    def test_missing_secrets_capability_disables_provider_for_runtime(self) -> None:
+        settings = _providers_settings(
+            {
+                "google": {
+                    "enabled": True,
+                    "client_id": "client-id",
+                    "secrets": "environment",
+                    "client_secret_key": "GOOGLE_SECRET",
+                }
+            }
+        )
+
+        effective, issues = provider_settings_with_available_secrets(settings, None)
+
+        assert effective.provider("google").enabled is False
+        assert len(issues) == 1
+        assert issues[0].provider_name == "google"
+        assert "SecretsCapability is not available" in issues[0].message
+        assert "wybra.secrets" in issues[0].message
 
     def test_disabled_provider_does_not_validate_source_or_key(self) -> None:
         settings = _providers_settings(
@@ -319,6 +362,109 @@ async def test_provider_capability_is_available_when_module_is_configured(
     providers = site.require_capability(ProvidersCapability)
 
     assert providers.settings.provider("google").client_id == "client-id"
+
+
+@pytest.mark.anyio
+async def test_missing_provider_secret_disables_provider_without_startup_failure(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    with caplog.at_level("ERROR", logger="wybra.providers.capabilities"):
+        site = await start(
+            FastAPI(),
+            config_source=_site_config_source(
+                tmp_path,
+                modules=(
+                    "wybra.secrets",
+                    "wybra.forms",
+                    "wybra.db",
+                    "wybra.auth",
+                    "wybra.providers",
+                ),
+                providers={
+                    "google": {
+                        "enabled": True,
+                        "client_id": "client-id",
+                        "secrets": "environment",
+                        "client_secret_key": "GOOGLE_SECRET",
+                    }
+                },
+            ),
+        )
+
+    providers = site.require_capability(ProvidersCapability)
+
+    assert providers.settings.provider("google").enabled is False
+    assert "Provider 'google' disabled" in caplog.text
+    assert "client secret is missing" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_missing_secrets_module_disables_provider_without_startup_failure(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    with caplog.at_level("ERROR", logger="wybra.providers.capabilities"):
+        site = await start(
+            FastAPI(),
+            config_source=_site_config_source(
+                tmp_path,
+                modules=(
+                    "wybra.forms",
+                    "wybra.db",
+                    "wybra.auth",
+                    "wybra.providers",
+                ),
+                providers={
+                    "google": {
+                        "enabled": True,
+                        "client_id": "client-id",
+                        "secrets": "environment",
+                        "client_secret_key": "GOOGLE_SECRET",
+                    }
+                },
+            ),
+        )
+
+    providers = site.require_capability(ProvidersCapability)
+
+    assert providers.settings.provider("google").enabled is False
+    assert "Provider 'google' disabled" in caplog.text
+    assert "SecretsCapability is not available" in caplog.text
+    assert "wybra.secrets" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_provider_secret_degradation_does_not_depend_on_module_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GOOGLE_SECRET", "secret")
+    site = await start(
+        FastAPI(),
+        config_source=_site_config_source(
+            tmp_path,
+            modules=(
+                "wybra.providers",
+                "wybra.secrets",
+                "wybra.forms",
+                "wybra.db",
+                "wybra.auth",
+            ),
+            providers={
+                "google": {
+                    "enabled": True,
+                    "client_id": "client-id",
+                    "secrets": "environment",
+                    "client_secret_key": "GOOGLE_SECRET",
+                }
+            },
+        ),
+    )
+
+    providers = site.require_capability(ProvidersCapability)
+
+    assert providers.settings.provider("google").enabled is True
 
 
 def _providers_settings(providers: dict[str, object]) -> ProvidersSettings:
