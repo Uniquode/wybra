@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 
+from wybra.auth.timestamps import current_timestamp
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
 from wybra.providers import (
@@ -18,6 +22,16 @@ from wybra.providers import (
     provider_settings_with_available_secrets,
     resolve_provider_client_secret,
     validate_provider_secret_settings,
+)
+from wybra.providers.google import (
+    GOOGLE_DEFAULT_ISSUER,
+    GOOGLE_DEFAULT_JWKS_URI,
+    GoogleIDTokenValidationError,
+    GoogleIDTokenValidationRequest,
+    GoogleOAuthSettings,
+    GoogleOIDCIDTokenValidator,
+    google_id_token_claims_from_payload,
+    google_oauth_settings_from_provider,
 )
 from wybra.secrets import MissingSecretError, SecretValue
 from wybra.site import start
@@ -47,6 +61,16 @@ class FailingSecretsCapability:
         raise AssertionError("disabled provider must not validate secrets")
 
 
+class FakeGoogleJwksClient:
+    def __init__(self, key) -> None:
+        self.key = key
+        self.tokens: list[str] = []
+
+    def get_signing_key_from_jwt(self, token: str):
+        self.tokens.append(token)
+        return SimpleNamespace(key=self.key)
+
+
 class TestProvidersSettings:
     def test_settings_load_from_providers_section(self) -> None:
         settings = _providers_settings(
@@ -57,6 +81,7 @@ class TestProvidersSettings:
                     "secrets": " environment ",
                     "client_secret_key": " GOOGLE_SECRET ",
                     "account_creation_enabled": True,
+                    "email_match_linking_enabled": True,
                     "required_claims": ["email", "email_verified"],
                     "allowed_domains": [" Example.COM "],
                 }
@@ -71,8 +96,14 @@ class TestProvidersSettings:
             "GOOGLE_SECRET",
         )
         assert provider.account_creation_enabled is True
+        assert provider.email_match_linking_enabled is True
         assert provider.required_claims == ("email", "email_verified")
         assert provider.allowed_domains == ("example.com",)
+
+    def test_email_match_linking_defaults_to_disabled(self) -> None:
+        provider = _providers_settings({"google": {"enabled": True}}).provider("google")
+
+        assert provider.email_match_linking_enabled is False
 
     def test_programmatic_provider_settings_strings_are_trimmed(self) -> None:
         provider = ProviderSettings(
@@ -114,6 +145,49 @@ class TestProvidersSettings:
 
         with pytest.raises(ConfigurationError, match=field_name):
             _providers_settings({"google": provider_config})
+
+    def test_google_oauth_settings_use_google_defaults(self) -> None:
+        provider = _providers_settings(
+            {
+                "google": {
+                    "enabled": True,
+                    "client_id": " google-client-id ",
+                    "secrets": "keychain",
+                    "client_secret_key": "auth/providers/google/dev/client-secret",
+                }
+            }
+        ).provider("google")
+
+        settings = google_oauth_settings_from_provider(provider)
+
+        assert settings.client_id == "google-client-id"
+        assert settings.scopes == ("openid", "email", "profile")
+        assert settings.issuer == "https://accounts.google.com"
+        assert (
+            settings.authorisation_endpoint
+            == "https://accounts.google.com/o/oauth2/v2/auth"
+        )
+        assert settings.token_endpoint == "https://oauth2.googleapis.com/token"
+        assert settings.jwks_uri == "https://www.googleapis.com/oauth2/v3/certs"
+        assert (
+            settings.discovery_document_url
+            == "https://accounts.google.com/.well-known/openid-configuration"
+        )
+
+    def test_google_oauth_settings_require_google_provider(self) -> None:
+        with pytest.raises(ConfigurationError, match="provider 'google'"):
+            google_oauth_settings_from_provider(ProviderSettings(name="github"))
+
+    def test_google_oauth_settings_require_client_id_and_secret_reference(
+        self,
+    ) -> None:
+        with pytest.raises(ConfigurationError, match="client_id"):
+            google_oauth_settings_from_provider(ProviderSettings(name="google"))
+
+        with pytest.raises(ConfigurationError, match="client_secret_key"):
+            google_oauth_settings_from_provider(
+                ProviderSettings(name="google", client_id="client-id")
+            )
 
 
 class TestProviderSecretValidation:
@@ -296,6 +370,57 @@ class TestProviderAccountPolicy:
 
         assert decision.outcome is ProviderPolicyOutcome.CREATION_DENIED
 
+    def test_verified_email_match_allows_auto_linking(self) -> None:
+        decision = ProviderAccountPolicy().evaluate_login(
+            provider=ProviderSettings(
+                name="google",
+                enabled=True,
+                email_match_linking_enabled=True,
+            ),
+            assertion=ProviderAssertion(
+                "google",
+                "subject-1",
+                {"email": "user@example.com", "email_verified": True},
+            ),
+            email_match_user_id="user-1",
+        )
+
+        assert decision.outcome is ProviderPolicyOutcome.EMAIL_MATCH_LINK_ALLOWED
+        assert decision.user_id == "user-1"
+        assert decision.accepted is True
+
+    def test_email_match_requires_verified_provider_email(self) -> None:
+        decision = ProviderAccountPolicy().evaluate_login(
+            provider=ProviderSettings(
+                name="google",
+                enabled=True,
+                email_match_linking_enabled=True,
+            ),
+            assertion=ProviderAssertion(
+                "google",
+                "subject-1",
+                {"email": "user@example.com", "email_verified": False},
+            ),
+            email_match_user_id="user-1",
+        )
+
+        assert decision.outcome is ProviderPolicyOutcome.INVALID_CLAIMS
+        assert decision.accepted is False
+
+    def test_email_match_is_denied_when_policy_is_disabled(self) -> None:
+        decision = ProviderAccountPolicy().evaluate_login(
+            provider=ProviderSettings(name="google", enabled=True),
+            assertion=ProviderAssertion(
+                "google",
+                "subject-1",
+                {"email": "user@example.com", "email_verified": True},
+            ),
+            email_match_user_id="user-1",
+        )
+
+        assert decision.outcome is ProviderPolicyOutcome.CREATION_DENIED
+        assert decision.accepted is False
+
     def test_linking_collision_is_rejected(self) -> None:
         decision = ProviderAccountPolicy().evaluate_linking(
             provider=ProviderSettings(name="github", enabled=True),
@@ -329,6 +454,78 @@ class TestProviderAccountPolicy:
         )
 
         assert decision.outcome is ProviderPolicyOutcome.INVALID_CLAIMS
+
+
+class TestGoogleIDTokenValidation:
+    @pytest.mark.anyio
+    async def test_oidc_validator_accepts_signed_google_id_token(self) -> None:
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_key = private_key.public_key()
+        token = jwt.encode(
+            {
+                "iss": GOOGLE_DEFAULT_ISSUER,
+                "aud": "google-client-id",
+                "exp": int(current_timestamp() + 300),
+                "sub": "google-subject",
+                "email": "user@example.com",
+                "email_verified": True,
+                "nonce": "nonce-value",
+            },
+            private_key,
+            algorithm="RS256",
+            headers={"kid": "test-key"},
+        )
+        jwks_client = FakeGoogleJwksClient(public_key)
+        jwks_uris: list[str] = []
+
+        def jwks_client_factory(jwks_uri: str) -> FakeGoogleJwksClient:
+            jwks_uris.append(jwks_uri)
+            return jwks_client
+
+        validator = GoogleOIDCIDTokenValidator(jwks_client_factory=jwks_client_factory)
+
+        claims = await validator.validate(
+            GoogleIDTokenValidationRequest(
+                id_token=token,
+                settings=GoogleOAuthSettings(
+                    provider_name="google",
+                    client_id="google-client-id",
+                    client_secret_reference=("environment", "GOOGLE_SECRET"),
+                ),
+                nonce="nonce-value",
+            )
+        )
+
+        assert claims.subject == "google-subject"
+        assert claims.email == "user@example.com"
+        assert claims.email_verified is True
+        assert claims.nonce == "nonce-value"
+        assert jwks_uris == [GOOGLE_DEFAULT_JWKS_URI]
+        assert jwks_client.tokens == [token]
+
+    def test_claim_mapping_rejects_nonce_mismatch(self) -> None:
+        with pytest.raises(GoogleIDTokenValidationError, match="nonce"):
+            google_id_token_claims_from_payload(
+                {
+                    "sub": "google-subject",
+                    "email": "user@example.com",
+                    "email_verified": True,
+                    "nonce": "actual",
+                },
+                expected_nonce="expected",
+            )
+
+    def test_claim_mapping_requires_email_verified_boolean(self) -> None:
+        with pytest.raises(GoogleIDTokenValidationError, match="email_verified"):
+            google_id_token_claims_from_payload(
+                {
+                    "sub": "google-subject",
+                    "email": "user@example.com",
+                    "email_verified": "true",
+                    "nonce": "nonce",
+                },
+                expected_nonce="nonce",
+            )
 
 
 @pytest.mark.anyio

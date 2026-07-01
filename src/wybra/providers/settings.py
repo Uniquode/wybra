@@ -18,6 +18,7 @@ PROVIDER_CLIENT_ID_FIELD: Final = "client_id"
 PROVIDER_SECRETS_FIELD: Final = "secrets"
 PROVIDER_CLIENT_SECRET_KEY_FIELD: Final = "client_secret_key"
 PROVIDER_ACCOUNT_CREATION_ENABLED_FIELD: Final = "account_creation_enabled"
+PROVIDER_EMAIL_MATCH_LINKING_ENABLED_FIELD: Final = "email_match_linking_enabled"
 PROVIDER_REQUIRED_CLAIMS_FIELD: Final = "required_claims"
 PROVIDER_ALLOWED_EMAILS_FIELD: Final = "allowed_emails"
 PROVIDER_ALLOWED_DOMAINS_FIELD: Final = "allowed_domains"
@@ -28,6 +29,7 @@ PROVIDER_OPTION_FIELDS: Final = frozenset(
         PROVIDER_ALLOWED_EMAILS_FIELD,
         PROVIDER_CLIENT_ID_FIELD,
         PROVIDER_CLIENT_SECRET_KEY_FIELD,
+        PROVIDER_EMAIL_MATCH_LINKING_ENABLED_FIELD,
         PROVIDER_ENABLED_FIELD,
         PROVIDER_REQUIRED_CLAIMS_FIELD,
         PROVIDER_SECRETS_FIELD,
@@ -45,6 +47,7 @@ class ProviderSettings:
     secrets: str | None = None
     client_secret_key: str | None = None
     account_creation_enabled: bool = False
+    email_match_linking_enabled: bool = False
     required_claims: tuple[str, ...] = ()
     allowed_emails: tuple[str, ...] = ()
     allowed_domains: tuple[str, ...] = ()
@@ -80,6 +83,11 @@ class ProviderSettings:
             self,
             "account_creation_enabled",
             _provider_enabled_value(self.account_creation_enabled),
+        )
+        object.__setattr__(
+            self,
+            "email_match_linking_enabled",
+            _provider_enabled_value(self.email_match_linking_enabled),
         )
         object.__setattr__(
             self,
@@ -193,6 +201,10 @@ def provider_settings_from_config(
                     PROVIDER_ACCOUNT_CREATION_ENABLED_FIELD,
                     False,
                 ),
+                email_match_linking_enabled=provider_config.get(
+                    PROVIDER_EMAIL_MATCH_LINKING_ENABLED_FIELD,
+                    False,
+                ),
                 required_claims=_tuple_config_value(
                     provider_config.get(PROVIDER_REQUIRED_CLAIMS_FIELD, ())
                 ),
@@ -292,6 +304,7 @@ __all__ = (
     "PROVIDER_ALLOWED_EMAILS_FIELD",
     "PROVIDER_CLIENT_ID_FIELD",
     "PROVIDER_CLIENT_SECRET_KEY_FIELD",
+    "PROVIDER_EMAIL_MATCH_LINKING_ENABLED_FIELD",
     "PROVIDER_ENABLED_FIELD",
     "PROVIDER_OPTION_FIELDS",
     "PROVIDER_REQUIRED_CLAIMS_FIELD",

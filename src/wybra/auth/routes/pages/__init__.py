@@ -1,18 +1,21 @@
 """Authentication page route package."""
 
+from ..paths import normalise_return_to
 from .account import (
     account,
+    disable_password_login,
     logout,
     password_reset,
     password_reset_confirm,
     security,
     signup,
+    unlink_google_provider,
     verify,
     verify_confirm,
 )
 from .api import current_user_api, current_user_state
 from .login import login
-from .shared import account_router, api_router, normalise_return_to
+from .shared import account_router, api_router
 from .totp_management import (
     disable_totp,
     regenerate_totp_recovery_codes,
@@ -32,6 +35,7 @@ __all__ = [
     "current_user_api",
     "current_user_state",
     "disable_totp",
+    "disable_password_login",
     "login",
     "logout",
     "module_routers",
@@ -43,6 +47,7 @@ __all__ = [
     "security",
     "signup",
     "totp_setup",
+    "unlink_google_provider",
     "verify",
     "verify_confirm",
 ]

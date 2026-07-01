@@ -5,7 +5,65 @@
   <p class="eyebrow">Account security</p>
   <h1>Login &amp; Security</h1>
   <p class="muted-copy">Signed in as {{ user.email }}.</p>
+  {% if form_message %}
+  <p role="status">{{ form_message }}</p>
+  {% endif %}
+  {% if form_error %}
+  <p role="alert">{{ form_error }}</p>
+  {% endif %}
 </section>
+{% if password_login.available %}
+<section class="surface-panel">
+  <p class="eyebrow">Local sign-in</p>
+  <h2>Username and password</h2>
+  {% if password_login.enabled %}
+  <p class="muted-copy">Username/password login is enabled for this account.</p>
+  {% if password_login.disable_available %}
+  <form action="{{ password_login.disable_path }}" method="post">
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    <button type="submit">Disable username/password login</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="muted-copy">Username/password login is disabled for this account.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% if providers.available %}
+<section class="surface-panel">
+  <p class="eyebrow">Connected accounts</p>
+  <h2>Provider sign-in</h2>
+  {% for provider in providers.providers %}
+  <section>
+    <h3>{{ provider.label }}</h3>
+    {% if provider.linked %}
+    {% for linked_account in provider.linked_accounts %}
+    <p class="muted-copy">
+      {{ provider.label }} sign-in is linked{% if linked_account.account_email %} as {{ linked_account.account_email }}{% endif %}.
+    </p>
+    <form action="{{ provider.unlink_path }}" method="post">
+      <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+      <input name="provider_id" type="hidden" value="{{ linked_account.id }}">
+      <button type="submit">Unlink {{ provider.label }}</button>
+    </form>
+    {% endfor %}
+    <p>
+      <a href="{{ provider.link_path }}">
+        Link another {{ provider.label }} account
+      </a>
+    </p>
+    {% else %}
+    <p class="muted-copy">{{ provider.label }} sign-in is not linked.</p>
+    <p>
+      <a href="{{ provider.link_path }}">
+        Link {{ provider.label }}
+      </a>
+    </p>
+    {% endif %}
+  </section>
+  {% endfor %}
+</section>
+{% endif %}
 {% if totp.available %}
 <section class="surface-panel">
   <p class="eyebrow">Two-factor authentication</p>

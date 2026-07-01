@@ -9,7 +9,12 @@ from wybra.auth.mfa.storage import (
 )
 from wybra.auth.mfa.totp import generate_totp_secret, totp_auth_uri
 from wybra.auth.options import TOTP_REQUIRED
+from wybra.auth.provider_support import (
+    user_has_usable_account_sign_in as _user_has_usable_account_sign_in,
+)
 from wybra.auth.result import ERROR_TOTP_SETUP_REQUIRED
+from wybra.auth.routes.paths import normalise_return_to
+from wybra.auth.routes.paths import route_path as _route_path
 from wybra.auth.routes.totp import (
     RECOVERY_CODES_DOWNLOAD_FILENAME,
     TOTP_SETUP_PAGE_MESSAGES,
@@ -46,12 +51,10 @@ from .shared import (
     _load_user_by_id,
     _login_error_response,
     _require_authenticated_user,
-    _route_path,
     _session_factory_from_request,
     _totp_setup_return_to,
     account_router,
     logger,
-    normalise_return_to,
 )
 
 TOTP_CONFIRMATION_MESSAGE = (
@@ -300,7 +303,7 @@ async def disable_totp(request: Request) -> Response:
                 button_label="Disable authenticator",
             )
 
-        if not _user_has_usable_sign_in_after_totp(user):
+        if not await _user_has_usable_account_sign_in(request, session, user):
             return _totp_action_confirmation_page(
                 request,
                 page_title="Disable authenticator",
@@ -329,10 +332,6 @@ async def disable_totp(request: Request) -> Response:
         await session.commit()
 
     return RedirectResponse(url=_route_path(request, "auth:security"), status_code=303)
-
-
-def _user_has_usable_sign_in_after_totp(user: object) -> bool:
-    return bool(getattr(user, "hashed_password", None))
 
 
 @account_router.api_route(

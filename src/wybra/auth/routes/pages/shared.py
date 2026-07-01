@@ -2,7 +2,6 @@ import logging
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from typing import Any, cast
-from urllib.parse import unquote, urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,9 +17,13 @@ from wybra.auth.mfa.storage import (
 )
 from wybra.auth.models import User
 from wybra.auth.options import IdentityOptions
+from wybra.auth.provider_support import provider_login_options
 from wybra.auth.result import (
     ERROR_EMAIL_VERIFICATION_REQUIRED,
     ERROR_TOTP_CODE_REQUIRED,
+)
+from wybra.auth.routes.paths import (
+    normalise_return_to,
 )
 from wybra.auth.routes.totp import (
     TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE,
@@ -72,37 +75,13 @@ def _public_signup_enabled(request: Request) -> bool:
     return _identity_options(request).account_creation_policy == "public-signup"
 
 
-def normalise_return_to(value: str | None, default: str = "/account") -> str:
-    candidate = (value or "").strip()
-    if (
-        not candidate.startswith("/")
-        or candidate.startswith("//")
-        or "\\" in candidate
-        or "\r" in candidate
-        or "\n" in candidate
-    ):
-        return default
-
-    decoded_candidate = unquote(candidate)
-    if (
-        decoded_candidate.startswith("//")
-        or "\\" in decoded_candidate
-        or any(
-            ord(character) < 32 or ord(character) == 127
-            for character in decoded_candidate
-        )
-    ):
-        return default
-
-    parsed = urlsplit(candidate)
-    if parsed.scheme or parsed.netloc:
-        return default
-
-    return urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
-
-
-def _route_path(request: Request, route_name: str) -> str:
-    return urlsplit(str(request.url_for(route_name))).path
+def _login_page_context(request: Request, **extra: Any) -> dict[str, Any]:
+    context = login_context(request, **extra)
+    context["provider_logins"] = provider_login_options(
+        request,
+        return_to=cast(str | None, context.get("return_to")),
+    )
+    return context
 
 
 def _session_factory_from_request(
@@ -414,7 +393,7 @@ def _login_error_response(
     ):
         challenge_error = TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE[message]
 
-    context = login_context(
+    context = _login_page_context(
         request,
         email=email,
         return_to=return_to,

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from fastapi import Request
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import BaseUserManager, UUIDIDMixin
 from fastapi_users.exceptions import (
     InvalidPasswordException,
@@ -91,6 +92,17 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         self.reset_password_token_secret = options.reset_password_token_secret
         self.verification_token_secret = options.verification_token_secret
         self.profile_lookup = profile_lookup
+
+    async def authenticate(self, credentials: OAuth2PasswordRequestForm) -> User | None:
+        try:
+            user = await self.get_by_email(credentials.username)
+        except UserNotExists:
+            return None
+
+        if not user.password_login_enabled or not user.hashed_password:
+            return None
+
+        return await super().authenticate(credentials)
 
     async def validate_password(
         self,

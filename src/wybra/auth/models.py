@@ -174,6 +174,15 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     )
 
     # Store Unix timestamps as `float` for cross-database consistency.
+    hashed_password: Mapped[str] = mapped_column(
+        String(length=1024),
+        nullable=True,
+    )
+    password_login_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[float] = mapped_column(
         Float,
