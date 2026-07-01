@@ -25,6 +25,30 @@ from wybra.auth.timestamps import current_timestamp
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability
 from wybra.providers.capabilities import ProvidersCapability
+from wybra.providers.github import (
+    GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+    GITHUB_OAUTH_STATE_COOKIE,
+    GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+    GITHUB_PROVIDER_NAME,
+    GitHubAPIClient,
+    GitHubAPIError,
+    GitHubIdentityRequest,
+    GitHubOAuthPurpose,
+    GitHubOAuthSettings,
+    GitHubOAuthState,
+    GitHubOAuthTokenClient,
+    GitHubRESTAPIClient,
+    GitHubTokenClient,
+    GitHubTokenExchangeError,
+    GitHubTokenExchangeRequest,
+    GitHubTokenResponse,
+    GitHubUserClaims,
+    create_github_oauth_state,
+    decode_github_oauth_state_cookie,
+    encode_github_oauth_state_cookie,
+    github_oauth_settings_from_provider,
+    github_token_response_has_required_scopes,
+)
 from wybra.providers.google import (
     GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
     GOOGLE_OAUTH_STATE_COOKIE,
@@ -59,6 +83,7 @@ from wybra.services.secrets import SecretsCapability, SecretsError
 from wybra.site import get_site
 
 google_router = APIRouter()
+github_router = APIRouter()
 LOGIN_REQUIRED = Depends(login_required)
 logger = logging.getLogger(__name__)
 
@@ -180,6 +205,121 @@ async def google_callback(request: Request) -> Response:
     return await _google_resolution_response(request, state, decision)
 
 
+@github_router.get(
+    "/login",
+    include_in_schema=False,
+    name="auth:github-login",
+)
+async def github_login_start(request: Request) -> Response:
+    return _github_authorisation_redirect(
+        request,
+        purpose="login",
+        return_to_default=_route_path(request, "auth:account"),
+    )
+
+
+@github_router.get(
+    "/link",
+    include_in_schema=False,
+    name="auth:github-link",
+)
+async def github_link_start(request: Request, user=LOGIN_REQUIRED) -> Response:
+    return _github_authorisation_redirect(
+        request,
+        purpose="link",
+        return_to_default=_route_path(request, "auth:security"),
+        user_id=str(user.id),
+    )
+
+
+@github_router.get(
+    "/callback",
+    include_in_schema=False,
+    name="auth:github-callback",
+)
+async def github_callback(request: Request) -> Response:
+    settings = _available_github_settings(request)
+    state = _validated_github_callback_state(request)
+    if state is None:
+        return _github_callback_response(
+            request,
+            status_code=400,
+            detail="GitHub callback state is invalid.",
+        )
+    linking_user = await _github_linking_user(request, state)
+    if state.purpose == "link" and linking_user is None:
+        return _github_callback_response(
+            request,
+            status_code=401,
+            detail="GitHub linking requires an active session.",
+        )
+    code = request.query_params.get("code")
+    if not isinstance(code, str) or not code.strip():
+        return _github_callback_response(
+            request,
+            status_code=400,
+            detail="GitHub callback code is missing.",
+        )
+    client_secret = _github_client_secret(request, settings)
+    if client_secret is None:
+        return _github_callback_response(
+            request,
+            status_code=404,
+            detail="GitHub login is not available.",
+        )
+    try:
+        token_response = await _github_token_client(request).exchange_code(
+            GitHubTokenExchangeRequest(
+                token_endpoint=settings.token_endpoint,
+                client_id=settings.client_id,
+                client_secret=client_secret,
+                code=code.strip(),
+                redirect_uri=state.redirect_uri,
+                code_verifier=state.code_verifier,
+            )
+        )
+    except GitHubTokenExchangeError:
+        return _github_callback_response(
+            request,
+            status_code=400,
+            detail="GitHub token exchange failed.",
+        )
+    if not _valid_github_token_response(settings, token_response):
+        return _github_callback_response(
+            request,
+            status_code=400,
+            detail="GitHub token response is invalid.",
+        )
+    access_token = token_response.access_token
+    assert access_token is not None
+    try:
+        claims = await _github_api_client(request).fetch_identity(
+            GitHubIdentityRequest(settings=settings, access_token=access_token)
+        )
+    except GitHubAPIError:
+        return _github_callback_response(
+            request,
+            status_code=400,
+            detail="GitHub account claims are invalid.",
+        )
+    try:
+        decision = await _resolve_github_account(
+            request,
+            state=state,
+            claims=claims,
+            token_response=token_response,
+            linking_user=linking_user,
+        )
+    except ProviderCredentialStorageError:
+        logger.exception("GitHub provider credential storage is unavailable.")
+        return _github_callback_response(
+            request,
+            status_code=503,
+            detail="GitHub login is not available.",
+        )
+    return await _github_resolution_response(request, state, decision)
+
+
 async def _google_linking_user(
     request: Request,
     state: GoogleOAuthState,
@@ -291,7 +431,7 @@ def _validated_google_callback_state(request: Request) -> GoogleOAuthState | Non
         return None
     state = decode_google_oauth_state_cookie(
         value,
-        secret=_google_oauth_state_secret(request),
+        secret=_oauth_state_secret(request),
     )
     if state is None:
         return None
@@ -326,7 +466,7 @@ def _google_token_client(request: Request) -> GoogleTokenClient:
     if client is None:
         return GoogleOAuthTokenClient()
     if not isinstance(client, GoogleTokenClient):
-        raise TypeError("Configured Google OAuth token client is invalid.")
+        _raise_invalid_configured_client_type("Google OAuth token client", client)
     return client
 
 
@@ -339,7 +479,7 @@ def _google_id_token_validator(request: Request) -> GoogleIDTokenValidator:
     if validator is None:
         return GoogleOIDCIDTokenValidator()
     if not isinstance(validator, GoogleIDTokenValidator):
-        raise TypeError("Configured Google ID token validator is invalid.")
+        _raise_invalid_configured_client_type("Google ID token validator", validator)
     return validator
 
 
@@ -740,8 +880,589 @@ def _clear_google_oauth_state_cookie(request: Request, response: Response) -> No
     )
 
 
-def _google_oauth_state_secret(request: Request) -> str:
+async def _github_linking_user(
+    request: Request,
+    state: GitHubOAuthState,
+) -> User | None:
+    if state.purpose != "link":
+        return None
+    state_user_id = parse_uuid(state.user_id) if state.user_id is not None else None
+    if state_user_id is None:
+        return None
+    user = await resolve_current_user(request)
+    if user is None or parse_uuid(user.id) != state_user_id:
+        return None
+    return user if is_user_effectively_active(user) else None
+
+
+def _github_authorisation_redirect(
+    request: Request,
+    *,
+    purpose: GitHubOAuthPurpose,
+    return_to_default: str,
+    user_id: str | None = None,
+) -> Response:
+    settings = _available_github_settings(request)
+    redirect_uri = str(request.url_for("auth:github-callback"))
+    state = create_github_oauth_state(
+        purpose=purpose,
+        return_to=normalise_return_to(
+            request.query_params.get("return_to"),
+            default=return_to_default,
+        ),
+        redirect_uri=redirect_uri,
+        user_id=user_id,
+    )
+    response = RedirectResponse(
+        url=_github_authorisation_url(settings, state),
+        status_code=303,
+    )
+    _set_github_oauth_state_cookie(request, response, state)
+    return response
+
+
+def _available_github_settings(request: Request) -> GitHubOAuthSettings:
+    try:
+        return github_oauth_settings_from_provider(_available_github_provider(request))
+    except ConfigurationError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="GitHub login is not available.",
+        ) from exc
+
+
+def _available_github_provider(request: Request) -> ProviderSettings:
+    providers = get_site(request.app).optional_capability(ProvidersCapability)
+    if providers is None:
+        _raise_github_unavailable()
+    try:
+        return providers.settings.provider(GITHUB_PROVIDER_NAME)
+    except ConfigurationError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="GitHub login is not available.",
+        ) from exc
+
+
+def _github_authorisation_url(
+    settings: GitHubOAuthSettings,
+    state: GitHubOAuthState,
+) -> str:
+    query = urlencode(
+        {
+            "client_id": settings.client_id,
+            "redirect_uri": state.redirect_uri,
+            "scope": " ".join(settings.scopes),
+            "state": state.state,
+            "code_challenge": state.code_challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+    return f"{settings.authorisation_endpoint}?{query}"
+
+
+def _set_github_oauth_state_cookie(
+    request: Request,
+    response: Response,
+    state: GitHubOAuthState,
+) -> None:
+    identity_options = identity_options_from_state(request.app.state)
+    max_age = max(0, int(state.expires_at - current_timestamp()))
+    response.set_cookie(
+        GITHUB_OAUTH_STATE_COOKIE,
+        encode_github_oauth_state_cookie(
+            state,
+            secret=identity_options.verification_token_secret,
+        ),
+        max_age=max_age,
+        path="/",
+        secure=session_cookie_secure_for_request(
+            request,
+            force_secure=identity_options.session_cookie_force_secure,
+        ),
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _validated_github_callback_state(request: Request) -> GitHubOAuthState | None:
+    value = request.cookies.get(GITHUB_OAUTH_STATE_COOKIE)
+    if not isinstance(value, str) or not value:
+        return None
+    state = decode_github_oauth_state_cookie(
+        value,
+        secret=_oauth_state_secret(request),
+    )
+    if state is None:
+        return None
+    submitted_state = request.query_params.get("state")
+    if not isinstance(submitted_state, str) or submitted_state != state.state:
+        return None
+    if state.redirect_uri != str(request.url_for("auth:github-callback")):
+        return None
+    return state
+
+
+def _github_client_secret(
+    request: Request,
+    settings: GitHubOAuthSettings,
+) -> str | None:
+    secrets = get_site(request.app).optional_capability(SecretsCapability)
+    if secrets is None:
+        return None
+    source, key = settings.client_secret_reference
+    try:
+        return secrets.resolve(source, key).reveal()
+    except SecretsError:
+        return None
+
+
+def _github_token_client(request: Request) -> GitHubTokenClient:
+    client = getattr(
+        request.app.state,
+        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        None,
+    )
+    if client is None:
+        return GitHubOAuthTokenClient()
+    if not isinstance(client, GitHubTokenClient):
+        _raise_invalid_configured_client_type("GitHub OAuth token client", client)
+    return client
+
+
+def _github_api_client(request: Request) -> GitHubAPIClient:
+    client = getattr(
+        request.app.state,
+        GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+        None,
+    )
+    if client is None:
+        return GitHubRESTAPIClient()
+    if not isinstance(client, GitHubAPIClient):
+        _raise_invalid_configured_client_type("GitHub API client", client)
+    return client
+
+
+def _valid_github_token_response(
+    settings: GitHubOAuthSettings,
+    token_response: GitHubTokenResponse,
+) -> bool:
+    access_token = token_response.access_token
+    if access_token is None or not access_token.strip():
+        return False
+    token_type = token_response.token_type
+    if token_type is None or token_type.lower() != "bearer":
+        return False
+    return github_token_response_has_required_scopes(
+        token_response,
+        settings.scopes,
+    )
+
+
+async def _resolve_github_account(
+    request: Request,
+    *,
+    state: GitHubOAuthState,
+    claims: GitHubUserClaims,
+    token_response: GitHubTokenResponse,
+    linking_user: User | None,
+) -> ProviderPolicyDecision:
+    provider = _available_github_provider(request)
+    assertion = _github_provider_assertion(claims)
+    database = get_site(request.app).require_capability(DatabaseCapability)
+    async with database.transaction() as session:
+        store = provider_credential_store(
+            session,
+            getattr(request.app.state, "secret_envelope_service", None),
+        )
+        provider_record = await store.get_provider_by_identity(
+            assertion.provider_name,
+            assertion.provider_subject,
+        )
+        linked_user = (
+            await store.get_linked_user(provider_record)
+            if provider_record is not None and provider_record.provider_enabled
+            else None
+        )
+        if state.purpose == "link":
+            return await _resolve_github_linking_account(
+                provider=provider,
+                assertion=assertion,
+                state=state,
+                claims=claims,
+                token_response=token_response,
+                store=store,
+                linked_user=linked_user,
+                linking_user=linking_user,
+            )
+
+        email_match_user = await _github_email_match_user(store, claims)
+        decision = ProviderAccountPolicy().evaluate_login(
+            provider=provider,
+            assertion=assertion,
+            linked_user_id=str(linked_user.id) if linked_user is not None else None,
+            linked_user_active=(
+                is_user_effectively_active(linked_user)
+                if linked_user is not None
+                else True
+            ),
+            email_match_user_id=(
+                str(email_match_user.id) if email_match_user is not None else None
+            ),
+            email_match_user_active=(
+                is_user_effectively_active(email_match_user)
+                if email_match_user is not None
+                else True
+            ),
+        )
+        if decision.outcome is ProviderPolicyOutcome.EMAIL_MATCH_LINK_ALLOWED:
+            if email_match_user is None:
+                return _github_policy_decision(
+                    ProviderPolicyOutcome.INVALID_CLAIMS,
+                    assertion,
+                    reason="Provider email-match user could not be resolved.",
+                )
+            persisted = await _persist_github_provider_link(
+                store=store,
+                assertion=assertion,
+                claims=claims,
+                token_response=token_response,
+                user=email_match_user,
+            )
+            if not persisted:
+                return _github_policy_decision(
+                    ProviderPolicyOutcome.INVALID_CLAIMS,
+                    assertion,
+                    reason="GitHub token response is missing access token.",
+                )
+        if (
+            decision.outcome is ProviderPolicyOutcome.LINKED_USER
+            and linked_user is not None
+        ):
+            await _apply_verified_github_email(store, linked_user, claims)
+        if decision.outcome is ProviderPolicyOutcome.CREATION_ALLOWED:
+            return await _create_github_provider_user(
+                store=store,
+                assertion=assertion,
+                claims=claims,
+                token_response=token_response,
+            )
+        return decision
+
+
+async def _resolve_github_linking_account(
+    *,
+    provider: ProviderSettings,
+    assertion: ProviderAssertion,
+    state: GitHubOAuthState,
+    claims: GitHubUserClaims,
+    token_response: GitHubTokenResponse,
+    store: ProviderCredentialStore,
+    linked_user: User | None,
+    linking_user: User | None,
+) -> ProviderPolicyDecision:
+    user_id = parse_uuid(state.user_id) if state.user_id is not None else None
+    if (
+        user_id is None
+        or linking_user is None
+        or parse_uuid(linking_user.id) != user_id
+    ):
+        return _github_policy_decision(
+            ProviderPolicyOutcome.INVALID_CLAIMS,
+            assertion,
+            reason="GitHub linking state does not identify a local user.",
+        )
+    current_user = await store.get_user(user_id)
+    if current_user is None or not is_user_effectively_active(current_user):
+        return _github_policy_decision(
+            ProviderPolicyOutcome.INACTIVE_USER,
+            assertion,
+            user_id=str(user_id),
+            reason="Linking user is inactive or unavailable.",
+        )
+    decision = ProviderAccountPolicy().evaluate_linking(
+        provider=provider,
+        assertion=assertion,
+        current_user_id=str(current_user.id),
+        linked_user_id=str(linked_user.id) if linked_user is not None else None,
+    )
+    if decision.outcome is ProviderPolicyOutcome.LINK_ALLOWED:
+        persisted = await _persist_github_provider_link(
+            store=store,
+            assertion=assertion,
+            claims=claims,
+            token_response=token_response,
+            user=current_user,
+        )
+        if not persisted:
+            return _github_policy_decision(
+                ProviderPolicyOutcome.INVALID_CLAIMS,
+                assertion,
+                reason="GitHub token response is missing access token.",
+            )
+    return decision
+
+
+async def _github_email_match_user(
+    store: ProviderCredentialStore,
+    claims: GitHubUserClaims,
+) -> User | None:
+    normalised_email = normalise_email_target(claims.email)
+    if normalised_email is None:
+        return None
+    return await store.get_user_by_normalised_email(normalised_email)
+
+
+async def _create_github_provider_user(
+    *,
+    store: ProviderCredentialStore,
+    assertion: ProviderAssertion,
+    claims: GitHubUserClaims,
+    token_response: GitHubTokenResponse,
+) -> ProviderPolicyDecision:
+    normalised_email = normalise_email_target(claims.email)
+    if normalised_email is None:
+        return _github_policy_decision(
+            ProviderPolicyOutcome.INVALID_CLAIMS,
+            assertion,
+            reason="GitHub account email is invalid.",
+        )
+    created_user = await store.create_provider_user(
+        email=normalised_email,
+        is_verified=claims.email_verified,
+    )
+    persisted = await _persist_github_provider_link(
+        store=store,
+        assertion=assertion,
+        claims=claims,
+        token_response=token_response,
+        user=created_user,
+    )
+    if not persisted:
+        return _github_policy_decision(
+            ProviderPolicyOutcome.INVALID_CLAIMS,
+            assertion,
+            reason="GitHub token response is missing access token.",
+        )
+    return _github_policy_decision(
+        ProviderPolicyOutcome.CREATION_ALLOWED,
+        assertion,
+        user_id=str(created_user.id),
+    )
+
+
+async def _persist_github_provider_link(
+    *,
+    store: ProviderCredentialStore,
+    assertion: ProviderAssertion,
+    claims: GitHubUserClaims,
+    token_response: GitHubTokenResponse,
+    user: User,
+) -> bool:
+    access_token = token_response.access_token
+    if access_token is None or not access_token.strip():
+        return False
+    provider = await store.upsert_provider_credential(
+        provider_name=assertion.provider_name,
+        provider_subject=assertion.provider_subject,
+        access_token=access_token,
+        refresh_token=token_response.refresh_token,
+        expires_at=_github_token_expires_at(token_response),
+        account_email=claims.email,
+        provider_metadata=dict(claims.claims),
+    )
+    await store.link_provider_to_user(provider_id=provider.id, user_id=user.id)
+    await _apply_verified_github_email(store, user, claims)
+    return True
+
+
+async def _apply_verified_github_email(
+    store: ProviderCredentialStore,
+    user: User,
+    claims: GitHubUserClaims,
+) -> None:
+    normalised_email = normalise_email_target(claims.email)
+    if normalised_email is None:
+        return
+    await store.verify_matching_user_email(
+        user,
+        normalised_email,
+        is_verified=claims.email_verified,
+    )
+
+
+def _github_provider_assertion(claims: GitHubUserClaims) -> ProviderAssertion:
+    return ProviderAssertion(
+        GITHUB_PROVIDER_NAME,
+        claims.subject,
+        {
+            "id": claims.subject,
+            "sub": claims.subject,
+            "email": claims.email,
+            "email_verified": claims.email_verified,
+            "login": claims.login,
+        },
+    )
+
+
+def _github_token_expires_at(token_response: GitHubTokenResponse) -> float | None:
+    if token_response.expires_in is None:
+        return None
+    return current_timestamp() + token_response.expires_in
+
+
+def _github_policy_decision(
+    outcome: ProviderPolicyOutcome,
+    assertion: ProviderAssertion,
+    *,
+    user_id: str | None = None,
+    reason: str | None = None,
+) -> ProviderPolicyDecision:
+    return ProviderPolicyDecision(
+        outcome=outcome,
+        provider_name=assertion.provider_name,
+        provider_subject=assertion.provider_subject,
+        user_id=user_id,
+        reason=reason,
+    )
+
+
+async def _github_resolution_response(
+    request: Request,
+    state: GitHubOAuthState,
+    decision: ProviderPolicyDecision,
+) -> Response:
+    if decision.outcome in {
+        ProviderPolicyOutcome.CREATION_ALLOWED,
+        ProviderPolicyOutcome.EMAIL_MATCH_LINK_ALLOWED,
+        ProviderPolicyOutcome.LINKED_USER,
+    }:
+        return await _github_login_completion_response(request, state, decision)
+    if decision.outcome in {
+        ProviderPolicyOutcome.ALREADY_LINKED,
+        ProviderPolicyOutcome.LINK_ALLOWED,
+    }:
+        return _github_redirect_response(request, state.return_to)
+    return _github_callback_response(
+        request,
+        status_code=_github_rejection_status(decision),
+        detail=_github_rejection_detail(state, decision),
+    )
+
+
+def _github_rejection_status(decision: ProviderPolicyDecision) -> int:
+    if decision.outcome is ProviderPolicyOutcome.COLLISION:
+        return 409
+    if decision.outcome is ProviderPolicyOutcome.DISABLED_PROVIDER:
+        return 404
+    if decision.outcome in {
+        ProviderPolicyOutcome.CREATION_DENIED,
+        ProviderPolicyOutcome.INACTIVE_USER,
+    }:
+        return 403
+    return 400
+
+
+def _github_rejection_detail(
+    state: GitHubOAuthState,
+    decision: ProviderPolicyDecision,
+) -> str:
+    if decision.outcome is ProviderPolicyOutcome.COLLISION:
+        return "GitHub account is already linked to another user."
+    if decision.outcome is ProviderPolicyOutcome.INACTIVE_USER:
+        return "GitHub linked account is inactive."
+    if decision.outcome is ProviderPolicyOutcome.DISABLED_PROVIDER:
+        return "GitHub login is not available."
+    if decision.outcome is ProviderPolicyOutcome.INVALID_CLAIMS:
+        return "GitHub account claims are invalid."
+    if decision.outcome is ProviderPolicyOutcome.CREATION_DENIED:
+        return (
+            "GitHub account linking is not allowed."
+            if state.purpose == "link"
+            else "GitHub account is not linked."
+        )
+    return "GitHub login was rejected."
+
+
+async def _github_login_completion_response(
+    request: Request,
+    state: GitHubOAuthState,
+    decision: ProviderPolicyDecision,
+) -> Response:
+    if decision.user_id is None:
+        return _github_callback_response(
+            request,
+            status_code=400,
+            detail="GitHub account claims are invalid.",
+        )
+    user = await _github_resolution_user(request, decision.user_id)
+    if user is None:
+        return _github_callback_response(
+            request,
+            status_code=403,
+            detail="GitHub linked account is inactive.",
+        )
+    response = await _handle_totp_post_authentication_decision(
+        request,
+        user=user,
+        email=user.email,
+        return_to=state.return_to,
+    )
+    _clear_github_oauth_state_cookie(request, response)
+    return response
+
+
+async def _github_resolution_user(request: Request, user_id: str) -> User | None:
+    parsed_user_id = parse_uuid(user_id)
+    if parsed_user_id is None:
+        return None
+    database = get_site(request.app).require_capability(DatabaseCapability)
+    async with database.session() as session:
+        user = await session.get(User, parsed_user_id)
+        return user if user is not None and is_user_effectively_active(user) else None
+
+
+def _github_redirect_response(request: Request, location: str) -> Response:
+    response = RedirectResponse(url=location, status_code=303)
+    _clear_github_oauth_state_cookie(request, response)
+    return response
+
+
+def _github_callback_response(
+    request: Request,
+    *,
+    status_code: int,
+    detail: str,
+) -> Response:
+    response = JSONResponse({"detail": detail}, status_code=status_code)
+    _clear_github_oauth_state_cookie(request, response)
+    return response
+
+
+def _clear_github_oauth_state_cookie(request: Request, response: Response) -> None:
+    identity_options = identity_options_from_state(request.app.state)
+    response.set_cookie(
+        GITHUB_OAUTH_STATE_COOKIE,
+        "",
+        max_age=0,
+        path="/",
+        secure=session_cookie_secure_for_request(
+            request,
+            force_secure=identity_options.session_cookie_force_secure,
+        ),
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _oauth_state_secret(request: Request) -> str:
     return identity_options_from_state(request.app.state).verification_token_secret
+
+
+def _raise_invalid_configured_client_type(name: str, value: object) -> NoReturn:
+    raise TypeError(
+        f"Configured {name} is invalid: actual_type={type(value).__name__}."
+    )
 
 
 def _route_path(request: Request, route_name: str) -> str:
@@ -752,9 +1473,20 @@ def _raise_google_unavailable() -> NoReturn:
     raise HTTPException(status_code=404, detail="Google login is not available.")
 
 
-module_routers = {"google": google_router}
+def _raise_github_unavailable() -> NoReturn:
+    raise HTTPException(status_code=404, detail="GitHub login is not available.")
+
+
+module_routers = {
+    "google": google_router,
+    "github": github_router,
+}
 
 __all__ = (
+    "github_callback",
+    "github_link_start",
+    "github_login_start",
+    "github_router",
     "google_callback",
     "google_link_start",
     "google_login_start",

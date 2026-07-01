@@ -23,6 +23,20 @@ from wybra.providers import (
     resolve_provider_client_secret,
     validate_provider_secret_settings,
 )
+from wybra.providers.github import (
+    GITHUB_DEFAULT_API_VERSION,
+    GITHUB_DEFAULT_AUTHORISATION_ENDPOINT,
+    GITHUB_DEFAULT_EMAILS_API_ENDPOINT,
+    GITHUB_DEFAULT_SCOPES,
+    GITHUB_DEFAULT_TOKEN_ENDPOINT,
+    GITHUB_DEFAULT_USER_API_ENDPOINT,
+    GitHubAPIError,
+    github_granted_scopes,
+    github_oauth_settings_from_provider,
+    github_token_response_from_payload,
+    github_token_response_has_required_scopes,
+    github_user_claims_from_api_payloads,
+)
 from wybra.providers.google import (
     GOOGLE_DEFAULT_ISSUER,
     GOOGLE_DEFAULT_JWKS_URI,
@@ -188,6 +202,132 @@ class TestProvidersSettings:
             google_oauth_settings_from_provider(
                 ProviderSettings(name="google", client_id="client-id")
             )
+
+    def test_github_oauth_settings_use_github_defaults(self) -> None:
+        provider = _providers_settings(
+            {
+                "github": {
+                    "enabled": True,
+                    "client_id": " github-client-id ",
+                    "secrets": "keychain",
+                    "client_secret_key": "auth/providers/github/dev/client-secret",
+                }
+            }
+        ).provider("github")
+
+        settings = github_oauth_settings_from_provider(provider)
+
+        assert settings.client_id == "github-client-id"
+        assert settings.scopes == GITHUB_DEFAULT_SCOPES
+        assert settings.authorisation_endpoint == GITHUB_DEFAULT_AUTHORISATION_ENDPOINT
+        assert settings.token_endpoint == GITHUB_DEFAULT_TOKEN_ENDPOINT
+        assert settings.user_api_endpoint == GITHUB_DEFAULT_USER_API_ENDPOINT
+        assert settings.emails_api_endpoint == GITHUB_DEFAULT_EMAILS_API_ENDPOINT
+        assert settings.api_version == GITHUB_DEFAULT_API_VERSION
+
+    def test_github_oauth_settings_require_github_provider(self) -> None:
+        with pytest.raises(ConfigurationError, match="provider 'github'"):
+            github_oauth_settings_from_provider(ProviderSettings(name="google"))
+
+    def test_github_oauth_settings_require_client_id_and_secret_reference(
+        self,
+    ) -> None:
+        with pytest.raises(ConfigurationError, match="client_id"):
+            github_oauth_settings_from_provider(ProviderSettings(name="github"))
+
+        with pytest.raises(ConfigurationError, match="client_secret_key"):
+            github_oauth_settings_from_provider(
+                ProviderSettings(name="github", client_id="client-id")
+            )
+
+
+class TestGitHubClaimsAndTokens:
+    def test_claim_mapping_uses_numeric_user_id_as_provider_subject(self) -> None:
+        claims = github_user_claims_from_api_payloads(
+            {
+                "id": 12345,
+                "login": "octocat",
+                "avatar_url": "https://avatars.example/octocat",
+            },
+            (
+                {
+                    "email": "octocat@example.com",
+                    "verified": True,
+                    "primary": True,
+                },
+            ),
+        )
+
+        assert claims.subject == "12345"
+        assert claims.email == "octocat@example.com"
+        assert claims.email_verified is True
+        assert claims.login == "octocat"
+        assert claims.claims["id"] == "12345"
+        assert claims.claims["login"] == "octocat"
+        assert claims.claims["avatar_url"] == "https://avatars.example/octocat"
+
+    def test_claim_mapping_prefers_verified_email_over_unverified_primary(
+        self,
+    ) -> None:
+        claims = github_user_claims_from_api_payloads(
+            {"id": "github-subject"},
+            (
+                {
+                    "email": "primary@example.com",
+                    "verified": False,
+                    "primary": True,
+                },
+                {
+                    "email": "verified@example.com",
+                    "verified": True,
+                    "primary": False,
+                },
+            ),
+        )
+
+        assert claims.email == "verified@example.com"
+        assert claims.email_verified is True
+
+    def test_claim_mapping_rejects_missing_email(self) -> None:
+        with pytest.raises(GitHubAPIError, match="email"):
+            github_user_claims_from_api_payloads({"id": 12345}, ())
+
+    def test_token_response_parses_payload_fields(self) -> None:
+        response = github_token_response_from_payload(
+            {
+                "access_token": "access-token",
+                "token_type": "bearer",
+                "scope": "read:user,user:email",
+                "expires_in": 300,
+                "refresh_token": "refresh-token",
+            }
+        )
+
+        assert response.access_token == "access-token"
+        assert response.token_type == "bearer"
+        assert response.scope == "read:user,user:email"
+        assert response.expires_in == 300
+        assert response.refresh_token == "refresh-token"
+
+    def test_scope_matching_accepts_comma_or_space_separated_values(self) -> None:
+        response = github_token_response_from_payload(
+            {
+                "access_token": "access-token",
+                "token_type": "bearer",
+                "scope": "read:user, user:email repo",
+            }
+        )
+
+        assert github_granted_scopes(response.scope) == (
+            "read:user",
+            "user:email",
+            "repo",
+        )
+        assert github_token_response_has_required_scopes(
+            response,
+            ("read:user", "user:email"),
+        )
+        assert not github_token_response_has_required_scopes(response, ("gist",))
 
 
 class TestProviderSecretValidation:
