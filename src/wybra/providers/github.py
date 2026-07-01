@@ -340,7 +340,7 @@ def _github_oauth_state_from_payload(
         and isinstance(code_verifier, str)
         and isinstance(return_to, str)
         and isinstance(redirect_uri, str)
-        and isinstance(expires_at, int | float)
+        and isinstance(expires_at, (int, float))
         and (user_id is None or isinstance(user_id, str))
     ):
         return None
