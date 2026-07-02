@@ -37,7 +37,6 @@ from wybra.providers.apple import (
     AppleIDTokenValidationError,
     AppleIDTokenValidationRequest,
     AppleIDTokenValidator,
-    AppleOAuthPurpose,
     AppleOAuthSettings,
     AppleOAuthState,
     AppleOAuthTokenClient,
@@ -54,6 +53,11 @@ from wybra.providers.apple import (
 )
 from wybra.providers.capabilities import ProvidersCapability
 from wybra.providers.descriptors import provider_label
+from wybra.providers.flow import (
+    PROVIDER_OAUTH_LINK_PURPOSE,
+    PROVIDER_OAUTH_LOGIN_PURPOSE,
+    ProviderOAuthPurpose,
+)
 from wybra.providers.github import (
     GITHUB_API_CLIENT_STATE_ATTRIBUTE,
     GITHUB_OAUTH_STATE_COOKIE,
@@ -62,7 +66,6 @@ from wybra.providers.github import (
     GitHubAPIClient,
     GitHubAPIError,
     GitHubIdentityRequest,
-    GitHubOAuthPurpose,
     GitHubOAuthSettings,
     GitHubOAuthState,
     GitHubOAuthTokenClient,
@@ -87,7 +90,6 @@ from wybra.providers.google import (
     GoogleIDTokenValidationError,
     GoogleIDTokenValidationRequest,
     GoogleIDTokenValidator,
-    GoogleOAuthPurpose,
     GoogleOAuthSettings,
     GoogleOAuthState,
     GoogleOAuthTokenClient,
@@ -128,7 +130,7 @@ type ClearOAuthStateCookie = Callable[[Request, Response], None]
 async def google_login_start(request: Request) -> Response:
     return _google_authorisation_redirect(
         request,
-        purpose="login",
+        purpose=PROVIDER_OAUTH_LOGIN_PURPOSE,
         return_to_default=_route_path(request, "auth:account"),
     )
 
@@ -141,7 +143,7 @@ async def google_login_start(request: Request) -> Response:
 async def google_link_start(request: Request, user=LOGIN_REQUIRED) -> Response:
     return _google_authorisation_redirect(
         request,
-        purpose="link",
+        purpose=PROVIDER_OAUTH_LINK_PURPOSE,
         return_to_default=_route_path(request, "auth:security"),
         user_id=str(user.id),
     )
@@ -162,7 +164,7 @@ async def google_callback(request: Request) -> Response:
             detail="Google callback state is invalid.",
         )
     linking_user = await _google_linking_user(request, state)
-    if state.purpose == "link" and linking_user is None:
+    if state.purpose == PROVIDER_OAUTH_LINK_PURPOSE and linking_user is None:
         return _google_callback_response(
             request,
             status_code=401,
@@ -245,7 +247,7 @@ async def google_callback(request: Request) -> Response:
 async def github_login_start(request: Request) -> Response:
     return _github_authorisation_redirect(
         request,
-        purpose="login",
+        purpose=PROVIDER_OAUTH_LOGIN_PURPOSE,
         return_to_default=_route_path(request, "auth:account"),
     )
 
@@ -258,7 +260,7 @@ async def github_login_start(request: Request) -> Response:
 async def github_link_start(request: Request, user=LOGIN_REQUIRED) -> Response:
     return _github_authorisation_redirect(
         request,
-        purpose="link",
+        purpose=PROVIDER_OAUTH_LINK_PURPOSE,
         return_to_default=_route_path(request, "auth:security"),
         user_id=str(user.id),
     )
@@ -279,7 +281,7 @@ async def github_callback(request: Request) -> Response:
             detail="GitHub callback state is invalid.",
         )
     linking_user = await _github_linking_user(request, state)
-    if state.purpose == "link" and linking_user is None:
+    if state.purpose == PROVIDER_OAUTH_LINK_PURPOSE and linking_user is None:
         return _github_callback_response(
             request,
             status_code=401,
@@ -360,7 +362,7 @@ async def github_callback(request: Request) -> Response:
 async def apple_login_start(request: Request) -> Response:
     return _apple_authorisation_redirect(
         request,
-        purpose="login",
+        purpose=PROVIDER_OAUTH_LOGIN_PURPOSE,
         return_to_default=_route_path(request, "auth:account"),
     )
 
@@ -373,7 +375,7 @@ async def apple_login_start(request: Request) -> Response:
 async def apple_link_start(request: Request, user=LOGIN_REQUIRED) -> Response:
     return _apple_authorisation_redirect(
         request,
-        purpose="link",
+        purpose=PROVIDER_OAUTH_LINK_PURPOSE,
         return_to_default=_route_path(request, "auth:security"),
         user_id=str(user.id),
     )
@@ -396,7 +398,7 @@ async def apple_callback(request: Request) -> Response:
             detail="Apple callback state is invalid.",
         )
     linking_user = await _apple_linking_user(request, state)
-    if state.purpose == "link" and linking_user is None:
+    if state.purpose == PROVIDER_OAUTH_LINK_PURPOSE and linking_user is None:
         return _apple_callback_response(
             request,
             status_code=401,
@@ -486,7 +488,7 @@ async def _google_linking_user(
 def _google_authorisation_redirect(
     request: Request,
     *,
-    purpose: GoogleOAuthPurpose,
+    purpose: ProviderOAuthPurpose,
     return_to_default: str,
     user_id: str | None = None,
 ) -> Response:
@@ -628,7 +630,7 @@ async def _provider_resolution_response(
     request: Request,
     *,
     return_to: str,
-    purpose: str,
+    purpose: ProviderOAuthPurpose,
     decision: ProviderPolicyDecision,
     provider_label: str,
     clear_state_cookie: ClearOAuthStateCookie,
@@ -681,7 +683,7 @@ def _provider_rejection_status(decision: ProviderPolicyDecision) -> int:
 
 def _provider_rejection_detail(
     *,
-    purpose: str,
+    purpose: ProviderOAuthPurpose,
     decision: ProviderPolicyDecision,
     provider_label: str,
 ) -> str:
@@ -696,7 +698,7 @@ def _provider_rejection_detail(
     if decision.outcome is ProviderPolicyOutcome.CREATION_DENIED:
         return (
             f"{provider_label} account linking is not allowed."
-            if purpose == "link"
+            if purpose == PROVIDER_OAUTH_LINK_PURPOSE
             else f"{provider_label} account is not linked."
         )
     return f"{provider_label} login was rejected."
@@ -771,10 +773,10 @@ def _provider_callback_response(
 async def _provider_linking_user(
     request: Request,
     *,
-    purpose: str,
+    purpose: ProviderOAuthPurpose,
     user_id: str | None,
 ) -> User | None:
-    if purpose != "link":
+    if purpose != PROVIDER_OAUTH_LINK_PURPOSE:
         return None
     state_user_id = parse_uuid(user_id) if user_id is not None else None
     if state_user_id is None:
@@ -847,6 +849,7 @@ async def _resolve_google_account(
             assertion=assertion,
             purpose=state.purpose,
             state_user_id=state.user_id,
+            provider_label=provider_label(GOOGLE_PROVIDER_NAME),
             account_email=claims.email,
             email_verified=claims.email_verified,
             access_token=token_response.access_token,
@@ -856,13 +859,6 @@ async def _resolve_google_account(
                 "email": claims.email,
                 "email_verified": claims.email_verified,
             },
-            invalid_email_reason="Google account email is invalid.",
-            invalid_linking_state_reason=(
-                "Google linking state does not identify a local user."
-            ),
-            missing_access_token_reason=(
-                "Google token response is missing access token."
-            ),
         ),
         linking_user=linking_user,
     )
@@ -931,7 +927,7 @@ async def _github_linking_user(
 def _github_authorisation_redirect(
     request: Request,
     *,
-    purpose: GitHubOAuthPurpose,
+    purpose: ProviderOAuthPurpose,
     return_to_default: str,
     user_id: str | None = None,
 ) -> Response:
@@ -1102,19 +1098,13 @@ async def _resolve_github_account(
             assertion=assertion,
             purpose=state.purpose,
             state_user_id=state.user_id,
+            provider_label=provider_label(GITHUB_PROVIDER_NAME),
             account_email=claims.email,
             email_verified=claims.email_verified,
             access_token=token_response.access_token,
             refresh_token=token_response.refresh_token,
             expires_in=token_response.expires_in,
             provider_metadata=dict(claims.claims),
-            invalid_email_reason="GitHub account email is invalid.",
-            invalid_linking_state_reason=(
-                "GitHub linking state does not identify a local user."
-            ),
-            missing_access_token_reason=(
-                "GitHub token response is missing access token."
-            ),
         ),
         linking_user=linking_user,
     )
@@ -1199,7 +1189,7 @@ async def _apple_linking_user(
 def _apple_authorisation_redirect(
     request: Request,
     *,
-    purpose: AppleOAuthPurpose,
+    purpose: ProviderOAuthPurpose,
     return_to_default: str,
     user_id: str | None = None,
 ) -> Response:
@@ -1325,7 +1315,13 @@ def _apple_private_key(
     source, key = settings.private_key_reference
     try:
         return secrets.resolve(source, key).reveal()
-    except SecretsError:
+    except SecretsError as exc:
+        logger.warning(
+            "Apple private key resolution failed: source=%s key=%s",
+            source,
+            key,
+            exc_info=exc,
+        )
         return None
 
 
@@ -1383,19 +1379,13 @@ async def _resolve_apple_account(
             assertion=assertion,
             purpose=state.purpose,
             state_user_id=state.user_id,
+            provider_label=provider_label(APPLE_PROVIDER_NAME),
             account_email=claims.email,
             email_verified=claims.email_verified,
             access_token=token_response.access_token,
             refresh_token=token_response.refresh_token,
             expires_in=token_response.expires_in,
             provider_metadata=dict(claims.claims),
-            invalid_email_reason="Apple account email is invalid.",
-            invalid_linking_state_reason=(
-                "Apple linking state does not identify a local user."
-            ),
-            missing_access_token_reason=(
-                "Apple token response is missing access token."
-            ),
         ),
         linking_user=linking_user,
     )

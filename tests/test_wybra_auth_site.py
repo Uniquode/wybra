@@ -75,6 +75,7 @@ from wybra.providers.google import (
     encode_google_oauth_state_cookie,
 )
 from wybra.services.crypto import SecretEnvelopeService
+from wybra.services.secrets import MissingSecretError, SecretsCapability, SecretValue
 from wybra.site import Site, SiteCapabilityError, start
 
 PAGE_MODULES = (
@@ -85,6 +86,14 @@ PAGE_MODULES = (
     "wybra.auth",
 )
 STRONG_TEST_PASSWORD = "Correct horse 42!"
+
+
+class MissingSecretsCapability:
+    def resolve(self, source: str, key: str) -> SecretValue:
+        raise MissingSecretError(source=source, key=key)
+
+    def exists(self, source: str, key: str) -> bool:
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -2563,6 +2572,34 @@ async def test_apple_callback_rejects_invalid_token_response(
     assert len(token_client.requests) == 1
     assert id_token_validator.requests == []
     assert "Max-Age=0" in response.headers["set-cookie"]
+
+
+@pytest.mark.anyio
+async def test_apple_callback_logs_private_key_resolution_failure(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+    site = await _start_apple_provider_site(tmp_path)
+    client = TestClient(site.app)
+    start = client.get("/account/providers/apple/login", follow_redirects=False)
+    cookie_state = _apple_oauth_cookie_state(site, start)
+    site._capabilities[SecretsCapability] = MissingSecretsCapability()
+
+    with caplog.at_level("WARNING", logger="wybra.providers.routes"):
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Apple login is not available."
+    assert (
+        "Apple private key resolution failed: source=environment key=APPLE_PRIVATE_KEY"
+        in caplog.text
+    )
 
 
 @pytest.mark.anyio

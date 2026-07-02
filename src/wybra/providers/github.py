@@ -5,11 +5,12 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from secrets import token_urlsafe
-from typing import Final, Literal, Protocol, cast, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlencode
 
 from wybra.auth.timestamps import current_timestamp
 from wybra.core.exceptions import ConfigurationError
+from wybra.providers.flow import ProviderOAuthPurpose, is_provider_oauth_purpose
 from wybra.providers.http import (
     https_endpoint,
     https_request,
@@ -46,7 +47,7 @@ GITHUB_DEFAULT_USER_API_ENDPOINT: Final = "https://api.github.com/user"
 GITHUB_DEFAULT_EMAILS_API_ENDPOINT: Final = "https://api.github.com/user/emails"
 GITHUB_DEFAULT_API_VERSION: Final = "2022-11-28"
 GITHUB_DEFAULT_USER_AGENT: Final = "wybra"
-GitHubOAuthPurpose = Literal["login", "link"]
+GitHubOAuthPurpose = ProviderOAuthPurpose
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +169,7 @@ class GitHubOAuthState:
             raise ValueError(
                 f"GitHub OAuth state requires provider {GITHUB_PROVIDER_NAME!r}."
             )
-        if self.purpose not in ("login", "link"):
+        if not is_provider_oauth_purpose(self.purpose):
             raise ValueError("GitHub OAuth state purpose must be login or link.")
         for field_name in ("state", "code_verifier", "return_to", "redirect_uri"):
             value = getattr(self, field_name)
@@ -333,7 +334,7 @@ def _github_oauth_state_from_payload(
         return None
     if not (
         isinstance(provider_name, str)
-        and purpose in ("login", "link")
+        and is_provider_oauth_purpose(purpose)
         and isinstance(state, str)
         and isinstance(code_verifier, str)
         and isinstance(return_to, str)
@@ -345,7 +346,7 @@ def _github_oauth_state_from_payload(
     try:
         return GitHubOAuthState(
             provider_name=provider_name,
-            purpose=cast(GitHubOAuthPurpose, purpose),
+            purpose=purpose,
             state=state,
             code_verifier=code_verifier,
             return_to=return_to,

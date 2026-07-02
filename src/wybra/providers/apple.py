@@ -5,7 +5,7 @@ import hmac
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from secrets import token_urlsafe
-from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 from urllib.parse import urlencode
 
 import jwt
@@ -13,6 +13,7 @@ from jwt import PyJWKClient, PyJWTError
 
 from wybra.auth.timestamps import current_timestamp
 from wybra.core.exceptions import ConfigurationError
+from wybra.providers.flow import ProviderOAuthPurpose, is_provider_oauth_purpose
 from wybra.providers.http import https_endpoint, https_request, json_object_response
 from wybra.providers.oauth_state import (
     decode_signed_oauth_state,
@@ -43,7 +44,7 @@ APPLE_DEFAULT_TOKEN_ENDPOINT: Final = "https://appleid.apple.com/auth/token"
 APPLE_DEFAULT_JWKS_URI: Final = "https://appleid.apple.com/auth/keys"
 APPLE_CLIENT_SECRET_AUDIENCE: Final = "https://appleid.apple.com"
 APPLE_CLIENT_SECRET_LIFETIME_SECONDS: Final = 300
-AppleOAuthPurpose = Literal["login", "link"]
+AppleOAuthPurpose = ProviderOAuthPurpose
 AppleJwksClientFactory = Callable[[str], "AppleJwksClient"]
 
 
@@ -174,7 +175,7 @@ class AppleOAuthState:
             raise ValueError(
                 f"Apple OAuth state requires provider {APPLE_PROVIDER_NAME!r}."
             )
-        if self.purpose not in ("login", "link"):
+        if not is_provider_oauth_purpose(self.purpose):
             raise ValueError("Apple OAuth state purpose must be login or link.")
         for field_name in ("state", "nonce", "return_to", "redirect_uri"):
             value = getattr(self, field_name)
@@ -341,7 +342,7 @@ def _apple_oauth_state_from_payload(
         return None
     if not (
         isinstance(provider_name, str)
-        and purpose in ("login", "link")
+        and is_provider_oauth_purpose(purpose)
         and isinstance(state, str)
         and isinstance(nonce, str)
         and isinstance(return_to, str)
@@ -353,7 +354,7 @@ def _apple_oauth_state_from_payload(
     try:
         return AppleOAuthState(
             provider_name=provider_name,
-            purpose=cast(AppleOAuthPurpose, purpose),
+            purpose=purpose,
             state=state,
             nonce=nonce,
             return_to=return_to,

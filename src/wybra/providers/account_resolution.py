@@ -14,6 +14,15 @@ from wybra.auth.provider_credentials import (
 )
 from wybra.auth.timestamps import current_timestamp
 from wybra.db import DatabaseCapability
+from wybra.providers.flow import (
+    PROVIDER_EMAIL_MATCH_USER_UNRESOLVED_REASON,
+    PROVIDER_LINKING_USER_UNAVAILABLE_REASON,
+    PROVIDER_OAUTH_LINK_PURPOSE,
+    ProviderOAuthPurpose,
+    provider_invalid_email_reason,
+    provider_invalid_linking_state_reason,
+    provider_missing_access_token_reason,
+)
 from wybra.providers.policy import (
     ProviderAccountPolicy,
     ProviderAssertion,
@@ -28,17 +37,15 @@ from wybra.site import get_site
 class ProviderAccountResolution:
     provider: ProviderSettings
     assertion: ProviderAssertion
-    purpose: str
+    purpose: ProviderOAuthPurpose
     state_user_id: str | None
+    provider_label: str
     account_email: str
     email_verified: bool
     access_token: str | None
     refresh_token: str | None
     expires_in: int | None
     provider_metadata: dict[str, object]
-    invalid_email_reason: str
-    invalid_linking_state_reason: str
-    missing_access_token_reason: str
 
 
 async def resolve_provider_account(
@@ -62,7 +69,7 @@ async def resolve_provider_account(
             if provider_record is not None and provider_record.provider_enabled
             else None
         )
-        if resolution.purpose == "link":
+        if resolution.purpose == PROVIDER_OAUTH_LINK_PURPOSE:
             return await _resolve_provider_linking_account(
                 resolution=resolution,
                 store=store,
@@ -97,7 +104,7 @@ async def resolve_provider_account(
                 return _provider_policy_decision(
                     ProviderPolicyOutcome.INVALID_CLAIMS,
                     resolution.assertion,
-                    reason="Provider email-match user could not be resolved.",
+                    reason=PROVIDER_EMAIL_MATCH_USER_UNRESOLVED_REASON,
                 )
             persisted = await _persist_provider_link(
                 store=store,
@@ -108,7 +115,9 @@ async def resolve_provider_account(
                 return _provider_policy_decision(
                     ProviderPolicyOutcome.INVALID_CLAIMS,
                     resolution.assertion,
-                    reason=resolution.missing_access_token_reason,
+                    reason=provider_missing_access_token_reason(
+                        resolution.provider_label
+                    ),
                 )
         if (
             decision.outcome is ProviderPolicyOutcome.LINKED_USER
@@ -143,7 +152,7 @@ async def _resolve_provider_linking_account(
         return _provider_policy_decision(
             ProviderPolicyOutcome.INVALID_CLAIMS,
             resolution.assertion,
-            reason=resolution.invalid_linking_state_reason,
+            reason=provider_invalid_linking_state_reason(resolution.provider_label),
         )
     current_user = await store.get_user(user_id)
     if current_user is None or not is_user_effectively_active(current_user):
@@ -151,7 +160,7 @@ async def _resolve_provider_linking_account(
             ProviderPolicyOutcome.INACTIVE_USER,
             resolution.assertion,
             user_id=str(user_id),
-            reason="Linking user is inactive or unavailable.",
+            reason=PROVIDER_LINKING_USER_UNAVAILABLE_REASON,
         )
     decision = ProviderAccountPolicy().evaluate_linking(
         provider=resolution.provider,
@@ -169,7 +178,7 @@ async def _resolve_provider_linking_account(
             return _provider_policy_decision(
                 ProviderPolicyOutcome.INVALID_CLAIMS,
                 resolution.assertion,
-                reason=resolution.missing_access_token_reason,
+                reason=provider_missing_access_token_reason(resolution.provider_label),
             )
     return decision
 
@@ -194,7 +203,7 @@ async def _create_provider_user(
         return _provider_policy_decision(
             ProviderPolicyOutcome.INVALID_CLAIMS,
             resolution.assertion,
-            reason=resolution.invalid_email_reason,
+            reason=provider_invalid_email_reason(resolution.provider_label),
         )
     created_user = await store.create_provider_user(
         email=normalised_email,
@@ -209,7 +218,7 @@ async def _create_provider_user(
         return _provider_policy_decision(
             ProviderPolicyOutcome.INVALID_CLAIMS,
             resolution.assertion,
-            reason=resolution.missing_access_token_reason,
+            reason=provider_missing_access_token_reason(resolution.provider_label),
         )
     return _provider_policy_decision(
         ProviderPolicyOutcome.CREATION_ALLOWED,

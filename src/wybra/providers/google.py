@@ -5,13 +5,14 @@ import hmac
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from secrets import token_urlsafe
-from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 from urllib.parse import urlencode
 
 from jwt import PyJWKClient
 
 from wybra.auth.timestamps import current_timestamp
 from wybra.core.exceptions import ConfigurationError
+from wybra.providers.flow import ProviderOAuthPurpose, is_provider_oauth_purpose
 from wybra.providers.http import https_endpoint, https_request, json_object_response
 from wybra.providers.oauth_state import (
     decode_signed_oauth_state,
@@ -43,7 +44,7 @@ GOOGLE_DEFAULT_JWKS_URI: Final = "https://www.googleapis.com/oauth2/v3/certs"
 GOOGLE_DEFAULT_DISCOVERY_DOCUMENT_URL: Final = (
     "https://accounts.google.com/.well-known/openid-configuration"
 )
-GoogleOAuthPurpose = Literal["login", "link"]
+GoogleOAuthPurpose = ProviderOAuthPurpose
 GoogleJwksClientFactory = Callable[[str], "GoogleJwksClient"]
 
 
@@ -170,7 +171,7 @@ class GoogleOAuthState:
             raise ValueError(
                 f"Google OAuth state requires provider {GOOGLE_PROVIDER_NAME!r}."
             )
-        if self.purpose not in ("login", "link"):
+        if not is_provider_oauth_purpose(self.purpose):
             raise ValueError("Google OAuth state purpose must be login or link.")
         for field_name in ("state", "nonce", "return_to", "redirect_uri"):
             value = getattr(self, field_name)
@@ -300,7 +301,7 @@ def _google_oauth_state_from_payload(
         return None
     if not (
         isinstance(provider_name, str)
-        and purpose in ("login", "link")
+        and is_provider_oauth_purpose(purpose)
         and isinstance(state, str)
         and isinstance(nonce, str)
         and isinstance(return_to, str)
@@ -312,7 +313,7 @@ def _google_oauth_state_from_payload(
     try:
         return GoogleOAuthState(
             provider_name=provider_name,
-            purpose=cast(GoogleOAuthPurpose, purpose),
+            purpose=purpose,
             state=state,
             nonce=nonce,
             return_to=return_to,
