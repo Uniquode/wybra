@@ -32,6 +32,7 @@ CONTEXT_SETTINGS = {
     "allow_extra_args": True,
     "help_option_names": ["-h", "--help"],
     "ignore_unknown_options": True,
+    "max_content_width": 120,
 }
 
 

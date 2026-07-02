@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -27,8 +28,11 @@ from wybra.auth.emails import (
     normalise_email_target,
     resolve_user_by_normalised_email,
 )
+from wybra.auth.ids import parse_uuid
 from wybra.auth.mfa.recovery import generate_recovery_codes
 from wybra.auth.mfa.storage import (
+    WEBAUTHN_ACTIVE_STATUS,
+    WEBAUTHN_REVOKED_STATUS,
     SqlAlchemyRecoveryCodeStore,
     SqlAlchemyTOTPCredentialStore,
 )
@@ -39,6 +43,7 @@ from wybra.auth.models import (
     GroupGroup,
     GroupScope,
     GroupUser,
+    IdentityWebAuthnCredential,
     Scope,
     User,
 )
@@ -59,6 +64,7 @@ ERROR_SUPERUSER_PROTECTED = "superuser_protected"
 ERROR_FINAL_SUPERUSER = "final_superuser"
 ERROR_INVALID_USER_ID = "invalid_user_id"
 ERROR_NO_ACTIVE_TOTP = "no_active_totp"
+ERROR_NO_ACTIVE_PASSKEY = "no_active_passkey"
 ERROR_UNSUPPORTED_ORDER = "unsupported_order"
 ERROR_INVALID_GROUP_ID = "invalid_group_id"
 ERROR_GROUP_HAS_MEMBERSHIPS = "group_has_memberships"
@@ -93,6 +99,21 @@ GROUP_RECORD_FIELDS: tuple[str, ...] = (
     "child_groups",
     "parent_groups",
 )
+PASSKEY_RECORD_FIELDS: tuple[str, ...] = (
+    "id",
+    "credential_id",
+    "status",
+    "label",
+    "created_at",
+    "last_used_at",
+    "revoked_at",
+    "user_verified",
+    "credential_device_type",
+    "credential_backed_up",
+    "transports",
+    "aaguid",
+    "attestation_format",
+)
 DEFAULT_MANAGEMENT_TOTP_ISSUER = "Wybra"
 
 
@@ -119,6 +140,29 @@ def scope_record(scope: Scope) -> dict[str, Any]:
     return {
         "scope": scope.scope,
         "description": scope.description,
+    }
+
+
+def passkey_record(credential: IdentityWebAuthnCredential) -> dict[str, Any]:
+    record = {
+        "id": str(credential.id),
+        "credential_id": credential.credential_id,
+        "status": credential.status,
+        "label": credential.label,
+        "created_at": credential.created_at,
+        "last_used_at": credential.last_used_at,
+        "revoked_at": credential.revoked_at,
+        "user_verified": credential.user_verified,
+        "credential_device_type": credential.credential_device_type,
+        "credential_backed_up": credential.credential_backed_up,
+        "transports": credential.transports,
+        "aaguid": credential.aaguid,
+        "attestation_format": credential.attestation_format,
+    }
+    return {
+        field_name: record[field_name]
+        for field_name in PASSKEY_RECORD_FIELDS
+        if record.get(field_name) is not None
     }
 
 
@@ -407,6 +451,71 @@ async def rotate_totp_recovery_codes_for_management(
             },
         }
     )
+
+
+async def revoke_passkeys_for_management(
+    session: AsyncSession,
+    *,
+    user: User,
+    credential: str | None = None,
+) -> Result[dict[str, Any]]:
+    credentials = await _active_passkeys_for_revoke(
+        session,
+        user=user,
+        credential=credential,
+    )
+    if not credentials:
+        return Result.failure(
+            ERROR_NO_ACTIVE_PASSKEY,
+            _no_active_passkey_message(credential),
+        )
+
+    revoked_at = current_timestamp()
+    for webauthn_credential in credentials:
+        webauthn_credential.status = WEBAUTHN_REVOKED_STATUS
+        webauthn_credential.revoked_at = revoked_at
+
+    await session.commit()
+    return Result.ok(
+        {
+            "user": user_record(user),
+            "passkeys": [passkey_record(passkey) for passkey in credentials],
+        }
+    )
+
+
+async def _active_passkeys_for_revoke(
+    session: AsyncSession,
+    *,
+    user: User,
+    credential: str | None,
+) -> list[IdentityWebAuthnCredential]:
+    query = (
+        select(IdentityWebAuthnCredential)
+        .where(
+            IdentityWebAuthnCredential.user_id == user.id,
+            IdentityWebAuthnCredential.status == WEBAUTHN_ACTIVE_STATUS,
+        )
+        .order_by(IdentityWebAuthnCredential.created_at.desc())
+        .with_for_update()
+    )
+    if credential is not None:
+        credential_uuid = parse_uuid(credential)
+        credential_match = IdentityWebAuthnCredential.credential_id == credential
+        if credential_uuid is not None:
+            query = query.where(
+                or_(IdentityWebAuthnCredential.id == credential_uuid, credential_match)
+            )
+        else:
+            query = query.where(credential_match)
+
+    return list((await session.execute(query)).scalars().all())
+
+
+def _no_active_passkey_message(credential: str | None) -> str:
+    if credential is None:
+        return "User does not have active passkeys."
+    return "No matching active passkey was found for the user."
 
 
 async def create_group_for_management(
@@ -840,6 +949,7 @@ async def list_local_users_for_management(
     never_logged_in: bool | None = None,
     order: str = "email",
     direction: str | None = None,
+    include_passkeys: bool = False,
 ) -> Result[dict[str, Any]]:
     now = current_timestamp()
     if order == "email-domain":
@@ -872,7 +982,42 @@ async def list_local_users_for_management(
     )
     ordered_users = (await session.execute(query)).scalars().all()
     records = [user_record(user, now=now) for user in ordered_users]
+    if include_passkeys:
+        passkeys_by_user = await _active_passkeys_by_user(session, ordered_users)
+        for user, record in zip(ordered_users, records, strict=True):
+            record["passkeys"] = passkeys_by_user.get(user.id, [])
     return Result.ok({"users": records})
+
+
+async def _active_passkeys_by_user(
+    session: AsyncSession,
+    users: Sequence[User],
+) -> dict[UUID, list[dict[str, Any]]]:
+    user_ids = [user.id for user in users]
+    if not user_ids:
+        return {}
+
+    credentials = (
+        (
+            await session.execute(
+                select(IdentityWebAuthnCredential)
+                .where(
+                    IdentityWebAuthnCredential.user_id.in_(user_ids),
+                    IdentityWebAuthnCredential.status == WEBAUTHN_ACTIVE_STATUS,
+                )
+                .order_by(
+                    IdentityWebAuthnCredential.user_id,
+                    IdentityWebAuthnCredential.created_at.desc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    passkeys_by_user: dict[UUID, list[dict[str, Any]]] = defaultdict(list)
+    for credential in credentials:
+        passkeys_by_user[credential.user_id].append(passkey_record(credential))
+    return passkeys_by_user
 
 
 async def resolve_user_target(

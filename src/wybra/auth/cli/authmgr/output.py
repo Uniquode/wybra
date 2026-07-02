@@ -12,6 +12,7 @@ from wybra.auth.admin.management import (
     ERROR_GROUP_HAS_MEMBERSHIPS,
     ERROR_INVALID_TIMEZONE,
     ERROR_INVALID_USER_ID,
+    ERROR_NO_ACTIVE_PASSKEY,
     ERROR_NO_ACTIVE_TOTP,
     ERROR_NO_CHANGES,
     ERROR_NOT_FOUND,
@@ -28,6 +29,10 @@ from wybra.auth.result import (
 )
 
 TIMESTAMP_FIELDS: frozenset[str] = frozenset(USER_TIMESTAMP_FIELDS)
+PASSKEY_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
+    {"created_at", "last_used_at", "revoked_at"}
+)
+USER_NESTED_RECORD_FIELDS: tuple[str, ...] = ("passkeys",)
 
 
 def _print_failure(error_type: str | None, message: str | None) -> int:
@@ -40,6 +45,7 @@ def _print_failure(error_type: str | None, message: str | None) -> int:
         ERROR_INVALID_PASSWORD: "Password is invalid.",
         ERROR_INVALID_TIMEZONE: "Preferred timezone is invalid.",
         ERROR_INVALID_USER_ID: "User target must be an email address or valid user ID.",
+        ERROR_NO_ACTIVE_PASSKEY: "User does not have active passkeys.",
         ERROR_NO_CHANGES: "No user changes were requested.",
         ERROR_NO_ACTIVE_TOTP: "User does not have active TOTP.",
         ERROR_NOT_FOUND: "No matching user was found.",
@@ -75,19 +81,8 @@ def _print_user_records(
         writer.writerows(_records_for_human_output(cleaned_records))
         return
 
-    for record in _records_for_human_output(cleaned_records):
-        print(
-            " ".join(
-                [
-                    str(record.get("email", "<unknown>")),
-                    f"id={record.get('id', '<unknown>')}",
-                    f"admin={record.get('is_admin', False)}",
-                    f"superuser={record.get('is_superuser', False)}",
-                    f"active={record.get('effective_active', False)}",
-                    f"verified={record.get('is_verified', False)}",
-                ]
-            )
-        )
+    for record in cleaned_records:
+        _print_human_user_record(record)
 
 
 def _print_records(
@@ -162,7 +157,7 @@ def _format_record_value(value: Any) -> str:
 def _record_without_nulls(record: dict[str, Any]) -> dict[str, Any]:
     return {
         field_name: record[field_name]
-        for field_name in USER_RECORD_FIELDS
+        for field_name in (*USER_RECORD_FIELDS, *USER_NESTED_RECORD_FIELDS)
         if field_name in record and record[field_name] is not None
     }
 
@@ -181,7 +176,9 @@ def _records_for_human_output(
 
 
 def _format_human_value(field_name: str, value: Any) -> Any:
-    if field_name in TIMESTAMP_FIELDS and isinstance(value, (int, float)):
+    if (
+        field_name in TIMESTAMP_FIELDS or field_name in PASSKEY_TIMESTAMP_FIELDS
+    ) and isinstance(value, (int, float)):
         try:
             return datetime.fromtimestamp(float(value), UTC).isoformat()
         except OverflowError:
@@ -192,6 +189,45 @@ def _format_human_value(field_name: str, value: Any) -> Any:
             return value
 
     return value
+
+
+def _print_human_user_record(record: dict[str, Any]) -> None:
+    human_record = _records_for_human_output([record])[0]
+    print(
+        " ".join(
+            [
+                str(human_record.get("email", "<unknown>")),
+                f"id={human_record.get('id', '<unknown>')}",
+                f"admin={human_record.get('is_admin', False)}",
+                f"superuser={human_record.get('is_superuser', False)}",
+                f"active={human_record.get('effective_active', False)}",
+                f"verified={human_record.get('is_verified', False)}",
+            ]
+        )
+    )
+    passkeys = record.get("passkeys")
+    if not isinstance(passkeys, list):
+        return
+    for passkey in passkeys:
+        if isinstance(passkey, dict):
+            _print_human_passkey_record(passkey)
+
+
+def _print_human_passkey_record(record: dict[str, Any]) -> None:
+    fields = (
+        "id",
+        "credential_id",
+        "label",
+        "created_at",
+        "last_used_at",
+        "user_verified",
+    )
+    parts = [
+        f"{field_name}={_format_human_value(field_name, record[field_name])}"
+        for field_name in fields
+        if field_name in record and record[field_name] is not None
+    ]
+    print(f"  passkey {' '.join(parts)}")
 
 
 def _csv_fieldnames() -> list[str]:

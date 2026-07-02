@@ -26,6 +26,7 @@ class AuthenticationAssertion:
     method: AuthenticationMethod
     asserted_at: float
     ceremony_id: str
+    user_verified: bool = False
 
 
 def required_authentication_methods_for_totp_policy(
@@ -47,15 +48,25 @@ def assertions_satisfy_required_methods(
     assertions: tuple[AuthenticationAssertion, ...],
     now: float | None = None,
     max_age_seconds: float = AUTHENTICATION_ASSERTION_MAX_AGE_SECONDS,
+    webauthn_user_verification_satisfies_totp: bool = False,
 ) -> bool:
     comparison_time = current_timestamp() if now is None else now
-    asserted_methods = {
-        assertion.method
-        for assertion in assertions
-        if assertion.user_id == user_id
-        and assertion.ceremony_id == ceremony_id
-        and 0 <= comparison_time - assertion.asserted_at <= max_age_seconds
-    }
+    asserted_methods: set[AuthenticationMethod] = set()
+    for assertion in assertions:
+        if (
+            assertion.user_id != user_id
+            or assertion.ceremony_id != ceremony_id
+            or not 0 <= comparison_time - assertion.asserted_at <= max_age_seconds
+        ):
+            continue
+
+        asserted_methods.add(assertion.method)
+        if (
+            webauthn_user_verification_satisfies_totp
+            and assertion.method == WEBAUTHN_ASSERTION_METHOD
+            and assertion.user_verified
+        ):
+            asserted_methods.add(TOTP_ASSERTION_METHOD)
     return set(required_methods).issubset(asserted_methods)
 
 

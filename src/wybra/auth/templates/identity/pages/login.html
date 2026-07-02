@@ -5,6 +5,7 @@
 {% set challenge_step = challenge_step if challenge_step is defined else "" %}
 {% set is_setup_step = challenge_step == "setup" %}
 {% set is_totp_step = challenge_step == "totp" %}
+{% set passkey_login = passkey_login if passkey_login is defined else dict(available=false) %}
 
 {% set has_form_error = form_error is defined and form_error %}
 <section class="surface-panel">
@@ -97,6 +98,23 @@
     </a>
   </p>
   {% endfor %}
+  {% endif %}
+  {% if passkey_login.available and not is_totp_step and not is_setup_step %}
+  <p>
+    <button
+      data-passkey-login
+      data-complete-path="{{ passkey_login.complete_path }}"
+      data-csrf-header="{{ csrf_header_name }}"
+      data-csrf-token="{{ csrf_token }}"
+      data-options-path="{{ passkey_login.options_path }}"
+      data-return-to="{{ passkey_login.return_to }}"
+      type="button"
+    >
+      Sign in with passkey
+    </button>
+  </p>
+  <p class="muted-copy" data-passkey-message role="status"></p>
+  <script src="{{ asset_url('scripts/passkeys.js') }}" type="module"></script>
   {% endif %}
   {% endif %}
   <p class="muted-copy">

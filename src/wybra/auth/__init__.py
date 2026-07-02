@@ -57,6 +57,8 @@ _EXPORTS = {
     "UserRead": "wybra.auth.accounts.schemas",
     "UserUpdate": "wybra.auth.accounts.schemas",
     "WebAuthnCredentialStore": "wybra.auth.mfa.storage",
+    "WebAuthnCredentialRecord": "wybra.auth.mfa.storage",
+    "SqlAlchemyWebAuthnCredentialStore": "wybra.auth.mfa.storage",
     "complete_challenge": "wybra.auth.mfa.challenges",
     "is_generate_local_identity_secret": "wybra.auth.options",
     "auth_settings_from_state": "wybra.auth.settings",

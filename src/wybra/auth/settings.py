@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, cast
 
 from envex import Env
@@ -44,9 +44,11 @@ APP_CONFIG_SECTION: Final = "app"
 AUTH_CONFIG_SECTION: Final = "auth"
 PASSWORD_SECTION_FIELD = "password"
 PASSWORD_POLICY_SECTION_FIELD = "policy"
+PASSKEY_SECTION_FIELD = "passkeys"
 PASSWORD_POLICY_CONFIG_SECTION: Final = (
     f"{AUTH_CONFIG_SECTION}.{PASSWORD_SECTION_FIELD}.{PASSWORD_POLICY_SECTION_FIELD}"
 )
+PASSKEY_CONFIG_SECTION: Final = f"{AUTH_CONFIG_SECTION}.{PASSKEY_SECTION_FIELD}"
 IDENTITY_OPTION_FIELDS = frozenset(
     {
         "account_creation_policy",
@@ -70,8 +72,20 @@ PASSWORD_POLICY_OPTION_MAP = {
     "minimum_character_categories": "password_minimum_character_categories",
     "common_fragments": "password_common_fragments",
 }
+PASSKEY_OPTION_MAP = {
+    "rp_id": "passkey_rp_id",
+    "rp_name": "passkey_rp_name",
+    "allowed_origins": "passkey_allowed_origins",
+    "timeout_seconds": "passkey_timeout_seconds",
+    "user_verification": "passkey_user_verification",
+    "user_verification_satisfies_totp": "passkey_user_verification_satisfies_totp",
+    "attestation": "passkey_attestation",
+    "discoverable_credentials": "passkey_discoverable_credentials",
+    "counter_policy": "passkey_counter_policy",
+}
 PASSWORD_OPTION_FIELDS = frozenset({PASSWORD_POLICY_SECTION_FIELD})
 AUTH_OPTION_FIELDS = IDENTITY_OPTION_FIELDS | {
+    PASSKEY_SECTION_FIELD,
     PASSWORD_SECTION_FIELD,
 }
 ENV_ACCOUNT_CREATION_POLICY: Final = "ACCOUNT_CREATION_POLICY"
@@ -205,6 +219,11 @@ module_config: Final = ConfigDef(
                 for field_name in PASSWORD_POLICY_OPTION_MAP
             ),
         ),
+        PASSKEY_CONFIG_SECTION: ConfigGroup(
+            fields=tuple(
+                ConfigField(name=field_name) for field_name in PASSKEY_OPTION_MAP
+            ),
+        ),
     }
 )
 
@@ -250,11 +269,21 @@ class AuthSettings(BaseSettings):
         )
         _reject_unknown_auth_options(auth_config)
         database_url = _configured_database_url(config, app_config, env)
-        identity_options = merge_identity_options_with_environment(
-            _identity_options_from_config(config, auth_config),
-            auth_config,
-            env,
+        identity_values = _identity_values_from_environment(env)
+        identity_options = _identity_options_from_config(
+            config,
+            {**auth_config, **identity_values},
         )
+        if identity_values:
+            object.__setattr__(
+                identity_options,
+                "token_secrets_configured",
+                _identity_token_secrets_configured(
+                    identity_options,
+                    auth_config,
+                    identity_values,
+                ),
+            )
         return cls(
             database_url=resolve_database_url(
                 database_url,
@@ -384,27 +413,11 @@ def supported_auth_environment_names() -> tuple[str, ...]:
     return tuple(setting.name for setting in IDENTITY_ENV_SETTINGS)
 
 
-def merge_identity_options_with_environment(
-    identity_options: IdentityOptions,
-    auth_config: Mapping[str, Any],
-    env: Env,
-) -> IdentityOptions:
-    """Apply identity-related environment overrides to a base identity options model."""
+def _identity_values_from_environment(env: Env) -> dict[str, Any]:
     if not env_setting_is_set(env, IDENTITY_ENV_SETTINGS):
-        return identity_options
+        return {}
 
-    identity_values = values_from_env_settings(env, IDENTITY_ENV_SETTINGS)
-    merged_options = replace(identity_options, **cast(Any, identity_values))
-    object.__setattr__(
-        merged_options,
-        "token_secrets_configured",
-        _identity_token_secrets_configured(
-            identity_options,
-            auth_config,
-            identity_values,
-        ),
-    )
-    return merged_options
+    return values_from_env_settings(env, IDENTITY_ENV_SETTINGS)
 
 
 def _merge_auth_with_loaded_precedence(
@@ -420,19 +433,19 @@ def _merge_auth_with_loaded_precedence(
     """
     merged = dict(app_config_auth)
     for key, value in loaded_auth_config.items():
-        if key == PASSWORD_SECTION_FIELD:
+        if key in {PASSWORD_SECTION_FIELD, PASSKEY_SECTION_FIELD}:
             current_value = merged.get(key)
             loaded_is_mapping = isinstance(value, Mapping)
             current_is_mapping = isinstance(current_value, Mapping)
             if loaded_is_mapping and current_is_mapping:
-                merged[key] = _merge_password_with_loaded_precedence(
+                merged[key] = _merge_nested_auth_table_with_loaded_precedence(
                     cast(Mapping[str, Any], current_value),
                     value,
                 )
                 continue
             if current_value is not None and loaded_is_mapping != current_is_mapping:
                 raise ConfigurationError(
-                    "Conflicting auth.password configuration: app config and "
+                    f"Conflicting auth.{key} configuration: app config and "
                     "loaded config must both be tables when both are defined."
                 )
             merged[key] = value
@@ -441,11 +454,11 @@ def _merge_auth_with_loaded_precedence(
     return merged
 
 
-def _merge_password_with_loaded_precedence(
+def _merge_nested_auth_table_with_loaded_precedence(
     base: Mapping[str, Any],
     override: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Merge nested auth password config; loaded values win."""
+    """Merge nested auth config; loaded values win."""
     merged = dict(base)
     for key, value in override.items():
         if (
@@ -503,6 +516,7 @@ def _reject_unknown_auth_options(auth_config: Mapping[str, Any]) -> None:
     unknown_fields = sorted(set(auth_config) - AUTH_OPTION_FIELDS)
     if not unknown_fields:
         _reject_unknown_password_options(auth_config)
+        _reject_unknown_passkey_options(auth_config)
         return
 
     allowed_fields = ", ".join(sorted(AUTH_OPTION_FIELDS))
@@ -548,6 +562,26 @@ def _reject_unknown_password_options(auth_config: Mapping[str, Any]) -> None:
         )
 
 
+def _reject_unknown_passkey_options(auth_config: Mapping[str, Any]) -> None:
+    passkey_config = auth_config.get(PASSKEY_SECTION_FIELD)
+    if passkey_config is None:
+        return
+
+    if not isinstance(passkey_config, dict):
+        raise ConfigurationError(
+            f"Auth passkey config must be an [auth.{PASSKEY_SECTION_FIELD}] table."
+        )
+
+    unknown_fields = sorted(set(passkey_config) - set(PASSKEY_OPTION_MAP))
+    if unknown_fields:
+        unknown_list = ", ".join(unknown_fields)
+        allowed_fields = ", ".join(sorted(PASSKEY_OPTION_MAP))
+        raise ConfigurationError(
+            f"Unknown option(s) in [auth.{PASSKEY_SECTION_FIELD}] configuration: "
+            f"{unknown_list}. Allowed options are: {allowed_fields}."
+        )
+
+
 def _configured_database_url(
     config: ConfigService | Mapping[str, Mapping[str, Any]],
     app_config: AppConfig,
@@ -585,8 +619,30 @@ def _identity_options_from_config(
         for key, value in auth_config.items()
         if key in IDENTITY_OPTION_FIELDS
     }
+    identity_kwargs.update(_passkey_options_from_config(config, auth_config))
     identity_kwargs.update(_password_policy_options_from_config(config, auth_config))
     return IdentityOptions(**identity_kwargs)
+
+
+def _passkey_options_from_config(
+    config: ConfigService | Mapping[str, Mapping[str, Any]],
+    auth_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    passkey_config = auth_config.get(PASSKEY_SECTION_FIELD, {})
+    if PASSKEY_SECTION_FIELD in auth_config and not isinstance(passkey_config, dict):
+        raise ConfigurationError(
+            f"Auth passkey config must be an [auth.{PASSKEY_SECTION_FIELD}] table."
+        )
+    if not isinstance(passkey_config, dict):
+        passkey_config = {}
+    if not passkey_config:
+        passkey_config = AuthSettings.section_values(config, PASSKEY_CONFIG_SECTION)
+
+    return {
+        identity_option: passkey_config[config_key]
+        for config_key, identity_option in PASSKEY_OPTION_MAP.items()
+        if config_key in passkey_config
+    }
 
 
 def _password_policy_options_from_config(

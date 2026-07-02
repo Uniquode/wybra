@@ -4,6 +4,10 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
 from wybra.auth.capabilities import login_required
+from wybra.auth.mfa.storage import SqlAlchemyWebAuthnCredentialStore
+from wybra.auth.mfa.webauthn import (
+    passkeys_effectively_enabled as _passkeys_effectively_enabled,
+)
 from wybra.auth.models import User
 from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
 from wybra.auth.provider_support import (
@@ -17,9 +21,6 @@ from wybra.auth.provider_support import (
 )
 from wybra.auth.provider_support import (
     provider_security_options as _provider_security_options,
-)
-from wybra.auth.provider_support import (
-    usable_provider_names as _usable_provider_names,
 )
 from wybra.auth.provider_support import (
     user_has_usable_account_sign_in as _user_has_usable_account_sign_in,
@@ -302,6 +303,7 @@ async def _security_page_response(
         form_error=form_error,
         form_message=form_message,
         password_login=await _security_password_section(request, user),
+        passkeys=await _security_passkey_section(request, user),
         providers=await _security_provider_section(request, user),
         totp=await _security_totp_section(request, user),
     )
@@ -335,6 +337,61 @@ def _totp_setup_path(request: Request) -> str:
     return f"{_route_path(request, 'auth:totp-setup')}?{setup_query}"
 
 
+async def _security_passkey_section(
+    request: Request,
+    user: User,
+) -> dict[str, object]:
+    options = _identity_options(request)
+    if not _passkeys_effectively_enabled(options):
+        return {"available": False}
+
+    register_options_path = _optional_route_path(
+        request,
+        "auth:passkey-register-options",
+    )
+    register_complete_path = _optional_route_path(
+        request,
+        "auth:passkey-register-complete",
+    )
+    revoke_path = _optional_route_path(request, "auth:security-passkey-revoke")
+    if (
+        register_options_path is None
+        or register_complete_path is None
+        or revoke_path is None
+    ):
+        return {"available": False}
+
+    credentials: list[dict[str, object]] = []
+    session_factory = _session_factory_from_request(request)
+    async with session_factory() as session:
+        db_user = await _load_user_by_id(session, user.id)
+        if db_user is None:
+            return {"available": False}
+
+        store = SqlAlchemyWebAuthnCredentialStore(session)
+        for credential in await store.list_active_webauthn_credentials(str(db_user.id)):
+            credentials.append(
+                {
+                    "id": credential.id,
+                    "label": credential.label or "Passkey",
+                    "created_at": credential.created_at,
+                    "last_used_at": credential.last_used_at,
+                    "backed_up": credential.credential_backed_up,
+                }
+            )
+        email_verified = db_user.is_verified
+
+    return {
+        "available": True,
+        "add_available": email_verified,
+        "verification_required": not email_verified,
+        "credentials": tuple(credentials),
+        "register_options_path": register_options_path,
+        "register_complete_path": register_complete_path,
+        "revoke_path": revoke_path,
+    }
+
+
 async def _security_password_section(
     request: Request,
     user: User,
@@ -342,19 +399,8 @@ async def _security_password_section(
     enabled = _local_password_login_usable(user)
     disable_path = _optional_route_path(request, "auth:security-password-disable")
     disable_available = False
-    if enabled and disable_path is not None and _usable_provider_names(request):
-        session_factory = _session_factory_from_request(request)
-        async with session_factory() as session:
-            db_user = await _load_user_by_id(session, user.id)
-            disable_available = (
-                db_user is not None
-                and await _user_has_usable_account_sign_in(
-                    request,
-                    session,
-                    db_user,
-                    exclude_password=True,
-                )
-            )
+    if enabled and disable_path is not None:
+        disable_available = await _security_password_disable_available(request, user)
 
     return {
         "available": True,
@@ -362,6 +408,24 @@ async def _security_password_section(
         "disable_available": disable_available,
         "disable_path": disable_path,
     }
+
+
+async def _security_password_disable_available(
+    request: Request,
+    user: User,
+) -> bool:
+    session_factory = _session_factory_from_request(request)
+    async with session_factory() as session:
+        db_user = await _load_user_by_id(session, user.id)
+        return bool(
+            db_user is not None
+            and await _user_has_usable_account_sign_in(
+                request,
+                session,
+                db_user,
+                exclude_password=True,
+            )
+        )
 
 
 async def _security_provider_section(

@@ -121,7 +121,10 @@ def create_migrate_command(
 ) -> click.Group:
     @click.group(
         name="wybra-migrate",
-        context_settings={"help_option_names": ["-h", "--help"]},
+        context_settings={
+            "help_option_names": ["-h", "--help"],
+            "max_content_width": 120,
+        },
         help="Run application schema migrations through Alembic.",
     )
     @_database_url_option

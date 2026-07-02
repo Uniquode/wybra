@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 from uuid import UUID
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wybra.auth.ids import parse_uuid
@@ -18,6 +18,7 @@ from wybra.auth.models import (
     IdentityAuthenticationChallenge,
     IdentityTotpCredential,
     IdentityTotpRecoveryCode,
+    IdentityWebAuthnCredential,
 )
 from wybra.auth.timestamps import current_timestamp
 from wybra.services.crypto import SecretEnvelopeService
@@ -26,6 +27,8 @@ ChallengeKind = Literal["totp", "webauthn", "recovery-code"]
 TOTP_ACTIVE_STATUS: Literal["active"] = "active"
 TOTP_DISABLED_STATUS: Literal["disabled"] = "disabled"
 TOTP_PENDING_STATUS: Literal["pending"] = "pending"
+WEBAUTHN_ACTIVE_STATUS: Literal["active"] = "active"
+WEBAUTHN_REVOKED_STATUS: Literal["revoked"] = "revoked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,26 @@ class ChallengeRecord:
     @property
     def metadata_payload(self) -> dict[str, Any]:
         return self.metadata
+
+
+@dataclass(frozen=True, slots=True)
+class WebAuthnCredentialRecord:
+    id: str
+    user_id: str
+    credential_id: str
+    public_key: bytes
+    sign_count: int
+    status: str
+    label: str | None
+    created_at: float
+    last_used_at: float | None
+    revoked_at: float | None
+    user_verified: bool
+    credential_device_type: str | None
+    credential_backed_up: bool
+    transports: tuple[str, ...]
+    aaguid: str | None
+    attestation_format: str | None
 
 
 @runtime_checkable
@@ -83,13 +106,60 @@ class WebAuthnCredentialStore(Protocol):
         credential_id: str,
         public_key: bytes,
         sign_count: int,
-    ) -> None: ...
+        *,
+        label: str | None = None,
+        user_verified: bool = False,
+        credential_device_type: str | None = None,
+        credential_backed_up: bool = False,
+        transports: tuple[str, ...] = (),
+        aaguid: str | None = None,
+        attestation_format: str | None = None,
+    ) -> str: ...
+
+    async def get_webauthn_credential(
+        self,
+        credential_id: str,
+    ) -> WebAuthnCredentialRecord | None: ...
+
+    async def get_user_webauthn_credential(
+        self,
+        user_id: str,
+        row_id: str,
+    ) -> WebAuthnCredentialRecord | None: ...
+
+    async def list_active_webauthn_credentials(
+        self,
+        user_id: str,
+    ) -> tuple[WebAuthnCredentialRecord, ...]: ...
+
+    async def count_active_webauthn_credentials(
+        self,
+        user_id: str,
+        *,
+        exclude_row_id: str | UUID | None = None,
+    ) -> int: ...
 
     async def update_webauthn_sign_count(
         self,
         credential_id: str,
         sign_count: int,
     ) -> None: ...
+
+    async def update_webauthn_authentication(
+        self,
+        credential_id: str,
+        *,
+        sign_count: int,
+        user_verified: bool,
+        credential_device_type: str | None,
+        credential_backed_up: bool,
+    ) -> None: ...
+
+    async def revoke_webauthn_credential(
+        self,
+        user_id: str,
+        row_id: str,
+    ) -> bool: ...
 
 
 @runtime_checkable
@@ -442,3 +512,240 @@ class SqlAlchemyRecoveryCodeStore:
             return True
 
         return False
+
+
+class SqlAlchemyWebAuthnCredentialStore:
+    """Store WebAuthn credentials and authentication metadata."""
+
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    async def store_webauthn_credential(
+        self,
+        user_id: str,
+        credential_id: str,
+        public_key: bytes,
+        sign_count: int,
+        *,
+        label: str | None = None,
+        user_verified: bool = False,
+        credential_device_type: str | None = None,
+        credential_backed_up: bool = False,
+        transports: tuple[str, ...] = (),
+        aaguid: str | None = None,
+        attestation_format: str | None = None,
+    ) -> str:
+        user_uuid = parse_uuid(user_id)
+        if user_uuid is None:
+            raise ValueError("User id must be a UUID string.")
+
+        now = current_timestamp()
+        credential = IdentityWebAuthnCredential(
+            user_id=user_uuid,
+            credential_id=credential_id,
+            public_key=public_key,
+            sign_count=sign_count,
+            status=WEBAUTHN_ACTIVE_STATUS,
+            label=_normalise_webauthn_label(label),
+            created_at=now,
+            user_verified=user_verified,
+            credential_device_type=credential_device_type,
+            credential_backed_up=credential_backed_up,
+            transports=list(transports) if transports else None,
+            aaguid=aaguid,
+            attestation_format=attestation_format,
+        )
+        self._session.add(credential)
+        await self._session.flush()
+        return str(credential.id)
+
+    async def get_webauthn_credential(
+        self,
+        credential_id: str,
+    ) -> WebAuthnCredentialRecord | None:
+        credential = (
+            await self._session.execute(
+                select(IdentityWebAuthnCredential).where(
+                    IdentityWebAuthnCredential.credential_id == credential_id,
+                )
+            )
+        ).scalar_one_or_none()
+        return _webauthn_record(credential)
+
+    async def get_user_webauthn_credential(
+        self,
+        user_id: str,
+        row_id: str,
+    ) -> WebAuthnCredentialRecord | None:
+        user_uuid = parse_uuid(user_id)
+        row_uuid = parse_uuid(row_id)
+        if user_uuid is None or row_uuid is None:
+            return None
+
+        credential = (
+            await self._session.execute(
+                select(IdentityWebAuthnCredential).where(
+                    IdentityWebAuthnCredential.id == row_uuid,
+                    IdentityWebAuthnCredential.user_id == user_uuid,
+                )
+            )
+        ).scalar_one_or_none()
+        return _webauthn_record(credential)
+
+    async def list_active_webauthn_credentials(
+        self,
+        user_id: str,
+    ) -> tuple[WebAuthnCredentialRecord, ...]:
+        user_uuid = parse_uuid(user_id)
+        if user_uuid is None:
+            return ()
+
+        credentials = (
+            (
+                await self._session.execute(
+                    select(IdentityWebAuthnCredential)
+                    .where(
+                        IdentityWebAuthnCredential.user_id == user_uuid,
+                        IdentityWebAuthnCredential.status == WEBAUTHN_ACTIVE_STATUS,
+                    )
+                    .order_by(desc(IdentityWebAuthnCredential.created_at))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return tuple(
+            record
+            for credential in credentials
+            if (record := _webauthn_record(credential)) is not None
+        )
+
+    async def count_active_webauthn_credentials(
+        self,
+        user_id: str,
+        *,
+        exclude_row_id: str | UUID | None = None,
+    ) -> int:
+        user_uuid = parse_uuid(user_id)
+        if user_uuid is None:
+            return 0
+
+        query = (
+            select(func.count())
+            .select_from(IdentityWebAuthnCredential)
+            .where(
+                IdentityWebAuthnCredential.user_id == user_uuid,
+                IdentityWebAuthnCredential.status == WEBAUTHN_ACTIVE_STATUS,
+            )
+        )
+        excluded_uuid = (
+            parse_uuid(exclude_row_id) if exclude_row_id is not None else None
+        )
+        if excluded_uuid is not None:
+            query = query.where(IdentityWebAuthnCredential.id != excluded_uuid)
+
+        count = await self._session.scalar(query)
+        return int(count or 0)
+
+    async def update_webauthn_sign_count(
+        self,
+        credential_id: str,
+        sign_count: int,
+    ) -> None:
+        credential = await self._credential_for_update(credential_id)
+        if credential is None:
+            return
+
+        credential.sign_count = sign_count
+
+    async def update_webauthn_authentication(
+        self,
+        credential_id: str,
+        *,
+        sign_count: int,
+        user_verified: bool,
+        credential_device_type: str | None,
+        credential_backed_up: bool,
+    ) -> None:
+        credential = await self._credential_for_update(credential_id)
+        if credential is None:
+            return
+
+        credential.sign_count = sign_count
+        credential.last_used_at = current_timestamp()
+        credential.user_verified = user_verified
+        credential.credential_device_type = credential_device_type
+        credential.credential_backed_up = credential_backed_up
+
+    async def revoke_webauthn_credential(
+        self,
+        user_id: str,
+        row_id: str,
+    ) -> bool:
+        user_uuid = parse_uuid(user_id)
+        row_uuid = parse_uuid(row_id)
+        if user_uuid is None or row_uuid is None:
+            return False
+
+        credential = (
+            await self._session.execute(
+                select(IdentityWebAuthnCredential)
+                .where(
+                    IdentityWebAuthnCredential.id == row_uuid,
+                    IdentityWebAuthnCredential.user_id == user_uuid,
+                    IdentityWebAuthnCredential.status == WEBAUTHN_ACTIVE_STATUS,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if credential is None:
+            return False
+
+        credential.status = WEBAUTHN_REVOKED_STATUS
+        credential.revoked_at = current_timestamp()
+        return True
+
+    async def _credential_for_update(
+        self,
+        credential_id: str,
+    ) -> IdentityWebAuthnCredential | None:
+        return (
+            await self._session.execute(
+                select(IdentityWebAuthnCredential)
+                .where(IdentityWebAuthnCredential.credential_id == credential_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+
+
+def _normalise_webauthn_label(label: str | None) -> str | None:
+    if label is None:
+        return None
+    normalised = " ".join(label.split())
+    return normalised[:120] if normalised else None
+
+
+def _webauthn_record(
+    credential: IdentityWebAuthnCredential | None,
+) -> WebAuthnCredentialRecord | None:
+    if credential is None:
+        return None
+
+    return WebAuthnCredentialRecord(
+        id=str(credential.id),
+        user_id=str(credential.user_id),
+        credential_id=credential.credential_id,
+        public_key=bytes(credential.public_key),
+        sign_count=credential.sign_count,
+        status=credential.status,
+        label=credential.label,
+        created_at=credential.created_at,
+        last_used_at=credential.last_used_at,
+        revoked_at=credential.revoked_at,
+        user_verified=credential.user_verified,
+        credential_device_type=credential.credential_device_type,
+        credential_backed_up=credential.credential_backed_up,
+        transports=tuple(credential.transports or ()),
+        aaguid=credential.aaguid,
+        attestation_format=credential.attestation_format,
+    )

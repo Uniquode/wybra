@@ -38,6 +38,7 @@ from wybra.auth.admin.management import (
     remove_scope_from_group_for_management,
     remove_user_from_group_for_management,
     resolve_user_target,
+    revoke_passkeys_for_management,
     rotate_totp_recovery_codes_for_management,
     target_error_message,
     update_group_for_management,
@@ -56,7 +57,7 @@ from wybra.tools.app_startup import (
 )
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 
-from .args import AuthmgrArgs
+from .args import REVOKE_ALL_PASSKEYS, AuthmgrArgs
 from .output import (
     _print_failure,
     _print_records,
@@ -205,6 +206,7 @@ async def _handle_user_update(
             or args.remove_groups
             or args.set_groups
             or _user_totp_operation_requested(args)
+            or _user_passkey_operation_requested(args)
         ):
             return _print_failure(ERROR_NO_CHANGES, "No user changes were requested.")
         result = await _resolve_target_record(session, args.target)
@@ -225,9 +227,13 @@ async def _handle_user_update(
     totp_value = await _update_user_totp_from_args(session, settings, args)
     if totp_value.is_failure():
         return _print_failure(totp_value.error_type, totp_value.message)
+    passkey_value = await _update_user_passkeys_from_args(session, args)
+    if passkey_value.is_failure():
+        return _print_failure(passkey_value.error_type, passkey_value.message)
     payload = _user_operation_payload(
         value,
         totp_value=totp_value.value if totp_value.value else None,
+        passkey_value=passkey_value.value if passkey_value.value else None,
     )
 
     if args.json_output:
@@ -239,6 +245,7 @@ async def _handle_user_update(
 
     print(f"updated user: {payload['user'].get('email', args.target)}")
     _print_totp_material(payload)
+    _print_passkey_revocation(payload)
     return 0
 
 
@@ -308,6 +315,7 @@ async def _handle_user_list(
         never_logged_in=args.never_logged_in,
         order=args.order,
         direction=args.direction,
+        include_passkeys=args.include_passkeys,
     )
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
@@ -733,6 +741,10 @@ def _user_totp_operation_requested(args: AuthmgrArgs) -> bool:
     return args.totp or args.no_totp or args.rcodes
 
 
+def _user_passkey_operation_requested(args: AuthmgrArgs) -> bool:
+    return args.revoke_passkey is not None
+
+
 async def _update_user_totp_from_args(
     session: AsyncSession,
     settings: AuthSettings,
@@ -759,26 +771,66 @@ async def _update_user_totp_from_args(
     return await rotate_totp_recovery_codes_for_management(session, user=user)
 
 
+async def _update_user_passkeys_from_args(
+    session: AsyncSession,
+    args: AuthmgrArgs,
+) -> Result[dict[str, Any]]:
+    if not _user_passkey_operation_requested(args):
+        return Result.ok({})
+
+    user, target_error = await resolve_user_target(session, args.target)
+    if target_error is not None:
+        return Result.failure(target_error, target_error_message(target_error))
+    if user is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+
+    return await revoke_passkeys_for_management(
+        session,
+        user=user,
+        credential=_passkey_credential_from_args(args),
+    )
+
+
+def _passkey_credential_from_args(args: AuthmgrArgs) -> str | None:
+    if args.revoke_passkey == REVOKE_ALL_PASSKEYS:
+        return None
+    return args.revoke_passkey
+
+
 def _user_operation_payload(
     user_record_value: dict[str, Any],
     *,
     totp_value: dict[str, Any] | None,
+    passkey_value: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    payload = {"user": _operation_user_record(user_record_value, totp_value)}
+    payload = {
+        "user": _operation_user_record(
+            user_record_value,
+            totp_value,
+            passkey_value,
+        )
+    }
     totp_material = _operation_totp_material(totp_value)
     if totp_material is not None:
         payload["totp"] = totp_material
+    passkeys = _operation_passkeys(passkey_value)
+    if passkeys is not None:
+        payload["passkeys"] = {"revoked": passkeys}
     return payload
 
 
 def _operation_user_record(
     user_record_value: dict[str, Any],
     totp_value: dict[str, Any] | None,
+    passkey_value: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if totp_value is None:
-        return user_record_value
-    candidate = totp_value.get("user")
-    return candidate if isinstance(candidate, dict) else user_record_value
+    for operation_value in (passkey_value, totp_value):
+        if operation_value is None:
+            continue
+        candidate = operation_value.get("user")
+        if isinstance(candidate, dict):
+            return candidate
+    return user_record_value
 
 
 def _operation_totp_material(
@@ -788,6 +840,15 @@ def _operation_totp_material(
         return None
     candidate = totp_value.get("totp")
     return candidate if isinstance(candidate, dict) else None
+
+
+def _operation_passkeys(
+    passkey_value: dict[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    if passkey_value is None:
+        return None
+    candidate = passkey_value.get("passkeys")
+    return candidate if isinstance(candidate, list) else None
 
 
 def _print_user_operation_json(
@@ -802,6 +863,9 @@ def _print_user_operation_json(
             totp_material,
             include_secrets=include_secrets,
         )
+    passkey_material = payload.get("passkeys")
+    if passkey_material is not None:
+        json_payload["passkeys"] = passkey_material
     print(json.dumps(json_payload))
 
 
@@ -844,6 +908,26 @@ def _print_totp_material(
         print("Recovery codes:", file=output)
         for recovery_code in recovery_codes:
             _write_credential_material(output, f"- {recovery_code}")
+
+
+def _print_passkey_revocation(
+    payload: dict[str, dict[str, Any]],
+    *,
+    stream: TextIO | None = None,
+) -> None:
+    passkey_value = payload.get("passkeys")
+    if passkey_value is None:
+        return
+    revoked = passkey_value.get("revoked")
+    if not isinstance(revoked, list):
+        return
+
+    output = sys.stdout if stream is None else stream
+    print(f"revoked passkeys: {len(revoked)}", file=output)
+    for passkey in revoked:
+        if not isinstance(passkey, dict):
+            continue
+        print(f"- {passkey.get('id', '<unknown>')}", file=output)
 
 
 def _write_credential_material(output: TextIO, line: str) -> None:

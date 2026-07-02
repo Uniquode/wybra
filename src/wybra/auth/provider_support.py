@@ -4,6 +4,8 @@ from uuid import UUID
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from wybra.auth.mfa.storage import SqlAlchemyWebAuthnCredentialStore
+from wybra.auth.mfa.webauthn import passkeys_effectively_enabled
 from wybra.auth.models import User
 from wybra.auth.provider_credentials import (
     ProviderCredentialStore,
@@ -136,8 +138,16 @@ async def user_has_usable_account_sign_in(
     *,
     exclude_password: bool = False,
     exclude_provider_id: str | UUID | None = None,
+    exclude_passkey_id: str | UUID | None = None,
 ) -> bool:
     if not exclude_password and local_password_login_usable(user):
+        return True
+    if await user_has_usable_passkey(
+        request,
+        session,
+        user,
+        exclude_passkey_id=exclude_passkey_id,
+    ):
         return True
     store = provider_credential_store_from_request(request, session)
     return await store.user_has_enabled_provider_link(
@@ -153,6 +163,27 @@ def usable_provider_names(request: Request) -> tuple[str, ...]:
         if enabled_provider(request, descriptor) is not None:
             names.append(descriptor.name)
     return tuple(names)
+
+
+async def user_has_usable_passkey(
+    request: Request,
+    session: AsyncSession,
+    user: User,
+    *,
+    exclude_passkey_id: str | UUID | None = None,
+) -> bool:
+    options = getattr(request.app.state.auth_settings, "identity_options", None)
+    if options is None or not passkeys_effectively_enabled(options):
+        return False
+
+    store = SqlAlchemyWebAuthnCredentialStore(session)
+    return (
+        await store.count_active_webauthn_credentials(
+            str(user.id),
+            exclude_row_id=exclude_passkey_id,
+        )
+        > 0
+    )
 
 
 def local_password_login_usable(user: object) -> bool:

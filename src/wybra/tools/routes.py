@@ -43,7 +43,7 @@ def load_configured_asgi_app(config_source: str | None = None) -> Any:
 
 @click.command(
     name="wybra-routes",
-    context_settings={"help_option_names": ["-h", "--help"]},
+    context_settings={"help_option_names": ["-h", "--help"], "max_content_width": 120},
     help="Inspect the configured application's installed route tree.",
 )
 @click.option(

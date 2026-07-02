@@ -470,6 +470,9 @@ async def complete_authentication_ceremony(
             required_methods=required_methods,
             assertions=assertions,
             now=now,
+            webauthn_user_verification_satisfies_totp=(
+                options.passkey_user_verification_satisfies_totp
+            ),
         ):
             return Result.failure(ERROR_AUTHENTICATION_METHOD_REQUIRED)
 

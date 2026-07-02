@@ -14,7 +14,7 @@ from .passwords import (
 )
 from .timestamps import parse_timestamp_filter
 
-CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 120}
 
 
 class HelpSuffixGroup(click.Group):
