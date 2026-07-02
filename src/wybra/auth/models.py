@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -220,6 +221,13 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
         lazy="selectin",
     )
 
+    webauthn_credentials: Mapped[list[IdentityWebAuthnCredential]] = relationship(
+        "IdentityWebAuthnCredential",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
     external_identity_links: Mapped[list[ExternalIdentityLink]] = relationship(
         "ExternalIdentityLink",
         back_populates="user",
@@ -295,6 +303,63 @@ class IdentityAuthenticationChallenge(Base):
     )
 
     user: Mapped[User] = relationship("User")
+
+
+class IdentityWebAuthnCredential(Base):
+    """A WebAuthn public-key credential linked to a local account."""
+
+    __tablename__ = "identity_webauthn_credential"
+    __table_args__ = (
+        UniqueConstraint(
+            "credential_id",
+            name="uq_identity_webauthn_credential_credential_id",
+        ),
+        Index("ix_identity_webauthn_credential_user_id", "user_id"),
+        Index("ix_identity_webauthn_credential_status", "status"),
+        Index(
+            "ix_identity_webauthn_credential_user_status",
+            "user_id",
+            "status",
+        ),
+        Index("ix_identity_webauthn_credential_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("identity_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    credential_id: Mapped[str] = mapped_column(String(length=1024), nullable=False)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(length=16), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(length=120), nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    last_used_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revoked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    user_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    credential_device_type: Mapped[str | None] = mapped_column(
+        String(length=32),
+        nullable=True,
+    )
+    credential_backed_up: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    transports: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    aaguid: Mapped[str | None] = mapped_column(String(length=64), nullable=True)
+    attestation_format: Mapped[str | None] = mapped_column(
+        String(length=64),
+        nullable=True,
+    )
+
+    user: Mapped[User] = relationship("User", back_populates="webauthn_credentials")
 
 
 class IdentityTotpRecoveryCode(Base):

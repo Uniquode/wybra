@@ -144,7 +144,7 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
 
 @click.command(
     name="wybra-validate",
-    context_settings={"help_option_names": ["-h", "--help"]},
+    context_settings={"help_option_names": ["-h", "--help"], "max_content_width": 120},
     help=(
         "Run project validation checks. Examples: wybra-validate, "
         "wybra-validate --verbose routes persistence."

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .passwords import PasswordSource
 
 PROGRAM_NAME = "wybra-authmgr"
+REVOKE_ALL_PASSKEYS = "__all_passkeys__"
 
 
 @dataclass(slots=True)
@@ -38,7 +39,9 @@ class AuthmgrArgs:
     totp: bool = False
     no_totp: bool = False
     rcodes: bool = False
+    revoke_passkey: str | None = None
     include_secrets: bool = False
+    include_passkeys: bool = False
     json_output: bool = False
     csv_output: bool = False
     email_pattern: str | None = None

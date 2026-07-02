@@ -15,6 +15,7 @@ from wybra.auth.mfa.storage import (
     SqlAlchemyChallengeStore,
     SqlAlchemyTOTPCredentialStore,
 )
+from wybra.auth.mfa.webauthn import passkeys_effectively_enabled
 from wybra.auth.models import User
 from wybra.auth.options import IdentityOptions
 from wybra.auth.provider_support import provider_login_options
@@ -81,7 +82,34 @@ def _login_page_context(request: Request, **extra: Any) -> dict[str, Any]:
         request,
         return_to=cast(str | None, context.get("return_to")),
     )
+    context["passkey_login"] = _passkey_login_context(
+        request,
+        return_to=cast(str | None, context.get("return_to")),
+    )
     return context
+
+
+def _passkey_login_context(
+    request: Request,
+    *,
+    return_to: str | None,
+) -> dict[str, object]:
+    if not passkeys_effectively_enabled(_identity_options(request)):
+        return {"available": False}
+
+    from wybra.auth.routes.paths import optional_route_path
+
+    options_path = optional_route_path(request, "auth:passkey-login-options")
+    complete_path = optional_route_path(request, "auth:passkey-login-complete")
+    if options_path is None or complete_path is None:
+        return {"available": False}
+
+    return {
+        "available": True,
+        "options_path": options_path,
+        "complete_path": complete_path,
+        "return_to": normalise_return_to(return_to),
+    }
 
 
 def _session_factory_from_request(

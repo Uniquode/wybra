@@ -54,6 +54,7 @@ from wybra.auth.models import (
     IdentityTotpCredential,
     IdentityTotpRecoveryCode,
     IdentityUserEmail,
+    IdentityWebAuthnCredential,
     Scope,
     User,
 )
@@ -73,6 +74,8 @@ from wybra.auth.settings import (
     ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
     ENV_TOTP_PERIOD_SECONDS,
     ENV_TOTP_RECOVERY_WINDOW_SECONDS,
+    PASSKEY_CONFIG_SECTION,
+    PASSKEY_SECTION_FIELD,
     PASSWORD_POLICY_CONFIG_SECTION,
     PASSWORD_POLICY_SECTION_FIELD,
     PASSWORD_SECTION_FIELD,
@@ -444,6 +447,81 @@ def totp_recovery_codes_from_database(
 
     try:
         return asyncio.run(load_recovery_codes())
+    finally:
+        asyncio.run(close_database(engine))
+
+
+def add_webauthn_credential_to_database(
+    database_url: str,
+    email: str,
+    *,
+    credential_id: str,
+    label: str | None = None,
+    status: str = "active",
+) -> str:
+    settings = AuthTestSettings(database_url=database_url)
+    engine = create_database_engine(settings)
+    session_factory = create_session_factory(engine)
+
+    async def add_credential() -> str:
+        async with session_scope(session_factory) as session:
+            user = (
+                await session.execute(select(User).where(User.email == email))
+            ).scalar_one()
+            now = time()
+            credential = IdentityWebAuthnCredential(
+                user_id=user.id,
+                credential_id=credential_id,
+                public_key=b"public-key",
+                sign_count=1,
+                status=status,
+                label=label,
+                created_at=now,
+                revoked_at=now if status == "revoked" else None,
+                user_verified=True,
+                credential_device_type="multi_device",
+                credential_backed_up=True,
+                transports=["internal"],
+            )
+            session.add(credential)
+            await session.flush()
+            row_id = str(credential.id)
+            await session.commit()
+            return row_id
+
+    try:
+        return asyncio.run(add_credential())
+    finally:
+        asyncio.run(close_database(engine))
+
+
+def webauthn_credentials_from_database(
+    database_url: str,
+    email: str,
+) -> list[IdentityWebAuthnCredential]:
+    settings = AuthTestSettings(database_url=database_url)
+    engine = create_database_engine(settings)
+    session_factory = create_session_factory(engine)
+
+    async def load_credentials() -> list[IdentityWebAuthnCredential]:
+        async with session_scope(session_factory) as session:
+            user = (
+                await session.execute(select(User).where(User.email == email))
+            ).scalar_one()
+            return list(
+                (
+                    await session.execute(
+                        select(IdentityWebAuthnCredential)
+                        .where(IdentityWebAuthnCredential.user_id == user.id)
+                        .order_by(IdentityWebAuthnCredential.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+    try:
+        return asyncio.run(load_credentials())
     finally:
         asyncio.run(close_database(engine))
 
@@ -880,6 +958,140 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
     assert settings.identity_options.totp_period_seconds == 60
     assert settings.identity_options.totp_challenge_expiry_seconds == 450
     assert settings.identity_options.totp_recovery_window_seconds == 900
+
+
+def test_app_auth_configures_passkey_options(tmp_path: Path) -> None:
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        "passkey_enabled = true",
+        "",
+        "[auth.passkeys]",
+        'rp_id = "app.example.com"',
+        'rp_name = "Example App"',
+        'allowed_origins = ["https://app.example.com/"]',
+        "timeout_seconds = 180",
+        'user_verification = "required"',
+        "user_verification_satisfies_totp = false",
+        'attestation = "none"',
+        'discoverable_credentials = "required"',
+        'counter_policy = "reject-regression"',
+    )
+
+    settings = load_auth_settings(app_config=app_config, environ={})
+
+    assert settings.identity_options.passkey_enabled is True
+    assert settings.identity_options.passkey_rp_id == "app.example.com"
+    assert settings.identity_options.passkey_rp_name == "Example App"
+    assert settings.identity_options.passkey_allowed_origins == (
+        "https://app.example.com",
+    )
+    assert settings.identity_options.passkey_timeout_seconds == 180
+    assert settings.identity_options.passkey_user_verification == "required"
+    assert settings.identity_options.passkey_user_verification_satisfies_totp is False
+    assert settings.identity_options.passkey_discoverable_credentials == "required"
+    assert settings.identity_options.passkey_counter_policy == "reject-regression"
+
+
+def test_auth_settings_merges_nested_passkey_config(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(
+        config_path,
+        "passkey_enabled = true",
+        "",
+        "[auth.passkeys]",
+        'rp_id = "app.example.com"',
+        'rp_name = "Example App"',
+    )
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    AUTH_CONFIG_SECTION: {
+                        PASSKEY_SECTION_FIELD: {
+                            "allowed_origins": ["https://login.example.com"],
+                            "user_verification": "required",
+                            "user_verification_satisfies_totp": False,
+                        }
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    settings = AuthSettings.load_settings(
+        config,
+        app_config=app_config,
+        environ={},
+    )
+
+    assert settings.identity_options.passkey_rp_id == "app.example.com"
+    assert settings.identity_options.passkey_rp_name == "Example App"
+    assert settings.identity_options.passkey_allowed_origins == (
+        "https://login.example.com",
+    )
+    assert settings.identity_options.passkey_user_verification == "required"
+    assert settings.identity_options.passkey_user_verification_satisfies_totp is False
+
+
+def test_auth_settings_uses_section_passkey_config_when_inline_config_missing(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    app_config = load_auth_test_app_config(
+        config_path,
+        "passkey_enabled = true",
+    )
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    APP_CONFIG_SECTION: {
+                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                    },
+                    PASSKEY_CONFIG_SECTION: {
+                        "rp_id": "app.example.com",
+                        "rp_name": "Example App",
+                        "allowed_origins": ["https://app.example.com"],
+                    },
+                }
+            )
+        ],
+        discover_module_config=False,
+    )
+
+    settings = AuthSettings.load_settings(
+        config,
+        app_config=app_config,
+        environ={},
+    )
+
+    assert settings.identity_options.passkey_rp_id == "app.example.com"
+    assert settings.identity_options.passkey_rp_name == "Example App"
+    assert settings.identity_options.passkey_allowed_origins == (
+        "https://app.example.com",
+    )
+
+
+def test_app_auth_rejects_unknown_passkey_options(tmp_path: Path) -> None:
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        "passkey_enabled = true",
+        "",
+        "[auth.passkeys]",
+        'rp_id = "app.example.com"',
+        'rp_name = "Example App"',
+        'allowed_origins = ["https://app.example.com"]',
+        'credential_policy = "strict"',
+    )
+
+    with pytest.raises(ConfigurationError, match="credential_policy"):
+        load_auth_settings(app_config=app_config, environ={})
 
 
 @pytest.mark.parametrize(
@@ -1339,6 +1551,37 @@ def test_authmgr_user_help_exposes_user_commands(command: str) -> None:
 
     assert result.exit_code == 0
     assert command in result.output
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (
+            ["user", "update", "--help"],
+            "--revoke-passkey [CREDENTIAL]",
+        ),
+        (
+            ["user", "update", "--help"],
+            "Omit CREDENTIAL to revoke all active",
+        ),
+        (
+            ["user", "list", "--help"],
+            "--passkeys",
+        ),
+        (
+            ["user", "list", "--help"],
+            "Include active passkey records for each",
+        ),
+    ],
+)
+def test_authmgr_user_help_exposes_passkey_management_options(
+    argv: list[str],
+    expected: str,
+) -> None:
+    result = CliRunner().invoke(authmgr.authmgr_command, argv)
+
+    assert result.exit_code == 0
+    assert expected in result.output
 
 
 @pytest.mark.parametrize(
@@ -2392,6 +2635,82 @@ def test_migrate_upgrade_creates_identity_user_email_table(
         engine.dispose()
 
 
+def test_migrate_upgrade_creates_webauthn_credential_table(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{(tmp_path / 'webauthn.sqlite3').as_posix()}"
+
+    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
+    exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
+
+    assert exit_code == 0
+
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'webauthn.sqlite3'}")
+    try:
+        inspector = sqlalchemy_inspect(engine)
+        assert "identity_webauthn_credential" in set(inspector.get_table_names())
+
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("identity_webauthn_credential")
+        }
+        assert {
+            "id",
+            "user_id",
+            "credential_id",
+            "public_key",
+            "sign_count",
+            "status",
+            "label",
+            "created_at",
+            "last_used_at",
+            "revoked_at",
+            "user_verified",
+            "credential_device_type",
+            "credential_backed_up",
+            "transports",
+            "aaguid",
+            "attestation_format",
+        }.issubset(columns)
+
+        indexes = {
+            index["name"]
+            for index in inspector.get_indexes("identity_webauthn_credential")
+        }
+        assert {
+            "ix_identity_webauthn_credential_user_id",
+            "ix_identity_webauthn_credential_status",
+            "ix_identity_webauthn_credential_user_status",
+            "ix_identity_webauthn_credential_created_at",
+        }.issubset(indexes)
+
+        uniques = {
+            unique["name"]: set(unique["column_names"])
+            for unique in inspector.get_unique_constraints(
+                "identity_webauthn_credential"
+            )
+        }
+        assert uniques["uq_identity_webauthn_credential_credential_id"] == {
+            "credential_id"
+        }
+
+        foreign_keys = {
+            tuple(foreign_key["constrained_columns"]): foreign_key["options"].get(
+                "ondelete"
+            )
+            for foreign_key in inspector.get_foreign_keys(
+                "identity_webauthn_credential"
+            )
+        }
+        assert foreign_keys == {
+            ("user_id",): "CASCADE",
+        }
+    finally:
+        engine.dispose()
+
+
 def test_authmgr_reports_outdated_identity_schema_before_reading_password(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3303,6 +3622,21 @@ def test_authmgr_update_no_totp_disables_active_totp_without_secret_output(
             "not allowed with option '--no-totp'",
             id="no-totp-rcodes",
         ),
+        pytest.param(
+            ["user", "update", "person@example.com", "--totp", "--revoke-passkey"],
+            "not allowed with option '--totp'",
+            id="totp-revoke-passkey",
+        ),
+        pytest.param(
+            ["user", "update", "person@example.com", "--no-totp", "--revoke-passkey"],
+            "not allowed with option '--no-totp'",
+            id="no-totp-revoke-passkey",
+        ),
+        pytest.param(
+            ["user", "update", "person@example.com", "--rcodes", "--revoke-passkey"],
+            "not allowed with option '--rcodes'",
+            id="rcodes-revoke-passkey",
+        ),
     ],
 )
 def test_authmgr_rejects_invalid_totp_option_combinations(
@@ -3313,6 +3647,15 @@ def test_authmgr_rejects_invalid_totp_option_combinations(
 
     assert result.exit_code == 2
     assert expected_message in result.output
+
+
+def test_authmgr_rejects_passkey_csv_output_combination() -> None:
+    result = CliRunner().invoke(
+        authmgr.authmgr_command, ["user", "list", "--csv", "--passkeys"]
+    )
+
+    assert result.exit_code == 2
+    assert "not allowed with option '--passkeys'" in result.output
 
 
 def test_authmgr_update_rcodes_requires_active_totp(
@@ -3333,6 +3676,199 @@ def test_authmgr_update_rcodes_requires_active_totp(
 
     assert exit_code == 1
     assert "User does not have active TOTP." in capsys.readouterr().err
+
+
+def test_authmgr_list_with_passkeys_reports_active_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "list-passkeys.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(["user", "create", "passkeys@example.com", "--password", "-"]) == 0
+    )
+    row_id = add_webauthn_credential_to_database(
+        database_url,
+        "passkeys@example.com",
+        credential_id="active-credential",
+        label="Work laptop",
+    )
+    add_webauthn_credential_to_database(
+        database_url,
+        "passkeys@example.com",
+        credential_id="revoked-credential",
+        status="revoked",
+    )
+    capsys.readouterr()
+
+    exit_code = authmgr.main(
+        ["user", "list", "--json", "--passkeys", "--email", "passkeys@example.com"]
+    )
+
+    assert exit_code == 0
+    [record] = json.loads(capsys.readouterr().out)
+    assert record["email"] == "passkeys@example.com"
+    assert record["passkeys"] == [
+        {
+            "id": row_id,
+            "credential_id": "active-credential",
+            "status": "active",
+            "label": "Work laptop",
+            "created_at": record["passkeys"][0]["created_at"],
+            "user_verified": True,
+            "credential_device_type": "multi_device",
+            "credential_backed_up": True,
+            "transports": ["internal"],
+        }
+    ]
+
+
+def test_authmgr_update_revoke_passkey_revokes_all_active_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "revoke-all-passkeys.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(["user", "create", "revoke-all@example.com", "--password", "-"])
+        == 0
+    )
+    add_webauthn_credential_to_database(
+        database_url,
+        "revoke-all@example.com",
+        credential_id="first-credential",
+    )
+    add_webauthn_credential_to_database(
+        database_url,
+        "revoke-all@example.com",
+        credential_id="second-credential",
+    )
+    capsys.readouterr()
+
+    exit_code = authmgr.main(
+        ["user", "update", "revoke-all@example.com", "--revoke-passkey", "--json"]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["user"]["email"] == "revoke-all@example.com"
+    assert {passkey["credential_id"] for passkey in payload["passkeys"]["revoked"]} == {
+        "first-credential",
+        "second-credential",
+    }
+    credentials = webauthn_credentials_from_database(
+        database_url,
+        "revoke-all@example.com",
+    )
+    assert [credential.status for credential in credentials] == ["revoked", "revoked"]
+    assert all(credential.revoked_at is not None for credential in credentials)
+
+
+def test_authmgr_update_revoke_passkey_can_revoke_single_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "revoke-one-passkey.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(["user", "create", "revoke-one@example.com", "--password", "-"])
+        == 0
+    )
+    row_id = add_webauthn_credential_to_database(
+        database_url,
+        "revoke-one@example.com",
+        credential_id="row-target",
+    )
+    add_webauthn_credential_to_database(
+        database_url,
+        "revoke-one@example.com",
+        credential_id="active-survivor",
+    )
+    capsys.readouterr()
+
+    exit_code = authmgr.main(
+        ["user", "update", "revoke-one@example.com", "--revoke-passkey", row_id]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "updated user: revoke-one@example.com" in captured.out
+    assert "revoked passkeys: 1" in captured.out
+    credentials = webauthn_credentials_from_database(
+        database_url,
+        "revoke-one@example.com",
+    )
+    assert [credential.status for credential in credentials] == ["revoked", "active"]
+
+
+def test_authmgr_update_revoke_passkey_accepts_public_credential_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "revoke-public-passkey.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(["user", "create", "revoke-public@example.com", "--password", "-"])
+        == 0
+    )
+    add_webauthn_credential_to_database(
+        database_url,
+        "revoke-public@example.com",
+        credential_id="public-target",
+    )
+    capsys.readouterr()
+
+    exit_code = authmgr.main(
+        [
+            "user",
+            "update",
+            "revoke-public@example.com",
+            "--revoke-passkey",
+            "public-target",
+        ]
+    )
+
+    assert exit_code == 0
+    [credential] = webauthn_credentials_from_database(
+        database_url,
+        "revoke-public@example.com",
+    )
+    assert credential.status == "revoked"
+
+
+def test_authmgr_update_revoke_passkey_requires_active_passkey(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "revoke-no-passkeys.sqlite3")
+    initialise_identity_database(database_url)
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    assert (
+        authmgr.main(["user", "create", "no-passkeys@example.com", "--password", "-"])
+        == 0
+    )
+    capsys.readouterr()
+
+    exit_code = authmgr.main(
+        ["user", "update", "no-passkeys@example.com", "--revoke-passkey"]
+    )
+
+    assert exit_code == 1
+    assert "User does not have active passkeys." in capsys.readouterr().err
 
 
 def test_authmgr_scope_commands_manage_scope_records(

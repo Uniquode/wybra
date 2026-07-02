@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import click
 
-from .args import AuthmgrArgs
+from .args import REVOKE_ALL_PASSKEYS, AuthmgrArgs
 from .clicking import (
     HelpSuffixGroup,
     _ensure_mutually_exclusive,
@@ -81,22 +81,80 @@ def register_user_commands(root_command: click.Group) -> None:
 
     @user_group.command("update", help="Update a local user.")
     @click.argument("target")
-    @click.option("--admin", "admin", is_flag=True)
-    @click.option("--no-admin", "no_admin", is_flag=True)
-    @click.option("--superuser", "superuser", is_flag=True)
-    @click.option("--no-superuser", "no_superuser", is_flag=True)
-    @click.option("--verify", "verify", is_flag=True)
-    @click.option("--no-verify", "no_verify", is_flag=True)
+    @click.option("--admin", "admin", is_flag=True, help="Grant admin privileges.")
+    @click.option(
+        "--no-admin",
+        "no_admin",
+        is_flag=True,
+        help="Remove admin privileges.",
+    )
+    @click.option(
+        "--superuser",
+        "superuser",
+        is_flag=True,
+        help="Grant superuser privileges.",
+    )
+    @click.option(
+        "--no-superuser",
+        "no_superuser",
+        is_flag=True,
+        help="Remove superuser privileges when this is not the final superuser.",
+    )
+    @click.option("--verify", "verify", is_flag=True, help="Mark the user as verified.")
+    @click.option(
+        "--no-verify",
+        "no_verify",
+        is_flag=True,
+        help="Mark the user as unverified.",
+    )
     @_password_source_option(default=None)
-    @click.option("--no-revoke", is_flag=True)
-    @click.option("--timezone", "preferred_timezone")
-    @click.option("--no-timezone", "clear_preferred_timezone", is_flag=True)
-    @click.option("--expires-at", callback=_timestamp_callback)
-    @click.option("--no-expires-at", is_flag=True)
-    @click.option("--add-group", "add_groups", multiple=True)
-    @click.option("--rm-group", "remove_groups", multiple=True)
-    @click.option("--set-group", "set_groups", multiple=True)
-    @click.option("--group", "invalid_groups", multiple=True)
+    @click.option(
+        "--no-revoke",
+        is_flag=True,
+        help="Keep existing sessions when changing the user's password.",
+    )
+    @click.option(
+        "--timezone",
+        "preferred_timezone",
+        help="Set the user's preferred IANA timezone.",
+    )
+    @click.option(
+        "--no-timezone",
+        "clear_preferred_timezone",
+        is_flag=True,
+        help="Clear the user's preferred timezone.",
+    )
+    @click.option(
+        "--expires-at",
+        callback=_timestamp_callback,
+        help="Set the account expiry timestamp.",
+    )
+    @click.option(
+        "--no-expires-at",
+        is_flag=True,
+        help="Clear the account expiry timestamp.",
+    )
+    @click.option(
+        "--add-group", "add_groups", multiple=True, help="Add group membership."
+    )
+    @click.option(
+        "--rm-group",
+        "remove_groups",
+        multiple=True,
+        help="Remove group membership.",
+    )
+    @click.option(
+        "--set-group",
+        "set_groups",
+        multiple=True,
+        help="Replace all group memberships; may be provided more than once.",
+    )
+    @click.option(
+        "--group",
+        "invalid_groups",
+        multiple=True,
+        help="Removed update shortcut. Use --set-group, --add-group, or --rm-group.",
+    )
     @click.option(
         "--totp",
         is_flag=True,
@@ -116,7 +174,19 @@ def register_user_commands(root_command: click.Group) -> None:
             "them."
         ),
     )
-    @click.option("--json", "json_output", is_flag=True)
+    @click.option(
+        "--revoke-passkey",
+        is_flag=False,
+        flag_value=REVOKE_ALL_PASSKEYS,
+        default=None,
+        metavar="[CREDENTIAL]",
+        help=(
+            "Revoke active passkeys for the target user. Omit CREDENTIAL to "
+            "revoke all active passkeys, or provide a passkey id or credential "
+            "id to revoke one passkey."
+        ),
+    )
+    @click.option("--json", "json_output", is_flag=True, help="Print JSON output.")
     @click.option(
         "--include-secrets",
         is_flag=True,
@@ -148,6 +218,7 @@ def register_user_commands(root_command: click.Group) -> None:
         totp: bool,
         no_totp: bool,
         rcodes: bool,
+        revoke_passkey: str | None,
         json_output: bool,
         include_secrets: bool,
     ) -> None:
@@ -170,6 +241,18 @@ def register_user_commands(root_command: click.Group) -> None:
         _ensure_mutually_exclusive((totp, "--totp"), (no_totp, "--no-totp"))
         _ensure_mutually_exclusive((totp, "--totp"), (rcodes, "--rcodes"))
         _ensure_mutually_exclusive((no_totp, "--no-totp"), (rcodes, "--rcodes"))
+        _ensure_mutually_exclusive(
+            (totp, "--totp"),
+            (revoke_passkey, "--revoke-passkey"),
+        )
+        _ensure_mutually_exclusive(
+            (no_totp, "--no-totp"),
+            (revoke_passkey, "--revoke-passkey"),
+        )
+        _ensure_mutually_exclusive(
+            (rcodes, "--rcodes"),
+            (revoke_passkey, "--revoke-passkey"),
+        )
         _run_authmgr(
             ctx,
             AuthmgrArgs(
@@ -205,6 +288,7 @@ def register_user_commands(root_command: click.Group) -> None:
                 totp=totp,
                 no_totp=no_totp,
                 rcodes=rcodes,
+                revoke_passkey=revoke_passkey,
                 json_output=json_output,
                 include_secrets=include_secrets,
             ),
@@ -241,6 +325,12 @@ def register_user_commands(root_command: click.Group) -> None:
     @user_group.command("list", help="List local users.")
     @click.option("--json", "json_output", is_flag=True)
     @click.option("--csv", "csv_output", is_flag=True)
+    @click.option(
+        "--passkeys",
+        "include_passkeys",
+        is_flag=True,
+        help="Include active passkey records for each listed user.",
+    )
     @click.option("--email", "-e", "email_pattern")
     @click.option("--domain", "-d", "domain_pattern")
     @click.option("--admin", "admin", is_flag=True)
@@ -284,6 +374,7 @@ def register_user_commands(root_command: click.Group) -> None:
         ctx: click.Context,
         json_output: bool,
         csv_output: bool,
+        include_passkeys: bool,
         email_pattern: str | None,
         domain_pattern: str | None,
         admin: bool,
@@ -306,12 +397,17 @@ def register_user_commands(root_command: click.Group) -> None:
         direction: str | None,
     ) -> None:
         _ensure_mutually_exclusive((json_output, "--json"), (csv_output, "--csv"))
+        _ensure_mutually_exclusive(
+            (include_passkeys, "--passkeys"),
+            (csv_output, "--csv"),
+        )
         _run_authmgr(
             ctx,
             AuthmgrArgs(
                 command="list",
                 json_output=json_output,
                 csv_output=csv_output,
+                include_passkeys=include_passkeys,
                 email_pattern=email_pattern,
                 domain_pattern=domain_pattern,
                 is_admin=_optional_boolean(

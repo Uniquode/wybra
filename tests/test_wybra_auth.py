@@ -10,13 +10,17 @@ from typing import cast
 import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 
 import wybra.auth.context as auth_context
+import wybra.auth.mfa.webauthn as webauthn_mfa
 from wybra.auth import (
     ERROR_ALREADY_EXISTS,
     ERROR_INVALID_PASSWORD,
     ERROR_PASSWORD_TOO_SHORT,
     ERROR_PASSWORD_TOO_WEAK,
+    TOTP_ASSERTION_METHOD,
+    AuthenticationAssertion,
     ChallengeDecision,
     ChallengeKind,
     ChallengeRecord,
@@ -59,9 +63,12 @@ from wybra.auth.admin.management import (
     update_group_for_management,
     update_scope_for_management,
 )
+from wybra.auth.mfa.challenges import assertions_satisfy_required_methods
 from wybra.auth.mfa.storage import (
     SqlAlchemyRecoveryCodeStore,
     SqlAlchemyTOTPCredentialStore,
+    SqlAlchemyWebAuthnCredentialStore,
+    WebAuthnCredentialRecord,
 )
 from wybra.auth.mfa.totp import (
     MAX_TOTP_ALLOWED_DRIFT,
@@ -82,6 +89,7 @@ from wybra.auth.models import (
     IdentityTotpCredential,
     IdentityTotpRecoveryCode,
     IdentityUserEmail,
+    IdentityWebAuthnCredential,
     User,
 )
 from wybra.auth.models import metadata as wybra_auth_metadata
@@ -213,6 +221,7 @@ def test_wybra_auth_metadata_exposes_authorisation_group_tables() -> None:
         "identity_authentication_challenge",
         "identity_totp_credential",
         "identity_totp_recovery_code",
+        "identity_webauthn_credential",
     }.issubset(wybra_auth_metadata.tables)
     assert any(
         constraint.name == "ck_identity_group_group_no_self_membership"
@@ -246,6 +255,17 @@ def test_wybra_auth_metadata_exposes_authorisation_group_tables() -> None:
 
 def test_wybra_auth_totp_seed_model_uses_encrypted_field() -> None:
     assert IdentityTotpCredential.__table__.columns["crypt_secret"].nullable is False
+
+
+def test_wybra_auth_webauthn_credential_model_uses_public_key_field() -> None:
+    table = IdentityWebAuthnCredential.__table__
+
+    assert table.columns["public_key"].nullable is False
+    assert table.columns["credential_id"].nullable is False
+    assert any(
+        constraint.name == "uq_identity_webauthn_credential_credential_id"
+        for constraint in table.constraints
+    )
 
 
 def test_authorisation_scope_management_lifecycle(tmp_path: Path) -> None:
@@ -985,6 +1005,9 @@ def test_wybra_auth_integration_options_enabled() -> None:
     options = IdentityOptions(
         provider_enabled=True,
         passkey_enabled=True,
+        passkey_rp_id="app.example.com",
+        passkey_rp_name="Example App",
+        passkey_allowed_origins=("https://app.example.com",),
         totp_mode="required",
     )
 
@@ -1052,6 +1075,68 @@ def test_wybra_auth_identity_options_reject_invalid_totp_settings() -> None:
     with pytest.raises(ConfigurationError, match="must not exceed"):
         IdentityOptions(
             totp_recovery_window_seconds=MAX_TOTP_RECOVERY_WINDOW_SECONDS + 1,
+        )
+
+
+def test_wybra_auth_identity_options_validate_passkey_settings() -> None:
+    options = IdentityOptions(
+        passkey_enabled=True,
+        passkey_rp_id="app.example.com",
+        passkey_rp_name="Example App",
+        passkey_allowed_origins=("https://app.example.com/",),
+    )
+
+    assert options.passkey_allowed_origins == ("https://app.example.com",)
+
+    with pytest.raises(ConfigurationError, match="relying-party ID"):
+        IdentityOptions(passkey_enabled=True)
+
+    with pytest.raises(ConfigurationError, match="domain, not a URL"):
+        IdentityOptions(
+            passkey_enabled=True,
+            passkey_rp_id="https://app.example.com",
+            passkey_rp_name="Example App",
+            passkey_allowed_origins=("https://app.example.com",),
+        )
+
+    with pytest.raises(ConfigurationError, match="domain, not a URL"):
+        IdentityOptions(
+            passkey_enabled=True,
+            passkey_rp_id="app.example.com/path",
+            passkey_rp_name="Example App",
+            passkey_allowed_origins=("https://app.example.com",),
+        )
+
+    with pytest.raises(ConfigurationError, match="allowed origins"):
+        IdentityOptions(
+            passkey_enabled=True,
+            passkey_rp_id="app.example.com",
+            passkey_rp_name="Example App",
+        )
+
+    with pytest.raises(ConfigurationError, match="TOTP policy"):
+        IdentityOptions(
+            passkey_enabled=True,
+            passkey_rp_id="app.example.com",
+            passkey_rp_name="Example App",
+            passkey_allowed_origins=("https://app.example.com",),
+            passkey_user_verification_satisfies_totp="yes",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ConfigurationError, match="scheme and host"):
+        IdentityOptions(
+            passkey_enabled=True,
+            passkey_rp_id="app.example.com",
+            passkey_rp_name="Example App",
+            passkey_allowed_origins=("app.example.com",),
+        )
+
+    with pytest.raises(ConfigurationError, match="path"):
+        IdentityOptions(
+            passkey_enabled=True,
+            passkey_rp_id="app.example.com",
+            passkey_rp_name="Example App",
+            passkey_allowed_origins=("https://app.example.com/login",),
         )
 
 
@@ -1493,6 +1578,165 @@ def test_wybra_auth_recovery_codes_use_keyed_verifiers(
             await close_database(database)
 
     asyncio.run(assert_recovery_verifier_storage())
+
+
+def test_wybra_auth_webauthn_credential_store_lifecycle(
+    tmp_path: Path,
+) -> None:
+    async def assert_webauthn_storage_lifecycle() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "webauthn-storage.sqlite3")
+        )
+        try:
+            async with session_scope(database.session_factory) as session:
+                user = User(
+                    email="passkey@example.com",
+                    hashed_password="hash",
+                    is_active=True,
+                    is_superuser=False,
+                    is_verified=True,
+                )
+                session.add(user)
+                await session.flush()
+
+                store = SqlAlchemyWebAuthnCredentialStore(session)
+                row_id = await store.store_webauthn_credential(
+                    str(user.id),
+                    "credential-id",
+                    b"public-key",
+                    1,
+                    label="  Work laptop  ",
+                    user_verified=True,
+                    credential_device_type="multi_device",
+                    credential_backed_up=True,
+                    transports=("internal",),
+                    aaguid="aaguid",
+                    attestation_format="none",
+                )
+
+                credential = await store.get_webauthn_credential("credential-id")
+                assert credential is not None
+                assert credential.id == row_id
+                assert credential.label == "Work laptop"
+                assert credential.public_key == b"public-key"
+                assert credential.transports == ("internal",)
+                assert await store.count_active_webauthn_credentials(str(user.id)) == 1
+
+                await store.update_webauthn_authentication(
+                    "credential-id",
+                    sign_count=2,
+                    user_verified=False,
+                    credential_device_type="single_device",
+                    credential_backed_up=False,
+                )
+                updated = await store.get_user_webauthn_credential(
+                    str(user.id),
+                    row_id,
+                )
+                assert updated is not None
+                assert updated.sign_count == 2
+                assert updated.last_used_at is not None
+                assert updated.user_verified is False
+
+                assert await store.revoke_webauthn_credential(str(user.id), row_id)
+                assert await store.count_active_webauthn_credentials(str(user.id)) == 0
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_webauthn_storage_lifecycle())
+
+
+def test_wybra_auth_webauthn_counter_regression_has_branch_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_id = webauthn_mfa.credential_id_to_text(b"credential")
+
+    def reject_assertion(**_kwargs):
+        raise InvalidAuthenticationResponse("Sign count regression detected.")
+
+    monkeypatch.setattr(
+        webauthn_mfa,
+        "verify_authentication_response",
+        reject_assertion,
+    )
+
+    with pytest.raises(webauthn_mfa.WebAuthnCeremonyError) as exc:
+        webauthn_mfa.verify_passkey_authentication(
+            IdentityOptions(
+                passkey_enabled=True,
+                passkey_rp_id="app.example.com",
+                passkey_rp_name="Example App",
+                passkey_allowed_origins=("https://app.example.com",),
+            ),
+            credential={"id": credential_id},
+            expected_challenge=b"challenge",
+            stored_credential=WebAuthnCredentialRecord(
+                id=str(uuid.uuid4()),
+                user_id=str(uuid.uuid4()),
+                credential_id=credential_id,
+                public_key=b"public-key",
+                sign_count=2,
+                status="active",
+                label=None,
+                created_at=1_000.0,
+                last_used_at=None,
+                revoked_at=None,
+                user_verified=True,
+                credential_device_type="multi_device",
+                credential_backed_up=True,
+                transports=("internal",),
+                aaguid=None,
+                attestation_format="none",
+            ),
+        )
+
+    assert exc.value.reason == webauthn_mfa.WEBAUTHN_COUNTER_REGRESSION_REASON
+
+
+def test_wybra_auth_user_verified_webauthn_assertion_satisfies_totp_requirement() -> (
+    None
+):
+    now = 1_000.0
+    assertion = AuthenticationAssertion(
+        user_id="user-1",
+        method="webauthn",
+        asserted_at=now,
+        ceremony_id="ceremony-1",
+        user_verified=True,
+    )
+
+    assert not assertions_satisfy_required_methods(
+        user_id="user-1",
+        ceremony_id="ceremony-1",
+        required_methods=(TOTP_ASSERTION_METHOD,),
+        assertions=(assertion,),
+        now=now,
+    )
+
+    assert assertions_satisfy_required_methods(
+        user_id="user-1",
+        ceremony_id="ceremony-1",
+        required_methods=(TOTP_ASSERTION_METHOD,),
+        assertions=(assertion,),
+        now=now,
+        webauthn_user_verification_satisfies_totp=True,
+    )
+    assert not assertions_satisfy_required_methods(
+        user_id="user-1",
+        ceremony_id="ceremony-1",
+        required_methods=(TOTP_ASSERTION_METHOD,),
+        assertions=(
+            AuthenticationAssertion(
+                user_id="user-1",
+                method="webauthn",
+                asserted_at=now,
+                ceremony_id="ceremony-1",
+                user_verified=False,
+            ),
+        ),
+        now=now,
+        webauthn_user_verification_satisfies_totp=True,
+    )
 
 
 def test_identity_user_email_stores_normalised_email() -> None:

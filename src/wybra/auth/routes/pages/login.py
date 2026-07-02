@@ -71,6 +71,15 @@ from .shared import (
 )
 async def login(request: Request) -> Response:
     if request.method == "GET":
+        challenge_id = request.query_params.get("challenge_id", "").strip()
+        if request.query_params.get("challenge_step") == "totp" and challenge_id:
+            return render_totp_login_challenge(
+                request,
+                return_to=normalise_return_to(request.query_params.get("return_to")),
+                email=request.query_params.get("email", "").strip(),
+                challenge_id=challenge_id,
+            )
+
         return render_page(
             request,
             "identity/pages/login.html",

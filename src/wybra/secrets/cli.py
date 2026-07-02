@@ -31,7 +31,7 @@ from wybra.tools.app_startup import (
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 
 PROGRAM_NAME = "wybra-secret"
-CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 120}
 
 
 @dataclass(frozen=True, slots=True)

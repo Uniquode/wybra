@@ -17,6 +17,13 @@ from .account import (
 )
 from .api import current_user_api, current_user_state
 from .login import login
+from .passkeys import (
+    passkey_login_complete,
+    passkey_login_options,
+    passkey_register_complete,
+    passkey_register_options,
+    revoke_passkey,
+)
 from .shared import account_router, api_router
 from .totp_management import (
     disable_totp,
@@ -44,8 +51,13 @@ __all__ = [
     "normalise_return_to",
     "password_reset",
     "password_reset_confirm",
+    "passkey_login_complete",
+    "passkey_login_options",
+    "passkey_register_complete",
+    "passkey_register_options",
     "regenerate_totp_recovery_codes",
     "reset_totp",
+    "revoke_passkey",
     "security",
     "signup",
     "totp_setup",

@@ -24,10 +24,52 @@
     <button type="submit">Disable username/password login</button>
   </form>
   {% endif %}
-  {% else %}
+{% else %}
   <p class="muted-copy">Username/password login is disabled for this account.</p>
   {% endif %}
 </section>
+{% endif %}
+{% if passkeys.available %}
+<section class="surface-panel">
+  <p class="eyebrow">Passkeys</p>
+  <h2>Passkey sign-in</h2>
+  {% if passkeys.credentials %}
+  {% for passkey in passkeys.credentials %}
+  <section>
+    <h3>{{ passkey.label }}</h3>
+    <p class="muted-copy">
+      Passkey sign-in is enabled{% if passkey.backed_up %} and backed up{% endif %}.
+    </p>
+    <form action="{{ passkeys.revoke_path }}" method="post">
+      <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+      <input name="credential_id" type="hidden" value="{{ passkey.id }}">
+      <button type="submit">Remove passkey</button>
+    </form>
+  </section>
+  {% endfor %}
+  {% else %}
+  <p class="muted-copy">No passkeys are registered for this account.</p>
+  {% endif %}
+  {% if passkeys.add_available %}
+  <form
+    data-passkey-register
+    data-complete-path="{{ passkeys.register_complete_path }}"
+    data-csrf-header="{{ csrf_header_name }}"
+    data-options-path="{{ passkeys.register_options_path }}"
+  >
+    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    <label>
+      Passkey name
+      <input autocomplete="off" name="label" placeholder="This device" type="text">
+    </label>
+    <button type="button" data-passkey-register-button>Add passkey</button>
+    <p class="muted-copy" data-passkey-message role="status"></p>
+  </form>
+  {% elif passkeys.verification_required %}
+  <p class="muted-copy">Verify your email before adding a passkey.</p>
+  {% endif %}
+</section>
+<script src="{{ asset_url('scripts/passkeys.js') }}" type="module"></script>
 {% endif %}
 {% if providers.available %}
 <section class="surface-panel">

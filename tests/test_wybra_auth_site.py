@@ -19,13 +19,17 @@ from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.delivery import NullIdentityDelivery
 from wybra.auth.mfa.recovery import generate_recovery_codes
 from wybra.auth.mfa.storage import (
+    SqlAlchemyChallengeStore,
     SqlAlchemyRecoveryCodeStore,
     SqlAlchemyTOTPCredentialStore,
+    SqlAlchemyWebAuthnCredentialStore,
 )
 from wybra.auth.mfa.totp import generate_totp, generate_totp_secret
+from wybra.auth.mfa.webauthn import credential_id_to_text
 from wybra.auth.models import ExternalIdentityLink, IdentityProvider, User
 from wybra.auth.models import metadata as auth_metadata
 from wybra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
+from wybra.auth.routes.pages import passkeys as passkey_pages
 from wybra.auth.routes.pages import totp_management as totp_management_pages
 from wybra.auth.routes.totp import TOTP_LOGIN_NONCE_COOKIE
 from wybra.config import MappingConfigSource
@@ -86,6 +90,19 @@ PAGE_MODULES = (
     "wybra.auth",
 )
 STRONG_TEST_PASSWORD = "Correct horse 42!"
+PASSKEY_AUTH_CONFIG = {
+    "passkey_enabled": True,
+    "passkeys": {
+        "rp_id": "testserver",
+        "rp_name": "Test App",
+        "allowed_origins": ["http://testserver"],
+        "timeout_seconds": 300,
+        "user_verification": "preferred",
+        "attestation": "none",
+        "discoverable_credentials": "preferred",
+        "counter_policy": "reject-regression",
+    },
+}
 
 
 class MissingSecretsCapability:
@@ -219,6 +236,43 @@ async def _active_totp_credential_id(site, user_id: uuid.UUID) -> str | None:
         return await store.get_active_totp_credential(str(user_id))
 
 
+async def _create_passkey_credential(
+    site,
+    *,
+    user_id: uuid.UUID,
+    credential_id: str | None = None,
+    label: str = "Test passkey",
+) -> str:
+    stored_credential_id = credential_id or credential_id_to_text(b"test-passkey")
+    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+        store = SqlAlchemyWebAuthnCredentialStore(db_session)
+        return await store.store_webauthn_credential(
+            str(user_id),
+            stored_credential_id,
+            b"public-key",
+            0,
+            label=label,
+            user_verified=True,
+            credential_device_type="multi_device",
+            credential_backed_up=True,
+            transports=("internal",),
+            aaguid="test-aaguid",
+            attestation_format="none",
+        )
+
+
+async def _active_passkey_count(site, user_id: uuid.UUID) -> int:
+    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+        store = SqlAlchemyWebAuthnCredentialStore(db_session)
+        return await store.count_active_webauthn_credentials(str(user_id))
+
+
+async def _authentication_challenge_exists(site, challenge_id: str) -> bool:
+    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+        store = SqlAlchemyChallengeStore(db_session)
+        return await store.get_challenge(challenge_id) is not None
+
+
 def _authenticated_security_site(
     tmp_path: Path,
     *,
@@ -263,6 +317,10 @@ def _csrf_token(response_text: str) -> str:
     match = re.search(r'name="csrf_token" type="hidden" value="([^"]+)"', response_text)
     assert match is not None
     return match.group(1)
+
+
+def _csrf_header(response_text: str) -> dict[str, str]:
+    return {"x-csrf-token": _csrf_token(response_text)}
 
 
 def _assert_recovery_codes_download(response_text: str) -> None:
@@ -3221,6 +3279,666 @@ async def test_security_page_rejects_disabling_password_when_google_unavailable(
 
 
 @pytest.mark.anyio
+async def test_login_page_shows_passkey_button_when_enabled(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(tmp_path, auth_config=PASSKEY_AUTH_CONFIG)
+
+    response = _security_page_client(site).get("/account/login?return_to=/dashboard")
+
+    assert response.status_code == 200
+    assert "Sign in with passkey" in response.text
+    assert "/account/login/passkey/options" in response.text
+    assert "/account/login/passkey/complete" in response.text
+    assert "scripts/passkeys.js" in response.text
+
+
+@pytest.mark.anyio
+async def test_security_page_omits_passkey_section_when_disabled(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(tmp_path)
+    await _create_auth_schema(site)
+
+    response = _security_page_client(site).get("/account/security")
+
+    assert response.status_code == 200
+    assert "Passkey sign-in" not in response.text
+
+
+@pytest.mark.anyio
+async def test_security_page_shows_passkey_controls_when_enabled(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+
+    response = _security_page_client(site).get("/account/security")
+
+    assert response.status_code == 200
+    assert "Passkey sign-in" in response.text
+    assert "Add passkey" in response.text
+    assert "/account/security/passkeys/register/options" in response.text
+    assert "/account/security/passkeys/register/complete" in response.text
+    assert "scripts/passkeys.js" in response.text
+
+
+@pytest.mark.anyio
+async def test_passkey_registration_rejects_unverified_user(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=False,
+    )
+    _override_current_user(site.app, user_id=user_id)
+    client = _security_page_client(site)
+    login_page = client.get("/account/login")
+
+    response = client.post(
+        "/account/security/passkeys/register/options",
+        headers=_csrf_header(login_page.text),
+        json={},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "Verify your email before adding a passkey."
+    assert await _active_passkey_count(site, user_id) == 0
+
+
+@pytest.mark.anyio
+async def test_passkey_registration_stores_verified_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_id = credential_id_to_text(b"new-passkey")
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+
+    def verify_registration(_options, **kwargs):
+        assert kwargs["expected_challenge"]
+        return SimpleNamespace(
+            credential_id=credential_id,
+            public_key=b"verified-public-key",
+            sign_count=1,
+            user_verified=True,
+            credential_device_type="multi_device",
+            credential_backed_up=True,
+            aaguid="test-aaguid",
+            attestation_format="none",
+        )
+
+    monkeypatch.setattr(
+        passkey_pages,
+        "verify_passkey_registration",
+        verify_registration,
+    )
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+    headers = _csrf_header(security_page.text)
+    options_response = client.post(
+        "/account/security/passkeys/register/options",
+        headers=headers,
+        json={},
+    )
+
+    response = client.post(
+        "/account/security/passkeys/register/complete",
+        headers=headers,
+        json={
+            "challenge_id": options_response.json()["challenge_id"],
+            "credential": {
+                "id": credential_id,
+                "response": {"transports": ["internal"]},
+            },
+            "label": "  Laptop key  ",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "registered",
+        "redirect_to": "/account/security",
+    }
+    async with site.require_capability(DatabaseCapability).transaction() as session:
+        store = SqlAlchemyWebAuthnCredentialStore(session)
+        credential = await store.get_webauthn_credential(credential_id)
+        assert credential is not None
+        assert credential.label == "Laptop key"
+        assert credential.public_key == b"verified-public-key"
+        assert credential.transports == ("internal",)
+
+
+@pytest.mark.anyio
+async def test_passkey_registration_failure_consumes_challenge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+
+    def reject_registration(_options, **_kwargs):
+        raise passkey_pages.WebAuthnCeremonyError()
+
+    monkeypatch.setattr(
+        passkey_pages,
+        "verify_passkey_registration",
+        reject_registration,
+    )
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+    headers = _csrf_header(security_page.text)
+    options_response = client.post(
+        "/account/security/passkeys/register/options",
+        headers=headers,
+        json={},
+    )
+    challenge_id = options_response.json()["challenge_id"]
+
+    response = client.post(
+        "/account/security/passkeys/register/complete",
+        headers=headers,
+        json={
+            "challenge_id": challenge_id,
+            "credential": {
+                "id": credential_id_to_text(b"rejected-passkey"),
+                "response": {"transports": ["internal"]},
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "Passkey verification failed."
+    assert await _active_passkey_count(site, user_id) == 0
+    assert not await _authentication_challenge_exists(site, challenge_id)
+
+
+@pytest.mark.anyio
+async def test_passkey_registration_malformed_json_returns_controlled_error(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+    headers = {
+        **_csrf_header(security_page.text),
+        "content-type": "application/json",
+    }
+
+    response = client.post(
+        "/account/security/passkeys/register/complete",
+        headers=headers,
+        content="{",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "Passkey verification failed."
+    assert await _active_passkey_count(site, user_id) == 0
+
+
+@pytest.mark.anyio
+async def test_passkey_login_user_verified_assertion_satisfies_active_totp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
+    credential_id = credential_id_to_text(b"login-passkey")
+    site = await _start_security_site(tmp_path, auth_config=auth_config)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="passkey-login@example.com",
+        is_verified=True,
+    )
+    await _create_passkey_credential(
+        site,
+        user_id=user_id,
+        credential_id=credential_id,
+    )
+    await _create_active_totp_credential(site, user_id)
+
+    def verify_authentication(_options, **kwargs):
+        assert kwargs["stored_credential"].credential_id == credential_id
+        return SimpleNamespace(
+            credential_id=credential_id,
+            sign_count=1,
+            user_verified=True,
+            credential_device_type="multi_device",
+            credential_backed_up=True,
+        )
+
+    monkeypatch.setattr(
+        passkey_pages,
+        "verify_passkey_authentication",
+        verify_authentication,
+    )
+    client = _security_page_client(site)
+    login_page = client.get("/account/login?return_to=/dashboard")
+    headers = _csrf_header(login_page.text)
+    options_response = client.post(
+        "/account/login/passkey/options",
+        headers=headers,
+        json={
+            "email": "passkey-login@example.com",
+            "return_to": "/dashboard",
+        },
+    )
+
+    response = client.post(
+        "/account/login/passkey/complete",
+        headers=headers,
+        json={
+            "challenge_id": options_response.json()["challenge_id"],
+            "credential": {"id": credential_id},
+            "return_to": "/dashboard",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "redirect_to": "/dashboard"}
+    assert TOTP_LOGIN_NONCE_COOKIE not in response.cookies
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name in response.cookies
+
+
+@pytest.mark.anyio
+async def test_passkey_login_user_verified_assertion_requires_totp_when_policy_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_config = {
+        **PASSKEY_AUTH_CONFIG,
+        "totp_mode": "opt_in",
+        "passkeys": {
+            **PASSKEY_AUTH_CONFIG["passkeys"],
+            "user_verification_satisfies_totp": False,
+        },
+    }
+    credential_id = credential_id_to_text(b"login-passkey-totp-policy")
+    site = await _start_security_site(tmp_path, auth_config=auth_config)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="passkey-policy@example.com",
+        is_verified=True,
+    )
+    await _create_passkey_credential(
+        site,
+        user_id=user_id,
+        credential_id=credential_id,
+    )
+    await _create_active_totp_credential(site, user_id)
+
+    def verify_authentication(_options, **kwargs):
+        assert kwargs["stored_credential"].credential_id == credential_id
+        return SimpleNamespace(
+            credential_id=credential_id,
+            sign_count=1,
+            user_verified=True,
+            credential_device_type="multi_device",
+            credential_backed_up=True,
+        )
+
+    monkeypatch.setattr(
+        passkey_pages,
+        "verify_passkey_authentication",
+        verify_authentication,
+    )
+    client = _security_page_client(site)
+    login_page = client.get("/account/login?return_to=/dashboard")
+    headers = _csrf_header(login_page.text)
+    options_response = client.post(
+        "/account/login/passkey/options",
+        headers=headers,
+        json={
+            "email": "passkey-policy@example.com",
+            "return_to": "/dashboard",
+        },
+    )
+
+    response = client.post(
+        "/account/login/passkey/complete",
+        headers=headers,
+        json={
+            "challenge_id": options_response.json()["challenge_id"],
+            "credential": {"id": credential_id},
+            "return_to": "/dashboard",
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "totp_required"
+    assert "challenge_step=totp" in payload["redirect_to"]
+    assert TOTP_LOGIN_NONCE_COOKIE in response.cookies
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name not in response.cookies
+
+
+@pytest.mark.anyio
+async def test_passkey_login_possession_only_assertion_requires_totp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
+    credential_id = credential_id_to_text(b"possession-passkey")
+    site = await _start_security_site(tmp_path, auth_config=auth_config)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="passkey-totp@example.com",
+        is_verified=True,
+    )
+    await _create_passkey_credential(
+        site,
+        user_id=user_id,
+        credential_id=credential_id,
+    )
+    await _create_active_totp_credential(site, user_id)
+
+    def verify_authentication(_options, **kwargs):
+        assert kwargs["stored_credential"].credential_id == credential_id
+        return SimpleNamespace(
+            credential_id=credential_id,
+            sign_count=1,
+            user_verified=False,
+            credential_device_type="multi_device",
+            credential_backed_up=True,
+        )
+
+    monkeypatch.setattr(
+        passkey_pages,
+        "verify_passkey_authentication",
+        verify_authentication,
+    )
+    client = _security_page_client(site)
+    login_page = client.get("/account/login?return_to=/dashboard")
+    headers = _csrf_header(login_page.text)
+    options_response = client.post(
+        "/account/login/passkey/options",
+        headers=headers,
+        json={
+            "email": "passkey-totp@example.com",
+            "return_to": "/dashboard",
+        },
+    )
+
+    response = client.post(
+        "/account/login/passkey/complete",
+        headers=headers,
+        json={
+            "challenge_id": options_response.json()["challenge_id"],
+            "credential": {"id": credential_id},
+            "return_to": "/dashboard",
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["status"] == "totp_required"
+    assert "challenge_step=totp" in payload["redirect_to"]
+    assert TOTP_LOGIN_NONCE_COOKIE in response.cookies
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name not in response.cookies
+
+
+@pytest.mark.anyio
+async def test_passkey_login_keeps_verified_email_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_id = credential_id_to_text(b"unverified-passkey")
+    site = await _start_security_site(tmp_path, auth_config=PASSKEY_AUTH_CONFIG)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="unverified-passkey@example.com",
+        is_verified=False,
+    )
+    await _create_passkey_credential(
+        site,
+        user_id=user_id,
+        credential_id=credential_id,
+    )
+
+    def verify_authentication(_options, **kwargs):
+        assert kwargs["stored_credential"].credential_id == credential_id
+        return SimpleNamespace(
+            credential_id=credential_id,
+            sign_count=1,
+            user_verified=True,
+            credential_device_type="multi_device",
+            credential_backed_up=True,
+        )
+
+    monkeypatch.setattr(
+        passkey_pages,
+        "verify_passkey_authentication",
+        verify_authentication,
+    )
+    client = _security_page_client(site)
+    login_page = client.get("/account/login")
+    headers = _csrf_header(login_page.text)
+    options_response = client.post(
+        "/account/login/passkey/options",
+        headers=headers,
+        json={"email": "unverified-passkey@example.com"},
+    )
+
+    response = client.post(
+        "/account/login/passkey/complete",
+        headers=headers,
+        json={
+            "challenge_id": options_response.json()["challenge_id"],
+            "credential": {"id": credential_id},
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["status"] == "email_verification_required"
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name not in response.cookies
+
+
+@pytest.mark.anyio
+async def test_security_page_rejects_removing_last_passkey_sign_in_method(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    await _set_password_login_enabled(site, user_id, False)
+    row_id = await _create_passkey_credential(site, user_id=user_id)
+    _override_current_user(
+        site.app,
+        user_id=user_id,
+        hashed_password=None,
+        password_login_enabled=False,
+    )
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+
+    response = client.post(
+        "/account/security/passkeys/revoke",
+        data={
+            "csrf_token": _csrf_token(security_page.text),
+            "credential_id": row_id,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Add another sign-in method before removing this passkey." in response.text
+    assert await _active_passkey_count(site, user_id) == 1
+
+
+@pytest.mark.anyio
+async def test_security_page_removes_passkey_when_password_login_remains(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+    row_id = await _create_passkey_credential(site, user_id=user_id)
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+
+    response = client.post(
+        "/account/security/passkeys/revoke",
+        data={
+            "csrf_token": _csrf_token(security_page.text),
+            "credential_id": row_id,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account/security"
+    assert await _active_passkey_count(site, user_id) == 0
+
+
+@pytest.mark.anyio
+async def test_security_page_disables_password_login_when_passkey_registered(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+    await _create_passkey_credential(site, user_id=user_id)
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+
+    response = client.post(
+        "/account/security/password/disable",
+        data={"csrf_token": _csrf_token(security_page.text)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account/security"
+    assert await _password_login_enabled(site, user_id) is False
+
+
+@pytest.mark.anyio
+async def test_totp_disable_allows_passkey_as_remaining_sign_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=auth_config,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+    await _set_password_login_enabled(site, user_id, False)
+    secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
+    await _create_passkey_credential(site, user_id=user_id)
+    user = SimpleNamespace(
+        id=user_id,
+        email="security@example.test",
+        is_active=True,
+        is_verified=True,
+        hashed_password=None,
+        password_login_enabled=False,
+    )
+
+    async def authenticated_user(_request):
+        return user
+
+    monkeypatch.setattr(
+        totp_management_pages,
+        "_require_authenticated_user",
+        authenticated_user,
+    )
+    client = _security_page_client(site)
+    confirmation = client.get("/account/totp/disable")
+
+    response = client.post(
+        "/account/totp/disable",
+        data={
+            "csrf_token": _csrf_token(confirmation.text),
+            "totp_code": generate_totp(secret),
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account/security"
+    assert await _active_totp_credential_id(site, user_id) is None
+
+
+@pytest.mark.anyio
 async def test_security_page_requires_authenticated_user(tmp_path: Path) -> None:
     app = FastAPI()
     site = await start(
@@ -3321,7 +4039,13 @@ async def test_security_page_renders_for_authenticated_user(tmp_path: Path) -> N
         ),
     )
 
-    _override_current_user(site.app)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
 
     response = _security_page_client(site).get("/account/security")
 
@@ -3335,6 +4059,7 @@ async def test_security_page_omits_totp_section_when_totp_disabled(
     tmp_path: Path,
 ) -> None:
     site = await _start_security_site(tmp_path)
+    await _create_auth_schema(site)
 
     response = _security_page_client(site).get("/account/security")
 

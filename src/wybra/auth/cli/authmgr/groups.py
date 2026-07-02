@@ -262,6 +262,7 @@ def register_group_commands(root_command: click.Group) -> None:
         context_settings={
             "ignore_unknown_options": True,
             "allow_extra_args": True,
+            "max_content_width": 120,
         },
         help=_GROUP_COMMAND_HELP,
     )

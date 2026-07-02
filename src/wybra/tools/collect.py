@@ -30,7 +30,7 @@ from wybra.tools.project import (
 
 @click.command(
     name="wybra-collect",
-    context_settings={"help_option_names": ["-h", "--help"]},
+    context_settings={"help_option_names": ["-h", "--help"], "max_content_width": 120},
     help="Collect configured static assets into a deployable filesystem tree.",
 )
 @click.option(

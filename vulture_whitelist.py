@@ -146,6 +146,7 @@ _.status
 _.activated_at
 _.disabled_at
 _.totp_credentials
+_.webauthn_credentials
 _.account_email
 _.provider_enabled
 _.provider_metadata
