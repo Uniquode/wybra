@@ -57,8 +57,11 @@ client_secret_key = "auth/providers/github/client-secret"
 
 [auth.providers.apple]
 enabled = true
+client_id = "com.example.app.web"
+team_id = "TEAMID1234"
+key_id = "KEYID1234"
 secrets = "environment"
-client_secret_key = "APPLE_SECRET"
+private_key_secret_key = "APPLE_PRIVATE_KEY"
 """.strip(),
         encoding="utf-8",
     )
@@ -169,7 +172,7 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     assert "WYBRA_SECRET_KEY_CURRENT" not in records
     assert "WYBRA_SECRET_KEYS_PREVIOUS" not in records
     assert "auth/providers/github/client-secret" not in records
-    assert "APPLE_SECRET" not in records
+    assert "APPLE_PRIVATE_KEY" not in records
 
 
 def test_list_excludes_crypto_keys_for_non_keychain_config(

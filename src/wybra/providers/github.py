@@ -1,22 +1,34 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
-import hmac
-import json
-from binascii import Error as BinasciiError
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from http.client import HTTPException as HTTPClientException
-from http.client import HTTPSConnection
 from secrets import token_urlsafe
-from typing import Final, Literal, Protocol, cast, runtime_checkable
-from urllib.parse import SplitResult, urlencode, urlsplit, urlunsplit
+from typing import Final, Protocol, runtime_checkable
+from urllib.parse import urlencode
 
 from wybra.auth.timestamps import current_timestamp
 from wybra.core.exceptions import ConfigurationError
-from wybra.providers.settings import ProviderSettings
+from wybra.providers.flow import ProviderOAuthPurpose, is_provider_oauth_purpose
+from wybra.providers.http import (
+    https_endpoint,
+    https_request,
+    json_array_response,
+    json_object_response,
+    mapping_items,
+)
+from wybra.providers.oauth_state import (
+    decode_signed_oauth_state,
+    encode_signed_oauth_state,
+    urlsafe_b64encode,
+)
+from wybra.providers.settings import (
+    PROVIDER_CLIENT_ID_FIELD,
+    PROVIDER_CLIENT_SECRET_KEY_FIELD,
+    PROVIDER_SECRETS_FIELD,
+    ProviderSettings,
+)
 from wybra.services.secrets import SecretSource
 
 GITHUB_PROVIDER_NAME: Final = "github"
@@ -35,8 +47,7 @@ GITHUB_DEFAULT_USER_API_ENDPOINT: Final = "https://api.github.com/user"
 GITHUB_DEFAULT_EMAILS_API_ENDPOINT: Final = "https://api.github.com/user/emails"
 GITHUB_DEFAULT_API_VERSION: Final = "2022-11-28"
 GITHUB_DEFAULT_USER_AGENT: Final = "wybra"
-_STATE_COOKIE_SEPARATOR: Final = "."
-GitHubOAuthPurpose = Literal["login", "link"]
+GitHubOAuthPurpose = ProviderOAuthPurpose
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,8 +166,10 @@ class GitHubOAuthState:
 
     def __post_init__(self) -> None:
         if self.provider_name != GITHUB_PROVIDER_NAME:
-            raise ValueError("GitHub OAuth state requires provider 'github'.")
-        if self.purpose not in ("login", "link"):
+            raise ValueError(
+                f"GitHub OAuth state requires provider {GITHUB_PROVIDER_NAME!r}."
+            )
+        if not is_provider_oauth_purpose(self.purpose):
             raise ValueError("GitHub OAuth state purpose must be login or link.")
         for field_name in ("state", "code_verifier", "return_to", "redirect_uri"):
             value = getattr(self, field_name)
@@ -176,13 +189,19 @@ def github_oauth_settings_from_provider(
     provider: ProviderSettings,
 ) -> GitHubOAuthSettings:
     if provider.name != GITHUB_PROVIDER_NAME:
-        raise ConfigurationError("GitHub OAuth settings require provider 'github'.")
+        raise ConfigurationError(
+            f"GitHub OAuth settings require provider {GITHUB_PROVIDER_NAME!r}."
+        )
     if provider.client_id is None:
-        raise ConfigurationError("GitHub provider must configure 'client_id'.")
+        raise ConfigurationError(
+            f"GitHub provider must configure {PROVIDER_CLIENT_ID_FIELD!r}."
+        )
     client_secret_reference = provider.required_client_secret_reference()
     if client_secret_reference is None:
         raise ConfigurationError(
-            "GitHub provider must configure both 'secrets' and 'client_secret_key'."
+            "GitHub provider must configure both "
+            f"{PROVIDER_SECRETS_FIELD!r} and "
+            f"{PROVIDER_CLIENT_SECRET_KEY_FIELD!r}."
         )
     return GitHubOAuthSettings(
         provider_name=provider.name,
@@ -213,7 +232,7 @@ def create_github_oauth_state(
 
 
 def github_pkce_challenge(code_verifier: str) -> str:
-    return _urlsafe_b64encode(hashlib.sha256(code_verifier.encode("ascii")).digest())
+    return urlsafe_b64encode(hashlib.sha256(code_verifier.encode("ascii")).digest())
 
 
 def github_token_response_from_payload(
@@ -282,14 +301,7 @@ def encode_github_oauth_state_cookie(
     *,
     secret: str,
 ) -> str:
-    payload = _urlsafe_b64encode(
-        json.dumps(
-            asdict(state),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
-    return f"{payload}{_STATE_COOKIE_SEPARATOR}{_signature(payload, secret)}"
+    return encode_signed_oauth_state(asdict(state), secret=secret)
 
 
 def decode_github_oauth_state_cookie(
@@ -298,25 +310,12 @@ def decode_github_oauth_state_cookie(
     secret: str,
     now: float | None = None,
 ) -> GitHubOAuthState | None:
-    payload, separator, signature = value.partition(_STATE_COOKIE_SEPARATOR)
-    if separator != _STATE_COOKIE_SEPARATOR or not payload or not signature:
-        return None
-    if not hmac.compare_digest(signature, _signature(payload, secret)):
-        return None
-
-    try:
-        raw_payload = json.loads(_urlsafe_b64decode(payload).decode("utf-8"))
-    except (BinasciiError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(raw_payload, dict):
-        return None
-
-    state = _github_oauth_state_from_payload(raw_payload)
-    if state is None:
-        return None
-    if (current_timestamp() if now is None else now) > state.expires_at:
-        return None
-    return state
+    return decode_signed_oauth_state(
+        value,
+        secret=secret,
+        state_factory=_github_oauth_state_from_payload,
+        now=now,
+    )
 
 
 def _github_oauth_state_from_payload(
@@ -335,7 +334,7 @@ def _github_oauth_state_from_payload(
         return None
     if not (
         isinstance(provider_name, str)
-        and purpose in ("login", "link")
+        and is_provider_oauth_purpose(purpose)
         and isinstance(state, str)
         and isinstance(code_verifier, str)
         and isinstance(return_to, str)
@@ -347,7 +346,7 @@ def _github_oauth_state_from_payload(
     try:
         return GitHubOAuthState(
             provider_name=provider_name,
-            purpose=cast(GitHubOAuthPurpose, purpose),
+            purpose=purpose,
             state=state,
             code_verifier=code_verifier,
             return_to=return_to,
@@ -363,7 +362,7 @@ def _exchange_github_authorisation_code(
     request: GitHubTokenExchangeRequest,
     timeout: float,
 ) -> GitHubTokenResponse:
-    parsed_endpoint = _github_https_endpoint(
+    parsed_endpoint = https_endpoint(
         request.token_endpoint,
         error_type=GitHubTokenExchangeError,
         error_message="GitHub token endpoint must be HTTPS.",
@@ -390,10 +389,11 @@ def _exchange_github_authorisation_code(
         error_type=GitHubTokenExchangeError,
         error_message="GitHub token exchange failed.",
     )
-    payload = _json_object_response(
+    payload = json_object_response(
         response_body,
         error_type=GitHubTokenExchangeError,
-        error_message="GitHub token exchange returned an invalid response.",
+        invalid_json_message="GitHub token exchange returned an invalid response.",
+        invalid_payload_message="GitHub token exchange returned an invalid response.",
     )
     return github_token_response_from_payload(payload)
 
@@ -409,7 +409,7 @@ def _fetch_github_identity(
         "X-GitHub-Api-Version": request.settings.api_version,
     }
     user_body = _github_https_request(
-        _github_https_endpoint(
+        https_endpoint(
             request.settings.user_api_endpoint,
             error_type=GitHubAPIError,
             error_message="GitHub endpoint must be HTTPS.",
@@ -422,7 +422,7 @@ def _fetch_github_identity(
         error_message="GitHub user API request failed.",
     )
     emails_body = _github_https_request(
-        _github_https_endpoint(
+        https_endpoint(
             request.settings.emails_api_endpoint,
             error_type=GitHubAPIError,
             error_message="GitHub endpoint must be HTTPS.",
@@ -434,24 +434,26 @@ def _fetch_github_identity(
         error_type=GitHubAPIError,
         error_message="GitHub emails API request failed.",
     )
-    user_payload = _json_object_response(
+    user_payload = json_object_response(
         user_body,
         error_type=GitHubAPIError,
-        error_message="GitHub user API returned an invalid response.",
+        invalid_json_message="GitHub user API returned an invalid response.",
+        invalid_payload_message="GitHub user API returned an invalid response.",
     )
-    emails_payload = _json_array_response(
+    emails_payload = json_array_response(
         emails_body,
         error_type=GitHubAPIError,
-        error_message="GitHub emails API returned an invalid response.",
+        invalid_json_message="GitHub emails API returned an invalid response.",
+        invalid_payload_message="GitHub emails API returned an invalid response.",
     )
     return github_user_claims_from_api_payloads(
         user_payload,
-        tuple(_mapping_items(emails_payload)),
+        tuple(mapping_items(emails_payload)),
     )
 
 
 def _github_https_request(
-    parsed_endpoint: SplitResult,
+    parsed_endpoint,
     *,
     method: str,
     body: bytes | None,
@@ -460,88 +462,15 @@ def _github_https_request(
     error_type: type[Exception],
     error_message: str,
 ) -> bytes:
-    hostname = parsed_endpoint.hostname
-    if hostname is None:
-        raise error_type(error_message)
-    connection = HTTPSConnection(
-        hostname,
-        parsed_endpoint.port,
+    return https_request(
+        parsed_endpoint,
+        method=method,
+        body=body,
+        headers=headers,
         timeout=timeout,
+        error_type=error_type,
+        error_message=error_message,
     )
-    try:
-        connection.request(
-            method,
-            urlunsplit(
-                ("", "", parsed_endpoint.path or "/", parsed_endpoint.query, "")
-            ),
-            body=body,
-            headers=dict(headers),
-        )
-        response = connection.getresponse()
-        response_body = response.read()
-    except (HTTPClientException, OSError, TimeoutError) as exc:
-        raise error_type(error_message) from exc
-    finally:
-        connection.close()
-
-    if response.status < 200 or response.status >= 300:
-        raise error_type(error_message)
-    return response_body
-
-
-def _github_https_endpoint(
-    value: str,
-    *,
-    error_type: type[Exception],
-    error_message: str,
-) -> SplitResult:
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname is None
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        raise error_type(error_message)
-    return parsed
-
-
-def _json_object_response(
-    response_body: bytes,
-    *,
-    error_type: type[Exception],
-    error_message: str,
-) -> Mapping[str, object]:
-    try:
-        payload = json.loads(response_body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise error_type(error_message) from exc
-    if not isinstance(payload, dict):
-        raise error_type(error_message)
-    return cast(Mapping[str, object], payload)
-
-
-def _json_array_response(
-    response_body: bytes,
-    *,
-    error_type: type[Exception],
-    error_message: str,
-) -> Sequence[object]:
-    try:
-        payload = json.loads(response_body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise error_type(error_message) from exc
-    if not isinstance(payload, list):
-        raise error_type(error_message)
-    return payload
-
-
-def _mapping_items(items: Sequence[object]) -> tuple[Mapping[str, object], ...]:
-    mappings: list[Mapping[str, object]] = []
-    for item in items:
-        if isinstance(item, Mapping):
-            mappings.append(cast(Mapping[str, object], item))
-    return tuple(mappings)
 
 
 def _optional_payload_str(
@@ -616,25 +545,6 @@ def _selected_github_email(
         email, verified, _primary = candidates[0]
         return email, verified
     return None
-
-
-def _signature(payload: str, secret: str) -> str:
-    return _urlsafe_b64encode(
-        hmac.new(
-            secret.encode("utf-8"),
-            payload.encode("ascii"),
-            hashlib.sha256,
-        ).digest()
-    )
-
-
-def _urlsafe_b64encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
-
-
-def _urlsafe_b64decode(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(f"{value}{padding}")
 
 
 __all__ = (

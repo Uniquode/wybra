@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from wybra.core.exceptions import ConfigurationError
-from wybra.providers.settings import ProvidersSettings
+from wybra.providers.settings import APPLE_PROVIDER_NAME, ProvidersSettings
 from wybra.tools.validation.core import ValidationResult, record_check
 
 
@@ -17,7 +17,16 @@ def validate_provider_configuration(settings: ProvidersSettings) -> None:
             raise ConfigurationError(
                 f"Provider {provider.name!r} is enabled but client_id is missing."
             )
-        provider.required_client_secret_reference()
+        if provider.name == APPLE_PROVIDER_NAME:
+            if provider.team_id is None:
+                raise ConfigurationError(
+                    f"Provider {provider.name!r} is enabled but team_id is missing."
+                )
+            if provider.key_id is None:
+                raise ConfigurationError(
+                    f"Provider {provider.name!r} is enabled but key_id is missing."
+                )
+        provider.required_provider_secret_reference()
 
 
 def validate_providers(settings: ProvidersValidationSettings) -> ValidationResult:
