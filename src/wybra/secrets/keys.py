@@ -7,6 +7,7 @@ from typing import Any, Final
 from wybra.core.exceptions import ConfigurationError
 from wybra.providers.secrets import provider_keychain_secret_references
 from wybra.providers.settings import (
+    APPLE_PROVIDER_NAME,
     PROVIDERS_CONFIG_SECTION,
     provider_settings_from_config,
 )
@@ -100,11 +101,14 @@ def _configured_provider_keys(
     keys: list[KnownSecretKey] = []
     providers = provider_settings_from_config(providers_config)
     for provider_name, key in provider_keychain_secret_references(providers):
+        secret_label = (
+            "private key" if provider_name == APPLE_PROVIDER_NAME else "client secret"
+        )
         keys.append(
             KnownSecretKey(
                 key=key,
                 owner=SECRET_KEY_OWNER_PROVIDERS,
-                description=f"Provider {provider_name} client secret.",
+                description=f"Provider {provider_name} {secret_label}.",
                 required=True,
             )
         )

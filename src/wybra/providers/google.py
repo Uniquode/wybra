@@ -1,25 +1,29 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import hmac
-import json
-from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
-from http.client import HTTPException as HTTPClientException
-from http.client import HTTPSConnection
 from secrets import token_urlsafe
 from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode
 
-import jwt
-from jwt import PyJWKClient, PyJWTError
+from jwt import PyJWKClient
 
 from wybra.auth.timestamps import current_timestamp
 from wybra.core.exceptions import ConfigurationError
-from wybra.providers.settings import ProviderSettings
+from wybra.providers.http import https_endpoint, https_request, json_object_response
+from wybra.providers.oauth_state import (
+    decode_signed_oauth_state,
+    encode_signed_oauth_state,
+)
+from wybra.providers.oidc import oidc_id_token_payload
+from wybra.providers.settings import (
+    PROVIDER_CLIENT_ID_FIELD,
+    PROVIDER_CLIENT_SECRET_KEY_FIELD,
+    PROVIDER_SECRETS_FIELD,
+    ProviderSettings,
+)
 from wybra.services.secrets import SecretSource
 
 GOOGLE_PROVIDER_NAME: Final = "google"
@@ -39,7 +43,6 @@ GOOGLE_DEFAULT_JWKS_URI: Final = "https://www.googleapis.com/oauth2/v3/certs"
 GOOGLE_DEFAULT_DISCOVERY_DOCUMENT_URL: Final = (
     "https://accounts.google.com/.well-known/openid-configuration"
 )
-_STATE_COOKIE_SEPARATOR: Final = "."
 GoogleOAuthPurpose = Literal["login", "link"]
 GoogleJwksClientFactory = Callable[[str], "GoogleJwksClient"]
 
@@ -164,7 +167,9 @@ class GoogleOAuthState:
 
     def __post_init__(self) -> None:
         if self.provider_name != GOOGLE_PROVIDER_NAME:
-            raise ValueError("Google OAuth state requires provider 'google'.")
+            raise ValueError(
+                f"Google OAuth state requires provider {GOOGLE_PROVIDER_NAME!r}."
+            )
         if self.purpose not in ("login", "link"):
             raise ValueError("Google OAuth state purpose must be login or link.")
         for field_name in ("state", "nonce", "return_to", "redirect_uri"):
@@ -181,13 +186,19 @@ def google_oauth_settings_from_provider(
     provider: ProviderSettings,
 ) -> GoogleOAuthSettings:
     if provider.name != GOOGLE_PROVIDER_NAME:
-        raise ConfigurationError("Google OAuth settings require provider 'google'.")
+        raise ConfigurationError(
+            f"Google OAuth settings require provider {GOOGLE_PROVIDER_NAME!r}."
+        )
     if provider.client_id is None:
-        raise ConfigurationError("Google provider must configure 'client_id'.")
+        raise ConfigurationError(
+            f"Google provider must configure {PROVIDER_CLIENT_ID_FIELD!r}."
+        )
     client_secret_reference = provider.required_client_secret_reference()
     if client_secret_reference is None:
         raise ConfigurationError(
-            "Google provider must configure both 'secrets' and 'client_secret_key'."
+            "Google provider must configure both "
+            f"{PROVIDER_SECRETS_FIELD!r} and "
+            f"{PROVIDER_CLIENT_SECRET_KEY_FIELD!r}."
         )
     return GoogleOAuthSettings(
         provider_name=provider.name,
@@ -256,14 +267,7 @@ def encode_google_oauth_state_cookie(
     *,
     secret: str,
 ) -> str:
-    payload = _urlsafe_b64encode(
-        json.dumps(
-            asdict(state),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
-    return f"{payload}{_STATE_COOKIE_SEPARATOR}{_signature(payload, secret)}"
+    return encode_signed_oauth_state(asdict(state), secret=secret)
 
 
 def decode_google_oauth_state_cookie(
@@ -272,25 +276,12 @@ def decode_google_oauth_state_cookie(
     secret: str,
     now: float | None = None,
 ) -> GoogleOAuthState | None:
-    payload, separator, signature = value.partition(_STATE_COOKIE_SEPARATOR)
-    if separator != _STATE_COOKIE_SEPARATOR or not payload or not signature:
-        return None
-    if not hmac.compare_digest(signature, _signature(payload, secret)):
-        return None
-
-    try:
-        raw_payload = json.loads(_urlsafe_b64decode(payload).decode("utf-8"))
-    except (BinasciiError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(raw_payload, dict):
-        return None
-
-    state = _google_oauth_state_from_payload(raw_payload)
-    if state is None:
-        return None
-    if (current_timestamp() if now is None else now) > state.expires_at:
-        return None
-    return state
+    return decode_signed_oauth_state(
+        value,
+        secret=secret,
+        state_factory=_google_oauth_state_from_payload,
+        now=now,
+    )
 
 
 def _google_oauth_state_from_payload(
@@ -337,7 +328,11 @@ def _exchange_google_authorisation_code(
     request: GoogleTokenExchangeRequest,
     timeout: float,
 ) -> GoogleTokenResponse:
-    parsed_endpoint = _google_https_endpoint(request.token_endpoint)
+    parsed_endpoint = https_endpoint(
+        request.token_endpoint,
+        error_type=GoogleTokenExchangeError,
+        error_message="Google token endpoint must be HTTPS.",
+    )
     body = urlencode(
         {
             "client_id": request.client_id,
@@ -351,79 +346,41 @@ def _exchange_google_authorisation_code(
         "Accept": "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
     }
-    connection = HTTPSConnection(
-        parsed_endpoint.hostname,
-        parsed_endpoint.port,
+    response_body = https_request(
+        parsed_endpoint,
+        method="POST",
+        body=body,
+        headers=headers,
         timeout=timeout,
+        error_type=GoogleTokenExchangeError,
+        error_message="Google token exchange failed.",
     )
-    try:
-        connection.request(
-            "POST",
-            urlunsplit(
-                ("", "", parsed_endpoint.path or "/", parsed_endpoint.query, "")
-            ),
-            body=body,
-            headers=headers,
-        )
-        response = connection.getresponse()
-        response_body = response.read()
-    except (HTTPClientException, OSError, TimeoutError) as exc:
-        raise GoogleTokenExchangeError("Google token exchange failed.") from exc
-    finally:
-        connection.close()
-
-    if response.status < 200 or response.status >= 300:
-        raise GoogleTokenExchangeError("Google token exchange failed.")
-
-    try:
-        payload = json.loads(response_body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise GoogleTokenExchangeError(
-            "Google token exchange returned invalid JSON."
-        ) from exc
-    if not isinstance(payload, dict):
-        raise GoogleTokenExchangeError(
-            "Google token exchange returned an invalid response."
-        )
+    payload = json_object_response(
+        response_body,
+        error_type=GoogleTokenExchangeError,
+        invalid_json_message="Google token exchange returned invalid JSON.",
+        invalid_payload_message="Google token exchange returned an invalid response.",
+    )
     return google_token_response_from_payload(payload)
-
-
-def _google_https_endpoint(value: str):
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname is None
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        raise GoogleTokenExchangeError("Google token endpoint must be HTTPS.")
-    return parsed
 
 
 def _validate_google_id_token(
     request: GoogleIDTokenValidationRequest,
     jwks_client_factory: GoogleJwksClientFactory,
 ) -> GoogleIDTokenClaims:
-    if not isinstance(request.id_token, str) or not request.id_token.strip():
-        raise GoogleIDTokenValidationError("Google ID token is missing.")
-    try:
-        signing_key = jwks_client_factory(
-            request.settings.jwks_uri
-        ).get_signing_key_from_jwt(request.id_token)
-        payload = jwt.decode(
-            request.id_token,
-            signing_key.key,
-            algorithms=("RS256",),
-            audience=request.settings.client_id,
-            issuer=request.settings.issuer,
-            options={"require": ["aud", "exp", "iss", "sub"]},
-        )
-    except PyJWTError as exc:
-        raise GoogleIDTokenValidationError("Google ID token is invalid.") from exc
-    if not isinstance(payload, dict):
-        raise GoogleIDTokenValidationError("Google ID token payload is invalid.")
+    payload = oidc_id_token_payload(
+        request.id_token,
+        jwks_uri=request.settings.jwks_uri,
+        audience=request.settings.client_id,
+        issuer=request.settings.issuer,
+        jwks_client_factory=jwks_client_factory,
+        error_type=GoogleIDTokenValidationError,
+        missing_message="Google ID token is missing.",
+        invalid_message="Google ID token is invalid.",
+        invalid_payload_message="Google ID token payload is invalid.",
+    )
     return google_id_token_claims_from_payload(
-        cast(Mapping[str, object], payload),
+        payload,
         expected_nonce=request.nonce,
     )
 
@@ -478,25 +435,6 @@ def _required_payload_bool(
     raise GoogleIDTokenValidationError(
         f"Google ID token claim {field_name!r} must be a boolean."
     )
-
-
-def _signature(payload: str, secret: str) -> str:
-    return _urlsafe_b64encode(
-        hmac.new(
-            secret.encode("utf-8"),
-            payload.encode("ascii"),
-            hashlib.sha256,
-        ).digest()
-    )
-
-
-def _urlsafe_b64encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
-
-
-def _urlsafe_b64decode(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(f"{value}{padding}")
 
 
 __all__ = (

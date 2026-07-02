@@ -1,7 +1,8 @@
 import re
 import sys
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -11,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from provider_test_keys import apple_private_key_pem as _apple_private_key_pem
 from wybra.auth import AuthCapability, anonymous_required, login_required
 from wybra.auth.accounts.manager import create_user_manager
 from wybra.auth.accounts.schemas import UserCreate
@@ -28,10 +30,26 @@ from wybra.auth.routes.pages import totp_management as totp_management_pages
 from wybra.auth.routes.totp import TOTP_LOGIN_NONCE_COOKIE
 from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability
+from wybra.providers.apple import (
+    APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+    APPLE_OAUTH_STATE_COOKIE,
+    APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+    APPLE_PROVIDER_NAME,
+    AppleIDTokenClaims,
+    AppleIDTokenValidationError,
+    AppleIDTokenValidationRequest,
+    AppleOAuthState,
+    AppleTokenExchangeError,
+    AppleTokenExchangeRequest,
+    AppleTokenResponse,
+    decode_apple_oauth_state_cookie,
+)
+from wybra.providers.descriptors import provider_label
 from wybra.providers.github import (
     GITHUB_API_CLIENT_STATE_ATTRIBUTE,
     GITHUB_OAUTH_STATE_COOKIE,
     GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+    GITHUB_PROVIDER_NAME,
     GitHubAPIError,
     GitHubIdentityRequest,
     GitHubOAuthState,
@@ -45,6 +63,7 @@ from wybra.providers.google import (
     GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
     GOOGLE_OAUTH_STATE_COOKIE,
     GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+    GOOGLE_PROVIDER_NAME,
     GoogleIDTokenClaims,
     GoogleIDTokenValidationError,
     GoogleIDTokenValidationRequest,
@@ -66,6 +85,26 @@ PAGE_MODULES = (
     "wybra.auth",
 )
 STRONG_TEST_PASSWORD = "Correct horse 42!"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderPageCase:
+    name: str
+    label: str
+    state_cookie_name: str
+    default_subject: str
+    available_secret_name: str
+    available_secret_value: Callable[[], str]
+    start_site: Callable[..., Awaitable[Site]]
+    config_factory: Callable[..., dict[str, object]]
+    create_link: Callable[..., Awaitable[str]]
+    linked_user_id: Callable[..., Awaitable[uuid.UUID | None]]
+
+    def page_params(self) -> tuple[str, str]:
+        return self.name, self.label
+
+    def set_available_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(self.available_secret_name, self.available_secret_value())
 
 
 @pytest.fixture(autouse=True)
@@ -104,7 +143,9 @@ def _site_config_source(
     if provider_route_prefixes is not None:
         route_prefixes["wybra.providers"] = provider_route_prefixes
     elif provider_route_prefix is not None:
-        route_prefixes["wybra.providers"] = {"google": provider_route_prefix}
+        route_prefixes["wybra.providers"] = {
+            GOOGLE_PROVIDER_NAME: provider_route_prefix
+        }
 
     config: dict[str, object] = {
         "app": {
@@ -302,7 +343,7 @@ def _google_provider_config(
                 "client_secret_key": secret_key,
             }
         )
-    return {"google": config}
+    return {GOOGLE_PROVIDER_NAME: config}
 
 
 def _github_provider_config(
@@ -326,7 +367,33 @@ def _github_provider_config(
                 "client_secret_key": secret_key,
             }
         )
-    return {"github": config}
+    return {GITHUB_PROVIDER_NAME: config}
+
+
+def _apple_provider_config(
+    *,
+    enabled: bool = True,
+    secret_key: str | None = "APPLE_PRIVATE_KEY",
+    account_creation_enabled: bool = False,
+    email_match_linking_enabled: bool = False,
+) -> dict[str, object]:
+    config: dict[str, object] = {
+        "enabled": enabled,
+        "client_id": "com.example.app.web",
+        "team_id": "TEAMID1234",
+        "key_id": "KEYID1234",
+        "account_creation_enabled": account_creation_enabled,
+        "email_match_linking_enabled": email_match_linking_enabled,
+        "required_claims": ["sub", "email", "email_verified"],
+    }
+    if secret_key is not None:
+        config.update(
+            {
+                "secrets": "environment",
+                "private_key_secret_key": secret_key,
+            }
+        )
+    return {APPLE_PROVIDER_NAME: config}
 
 
 async def _start_google_provider_site(
@@ -353,7 +420,7 @@ async def _start_google_provider_site(
             account_prefix=account_prefix,
             auth_config=auth_config,
             provider_route_prefix=provider_route_prefix
-            or f"{account_prefix}/providers/google",
+            or f"{account_prefix}/providers/{GOOGLE_PROVIDER_NAME}",
             providers_config=providers_config or _google_provider_config(),
         ),
     )
@@ -383,9 +450,42 @@ async def _start_github_provider_site(
             account_prefix=account_prefix,
             auth_config=auth_config,
             provider_route_prefixes={
-                "github": provider_route_prefix or f"{account_prefix}/providers/github",
+                GITHUB_PROVIDER_NAME: provider_route_prefix
+                or f"{account_prefix}/providers/{GITHUB_PROVIDER_NAME}",
             },
             providers_config=providers_config or _github_provider_config(),
+        ),
+    )
+
+
+async def _start_apple_provider_site(
+    tmp_path: Path,
+    *,
+    auth_config: dict[str, object] | None = None,
+    account_prefix: str = "/account",
+    provider_route_prefix: str | None = None,
+    providers_config: dict[str, object] | None = None,
+):
+    return await start(
+        FastAPI(),
+        config_source=_site_config_source(
+            tmp_path,
+            modules=(
+                "wybra.secrets",
+                "wybra.forms",
+                "wybra.assets",
+                "wybra.template",
+                "wybra.db",
+                "wybra.auth",
+                "wybra.providers",
+            ),
+            account_prefix=account_prefix,
+            auth_config=auth_config,
+            provider_route_prefixes={
+                APPLE_PROVIDER_NAME: provider_route_prefix
+                or f"{account_prefix}/providers/{APPLE_PROVIDER_NAME}",
+            },
+            providers_config=providers_config or _apple_provider_config(),
         ),
     )
 
@@ -412,6 +512,17 @@ def _github_oauth_cookie_state(site, response) -> GitHubOAuthState:
     return state
 
 
+def _apple_oauth_cookie_state(site, response) -> AppleOAuthState:
+    cookie = response.cookies.get(APPLE_OAUTH_STATE_COOKIE)
+    assert cookie is not None
+    state = decode_apple_oauth_state_cookie(
+        cookie,
+        secret=site.app.state.auth_settings.identity_options.verification_token_secret,
+    )
+    assert state is not None
+    return state
+
+
 def _google_state_cookie_secret(site) -> str:
     return site.app.state.auth_settings.identity_options.verification_token_secret
 
@@ -429,7 +540,7 @@ async def _create_google_provider_link(
             SecretEnvelopeService.for_testing(),
         )
         provider_id = await store.create_provider_credential(
-            provider_name="google",
+            provider_name=GOOGLE_PROVIDER_NAME,
             provider_subject=provider_subject,
             access_token="stored-access-token",
             account_email=account_email,
@@ -454,7 +565,32 @@ async def _create_github_provider_link(
             SecretEnvelopeService.for_testing(),
         )
         provider_id = await store.create_provider_credential(
-            provider_name="github",
+            provider_name=GITHUB_PROVIDER_NAME,
+            provider_subject=provider_subject,
+            access_token="stored-access-token",
+            account_email=account_email,
+        )
+        await store.link_provider_to_user(
+            provider_id=provider_id,
+            user_id=user_id,
+        )
+        return provider_id
+
+
+async def _create_apple_provider_link(
+    site,
+    *,
+    user_id: uuid.UUID,
+    provider_subject: str = "apple-subject",
+    account_email: str = "user@example.com",
+) -> str:
+    async with site.require_capability(DatabaseCapability).transaction() as session:
+        store = SqlAlchemyProviderCredentialStore(
+            session,
+            SecretEnvelopeService.for_testing(),
+        )
+        provider_id = await store.create_provider_credential(
+            provider_name=APPLE_PROVIDER_NAME,
             provider_subject=provider_subject,
             access_token="stored-access-token",
             account_email=account_email,
@@ -476,7 +612,7 @@ async def _google_provider_linked_user_id(
             select(ExternalIdentityLink.user_id)
             .join(IdentityProvider)
             .where(
-                IdentityProvider.provider_name == "google",
+                IdentityProvider.provider_name == GOOGLE_PROVIDER_NAME,
                 IdentityProvider.provider_subject == provider_subject,
             )
         )
@@ -493,11 +629,136 @@ async def _github_provider_linked_user_id(
             select(ExternalIdentityLink.user_id)
             .join(IdentityProvider)
             .where(
-                IdentityProvider.provider_name == "github",
+                IdentityProvider.provider_name == GITHUB_PROVIDER_NAME,
                 IdentityProvider.provider_subject == provider_subject,
             )
         )
         return result.scalar_one_or_none()
+
+
+async def _apple_provider_linked_user_id(
+    site,
+    *,
+    provider_subject: str,
+) -> uuid.UUID | None:
+    async with site.require_capability(DatabaseCapability).transaction() as session:
+        result = await session.execute(
+            select(ExternalIdentityLink.user_id)
+            .join(IdentityProvider)
+            .where(
+                IdentityProvider.provider_name == APPLE_PROVIDER_NAME,
+                IdentityProvider.provider_subject == provider_subject,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+def _test_client_secret() -> str:
+    return "client-secret"
+
+
+PROVIDER_TEST_CASES = (
+    ProviderPageCase(
+        name=GOOGLE_PROVIDER_NAME,
+        label=provider_label(GOOGLE_PROVIDER_NAME),
+        state_cookie_name=GOOGLE_OAUTH_STATE_COOKIE,
+        default_subject="google-subject",
+        available_secret_name="GOOGLE_SECRET",
+        available_secret_value=_test_client_secret,
+        start_site=_start_google_provider_site,
+        config_factory=_google_provider_config,
+        create_link=_create_google_provider_link,
+        linked_user_id=_google_provider_linked_user_id,
+    ),
+    ProviderPageCase(
+        name=GITHUB_PROVIDER_NAME,
+        label=provider_label(GITHUB_PROVIDER_NAME),
+        state_cookie_name=GITHUB_OAUTH_STATE_COOKIE,
+        default_subject="github-subject",
+        available_secret_name="GITHUB_SECRET",
+        available_secret_value=_test_client_secret,
+        start_site=_start_github_provider_site,
+        config_factory=_github_provider_config,
+        create_link=_create_github_provider_link,
+        linked_user_id=_github_provider_linked_user_id,
+    ),
+    ProviderPageCase(
+        name=APPLE_PROVIDER_NAME,
+        label=provider_label(APPLE_PROVIDER_NAME),
+        state_cookie_name=APPLE_OAUTH_STATE_COOKIE,
+        default_subject="apple-subject",
+        available_secret_name="APPLE_PRIVATE_KEY",
+        available_secret_value=_apple_private_key_pem,
+        start_site=_start_apple_provider_site,
+        config_factory=_apple_provider_config,
+        create_link=_create_apple_provider_link,
+        linked_user_id=_apple_provider_linked_user_id,
+    ),
+)
+PROVIDER_PAGE_CASES = tuple(case.page_params() for case in PROVIDER_TEST_CASES)
+_PROVIDER_TEST_CASE_BY_NAME = {case.name: case for case in PROVIDER_TEST_CASES}
+
+
+def _provider_case(provider_name: str) -> ProviderPageCase:
+    try:
+        return _PROVIDER_TEST_CASE_BY_NAME[provider_name]
+    except KeyError as exc:
+        raise AssertionError(f"unknown provider: {provider_name}") from exc
+
+
+def _set_available_provider_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+) -> None:
+    _provider_case(provider_name).set_available_secret(monkeypatch)
+
+
+async def _start_provider_site(
+    provider_name: str,
+    tmp_path: Path,
+    *,
+    providers_config: dict[str, object] | None = None,
+):
+    return await _provider_case(provider_name).start_site(
+        tmp_path,
+        providers_config=providers_config,
+    )
+
+
+def _provider_config(
+    provider_name: str,
+    **kwargs,
+) -> dict[str, object]:
+    return _provider_case(provider_name).config_factory(**kwargs)
+
+
+async def _create_provider_link(
+    provider_name: str,
+    site,
+    *,
+    user_id: uuid.UUID,
+    account_email: str = "user@example.com",
+) -> str:
+    return await _provider_case(provider_name).create_link(
+        site,
+        user_id=user_id,
+        account_email=account_email,
+    )
+
+
+async def _provider_linked_user_id(
+    provider_name: str,
+    site,
+) -> uuid.UUID | None:
+    provider_case = _provider_case(provider_name)
+    return await provider_case.linked_user_id(
+        site,
+        provider_subject=provider_case.default_subject,
+    )
+
+
+def _provider_state_cookie_name(provider_name: str) -> str:
+    return _provider_case(provider_name).state_cookie_name
 
 
 async def _google_provider_id(
@@ -508,7 +769,7 @@ async def _google_provider_id(
     async with site.require_capability(DatabaseCapability).transaction() as session:
         result = await session.execute(
             select(IdentityProvider.id).where(
-                IdentityProvider.provider_name == "google",
+                IdentityProvider.provider_name == GOOGLE_PROVIDER_NAME,
                 IdentityProvider.provider_subject == provider_subject,
             )
         )
@@ -526,7 +787,7 @@ async def _google_provider_subjects_for_user(
             .join(ExternalIdentityLink)
             .where(
                 ExternalIdentityLink.user_id == user_id,
-                IdentityProvider.provider_name == "google",
+                IdentityProvider.provider_name == GOOGLE_PROVIDER_NAME,
             )
             .order_by(IdentityProvider.provider_subject)
         )
@@ -660,6 +921,60 @@ class FakeGitHubAPIClient:
         return self.claims
 
 
+class FakeAppleTokenClient:
+    def __init__(
+        self,
+        response: AppleTokenResponse | None = None,
+        error: AppleTokenExchangeError | None = None,
+    ) -> None:
+        self.response = response or AppleTokenResponse(
+            access_token="access-token",
+            id_token="id-token",
+            token_type="bearer",
+        )
+        self.error = error
+        self.requests: list[AppleTokenExchangeRequest] = []
+
+    async def exchange_code(
+        self,
+        request: AppleTokenExchangeRequest,
+    ) -> AppleTokenResponse:
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+class FakeAppleIDTokenValidator:
+    def __init__(
+        self,
+        claims: AppleIDTokenClaims | None = None,
+        error: AppleIDTokenValidationError | None = None,
+    ) -> None:
+        self.claims = claims or AppleIDTokenClaims(
+            subject="apple-subject",
+            email="user@example.com",
+            email_verified=True,
+            nonce="nonce",
+            claims={
+                "sub": "apple-subject",
+                "email": "user@example.com",
+                "email_verified": True,
+            },
+        )
+        self.error = error
+        self.requests: list[AppleIDTokenValidationRequest] = []
+
+    async def validate(
+        self,
+        request: AppleIDTokenValidationRequest,
+    ) -> AppleIDTokenClaims:
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.claims
+
+
 @pytest.mark.anyio
 async def test_wybra_auth_setup_site_registers_auth_capability(
     tmp_path: Path,
@@ -755,7 +1070,7 @@ async def test_google_login_start_redirects_with_cookie_backed_state(
     assert redirect_query["scope"] == ["openid email profile"]
     assert redirect_query["state"] == [cookie_state.state]
     assert redirect_query["nonce"] == [cookie_state.nonce]
-    assert cookie_state.provider_name == "google"
+    assert cookie_state.provider_name == GOOGLE_PROVIDER_NAME
     assert cookie_state.purpose == "login"
     assert cookie_state.return_to == "/dashboard"
     assert cookie_state.redirect_uri == (
@@ -853,18 +1168,23 @@ async def test_google_start_routes_are_unavailable_when_provider_disabled(
 
 
 @pytest.mark.anyio
-async def test_google_start_routes_are_unavailable_after_secret_degradation(
+@pytest.mark.parametrize(
+    "provider_name",
+    (GOOGLE_PROVIDER_NAME, GITHUB_PROVIDER_NAME, APPLE_PROVIDER_NAME),
+)
+async def test_provider_start_routes_are_unavailable_after_secret_degradation(
     tmp_path: Path,
+    provider_name: str,
 ) -> None:
-    site = await _start_google_provider_site(tmp_path)
+    site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
 
     response = TestClient(site.app).get(
-        "/account/providers/google/login",
+        f"/account/providers/{provider_name}/login",
         follow_redirects=False,
     )
 
     assert response.status_code == 404
-    assert GOOGLE_OAUTH_STATE_COOKIE not in response.cookies
+    assert _provider_state_cookie_name(provider_name) not in response.cookies
 
 
 @pytest.mark.anyio
@@ -1858,7 +2178,7 @@ async def test_github_login_start_redirects_with_cookie_backed_pkce_state(
     assert redirect_query["code_challenge"] == [cookie_state.code_challenge]
     assert redirect_query["code_challenge_method"] == ["S256"]
     assert "nonce" not in redirect_query
-    assert cookie_state.provider_name == "github"
+    assert cookie_state.provider_name == GITHUB_PROVIDER_NAME
     assert cookie_state.purpose == "login"
     assert cookie_state.return_to == "/dashboard"
     assert cookie_state.redirect_uri == (
@@ -2109,39 +2429,363 @@ async def test_github_callback_links_provider_to_authenticated_user(
 
 
 @pytest.mark.anyio
-async def test_login_page_shows_google_sign_in_when_provider_available(
+async def test_apple_login_start_redirects_with_cookie_backed_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+    site = await _start_apple_provider_site(tmp_path)
 
-    response = TestClient(site.app).get("/account/login?return_to=/dashboard")
+    response = TestClient(site.app).get(
+        "/account/providers/apple/login?return_to=/dashboard",
+        follow_redirects=False,
+    )
 
-    assert response.status_code == 200
-    assert "Sign in with Google" in response.text
-    assert "/account/providers/google/login?return_to=%2Fdashboard" in response.text
+    assert response.status_code == 303
+    location = response.headers["location"]
+    parsed_location = urlsplit(location)
+    redirect_query = parse_qs(parsed_location.query)
+    cookie_state = _apple_oauth_cookie_state(site, response)
+    assert parsed_location.scheme == "https"
+    assert parsed_location.netloc == "appleid.apple.com"
+    assert parsed_location.path == "/auth/authorize"
+    assert redirect_query["client_id"] == ["com.example.app.web"]
+    assert redirect_query["redirect_uri"] == [
+        "http://testserver/account/providers/apple/callback"
+    ]
+    assert redirect_query["response_type"] == ["code"]
+    assert redirect_query["response_mode"] == ["form_post"]
+    assert redirect_query["scope"] == ["name email"]
+    assert redirect_query["state"] == [cookie_state.state]
+    assert redirect_query["nonce"] == [cookie_state.nonce]
+    assert cookie_state.provider_name == APPLE_PROVIDER_NAME
+    assert cookie_state.purpose == "login"
+    assert cookie_state.return_to == "/dashboard"
+    assert cookie_state.redirect_uri == (
+        "http://testserver/account/providers/apple/callback"
+    )
+    assert cookie_state.user_id is None
+    assert APPLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
+    assert "HttpOnly" in response.headers["set-cookie"]
 
 
 @pytest.mark.anyio
-async def test_login_page_shows_github_sign_in_when_provider_available(
+async def test_apple_start_routes_are_unavailable_after_private_key_degradation(
+    tmp_path: Path,
+) -> None:
+    site = await _start_apple_provider_site(tmp_path)
+
+    response = TestClient(site.app).get(
+        "/account/providers/apple/login",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 404
+    assert APPLE_OAUTH_STATE_COOKIE not in response.cookies
+
+
+@pytest.mark.anyio
+async def test_apple_callback_exchanges_code_and_validates_id_token_from_post(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+    site = await _start_apple_provider_site(tmp_path)
+    await _create_auth_schema(site)
+    token_client = FakeAppleTokenClient()
+    id_token_validator = FakeAppleIDTokenValidator()
+    setattr(
+        site.app.state,
+        APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        token_client,
+    )
+    setattr(
+        site.app.state,
+        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+        id_token_validator,
+    )
+    client = TestClient(site.app)
+    start = client.get("/account/providers/apple/login", follow_redirects=False)
+    cookie_state = _apple_oauth_cookie_state(site, start)
+
+    response = client.post(
+        "/account/providers/apple/callback",
+        data={"code": "code", "state": cookie_state.state},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Apple account is not linked."
+    assert len(token_client.requests) == 1
+    token_request = token_client.requests[0]
+    assert token_request.token_endpoint == "https://appleid.apple.com/auth/token"
+    assert token_request.client_id == "com.example.app.web"
+    assert token_request.client_secret.count(".") == 2
+    assert token_request.code == "code"
+    assert token_request.redirect_uri == (
+        "http://testserver/account/providers/apple/callback"
+    )
+    assert len(id_token_validator.requests) == 1
+    validation_request = id_token_validator.requests[0]
+    assert validation_request.id_token == "id-token"
+    assert validation_request.settings.client_id == "com.example.app.web"
+    assert validation_request.nonce == cookie_state.nonce
+    assert "Max-Age=0" in response.headers["set-cookie"]
+
+
+@pytest.mark.anyio
+async def test_apple_callback_rejects_invalid_token_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+    site = await _start_apple_provider_site(tmp_path)
+    token_client = FakeAppleTokenClient(response=AppleTokenResponse())
+    id_token_validator = FakeAppleIDTokenValidator()
+    setattr(site.app.state, APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
+    setattr(
+        site.app.state,
+        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+        id_token_validator,
+    )
+    client = TestClient(site.app)
+    start = client.get("/account/providers/apple/login", follow_redirects=False)
+    cookie_state = _apple_oauth_cookie_state(site, start)
+
+    response = client.post(
+        "/account/providers/apple/callback",
+        data={"code": "code", "state": cookie_state.state},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Apple token response is invalid."
+    assert len(token_client.requests) == 1
+    assert id_token_validator.requests == []
+    assert "Max-Age=0" in response.headers["set-cookie"]
+
+
+@pytest.mark.anyio
+async def test_apple_callback_logs_client_secret_generation_failure(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", "not-a-private-key")
+    site = await _start_apple_provider_site(tmp_path)
+    client = TestClient(site.app)
+    start = client.get("/account/providers/apple/login", follow_redirects=False)
+    cookie_state = _apple_oauth_cookie_state(site, start)
+
+    with caplog.at_level("WARNING", logger="wybra.providers.routes"):
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Apple login is not available."
+    assert "Apple client secret generation failed." in caplog.text
+
+
+@pytest.mark.anyio
+async def test_apple_callback_resolves_existing_provider_link(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+    site = await _start_apple_provider_site(tmp_path)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="linked@example.com",
+        is_verified=True,
+    )
+    await _create_apple_provider_link(
+        site,
+        user_id=user_id,
+        provider_subject="apple-subject",
+        account_email="linked@example.com",
+    )
+    setattr(
+        site.app.state,
+        APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        FakeAppleTokenClient(),
+    )
+    setattr(
+        site.app.state,
+        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+        FakeAppleIDTokenValidator(
+            claims=AppleIDTokenClaims(
+                subject="apple-subject",
+                email="linked@example.com",
+                email_verified=True,
+                nonce="nonce",
+            )
+        ),
+    )
+    client = TestClient(site.app)
+    start = client.get("/account/providers/apple/login", follow_redirects=False)
+    cookie_state = _apple_oauth_cookie_state(site, start)
+
+    response = client.post(
+        "/account/providers/apple/callback",
+        data={"code": "code", "state": cookie_state.state},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account"
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name in response.cookies
+
+
+@pytest.mark.anyio
+async def test_apple_callback_auto_links_verified_email_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+    site = await _start_apple_provider_site(
+        tmp_path,
+        providers_config=_apple_provider_config(email_match_linking_enabled=True),
+    )
+    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="match@example.com",
+        is_verified=True,
+    )
+    setattr(
+        site.app.state,
+        APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        FakeAppleTokenClient(
+            response=AppleTokenResponse(
+                access_token="access-token",
+                id_token="id-token",
+                token_type="bearer",
+                expires_in=300,
+            )
+        ),
+    )
+    setattr(
+        site.app.state,
+        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+        FakeAppleIDTokenValidator(
+            claims=AppleIDTokenClaims(
+                subject="apple-match-subject",
+                email="match@example.com",
+                email_verified=True,
+                nonce="nonce",
+            )
+        ),
+    )
+    client = TestClient(site.app)
+    start = client.get("/account/providers/apple/login", follow_redirects=False)
+    cookie_state = _apple_oauth_cookie_state(site, start)
+
+    response = client.post(
+        "/account/providers/apple/callback",
+        data={"code": "code", "state": cookie_state.state},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account"
+    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+    assert cookie_name in response.cookies
+    assert (
+        await _apple_provider_linked_user_id(
+            site,
+            provider_subject="apple-match-subject",
+        )
+        == user_id
+    )
+
+
+@pytest.mark.anyio
+async def test_apple_callback_links_provider_to_authenticated_user(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+    site = await _start_apple_provider_site(tmp_path)
+    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="current@example.com",
+        is_verified=True,
+    )
+    setattr(
+        site.app.state,
+        APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+        FakeAppleTokenClient(),
+    )
+    setattr(
+        site.app.state,
+        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+        FakeAppleIDTokenValidator(
+            claims=AppleIDTokenClaims(
+                subject="apple-link-subject",
+                email="current@example.com",
+                email_verified=True,
+                nonce="nonce",
+            )
+        ),
+    )
+    client = _authenticated_client(site, email="current@example.com")
+    start = client.get("/account/providers/apple/link", follow_redirects=False)
+    cookie_state = _apple_oauth_cookie_state(site, start)
+
+    response = client.post(
+        "/account/providers/apple/callback",
+        data={"code": "code", "state": cookie_state.state},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account/security"
+    assert (
+        await _apple_provider_linked_user_id(
+            site,
+            provider_subject="apple-link-subject",
+        )
+        == user_id
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("provider_name", "provider_label"),
+    PROVIDER_PAGE_CASES,
+)
+async def test_login_page_shows_provider_sign_in_when_provider_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider_name: str,
+    provider_label: str,
+) -> None:
+    _set_available_provider_secret(monkeypatch, provider_name)
+    site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
 
     response = TestClient(site.app).get("/account/login?return_to=/dashboard")
 
     assert response.status_code == 200
-    assert "Sign in with GitHub" in response.text
-    assert "/account/providers/github/login?return_to=%2Fdashboard" in response.text
+    assert f"Sign in with {provider_label}" in response.text
+    assert (
+        f"/account/providers/{provider_name}/login?return_to=%2Fdashboard"
+        in response.text
+    )
 
 
 @pytest.mark.anyio
 async def test_login_page_hides_google_sign_in_when_provider_disabled(
     tmp_path: Path,
 ) -> None:
+    google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
     site = await _start_google_provider_site(
         tmp_path,
         providers_config=_google_provider_config(enabled=False),
@@ -2150,13 +2794,14 @@ async def test_login_page_hides_google_sign_in_when_provider_disabled(
     response = TestClient(site.app).get("/account/login")
 
     assert response.status_code == 200
-    assert "Sign in with Google" not in response.text
+    assert f"Sign in with {google_label}" not in response.text
 
 
 @pytest.mark.anyio
 async def test_login_and_security_pages_hide_google_when_oauth_config_incomplete(
     tmp_path: Path,
 ) -> None:
+    google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
     site = await _start_google_provider_site(
         tmp_path,
         providers_config=_google_provider_config(secret_key=None),
@@ -2174,18 +2819,24 @@ async def test_login_and_security_pages_hide_google_when_oauth_config_incomplete
     security_response = client.get("/account/security")
 
     assert login_response.status_code == 200
-    assert "Sign in with Google" not in login_response.text
+    assert f"Sign in with {google_label}" not in login_response.text
     assert security_response.status_code == 200
     assert "Provider sign-in" not in security_response.text
 
 
 @pytest.mark.anyio
-async def test_security_page_shows_google_link_control(
+@pytest.mark.parametrize(
+    ("provider_name", "provider_label"),
+    PROVIDER_PAGE_CASES,
+)
+async def test_security_page_shows_provider_link_control(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    provider_name: str,
+    provider_label: str,
 ) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
+    _set_available_provider_secret(monkeypatch, provider_name)
+    site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
     await _create_auth_schema(site)
     user_id = await _create_local_user(
         site,
@@ -2198,34 +2849,10 @@ async def test_security_page_shows_google_link_control(
 
     assert response.status_code == 200
     assert "Provider sign-in" in response.text
-    assert "Link Google" in response.text
-    assert "/account/providers/google/link?return_to=%2Faccount%2Fsecurity" in (
-        response.text
-    )
-
-
-@pytest.mark.anyio
-async def test_security_page_shows_github_link_control(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert "Provider sign-in" in response.text
-    assert "Link GitHub" in response.text
-    assert "/account/providers/github/link?return_to=%2Faccount%2Fsecurity" in (
-        response.text
+    assert f"Link {provider_label}" in response.text
+    assert (
+        f"/account/providers/{provider_name}/link?return_to=%2Faccount%2Fsecurity"
+        in response.text
     )
 
 
@@ -2234,6 +2861,7 @@ async def test_security_page_shows_google_unlink_and_password_disable_controls(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
     monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
     site = await _start_google_provider_site(tmp_path)
     await _create_auth_schema(site)
@@ -2252,10 +2880,12 @@ async def test_security_page_shows_google_unlink_and_password_disable_controls(
     response = _security_page_client(site).get("/account/security")
 
     assert response.status_code == 200
-    assert "Google sign-in is linked as google-user@example.test" in response.text
+    assert (
+        f"{google_label} sign-in is linked as google-user@example.test" in response.text
+    )
     assert f'value="{provider_id}"' in response.text
-    assert "Link another Google account" in response.text
-    assert "Unlink Google" in response.text
+    assert f"Link another {google_label} account" in response.text
+    assert f"Unlink {google_label}" in response.text
     assert "Disable username/password login" in response.text
 
 
@@ -2264,6 +2894,7 @@ async def test_security_page_shows_github_unlink_control(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    github_label = _provider_case(GITHUB_PROVIDER_NAME).label
     monkeypatch.setenv("GITHUB_SECRET", "client-secret")
     site = await _start_github_provider_site(tmp_path)
     await _create_auth_schema(site)
@@ -2282,10 +2913,45 @@ async def test_security_page_shows_github_unlink_control(
     response = _security_page_client(site).get("/account/security")
 
     assert response.status_code == 200
-    assert "GitHub sign-in is linked as github-user@example.test" in response.text
+    assert (
+        f"{github_label} sign-in is linked as github-user@example.test" in response.text
+    )
     assert f'value="{provider_id}"' in response.text
-    assert "Link another GitHub account" in response.text
-    assert "Unlink GitHub" in response.text
+    assert f"Link another {github_label} account" in response.text
+    assert f"Unlink {github_label}" in response.text
+    assert "Disable username/password login" in response.text
+
+
+@pytest.mark.anyio
+async def test_security_page_shows_apple_unlink_control(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    apple_label = _provider_case(APPLE_PROVIDER_NAME).label
+    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+    site = await _start_apple_provider_site(tmp_path)
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    provider_id = await _create_apple_provider_link(
+        site,
+        user_id=user_id,
+        account_email="apple-user@example.test",
+    )
+    _override_current_user(site.app, user_id=user_id)
+
+    response = _security_page_client(site).get("/account/security")
+
+    assert response.status_code == 200
+    assert (
+        f"{apple_label} sign-in is linked as apple-user@example.test" in response.text
+    )
+    assert f'value="{provider_id}"' in response.text
+    assert f"Link another {apple_label} account" in response.text
+    assert f"Unlink {apple_label}" in response.text
     assert "Disable username/password login" in response.text
 
 
@@ -2328,12 +2994,18 @@ async def test_security_page_unlinks_google_when_password_login_remains(
 
 
 @pytest.mark.anyio
-async def test_security_page_rejects_unlinking_last_sign_in_method(
+@pytest.mark.parametrize(
+    ("provider_name", "provider_label"),
+    PROVIDER_PAGE_CASES,
+)
+async def test_security_page_rejects_unlinking_last_provider_sign_in_method(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    provider_name: str,
+    provider_label: str,
 ) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
+    _set_available_provider_secret(monkeypatch, provider_name)
+    site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
     await _create_auth_schema(site)
     user_id = await _create_local_user(
         site,
@@ -2341,7 +3013,11 @@ async def test_security_page_rejects_unlinking_last_sign_in_method(
         is_verified=True,
     )
     await _set_password_login_enabled(site, user_id, False)
-    provider_id = await _create_google_provider_link(site, user_id=user_id)
+    provider_id = await _create_provider_link(
+        provider_name,
+        site,
+        user_id=user_id,
+    )
     _override_current_user(
         site.app,
         user_id=user_id,
@@ -2352,7 +3028,7 @@ async def test_security_page_rejects_unlinking_last_sign_in_method(
     security_page = client.get("/account/security")
 
     response = client.post(
-        "/account/security/providers/google/unlink",
+        f"/account/security/providers/{provider_name}/unlink",
         data={
             "csrf_token": _csrf_token(security_page.text),
             "provider_id": provider_id,
@@ -2360,57 +3036,11 @@ async def test_security_page_rejects_unlinking_last_sign_in_method(
     )
 
     assert response.status_code == 400
-    assert "Add another sign-in method before unlinking Google." in response.text
     assert (
-        await _google_provider_linked_user_id(
-            site,
-            provider_subject="google-subject",
-        )
-        == user_id
+        f"Add another sign-in method before unlinking {provider_label}."
+        in response.text
     )
-
-
-@pytest.mark.anyio
-async def test_security_page_rejects_unlinking_last_github_sign_in_method(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    await _set_password_login_enabled(site, user_id, False)
-    provider_id = await _create_github_provider_link(site, user_id=user_id)
-    _override_current_user(
-        site.app,
-        user_id=user_id,
-        hashed_password=None,
-        password_login_enabled=False,
-    )
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-
-    response = client.post(
-        "/account/security/providers/github/unlink",
-        data={
-            "csrf_token": _csrf_token(security_page.text),
-            "provider_id": provider_id,
-        },
-    )
-
-    assert response.status_code == 400
-    assert "Add another sign-in method before unlinking GitHub." in response.text
-    assert (
-        await _github_provider_linked_user_id(
-            site,
-            provider_subject="github-subject",
-        )
-        == user_id
-    )
+    assert await _provider_linked_user_id(provider_name, site) == user_id
 
 
 @pytest.mark.anyio

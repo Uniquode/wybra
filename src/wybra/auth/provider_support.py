@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -10,42 +9,22 @@ from wybra.auth.provider_credentials import (
     ProviderCredentialStore,
     provider_credential_store,
 )
-from wybra.auth.routes.paths import normalise_return_to, optional_route_path
 from wybra.core.exceptions import ConfigurationError
 from wybra.providers.capabilities import ProvidersCapability
-from wybra.providers.github import (
-    GITHUB_PROVIDER_NAME,
-    github_oauth_settings_from_provider,
+from wybra.providers.descriptors import (
+    ProviderAuthDescriptor,
+    provider_auth_descriptors,
 )
-from wybra.providers.google import (
-    GOOGLE_PROVIDER_NAME,
-    google_oauth_settings_from_provider,
+from wybra.providers.descriptors import (
+    provider_label as provider_label,
 )
 from wybra.providers.settings import ProviderSettings
 from wybra.site import SiteCapabilityError, get_site
 
 
-def enabled_google_provider(request: Request) -> ProviderSettings | None:
-    return _enabled_provider(
-        request,
-        provider_name=GOOGLE_PROVIDER_NAME,
-        settings_factory=google_oauth_settings_from_provider,
-    )
-
-
-def enabled_github_provider(request: Request) -> ProviderSettings | None:
-    return _enabled_provider(
-        request,
-        provider_name=GITHUB_PROVIDER_NAME,
-        settings_factory=github_oauth_settings_from_provider,
-    )
-
-
-def _enabled_provider(
+def enabled_provider(
     request: Request,
-    *,
-    provider_name: str,
-    settings_factory: Callable[[ProviderSettings], object],
+    descriptor: ProviderAuthDescriptor,
 ) -> ProviderSettings | None:
     try:
         providers = get_site(request.app).optional_capability(ProvidersCapability)
@@ -54,29 +33,43 @@ def _enabled_provider(
     if providers is None:
         return None
     try:
-        provider = providers.settings.provider(provider_name)
+        provider = providers.settings.provider(descriptor.name)
     except ConfigurationError:
         return None
     if not provider.enabled:
         return None
     try:
-        settings_factory(provider)
+        descriptor.settings_factory(provider)
     except ConfigurationError:
         return None
     return provider
 
 
-def google_login_path(request: Request, *, return_to: str | None = None) -> str | None:
-    route_path = optional_route_path(request, "auth:google-login")
-    if route_path is None or enabled_google_provider(request) is None:
+def provider_login_path(
+    request: Request,
+    descriptor: ProviderAuthDescriptor,
+    *,
+    return_to: str | None = None,
+) -> str | None:
+    from wybra.auth.routes.paths import normalise_return_to, optional_route_path
+
+    route_path = optional_route_path(request, descriptor.login_route_name)
+    if route_path is None or enabled_provider(request, descriptor) is None:
         return None
     query = urlencode({"return_to": normalise_return_to(return_to)})
     return f"{route_path}?{query}"
 
 
-def google_link_path(request: Request, *, return_to: str | None = None) -> str | None:
-    route_path = optional_route_path(request, "auth:google-link")
-    if route_path is None or enabled_google_provider(request) is None:
+def provider_link_path(
+    request: Request,
+    descriptor: ProviderAuthDescriptor,
+    *,
+    return_to: str | None = None,
+) -> str | None:
+    from wybra.auth.routes.paths import normalise_return_to, optional_route_path
+
+    route_path = optional_route_path(request, descriptor.link_route_name)
+    if route_path is None or enabled_provider(request, descriptor) is None:
         return None
     security_path = (
         optional_route_path(request, "auth:security")
@@ -89,27 +82,31 @@ def google_link_path(request: Request, *, return_to: str | None = None) -> str |
     return f"{route_path}?{query}"
 
 
-def github_login_path(request: Request, *, return_to: str | None = None) -> str | None:
-    route_path = optional_route_path(request, "auth:github-login")
-    if route_path is None or enabled_github_provider(request) is None:
-        return None
-    query = urlencode({"return_to": normalise_return_to(return_to)})
-    return f"{route_path}?{query}"
+def provider_security_options(
+    request: Request,
+    *,
+    return_to: str | None,
+) -> tuple[dict[str, str], ...]:
+    from wybra.auth.routes.paths import optional_route_path
 
-
-def github_link_path(request: Request, *, return_to: str | None = None) -> str | None:
-    route_path = optional_route_path(request, "auth:github-link")
-    if route_path is None or enabled_github_provider(request) is None:
-        return None
-    security_path = (
-        optional_route_path(request, "auth:security")
-        or optional_route_path(request, "auth:account")
-        or "/"
-    )
-    query = urlencode(
-        {"return_to": normalise_return_to(return_to, default=security_path)}
-    )
-    return f"{route_path}?{query}"
+    options: list[dict[str, str]] = []
+    for descriptor in provider_auth_descriptors():
+        link_path = provider_link_path(request, descriptor, return_to=return_to)
+        unlink_path = optional_route_path(
+            request,
+            descriptor.security_unlink_route_name,
+        )
+        if link_path is None or unlink_path is None:
+            continue
+        options.append(
+            {
+                "name": descriptor.name,
+                "label": descriptor.label,
+                "link_path": link_path,
+                "unlink_path": unlink_path,
+            }
+        )
+    return tuple(options)
 
 
 def provider_login_options(
@@ -118,22 +115,15 @@ def provider_login_options(
     return_to: str | None,
 ) -> tuple[dict[str, str], ...]:
     options: list[dict[str, str]] = []
-    google_path = google_login_path(request, return_to=return_to)
-    if google_path is not None:
+    for descriptor in provider_auth_descriptors():
+        login_path = provider_login_path(request, descriptor, return_to=return_to)
+        if login_path is None:
+            continue
         options.append(
             {
-                "name": GOOGLE_PROVIDER_NAME,
-                "label": "Google",
-                "login_path": google_path,
-            }
-        )
-    github_path = github_login_path(request, return_to=return_to)
-    if github_path is not None:
-        options.append(
-            {
-                "name": GITHUB_PROVIDER_NAME,
-                "label": "GitHub",
-                "login_path": github_path,
+                "name": descriptor.name,
+                "label": descriptor.label,
+                "login_path": login_path,
             }
         )
     return tuple(options)
@@ -159,10 +149,9 @@ async def user_has_usable_account_sign_in(
 
 def usable_provider_names(request: Request) -> tuple[str, ...]:
     names: list[str] = []
-    if enabled_google_provider(request) is not None:
-        names.append(GOOGLE_PROVIDER_NAME)
-    if enabled_github_provider(request) is not None:
-        names.append(GITHUB_PROVIDER_NAME)
+    for descriptor in provider_auth_descriptors():
+        if enabled_provider(request, descriptor) is not None:
+            names.append(descriptor.name)
     return tuple(names)
 
 

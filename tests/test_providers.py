@@ -5,9 +5,14 @@ from types import SimpleNamespace
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 
+from provider_test_keys import (
+    apple_private_key_pair as _apple_private_key_pair,
+)
+from provider_test_keys import (
+    oidc_rsa_private_key,
+)
 from wybra.auth.timestamps import current_timestamp
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
@@ -21,7 +26,25 @@ from wybra.providers import (
     ProvidersSettings,
     provider_settings_with_available_secrets,
     resolve_provider_client_secret,
+    resolve_provider_private_key,
     validate_provider_secret_settings,
+)
+from wybra.providers.apple import (
+    APPLE_CLIENT_SECRET_AUDIENCE,
+    APPLE_DEFAULT_AUTHORISATION_ENDPOINT,
+    APPLE_DEFAULT_ISSUER,
+    APPLE_DEFAULT_JWKS_URI,
+    APPLE_DEFAULT_SCOPES,
+    APPLE_DEFAULT_TOKEN_ENDPOINT,
+    APPLE_PROVIDER_NAME,
+    AppleIDTokenValidationError,
+    AppleIDTokenValidationRequest,
+    AppleOAuthSettings,
+    AppleOIDCIDTokenValidator,
+    apple_id_token_claims_from_payload,
+    apple_oauth_settings_from_provider,
+    apple_token_response_from_payload,
+    create_apple_client_secret,
 )
 from wybra.providers.github import (
     GITHUB_DEFAULT_API_VERSION,
@@ -30,6 +53,7 @@ from wybra.providers.github import (
     GITHUB_DEFAULT_SCOPES,
     GITHUB_DEFAULT_TOKEN_ENDPOINT,
     GITHUB_DEFAULT_USER_API_ENDPOINT,
+    GITHUB_PROVIDER_NAME,
     GitHubAPIError,
     github_granted_scopes,
     github_oauth_settings_from_provider,
@@ -40,12 +64,21 @@ from wybra.providers.github import (
 from wybra.providers.google import (
     GOOGLE_DEFAULT_ISSUER,
     GOOGLE_DEFAULT_JWKS_URI,
+    GOOGLE_PROVIDER_NAME,
     GoogleIDTokenValidationError,
     GoogleIDTokenValidationRequest,
     GoogleOAuthSettings,
     GoogleOIDCIDTokenValidator,
     google_id_token_claims_from_payload,
     google_oauth_settings_from_provider,
+)
+from wybra.providers.settings import (
+    PROVIDER_CLIENT_ID_FIELD,
+    PROVIDER_CLIENT_SECRET_KEY_FIELD,
+    PROVIDER_KEY_ID_FIELD,
+    PROVIDER_PRIVATE_KEY_SECRET_KEY_FIELD,
+    PROVIDER_SECRETS_FIELD,
+    PROVIDER_TEAM_ID_FIELD,
 )
 from wybra.secrets import MissingSecretError, SecretValue
 from wybra.site import start
@@ -89,7 +122,7 @@ class TestProvidersSettings:
     def test_settings_load_from_providers_section(self) -> None:
         settings = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": " client-id ",
                     "secrets": " environment ",
@@ -102,7 +135,7 @@ class TestProvidersSettings:
             }
         )
 
-        provider = settings.provider("google")
+        provider = settings.provider(GOOGLE_PROVIDER_NAME)
 
         assert provider.client_id == "client-id"
         assert provider.required_client_secret_reference() == (
@@ -115,20 +148,22 @@ class TestProvidersSettings:
         assert provider.allowed_domains == ("example.com",)
 
     def test_email_match_linking_defaults_to_disabled(self) -> None:
-        provider = _providers_settings({"google": {"enabled": True}}).provider("google")
+        provider = _providers_settings(
+            {GOOGLE_PROVIDER_NAME: {"enabled": True}}
+        ).provider(GOOGLE_PROVIDER_NAME)
 
         assert provider.email_match_linking_enabled is False
 
     def test_programmatic_provider_settings_strings_are_trimmed(self) -> None:
         provider = ProviderSettings(
-            name=" google ",
+            name=f" {GOOGLE_PROVIDER_NAME} ",
             enabled=True,
             client_id=" client-id ",
             secrets=" environment ",
             client_secret_key=" GOOGLE_SECRET ",
         )
 
-        assert provider.name == "google"
+        assert provider.name == GOOGLE_PROVIDER_NAME
         assert provider.enabled is True
         assert provider.client_id == "client-id"
         assert provider.required_client_secret_reference() == (
@@ -139,38 +174,49 @@ class TestProvidersSettings:
     def test_enabled_provider_secret_reference_requires_source_and_key_pair(
         self,
     ) -> None:
-        provider = ProviderSettings(name="google", enabled=True, secrets="environment")
+        provider = ProviderSettings(
+            name=GOOGLE_PROVIDER_NAME,
+            enabled=True,
+            secrets="environment",
+        )
 
-        with pytest.raises(ConfigurationError, match="secrets.*client_secret_key"):
+        with pytest.raises(
+            ConfigurationError,
+            match=f"{PROVIDER_SECRETS_FIELD}.*{PROVIDER_CLIENT_SECRET_KEY_FIELD}",
+        ):
             provider.required_client_secret_reference()
 
     @pytest.mark.parametrize(
         "field_name",
-        ["client_id", "secrets", "client_secret_key"],
+        [
+            PROVIDER_CLIENT_ID_FIELD,
+            PROVIDER_SECRETS_FIELD,
+            PROVIDER_CLIENT_SECRET_KEY_FIELD,
+        ],
     )
     def test_provider_settings_reject_blank_strings(self, field_name: str) -> None:
         provider_config = {
             "enabled": True,
-            "client_id": "client-id",
-            "secrets": "environment",
-            "client_secret_key": "GOOGLE_SECRET",
+            PROVIDER_CLIENT_ID_FIELD: "client-id",
+            PROVIDER_SECRETS_FIELD: "environment",
+            PROVIDER_CLIENT_SECRET_KEY_FIELD: "GOOGLE_SECRET",
         }
         provider_config[field_name] = "   "
 
         with pytest.raises(ConfigurationError, match=field_name):
-            _providers_settings({"google": provider_config})
+            _providers_settings({GOOGLE_PROVIDER_NAME: provider_config})
 
     def test_google_oauth_settings_use_google_defaults(self) -> None:
         provider = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": " google-client-id ",
                     "secrets": "keychain",
                     "client_secret_key": "auth/providers/google/dev/client-secret",
                 }
             }
-        ).provider("google")
+        ).provider(GOOGLE_PROVIDER_NAME)
 
         settings = google_oauth_settings_from_provider(provider)
 
@@ -189,31 +235,41 @@ class TestProvidersSettings:
         )
 
     def test_google_oauth_settings_require_google_provider(self) -> None:
-        with pytest.raises(ConfigurationError, match="provider 'google'"):
-            google_oauth_settings_from_provider(ProviderSettings(name="github"))
+        with pytest.raises(
+            ConfigurationError,
+            match=f"provider {GOOGLE_PROVIDER_NAME!r}",
+        ):
+            google_oauth_settings_from_provider(
+                ProviderSettings(name=GITHUB_PROVIDER_NAME)
+            )
 
     def test_google_oauth_settings_require_client_id_and_secret_reference(
         self,
     ) -> None:
-        with pytest.raises(ConfigurationError, match="client_id"):
-            google_oauth_settings_from_provider(ProviderSettings(name="google"))
-
-        with pytest.raises(ConfigurationError, match="client_secret_key"):
+        with pytest.raises(ConfigurationError, match=PROVIDER_CLIENT_ID_FIELD):
             google_oauth_settings_from_provider(
-                ProviderSettings(name="google", client_id="client-id")
+                ProviderSettings(name=GOOGLE_PROVIDER_NAME)
+            )
+
+        with pytest.raises(ConfigurationError, match=PROVIDER_CLIENT_SECRET_KEY_FIELD):
+            google_oauth_settings_from_provider(
+                ProviderSettings(
+                    name=GOOGLE_PROVIDER_NAME,
+                    client_id="client-id",
+                )
             )
 
     def test_github_oauth_settings_use_github_defaults(self) -> None:
         provider = _providers_settings(
             {
-                "github": {
+                GITHUB_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": " github-client-id ",
                     "secrets": "keychain",
                     "client_secret_key": "auth/providers/github/dev/client-secret",
                 }
             }
-        ).provider("github")
+        ).provider(GITHUB_PROVIDER_NAME)
 
         settings = github_oauth_settings_from_provider(provider)
 
@@ -226,19 +282,163 @@ class TestProvidersSettings:
         assert settings.api_version == GITHUB_DEFAULT_API_VERSION
 
     def test_github_oauth_settings_require_github_provider(self) -> None:
-        with pytest.raises(ConfigurationError, match="provider 'github'"):
-            github_oauth_settings_from_provider(ProviderSettings(name="google"))
+        with pytest.raises(
+            ConfigurationError,
+            match=f"provider {GITHUB_PROVIDER_NAME!r}",
+        ):
+            github_oauth_settings_from_provider(
+                ProviderSettings(name=GOOGLE_PROVIDER_NAME)
+            )
 
     def test_github_oauth_settings_require_client_id_and_secret_reference(
         self,
     ) -> None:
-        with pytest.raises(ConfigurationError, match="client_id"):
-            github_oauth_settings_from_provider(ProviderSettings(name="github"))
-
-        with pytest.raises(ConfigurationError, match="client_secret_key"):
+        with pytest.raises(ConfigurationError, match=PROVIDER_CLIENT_ID_FIELD):
             github_oauth_settings_from_provider(
-                ProviderSettings(name="github", client_id="client-id")
+                ProviderSettings(name=GITHUB_PROVIDER_NAME)
             )
+
+        with pytest.raises(ConfigurationError, match=PROVIDER_CLIENT_SECRET_KEY_FIELD):
+            github_oauth_settings_from_provider(
+                ProviderSettings(
+                    name=GITHUB_PROVIDER_NAME,
+                    client_id="client-id",
+                )
+            )
+
+    def test_apple_provider_settings_load_apple_specific_options(self) -> None:
+        settings = _providers_settings(
+            {
+                APPLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "client_id": " com.example.app.web ",
+                    "team_id": " TEAMID1234 ",
+                    "key_id": " KEYID1234 ",
+                    "secrets": " keychain ",
+                    "private_key_secret_key": " auth/providers/apple/private-key ",
+                }
+            }
+        )
+
+        provider = settings.provider(APPLE_PROVIDER_NAME)
+
+        assert provider.client_id == "com.example.app.web"
+        assert provider.team_id == "TEAMID1234"
+        assert provider.key_id == "KEYID1234"
+        assert provider.required_private_key_reference() == (
+            "keychain",
+            "auth/providers/apple/private-key",
+        )
+        assert provider.required_provider_secret_reference() == (
+            "keychain",
+            "auth/providers/apple/private-key",
+            "private key",
+        )
+
+    def test_non_apple_provider_rejects_apple_specific_options(self) -> None:
+        with pytest.raises(ConfigurationError, match=PROVIDER_TEAM_ID_FIELD):
+            _providers_settings(
+                {
+                    GOOGLE_PROVIDER_NAME: {
+                        "enabled": True,
+                        "client_id": "client-id",
+                        "secrets": "environment",
+                        "client_secret_key": "GOOGLE_SECRET",
+                        PROVIDER_TEAM_ID_FIELD: "TEAMID1234",
+                    }
+                }
+            )
+
+    def test_enabled_apple_private_key_reference_requires_source_and_key_pair(
+        self,
+    ) -> None:
+        provider = ProviderSettings(
+            name=APPLE_PROVIDER_NAME,
+            enabled=True,
+            secrets="environment",
+        )
+
+        with pytest.raises(
+            ConfigurationError,
+            match=f"{PROVIDER_SECRETS_FIELD}.*{PROVIDER_PRIVATE_KEY_SECRET_KEY_FIELD}",
+        ):
+            provider.required_private_key_reference()
+
+    def test_apple_oauth_settings_use_apple_defaults(self) -> None:
+        provider = _providers_settings(
+            {
+                APPLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "client_id": " com.example.app.web ",
+                    "team_id": " TEAMID1234 ",
+                    "key_id": " KEYID1234 ",
+                    "secrets": "keychain",
+                    "private_key_secret_key": "auth/providers/apple/private-key",
+                }
+            }
+        ).provider(APPLE_PROVIDER_NAME)
+
+        settings = apple_oauth_settings_from_provider(provider)
+
+        assert settings.client_id == "com.example.app.web"
+        assert settings.team_id == "TEAMID1234"
+        assert settings.key_id == "KEYID1234"
+        assert settings.private_key_reference == (
+            "keychain",
+            "auth/providers/apple/private-key",
+        )
+        assert settings.scopes == APPLE_DEFAULT_SCOPES
+        assert settings.issuer == APPLE_DEFAULT_ISSUER
+        assert settings.authorisation_endpoint == APPLE_DEFAULT_AUTHORISATION_ENDPOINT
+        assert settings.token_endpoint == APPLE_DEFAULT_TOKEN_ENDPOINT
+        assert settings.jwks_uri == APPLE_DEFAULT_JWKS_URI
+
+    def test_apple_oauth_settings_require_apple_provider(self) -> None:
+        with pytest.raises(
+            ConfigurationError,
+            match=f"provider {APPLE_PROVIDER_NAME!r}",
+        ):
+            apple_oauth_settings_from_provider(
+                ProviderSettings(name=GOOGLE_PROVIDER_NAME)
+            )
+
+    @pytest.mark.parametrize(
+        ("provider", "field_name"),
+        (
+            (ProviderSettings(name=APPLE_PROVIDER_NAME), PROVIDER_CLIENT_ID_FIELD),
+            (
+                ProviderSettings(
+                    name=APPLE_PROVIDER_NAME,
+                    client_id="com.example.app.web",
+                ),
+                PROVIDER_TEAM_ID_FIELD,
+            ),
+            (
+                ProviderSettings(
+                    name=APPLE_PROVIDER_NAME,
+                    client_id="com.example.app.web",
+                    team_id="TEAMID1234",
+                ),
+                PROVIDER_KEY_ID_FIELD,
+            ),
+            (
+                ProviderSettings(
+                    name=APPLE_PROVIDER_NAME,
+                    client_id="com.example.app.web",
+                    team_id="TEAMID1234",
+                    key_id="KEYID1234",
+                ),
+                PROVIDER_PRIVATE_KEY_SECRET_KEY_FIELD,
+            ),
+        ),
+    )
+    def test_apple_oauth_settings_require_client_and_key_configuration(
+        self,
+        provider: ProviderSettings,
+        field_name: str,
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=field_name):
+            apple_oauth_settings_from_provider(provider)
 
 
 class TestGitHubClaimsAndTokens:
@@ -330,11 +530,102 @@ class TestGitHubClaimsAndTokens:
         assert not github_token_response_has_required_scopes(response, ("gist",))
 
 
+class TestAppleClaimsAndTokens:
+    def test_token_response_parses_payload_fields(self) -> None:
+        response = apple_token_response_from_payload(
+            {
+                "access_token": "access-token",
+                "id_token": "id-token",
+                "token_type": "Bearer",
+                "expires_in": 300,
+                "refresh_token": "refresh-token",
+            }
+        )
+
+        assert response.access_token == "access-token"
+        assert response.id_token == "id-token"
+        assert response.token_type == "Bearer"
+        assert response.expires_in == 300
+        assert response.refresh_token == "refresh-token"
+
+    def test_claim_mapping_accepts_apple_string_email_verified(self) -> None:
+        claims = apple_id_token_claims_from_payload(
+            {
+                "sub": "apple-subject",
+                "email": "user@example.com",
+                "email_verified": "true",
+                "nonce": "nonce-value",
+            },
+            expected_nonce="nonce-value",
+        )
+
+        assert claims.subject == "apple-subject"
+        assert claims.email == "user@example.com"
+        assert claims.email_verified is True
+        assert claims.nonce == "nonce-value"
+
+    def test_claim_mapping_rejects_nonce_mismatch(self) -> None:
+        with pytest.raises(AppleIDTokenValidationError, match="nonce"):
+            apple_id_token_claims_from_payload(
+                {
+                    "sub": "apple-subject",
+                    "email": "user@example.com",
+                    "email_verified": "true",
+                    "nonce": "actual",
+                },
+                expected_nonce="expected",
+            )
+
+    def test_claim_mapping_requires_booleanish_email_verified(self) -> None:
+        with pytest.raises(AppleIDTokenValidationError, match="email_verified"):
+            apple_id_token_claims_from_payload(
+                {
+                    "sub": "apple-subject",
+                    "email": "user@example.com",
+                    "email_verified": "yes",
+                    "nonce": "nonce-value",
+                },
+                expected_nonce="nonce-value",
+            )
+
+    def test_client_secret_contains_apple_required_jwt_claims(self) -> None:
+        private_key, private_key_pem = _apple_private_key_pair()
+        settings = AppleOAuthSettings(
+            provider_name=APPLE_PROVIDER_NAME,
+            client_id="com.example.app.web",
+            team_id="TEAMID1234",
+            key_id="KEYID1234",
+            private_key_reference=("environment", "APPLE_PRIVATE_KEY"),
+        )
+        issued_at = int(current_timestamp())
+
+        token = create_apple_client_secret(
+            settings,
+            private_key=private_key_pem,
+            now=issued_at,
+            lifetime_seconds=600,
+        )
+
+        header = jwt.get_unverified_header(token)
+        claims = jwt.decode(
+            token,
+            private_key.public_key(),
+            algorithms=("ES256",),
+            audience=APPLE_CLIENT_SECRET_AUDIENCE,
+        )
+        assert header["kid"] == "KEYID1234"
+        assert claims["iss"] == "TEAMID1234"
+        assert claims["sub"] == "com.example.app.web"
+        assert claims["aud"] == APPLE_CLIENT_SECRET_AUDIENCE
+        assert claims["iat"] == issued_at
+        assert claims["exp"] == issued_at + 600
+
+
 class TestProviderSecretValidation:
     def test_enabled_provider_validates_client_secret_reference(self) -> None:
         settings = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": "client-id",
                     "secrets": "environment",
@@ -353,7 +644,7 @@ class TestProviderSecretValidation:
     def test_enabled_provider_missing_secret_fails_clearly(self) -> None:
         settings = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": "client-id",
                     "secrets": "environment",
@@ -362,13 +653,16 @@ class TestProviderSecretValidation:
             }
         )
 
-        with pytest.raises(ProviderSecretResolutionError, match="google.*missing"):
+        with pytest.raises(
+            ProviderSecretResolutionError,
+            match=f"{GOOGLE_PROVIDER_NAME}.*missing",
+        ):
             validate_provider_secret_settings(settings, RecordingSecretsCapability())
 
     def test_missing_provider_secret_disables_provider_for_runtime(self) -> None:
         settings = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": "client-id",
                     "secrets": "environment",
@@ -382,15 +676,15 @@ class TestProviderSecretValidation:
             RecordingSecretsCapability(),
         )
 
-        assert effective.provider("google").enabled is False
+        assert effective.provider(GOOGLE_PROVIDER_NAME).enabled is False
         assert len(issues) == 1
-        assert issues[0].provider_name == "google"
+        assert issues[0].provider_name == GOOGLE_PROVIDER_NAME
         assert "missing" in issues[0].message
 
     def test_missing_secrets_capability_disables_provider_for_runtime(self) -> None:
         settings = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": "client-id",
                     "secrets": "environment",
@@ -401,16 +695,16 @@ class TestProviderSecretValidation:
 
         effective, issues = provider_settings_with_available_secrets(settings, None)
 
-        assert effective.provider("google").enabled is False
+        assert effective.provider(GOOGLE_PROVIDER_NAME).enabled is False
         assert len(issues) == 1
-        assert issues[0].provider_name == "google"
+        assert issues[0].provider_name == GOOGLE_PROVIDER_NAME
         assert "SecretsCapability is not available" in issues[0].message
         assert "wybra.secrets" in issues[0].message
 
     def test_disabled_provider_does_not_validate_source_or_key(self) -> None:
         settings = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": False,
                     "secrets": "unsupported",
                     "client_secret_key": "IGNORED_SECRET",
@@ -423,7 +717,7 @@ class TestProviderSecretValidation:
     def test_resolves_provider_client_secret(self) -> None:
         settings = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": "client-id",
                     "secrets": "environment",
@@ -435,15 +729,82 @@ class TestProviderSecretValidation:
             {("environment", "GOOGLE_SECRET"): "secret"}
         )
 
-        value = resolve_provider_client_secret(settings, "google", secrets)
+        value = resolve_provider_client_secret(settings, GOOGLE_PROVIDER_NAME, secrets)
 
         assert value.reveal() == "secret"
         assert "secret" not in repr(value)
 
+    def test_enabled_apple_provider_validates_private_key_reference(self) -> None:
+        settings = _providers_settings(
+            {
+                APPLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "client_id": "com.example.app.web",
+                    "team_id": "TEAMID1234",
+                    "key_id": "KEYID1234",
+                    "secrets": "environment",
+                    "private_key_secret_key": "APPLE_PRIVATE_KEY",
+                }
+            }
+        )
+        secrets = RecordingSecretsCapability(
+            {("environment", "APPLE_PRIVATE_KEY"): "private-key"}
+        )
+
+        validate_provider_secret_settings(settings, secrets)
+
+        assert secrets.exists_calls == [("environment", "APPLE_PRIVATE_KEY")]
+
+    def test_missing_apple_private_key_disables_provider_for_runtime(self) -> None:
+        settings = _providers_settings(
+            {
+                APPLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "client_id": "com.example.app.web",
+                    "team_id": "TEAMID1234",
+                    "key_id": "KEYID1234",
+                    "secrets": "environment",
+                    "private_key_secret_key": "APPLE_PRIVATE_KEY",
+                }
+            }
+        )
+
+        effective, issues = provider_settings_with_available_secrets(
+            settings,
+            RecordingSecretsCapability(),
+        )
+
+        assert effective.provider(APPLE_PROVIDER_NAME).enabled is False
+        assert len(issues) == 1
+        assert issues[0].provider_name == APPLE_PROVIDER_NAME
+        assert "private key is missing" in issues[0].message
+
+    def test_resolves_provider_private_key(self) -> None:
+        settings = _providers_settings(
+            {
+                APPLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "client_id": "com.example.app.web",
+                    "team_id": "TEAMID1234",
+                    "key_id": "KEYID1234",
+                    "secrets": "environment",
+                    "private_key_secret_key": "APPLE_PRIVATE_KEY",
+                }
+            }
+        )
+        secrets = RecordingSecretsCapability(
+            {("environment", "APPLE_PRIVATE_KEY"): "private-key"}
+        )
+
+        value = resolve_provider_private_key(settings, APPLE_PROVIDER_NAME, secrets)
+
+        assert value.reveal() == "private-key"
+        assert "private-key" not in repr(value)
+
     def test_enabled_provider_requires_secrets_capability(self) -> None:
         settings = _providers_settings(
             {
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": "client-id",
                     "secrets": "environment",
@@ -459,8 +820,8 @@ class TestProviderSecretValidation:
 class TestProviderAccountPolicy:
     def test_linked_provider_subject_resolves_local_user(self) -> None:
         decision = ProviderAccountPolicy().evaluate_login(
-            provider=ProviderSettings(name="github", enabled=True),
-            assertion=ProviderAssertion("github", "subject-1"),
+            provider=ProviderSettings(name=GITHUB_PROVIDER_NAME, enabled=True),
+            assertion=ProviderAssertion(GITHUB_PROVIDER_NAME, "subject-1"),
             linked_user_id="user-1",
         )
 
@@ -471,14 +832,14 @@ class TestProviderAccountPolicy:
     def test_unlinked_provider_creates_only_when_policy_allows(self) -> None:
         policy = ProviderAccountPolicy()
         assertion = ProviderAssertion(
-            "google",
+            GOOGLE_PROVIDER_NAME,
             "subject-1",
             {"email": "USER@example.com", "email_verified": True},
         )
 
         allowed = policy.evaluate_login(
             provider=ProviderSettings(
-                name="google",
+                name=GOOGLE_PROVIDER_NAME,
                 enabled=True,
                 account_creation_enabled=True,
                 allowed_domains=("example.com",),
@@ -486,7 +847,7 @@ class TestProviderAccountPolicy:
             assertion=assertion,
         )
         denied = policy.evaluate_login(
-            provider=ProviderSettings(name="google", enabled=True),
+            provider=ProviderSettings(name=GOOGLE_PROVIDER_NAME, enabled=True),
             assertion=assertion,
         )
 
@@ -496,13 +857,13 @@ class TestProviderAccountPolicy:
     def test_email_only_ownership_is_rejected_for_unverified_allowlist(self) -> None:
         decision = ProviderAccountPolicy().evaluate_login(
             provider=ProviderSettings(
-                name="google",
+                name=GOOGLE_PROVIDER_NAME,
                 enabled=True,
                 account_creation_enabled=True,
                 allowed_emails=("user@example.com",),
             ),
             assertion=ProviderAssertion(
-                "google",
+                GOOGLE_PROVIDER_NAME,
                 "subject-1",
                 {"email": "user@example.com", "email_verified": False},
             ),
@@ -513,12 +874,12 @@ class TestProviderAccountPolicy:
     def test_verified_email_match_allows_auto_linking(self) -> None:
         decision = ProviderAccountPolicy().evaluate_login(
             provider=ProviderSettings(
-                name="google",
+                name=GOOGLE_PROVIDER_NAME,
                 enabled=True,
                 email_match_linking_enabled=True,
             ),
             assertion=ProviderAssertion(
-                "google",
+                GOOGLE_PROVIDER_NAME,
                 "subject-1",
                 {"email": "user@example.com", "email_verified": True},
             ),
@@ -532,12 +893,12 @@ class TestProviderAccountPolicy:
     def test_email_match_requires_verified_provider_email(self) -> None:
         decision = ProviderAccountPolicy().evaluate_login(
             provider=ProviderSettings(
-                name="google",
+                name=GOOGLE_PROVIDER_NAME,
                 enabled=True,
                 email_match_linking_enabled=True,
             ),
             assertion=ProviderAssertion(
-                "google",
+                GOOGLE_PROVIDER_NAME,
                 "subject-1",
                 {"email": "user@example.com", "email_verified": False},
             ),
@@ -549,9 +910,9 @@ class TestProviderAccountPolicy:
 
     def test_email_match_is_denied_when_policy_is_disabled(self) -> None:
         decision = ProviderAccountPolicy().evaluate_login(
-            provider=ProviderSettings(name="google", enabled=True),
+            provider=ProviderSettings(name=GOOGLE_PROVIDER_NAME, enabled=True),
             assertion=ProviderAssertion(
-                "google",
+                GOOGLE_PROVIDER_NAME,
                 "subject-1",
                 {"email": "user@example.com", "email_verified": True},
             ),
@@ -563,8 +924,8 @@ class TestProviderAccountPolicy:
 
     def test_linking_collision_is_rejected(self) -> None:
         decision = ProviderAccountPolicy().evaluate_linking(
-            provider=ProviderSettings(name="github", enabled=True),
-            assertion=ProviderAssertion("github", "subject-1"),
+            provider=ProviderSettings(name=GITHUB_PROVIDER_NAME, enabled=True),
+            assertion=ProviderAssertion(GITHUB_PROVIDER_NAME, "subject-1"),
             current_user_id="user-1",
             linked_user_id="user-2",
         )
@@ -574,8 +935,8 @@ class TestProviderAccountPolicy:
 
     def test_inactive_linked_user_cannot_login(self) -> None:
         decision = ProviderAccountPolicy().evaluate_login(
-            provider=ProviderSettings(name="github", enabled=True),
-            assertion=ProviderAssertion("github", "subject-1"),
+            provider=ProviderSettings(name=GITHUB_PROVIDER_NAME, enabled=True),
+            assertion=ProviderAssertion(GITHUB_PROVIDER_NAME, "subject-1"),
             linked_user_id="user-1",
             linked_user_active=False,
         )
@@ -586,11 +947,11 @@ class TestProviderAccountPolicy:
     def test_required_claims_are_branchable_invalid_claims(self) -> None:
         decision = ProviderAccountPolicy().evaluate_login(
             provider=ProviderSettings(
-                name="apple",
+                name=APPLE_PROVIDER_NAME,
                 enabled=True,
                 required_claims=("email",),
             ),
-            assertion=ProviderAssertion("apple", "subject-1"),
+            assertion=ProviderAssertion(APPLE_PROVIDER_NAME, "subject-1"),
         )
 
         assert decision.outcome is ProviderPolicyOutcome.INVALID_CLAIMS
@@ -613,7 +974,7 @@ class TestGoogleIDTokenValidation:
             GoogleIDTokenValidationRequest(
                 id_token=token,
                 settings=GoogleOAuthSettings(
-                    provider_name="google",
+                    provider_name=GOOGLE_PROVIDER_NAME,
                     client_id="google-client-id",
                     client_secret_reference=("environment", "GOOGLE_SECRET"),
                 ),
@@ -653,7 +1014,7 @@ class TestGoogleIDTokenValidation:
                 GoogleIDTokenValidationRequest(
                     id_token=token,
                     settings=GoogleOAuthSettings(
-                        provider_name="google",
+                        provider_name=GOOGLE_PROVIDER_NAME,
                         client_id="google-client-id",
                         client_secret_reference=("environment", "GOOGLE_SECRET"),
                     ),
@@ -666,7 +1027,7 @@ class TestGoogleIDTokenValidation:
         *,
         claim_overrides: dict[str, object] | None = None,
     ) -> tuple[str, object]:
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private_key = oidc_rsa_private_key()
         claims: dict[str, object] = {
             "iss": GOOGLE_DEFAULT_ISSUER,
             "aud": "google-client-id",
@@ -713,6 +1074,101 @@ class TestGoogleIDTokenValidation:
             )
 
 
+class TestAppleIDTokenValidation:
+    @pytest.mark.anyio
+    async def test_oidc_validator_accepts_signed_apple_id_token(self) -> None:
+        token, public_key = self._signed_apple_id_token()
+        jwks_client = FakeGoogleJwksClient(public_key)
+        jwks_uris: list[str] = []
+
+        def jwks_client_factory(jwks_uri: str) -> FakeGoogleJwksClient:
+            jwks_uris.append(jwks_uri)
+            return jwks_client
+
+        validator = AppleOIDCIDTokenValidator(jwks_client_factory=jwks_client_factory)
+
+        claims = await validator.validate(
+            AppleIDTokenValidationRequest(
+                id_token=token,
+                settings=AppleOAuthSettings(
+                    provider_name=APPLE_PROVIDER_NAME,
+                    client_id="com.example.app.web",
+                    team_id="TEAMID1234",
+                    key_id="KEYID1234",
+                    private_key_reference=("environment", "APPLE_PRIVATE_KEY"),
+                ),
+                nonce="nonce-value",
+            )
+        )
+
+        assert claims.subject == "apple-subject"
+        assert claims.email == "user@example.com"
+        assert claims.email_verified is True
+        assert claims.nonce == "nonce-value"
+        assert jwks_uris == [APPLE_DEFAULT_JWKS_URI]
+        assert jwks_client.tokens == [token]
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "claim_overrides",
+        (
+            {"aud": "other-client-id"},
+            {"iss": "https://apple.example.invalid"},
+            {"exp": int(current_timestamp() - 300)},
+        ),
+    )
+    async def test_oidc_validator_rejects_invalid_trust_claims(
+        self,
+        claim_overrides: dict[str, object],
+    ) -> None:
+        token, public_key = self._signed_apple_id_token(claim_overrides=claim_overrides)
+        validator = AppleOIDCIDTokenValidator(
+            jwks_client_factory=lambda _jwks_uri: FakeGoogleJwksClient(public_key)
+        )
+
+        with pytest.raises(AppleIDTokenValidationError, match="invalid"):
+            await validator.validate(
+                AppleIDTokenValidationRequest(
+                    id_token=token,
+                    settings=AppleOAuthSettings(
+                        provider_name=APPLE_PROVIDER_NAME,
+                        client_id="com.example.app.web",
+                        team_id="TEAMID1234",
+                        key_id="KEYID1234",
+                        private_key_reference=("environment", "APPLE_PRIVATE_KEY"),
+                    ),
+                    nonce="nonce-value",
+                )
+            )
+
+    @staticmethod
+    def _signed_apple_id_token(
+        *,
+        claim_overrides: dict[str, object] | None = None,
+    ) -> tuple[str, object]:
+        private_key = oidc_rsa_private_key()
+        claims: dict[str, object] = {
+            "iss": APPLE_DEFAULT_ISSUER,
+            "aud": "com.example.app.web",
+            "exp": int(current_timestamp() + 300),
+            "sub": "apple-subject",
+            "email": "user@example.com",
+            "email_verified": "true",
+            "nonce": "nonce-value",
+        }
+        if claim_overrides is not None:
+            claims.update(claim_overrides)
+        return (
+            jwt.encode(
+                claims,
+                private_key,
+                algorithm="RS256",
+                headers={"kid": "test-key"},
+            ),
+            private_key.public_key(),
+        )
+
+
 @pytest.mark.anyio
 async def test_provider_capability_is_available_when_module_is_configured(
     monkeypatch: pytest.MonkeyPatch,
@@ -731,7 +1187,7 @@ async def test_provider_capability_is_available_when_module_is_configured(
                 "wybra.providers",
             ),
             providers={
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": "client-id",
                     "secrets": "environment",
@@ -743,7 +1199,7 @@ async def test_provider_capability_is_available_when_module_is_configured(
 
     providers = site.require_capability(ProvidersCapability)
 
-    assert providers.settings.provider("google").client_id == "client-id"
+    assert providers.settings.provider(GOOGLE_PROVIDER_NAME).client_id == "client-id"
 
 
 @pytest.mark.anyio
@@ -764,7 +1220,7 @@ async def test_missing_provider_secret_disables_provider_without_startup_failure
                     "wybra.providers",
                 ),
                 providers={
-                    "google": {
+                    GOOGLE_PROVIDER_NAME: {
                         "enabled": True,
                         "client_id": "client-id",
                         "secrets": "environment",
@@ -776,8 +1232,8 @@ async def test_missing_provider_secret_disables_provider_without_startup_failure
 
     providers = site.require_capability(ProvidersCapability)
 
-    assert providers.settings.provider("google").enabled is False
-    assert "Provider 'google' disabled" in caplog.text
+    assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is False
+    assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in caplog.text
     assert "client secret is missing" in caplog.text
 
 
@@ -798,7 +1254,7 @@ async def test_missing_secrets_module_disables_provider_without_startup_failure(
                     "wybra.providers",
                 ),
                 providers={
-                    "google": {
+                    GOOGLE_PROVIDER_NAME: {
                         "enabled": True,
                         "client_id": "client-id",
                         "secrets": "environment",
@@ -810,8 +1266,8 @@ async def test_missing_secrets_module_disables_provider_without_startup_failure(
 
     providers = site.require_capability(ProvidersCapability)
 
-    assert providers.settings.provider("google").enabled is False
-    assert "Provider 'google' disabled" in caplog.text
+    assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is False
+    assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in caplog.text
     assert "SecretsCapability is not available" in caplog.text
     assert "wybra.secrets" in caplog.text
 
@@ -834,7 +1290,7 @@ async def test_provider_secret_degradation_does_not_depend_on_module_order(
                 "wybra.auth",
             ),
             providers={
-                "google": {
+                GOOGLE_PROVIDER_NAME: {
                     "enabled": True,
                     "client_id": "client-id",
                     "secrets": "environment",
@@ -846,7 +1302,7 @@ async def test_provider_secret_degradation_does_not_depend_on_module_order(
 
     providers = site.require_capability(ProvidersCapability)
 
-    assert providers.settings.provider("google").enabled is True
+    assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is True
 
 
 def _providers_settings(providers: dict[str, object]) -> ProvidersSettings:

@@ -7,22 +7,16 @@ from wybra.auth.capabilities import login_required
 from wybra.auth.models import User
 from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
 from wybra.auth.provider_support import (
-    enabled_github_provider as _enabled_github_provider,
-)
-from wybra.auth.provider_support import (
-    enabled_google_provider as _enabled_google_provider,
-)
-from wybra.auth.provider_support import (
-    github_link_path as _github_link_path,
-)
-from wybra.auth.provider_support import (
-    google_link_path as _google_link_path,
-)
-from wybra.auth.provider_support import (
     local_password_login_usable as _local_password_login_usable,
 )
 from wybra.auth.provider_support import (
     provider_credential_store_from_request as _provider_credential_store,
+)
+from wybra.auth.provider_support import (
+    provider_label as _provider_label,
+)
+from wybra.auth.provider_support import (
+    provider_security_options as _provider_security_options,
 )
 from wybra.auth.provider_support import (
     usable_provider_names as _usable_provider_names,
@@ -47,6 +41,7 @@ from wybra.auth.sessions import (
     verify_user,
 )
 from wybra.forms import request_form_data
+from wybra.providers.apple import APPLE_PROVIDER_NAME
 from wybra.providers.github import GITHUB_PROVIDER_NAME
 from wybra.providers.google import GOOGLE_PROVIDER_NAME
 from wybra.template import render_page
@@ -160,7 +155,7 @@ async def unlink_google_provider(
         request,
         user,
         provider_name=GOOGLE_PROVIDER_NAME,
-        provider_label="Google",
+        provider_label=_provider_label(GOOGLE_PROVIDER_NAME),
     )
 
 
@@ -177,7 +172,24 @@ async def unlink_github_provider(
         request,
         user,
         provider_name=GITHUB_PROVIDER_NAME,
-        provider_label="GitHub",
+        provider_label=_provider_label(GITHUB_PROVIDER_NAME),
+    )
+
+
+@account_router.post(
+    "/security/providers/apple/unlink",
+    include_in_schema=False,
+    name="auth:security-apple-unlink",
+)
+async def unlink_apple_provider(
+    request: Request,
+    user: User = LOGIN_REQUIRED,
+) -> Response:
+    return await _unlink_provider_response(
+        request,
+        user,
+        provider_name=APPLE_PROVIDER_NAME,
+        provider_label=_provider_label(APPLE_PROVIDER_NAME),
     )
 
 
@@ -356,32 +368,21 @@ async def _security_provider_section(
     request: Request,
     user: User,
 ) -> dict[str, object]:
-    sections = (
-        await _security_named_provider_section(
-            request,
-            user,
-            provider_name=GOOGLE_PROVIDER_NAME,
-            provider_label="Google",
-            link_path=_google_link_path(
+    sections = []
+    for option in _provider_security_options(
+        request,
+        return_to=_optional_route_path(request, "auth:security"),
+    ):
+        sections.append(
+            await _security_named_provider_section(
                 request,
-                return_to=_optional_route_path(request, "auth:security"),
-            ),
-            unlink_path=_optional_route_path(request, "auth:security-google-unlink"),
-            enabled=_enabled_google_provider(request) is not None,
-        ),
-        await _security_named_provider_section(
-            request,
-            user,
-            provider_name=GITHUB_PROVIDER_NAME,
-            provider_label="GitHub",
-            link_path=_github_link_path(
-                request,
-                return_to=_optional_route_path(request, "auth:security"),
-            ),
-            unlink_path=_optional_route_path(request, "auth:security-github-unlink"),
-            enabled=_enabled_github_provider(request) is not None,
-        ),
-    )
+                user,
+                provider_name=option["name"],
+                provider_label=option["label"],
+                link_path=option["link_path"],
+                unlink_path=option["unlink_path"],
+            )
+        )
     providers = tuple(section for section in sections if section["available"])
     return {
         "available": bool(providers),
@@ -397,9 +398,8 @@ async def _security_named_provider_section(
     provider_label: str,
     link_path: str | None,
     unlink_path: str | None,
-    enabled: bool,
 ) -> dict[str, object]:
-    if not enabled or link_path is None or unlink_path is None:
+    if link_path is None or unlink_path is None:
         return {"available": False}
 
     linked_accounts: list[dict[str, str]] = []
