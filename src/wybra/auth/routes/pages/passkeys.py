@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from json import JSONDecodeError
 from typing import Any, cast
 from urllib.parse import urlencode
 
@@ -13,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from wybra.auth.capabilities import login_required
 from wybra.auth.email_normalisation import normalise_email
 from wybra.auth.mfa.storage import (
+    WEBAUTHN_ACTIVE_STATUS,
     SqlAlchemyChallengeStore,
     SqlAlchemyTOTPCredentialStore,
     SqlAlchemyWebAuthnCredentialStore,
@@ -79,6 +81,7 @@ async def passkey_register_options(
         db_user = await _load_user_by_id(session, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
+        db_user_id = str(db_user.id)
         if not db_user.is_verified:
             return _json_error(
                 "Verify your email before adding a passkey.",
@@ -87,18 +90,18 @@ async def passkey_register_options(
 
         store = SqlAlchemyWebAuthnCredentialStore(session)
         existing_credentials = await store.list_active_webauthn_credentials(
-            str(db_user.id),
+            db_user_id,
         )
         options = passkey_registration_options(
             _identity_options(request),
-            user_id=str(db_user.id),
+            user_id=db_user_id,
             user_name=db_user.email,
             user_display_name=db_user.email,
             exclude_credentials=existing_credentials,
         )
         challenge_store = SqlAlchemyChallengeStore(session)
         challenge = await challenge_store.create_challenge(
-            user_id=str(db_user.id),
+            user_id=db_user_id,
             kind="webauthn",
             expires_at=current_timestamp()
             + _identity_options(request).passkey_timeout_seconds,
@@ -140,6 +143,7 @@ async def passkey_register_complete(
         db_user = await _load_user_by_id(session, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
+        db_user_id = str(db_user.id)
         if not db_user.is_verified:
             return _json_error(
                 "Verify your email before adding a passkey.",
@@ -151,7 +155,7 @@ async def passkey_register_complete(
         if (
             challenge is None
             or challenge.kind != "webauthn"
-            or challenge.user_id != str(db_user.id)
+            or challenge.user_id != db_user_id
             or not challenge_has_purpose(
                 challenge.metadata_payload,
                 WEBAUTHN_REGISTRATION_PURPOSE,
@@ -171,7 +175,7 @@ async def passkey_register_complete(
             )
             store = SqlAlchemyWebAuthnCredentialStore(session)
             await store.store_webauthn_credential(
-                str(db_user.id),
+                db_user_id,
                 verified.credential_id,
                 verified.public_key,
                 verified.sign_count,
@@ -185,9 +189,11 @@ async def passkey_register_complete(
             )
         except (IntegrityError, WebAuthnCeremonyError) as exc:
             await session.rollback()
+            await challenge_store.consume_challenge(challenge_id)
+            await session.commit()
             logger.warning(
                 "Passkey registration rejected: user_id=%s reason=%s",
-                db_user.id,
+                db_user_id,
                 getattr(exc, "reason", type(exc).__name__),
             )
             return _json_error(PASSKEY_GENERIC_ERROR)
@@ -307,7 +313,7 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
         if (
             stored_credential is None
             or stored_credential.user_id != str(user.id)
-            or stored_credential.status != "active"
+            or stored_credential.status != WEBAUTHN_ACTIVE_STATUS
         ):
             return _json_error(PASSKEY_GENERIC_ERROR)
 
@@ -445,7 +451,7 @@ async def revoke_passkey(
             str(db_user.id),
             credential_row_id,
         )
-        if credential is None or credential.status != "active":
+        if credential is None or credential.status != WEBAUTHN_ACTIVE_STATUS:
             return RedirectResponse(
                 url=_route_path(request, "auth:security"),
                 status_code=303,
@@ -480,7 +486,10 @@ def _ensure_passkeys_supported(request: Request) -> None:
 async def _request_payload(request: Request) -> Mapping[str, Any]:
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
-        payload = await request.json()
+        try:
+            payload = await request.json()
+        except JSONDecodeError:
+            return {}
         return payload if isinstance(payload, Mapping) else {}
 
     form_data = await request_form_data(request)

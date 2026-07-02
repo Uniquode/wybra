@@ -19,6 +19,7 @@ from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.delivery import NullIdentityDelivery
 from wybra.auth.mfa.recovery import generate_recovery_codes
 from wybra.auth.mfa.storage import (
+    SqlAlchemyChallengeStore,
     SqlAlchemyRecoveryCodeStore,
     SqlAlchemyTOTPCredentialStore,
     SqlAlchemyWebAuthnCredentialStore,
@@ -264,6 +265,12 @@ async def _active_passkey_count(site, user_id: uuid.UUID) -> int:
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
         store = SqlAlchemyWebAuthnCredentialStore(db_session)
         return await store.count_active_webauthn_credentials(str(user_id))
+
+
+async def _authentication_challenge_exists(site, challenge_id: str) -> bool:
+    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+        store = SqlAlchemyChallengeStore(db_session)
+        return await store.get_challenge(challenge_id) is not None
 
 
 def _authenticated_security_site(
@@ -3424,6 +3431,92 @@ async def test_passkey_registration_stores_verified_credential(
         assert credential.label == "Laptop key"
         assert credential.public_key == b"verified-public-key"
         assert credential.transports == ("internal",)
+
+
+@pytest.mark.anyio
+async def test_passkey_registration_failure_consumes_challenge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+
+    def reject_registration(_options, **_kwargs):
+        raise passkey_pages.WebAuthnCeremonyError()
+
+    monkeypatch.setattr(
+        passkey_pages,
+        "verify_passkey_registration",
+        reject_registration,
+    )
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+    headers = _csrf_header(security_page.text)
+    options_response = client.post(
+        "/account/security/passkeys/register/options",
+        headers=headers,
+        json={},
+    )
+    challenge_id = options_response.json()["challenge_id"]
+
+    response = client.post(
+        "/account/security/passkeys/register/complete",
+        headers=headers,
+        json={
+            "challenge_id": challenge_id,
+            "credential": {
+                "id": credential_id_to_text(b"rejected-passkey"),
+                "response": {"transports": ["internal"]},
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "Passkey verification failed."
+    assert await _active_passkey_count(site, user_id) == 0
+    assert not await _authentication_challenge_exists(site, challenge_id)
+
+
+@pytest.mark.anyio
+async def test_passkey_registration_malformed_json_returns_controlled_error(
+    tmp_path: Path,
+) -> None:
+    site = await _start_security_site(
+        tmp_path,
+        auth_config=PASSKEY_AUTH_CONFIG,
+    )
+    await _create_auth_schema(site)
+    user_id = await _create_local_user(
+        site,
+        email="security@example.com",
+        is_verified=True,
+    )
+    _override_current_user(site.app, user_id=user_id)
+    client = _security_page_client(site)
+    security_page = client.get("/account/security")
+    headers = {
+        **_csrf_header(security_page.text),
+        "content-type": "application/json",
+    }
+
+    response = client.post(
+        "/account/security/passkeys/register/complete",
+        headers=headers,
+        content="{",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "Passkey verification failed."
+    assert await _active_passkey_count(site, user_id) == 0
 
 
 @pytest.mark.anyio

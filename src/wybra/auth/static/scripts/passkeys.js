@@ -1,3 +1,5 @@
+const PASSKEY_VERIFICATION_FAILED = "Passkey verification failed.";
+
 function base64urlToBuffer(value) {
   const padding = "=".repeat((4 - (value.length % 4)) % 4);
   const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -79,9 +81,17 @@ async function postJSON(path, csrfHeader, csrfToken, body) {
     },
     body: JSON.stringify(body),
   });
-  const payload = await response.json();
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    if (response.ok) {
+      throw error;
+    }
+    payload = { error: PASSKEY_VERIFICATION_FAILED };
+  }
   if (!response.ok) {
-    throw new Error(payload.error || "Passkey verification failed.");
+    throw new Error(payload.error || PASSKEY_VERIFICATION_FAILED);
   }
   return payload;
 }
