@@ -393,6 +393,7 @@ def test_csrf_settings_accepts_keychain_reference_without_secret_value() -> None
         "keychain",
         CSRF_TOKEN_SECRET_KEY_CURRENT,
     )
+    assert settings.token_secret is None
     assert settings.fallback_token_secret is None
 
 
@@ -454,24 +455,6 @@ def test_csrf_settings_load_settings_rejects_blank_token_secret() -> None:
                     {
                         "app": {"modules": ("wybra.forms",)},
                         "wybra.forms": {"csrf_token_secret": "   "},
-                    }
-                )
-            ],
-        )
-
-
-def test_csrf_settings_load_settings_rejects_explicit_generator_sentinel() -> None:
-    from wybra.forms import GENERATE_LOCAL_CSRF_SECRET
-
-    with pytest.raises(ConfigSourceError, match="reserved for internal use"):
-        ConfigService(
-            [
-                MappingConfigSource(
-                    {
-                        "app": {"modules": ("wybra.forms",)},
-                        "wybra.forms": {
-                            "csrf_token_secret": GENERATE_LOCAL_CSRF_SECRET,
-                        },
                     }
                 )
             ],

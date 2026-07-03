@@ -432,7 +432,7 @@ async def test_start_environment_overrides_database_url_and_sets_deployment_fall
 
 
 @pytest.mark.anyio
-async def test_start_config_deployment_environment_precedes_app_env(
+async def test_start_app_env_overrides_config_deployment_environment(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
@@ -454,8 +454,31 @@ async def test_start_config_deployment_environment_precedes_app_env(
 
     try:
         app_config = app_config_from_site(site)
-        assert site.deployment_environment == "production"
-        assert app_config.deployment_environment == "production"
+        assert site.deployment_environment == "staging"
+        assert app_config.deployment_environment == "staging"
+    finally:
+        await site.close()
+
+
+@pytest.mark.anyio
+async def test_start_app_env_overrides_mapping_config_deployment_environment() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "modules": ("wybra.assets",),
+                    "deployment_environment": "production",
+                },
+            }
+        ),
+        environ={ENV_APP_ENV: "staging"},
+    )
+
+    try:
+        app_config = app_config_from_site(site)
+        assert site.deployment_environment == "staging"
+        assert app_config.deployment_environment == "staging"
     finally:
         await site.close()
 

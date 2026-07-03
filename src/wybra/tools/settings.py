@@ -236,11 +236,11 @@ def _deployment_environment(
     app_values: Mapping[str, Any],
     app_config: AppConfig,
 ) -> DeploymentEnvironment:
-    if app_config.deployment_environment is not None:
-        return normalise_deployment_environment(app_config.deployment_environment)
     value = app_values.get("deployment_environment")
     if value is not None:
         return normalise_deployment_environment(value)
+    if app_config.deployment_environment is not None:
+        return normalise_deployment_environment(app_config.deployment_environment)
     return DEFAULT_DEPLOYMENT_ENVIRONMENT
 
 

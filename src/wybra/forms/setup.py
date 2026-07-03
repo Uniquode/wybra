@@ -37,10 +37,6 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
             logger.warning(
                 "Falling back to configured CSRF token secret because "
                 "SecretsCapability is unavailable.",
-                extra={
-                    "csrf_reference_source": reference_source,
-                    "csrf_reference_identifier": reference_identifier,
-                },
             )
             return fallback
         local_fallback = _local_generated_fallback(site, settings)
@@ -56,11 +52,7 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
     except SecretsError as exc:
         logger.warning(
             "Falling back from keychain-backed CSRF token secret resolution.",
-            extra={
-                "csrf_reference_source": reference_source,
-                "csrf_reference_identifier": reference_identifier,
-                "error_type": type(exc).__name__,
-            },
+            extra={"error_type": type(exc).__name__},
         )
         if fallback is not None:
             return fallback

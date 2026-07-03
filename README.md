@@ -393,14 +393,13 @@ startup configuration channel used by ASGI startup:
 - `--database-url` sets `DATABASE_URL` for database, auth, validation, and
   migration consumers.
 - `--deploy` sets `APP_ENV`, which is used as the deployment-environment
-  fallback when the selected app config file does not set
-  `[app].deployment_environment`.
+  override for this invocation.
 
-For deployment environment, precedence is `[app].deployment_environment`, then
-`APP_ENV` including `--deploy`, then `local`. Other runtime overrides use CLI
-override, then environment variable, then app config default. Relative config
-paths and relative SQLite database paths are resolved from the effective
-project root.
+Runtime override precedence is CLI override, then environment variable, then app
+config default, then built-in default. For deployment environment, this is
+`--deploy`, then `APP_ENV`, then `[app].deployment_environment`, then `local`.
+Relative config paths and relative SQLite database paths are resolved from the
+effective project root.
 
 ```toml
 [app.runserver]
@@ -617,7 +616,7 @@ csrf_token_secret_source = "keychain"
 ```
 
 When `csrf_token_secret_source = "keychain"` is configured, `wybra.forms`
-attempts the canonical forms CSRF storage key
+attempts to load the canonical forms CSRF storage key
 `auth/forms/csrf-token-secret/current` during startup. Set
 `csrf_token_secret_key` only when intentionally overriding or migrating that
 storage key. If the key cannot be resolved and `CSRF_SECRET` or inline

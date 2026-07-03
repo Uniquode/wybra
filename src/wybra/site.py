@@ -30,7 +30,7 @@ from wybra.core.composition import (
     load_app_config,
     resolve_project_root,
 )
-from wybra.core.config import ENV_APP_ENV, RUNTIME_CONFIG_DEF
+from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.environment import EnvironmentMapping, load_environment
 from wybra.core.runtime import (
     DEFAULT_DEPLOYMENT_ENVIRONMENT,
@@ -338,11 +338,7 @@ async def start(
     site = Site(
         app=app,
         config=config,
-        deployment_environment=_deployment_environment(
-            startup_config.app_config,
-            startup_config.environ,
-            config,
-        ),
+        deployment_environment=_deployment_environment(config),
     )
     app.state.site = site
     await _compose_site(site, module_loader or import_module)
@@ -414,20 +410,8 @@ def _load_file_config_source(config_path: Path, *, project_root: Path) -> AppCon
 
 
 def _deployment_environment(
-    app_config: AppConfig | None,
-    environ: Mapping[str, str],
     config: ConfigService,
 ) -> DeploymentEnvironment:
-    if app_config is not None and app_config.deployment_environment is not None:
-        return _normalise_configured_deployment_environment(
-            app_config.deployment_environment,
-            "app.deployment_environment",
-        )
-    if ENV_APP_ENV in environ:
-        return _normalise_configured_deployment_environment(
-            environ[ENV_APP_ENV],
-            ENV_APP_ENV,
-        )
     app_values = config.get_config("app") or {}
     config_value = app_values.get("deployment_environment")
     if config_value is not None:

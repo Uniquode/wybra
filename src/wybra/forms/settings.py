@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from secrets import token_urlsafe
 from typing import Any, ClassVar, Self, cast
 
@@ -12,7 +12,6 @@ from wybra.core.runtime import DeploymentEnvironment, normalise_deployment_envir
 from wybra.forms.config import (
     CSRF_TOKEN_SECRET_KEY_CURRENT,
     FORMS_CONFIG_SECTION,
-    GENERATE_LOCAL_CSRF_SECRET,
     module_config,
 )
 from wybra.forms.csrf import CsrfProtector
@@ -27,12 +26,11 @@ class FormsSettings(BaseSettings):
     module_config: ClassVar[ConfigDef] = module_config
     config_section: ClassVar[str | None] = FORMS_CONFIG_SECTION
 
-    csrf_token_secret: str = GENERATE_LOCAL_CSRF_SECRET
+    csrf_token_secret: str | None = None
     csrf_token_secret_source: SecretSource | str | None = None
     csrf_token_secret_key: str | None = None
     csrf_cookie_secure: bool | str | None = None
     deployment_environment: DeploymentEnvironment | str | None = None
-    _generated_token_secret: bool = field(default=False, init=False, repr=False)
 
     @classmethod
     def load_settings(
@@ -63,11 +61,10 @@ class FormsSettings(BaseSettings):
             self.csrf_token_secret_source,
             self.csrf_token_secret_key,
         )
-        token_secret = self.csrf_token_secret
-        token_secret_configured = _token_secret_is_configured(token_secret)
+        token_secret = _normalise_token_secret(self.csrf_token_secret)
         if (
             deployment_environment != "local"
-            and not token_secret_configured
+            and token_secret is None
             and secret_reference is None
         ):
             raise ConfigurationError(
@@ -77,15 +74,13 @@ class FormsSettings(BaseSettings):
             raise ConfigurationError(
                 "Non-local deployments must use secure CSRF cookies."
             )
-        generated_token_secret = False
-        if not token_secret_configured and secret_reference is None:
+        if token_secret is None and secret_reference is None:
             logger.info(
                 "Generated startup-local CSRF token secret. Configure "
                 "csrf_token_secret for stable tokens across reloads or workers.",
                 extra={"deployment_environment": deployment_environment},
             )
             token_secret = token_urlsafe(CSRF_TOKEN_SECRET_BYTES)
-            generated_token_secret = True
         object.__setattr__(self, "deployment_environment", deployment_environment)
         object.__setattr__(self, "csrf_cookie_secure", cookie_secure)
         object.__setattr__(self, "csrf_token_secret", token_secret)
@@ -99,7 +94,6 @@ class FormsSettings(BaseSettings):
             "csrf_token_secret_key",
             None if secret_reference is None else secret_reference[1],
         )
-        object.__setattr__(self, "_generated_token_secret", generated_token_secret)
 
     def protector(self, token_secret: str | None = None) -> CsrfProtector:
         resolved_secret = token_secret or self.fallback_token_secret
@@ -111,17 +105,13 @@ class FormsSettings(BaseSettings):
         )
 
     @property
-    def token_secret(self) -> str:
+    def token_secret(self) -> str | None:
         """Runtime view of a configured or generated fallback token secret."""
         return self.csrf_token_secret
 
     @property
     def fallback_token_secret(self) -> str | None:
         """Configured or generated fallback secret used when keychain lookup misses."""
-        if self._generated_token_secret:
-            return self.csrf_token_secret
-        if self.csrf_token_secret == GENERATE_LOCAL_CSRF_SECRET:
-            return None
         return self.csrf_token_secret
 
     @property
@@ -141,12 +131,12 @@ class FormsSettings(BaseSettings):
         return bool(self.csrf_cookie_secure)
 
 
-def _token_secret_is_configured(csrf_token_secret: str) -> bool:
-    if csrf_token_secret == GENERATE_LOCAL_CSRF_SECRET:
-        return False
-    if not csrf_token_secret.strip():
+def _normalise_token_secret(csrf_token_secret: str | None) -> str | None:
+    if csrf_token_secret is None:
+        return None
+    if not isinstance(csrf_token_secret, str) or not csrf_token_secret.strip():
         raise ConfigurationError("CSRF token secret must not be blank.")
-    return True
+    return csrf_token_secret.strip()
 
 
 def _normalise_optional_bool(
@@ -186,5 +176,4 @@ __all__ = (
     "CSRF_TOKEN_SECRET_BYTES",
     "CSRF_TOKEN_SECRET_KEY_CURRENT",
     "FormsSettings",
-    "GENERATE_LOCAL_CSRF_SECRET",
 )

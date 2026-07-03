@@ -9,7 +9,6 @@ ENV_CSRF_SECRET: Final = "CSRF_SECRET"
 ENV_CSRF_SECURE: Final = "CSRF_SECURE"
 FORMS_CONFIG_SECTION: Final = "wybra.forms"
 CSRF_TOKEN_SECRET_KEY_CURRENT: Final = "auth/forms/csrf-token-secret/current"
-GENERATE_LOCAL_CSRF_SECRET: Final = "__generate-local-csrf-secret__"
 
 
 def to_csrf_token_secret(value: object) -> str:
@@ -19,11 +18,6 @@ def to_csrf_token_secret(value: object) -> str:
     secret = value.strip()
     if not secret:
         raise ValueError("must be a non-blank string.")
-    if secret == GENERATE_LOCAL_CSRF_SECRET:
-        raise ValueError(
-            f"{GENERATE_LOCAL_CSRF_SECRET!r} is reserved for internal use; "
-            f"unset {ENV_CSRF_SECRET} to request automatic CSRF secret generation."
-        )
     return secret
 
 
@@ -81,7 +75,6 @@ __all__ = (
     "ENV_CSRF_SECURE",
     "CSRF_TOKEN_SECRET_KEY_CURRENT",
     "FORMS_CONFIG_SECTION",
-    "GENERATE_LOCAL_CSRF_SECRET",
     "module_config",
     "to_csrf_token_secret",
     "to_optional_non_blank_string",
