@@ -19,6 +19,7 @@ from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
     CSRF_TOKEN_SECRET_KEY_CURRENT,
+    CSRF_TOKEN_SECRET_KEY_PREVIOUS,
     Attr,
     CheckboxField,
     ChoiceField,
@@ -69,7 +70,12 @@ from wybra.forms import (
 from wybra.forms.context import forms_context
 from wybra.forms.csrf import CsrfProtector
 from wybra.forms.setup import setup_site as setup_forms_site
-from wybra.services.secrets import MissingSecretError, SecretsCapability, SecretValue
+from wybra.services.secrets import (
+    MissingSecretError,
+    SecretsCapability,
+    SecretsError,
+    SecretValue,
+)
 from wybra.site import Site, start
 from wybra.template.capabilities import DefaultTemplateCapability
 from wybra.template.context import TemplateContext
@@ -134,6 +140,13 @@ class FakeSecretsCapability:
 
     def exists(self, source: str, key: str) -> bool:
         return (source, key) in self.values
+
+
+class FailingPreviousCsrfSecretsCapability(FakeSecretsCapability):
+    def resolve(self, source: str, key: str) -> SecretValue:
+        if key == CSRF_TOKEN_SECRET_KEY_PREVIOUS:
+            raise SecretsError("keychain unavailable")
+        return super().resolve(source, key)
 
 
 def _forms_site(
@@ -1922,6 +1935,61 @@ async def test_forms_setup_uses_keychain_csrf_secret_before_fallback() -> None:
 
     assert site.app.state.csrf.secret == "keychain-csrf-secret"
     assert site.app.state.csrf.cookie_secure is True
+
+
+@pytest.mark.anyio
+async def test_forms_setup_uses_keychain_previous_csrf_secrets() -> None:
+    site = _forms_site(
+        {
+            "wybra.forms": {
+                "csrf_token_secret_source": "keychain",
+                "csrf_cookie_secure": "true",
+            },
+        },
+        deployment_environment="production",
+    )
+    site.provide_capability(
+        SecretsCapability,
+        FakeSecretsCapability(
+            {
+                ("keychain", CSRF_TOKEN_SECRET_KEY_CURRENT): "current-csrf-secret",
+                (
+                    "keychain",
+                    CSRF_TOKEN_SECRET_KEY_PREVIOUS,
+                ): "previous-csrf-secret,older-csrf-secret",
+            }
+        ),
+    )
+
+    await setup_forms_site(site)
+
+    assert site.app.state.csrf.secret == "current-csrf-secret"
+    assert site.app.state.csrf.previous_secrets == (
+        "previous-csrf-secret",
+        "older-csrf-secret",
+    )
+
+
+@pytest.mark.anyio
+async def test_forms_setup_fails_when_previous_csrf_secret_resolution_errors() -> None:
+    site = _forms_site(
+        {
+            "wybra.forms": {
+                "csrf_token_secret_source": "keychain",
+                "csrf_cookie_secure": "true",
+            },
+        },
+        deployment_environment="production",
+    )
+    site.provide_capability(
+        SecretsCapability,
+        FailingPreviousCsrfSecretsCapability(
+            {("keychain", CSRF_TOKEN_SECRET_KEY_CURRENT): "current-csrf-secret"}
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match=CSRF_TOKEN_SECRET_KEY_PREVIOUS):
+        await setup_forms_site(site)
 
 
 @pytest.mark.anyio

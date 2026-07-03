@@ -10,20 +10,29 @@ This key is separate from `[secrets.crypto]` and must not reuse
 ## Storage Key
 
 When `[wybra.forms].csrf_token_secret_source = "keychain"` is configured, Wybra
-uses this canonical storage key:
+uses this canonical current storage key:
 
 ```text
 auth/forms/csrf-token-secret/current
 ```
 
-The code constant for that storage key is:
+Rolling rotation also uses this canonical previous-secret storage key:
+
+```text
+auth/forms/csrf-token-secret/previous
+```
+
+The code constants for these storage keys are:
 
 ```python
 CSRF_TOKEN_SECRET_KEY_CURRENT
+CSRF_TOKEN_SECRET_KEY_PREVIOUS
 ```
 
 Set `[wybra.forms].csrf_token_secret_key` only when intentionally overriding or
-migrating that storage key.
+migrating the current storage key. If you override the current key, also set
+`csrf_token_secret_previous_key` so rotation has a matching previous-secret
+location.
 
 ## Configuration
 
@@ -44,6 +53,14 @@ csrf_token_secret_source = "keychain"
 `CSRF_SECRET` or inline `csrf_token_secret` may be used as a fallback, but the
 keychain value wins when it exists.
 
+The default CSRF token age is 3600 seconds. Override it only when your
+deployment needs a different rotation overlap window:
+
+```toml
+[wybra.forms]
+csrf_token_max_age_seconds = 3600
+```
+
 ## Generate A New Secret
 
 Generate and store a new CSRF token secret with:
@@ -61,13 +78,23 @@ uv run wybra-secret --config config/app.toml list
 
 ## Rotation
 
-The storage key is named with `/current` so future CSRF secret rotation can add
-previous-key verification without renaming the active key. Current Wybra
-versions read only `auth/forms/csrf-token-secret/current` for CSRF tokens.
+Run a dry run first:
 
-Replacing the current value immediately invalidates CSRF tokens rendered before
-the replacement. That is usually acceptable during a controlled deploy, but it
-is not yet rolling rotation.
+```sh
+uv run wybra-secret --config config/app.toml rotate csrf-token-secret --dry-run
+```
 
-When CSRF secret rotation is implemented, update this document with the
-previous-key storage key, token expiry behaviour, and the rotation procedure.
+Rotate the CSRF token secret with:
+
+```sh
+uv run wybra-secret --config config/app.toml rotate csrf-token-secret
+```
+
+Rotation writes the retired current secret to
+`auth/forms/csrf-token-secret/previous` before writing the new current secret.
+If previous secrets already exist, the retired current secret becomes the first
+entry in that previous-secret list.
+
+Tokens rendered before rotation remain valid only until
+`csrf_token_max_age_seconds` expires. Expired tokens are rejected even if they
+were signed by a retained previous secret.

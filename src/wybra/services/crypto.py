@@ -6,9 +6,11 @@ import base64
 import binascii
 import hashlib
 import hmac
+import time
 import zlib
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from secrets import token_hex
 from typing import Final, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -157,6 +159,72 @@ def parse_secret_key_bundle(
         keys=tuple(
             SecretKey(version=version, key=key) for version, key in ring_entries
         ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SecretKeyRotationPlan:
+    """Validated key material for a keychain-backed system secret-key rotation."""
+
+    current_value: str = field(repr=False)
+    previous_value: str = field(repr=False)
+    retired_version: str
+    new_version: str
+    previous_key_count: int
+
+
+def generate_secret_key_entry(
+    *,
+    version: str | None = None,
+    existing_versions: set[str] | frozenset[str] = frozenset(),
+) -> str:
+    """Generate a parser-compatible system secret-key entry for rotation."""
+
+    used_versions = set(existing_versions)
+    if version is not None and version in used_versions:
+        raise SecretDataError("Generated secret key version must be unique.")
+
+    for _attempt in range(32):
+        candidate_version = version or f"rot-{int(time.time())}-{token_hex(4)}"
+        if candidate_version in used_versions:
+            if version is not None:
+                raise SecretDataError("Generated secret key version must be unique.")
+            continue
+
+        encoded_key = Fernet.generate_key().decode("ascii")
+        key = _decode_base64_key(encoded_key)
+        entry = f"{candidate_version}:{encoded_key}:{_checksum(key)}"
+        parse_secret_key_entry(entry)
+        return entry
+
+    raise SecretDataError("Could not generate a unique secret key version.")
+
+
+def plan_secret_key_rotation(
+    *,
+    current: str | None,
+    previous: str | None,
+) -> SecretKeyRotationPlan:
+    """Build a validated rotation plan without writing keychain state."""
+
+    current_value = _normalise_environment_value(current)
+    previous_value = _normalise_environment_value(previous)
+    key_ring = parse_secret_key_bundle(current=current_value, previous=previous_value)
+    assert current_value is not None
+    existing_versions = {key.version for key in key_ring.keys}
+    new_current = generate_secret_key_entry(existing_versions=existing_versions)
+    new_version, _new_key = parse_secret_key_entry(new_current)
+    previous_entries = [current_value]
+    if previous_value is not None:
+        previous_entries.extend(previous_value.split(","))
+    new_previous = ",".join(previous_entries)
+    parse_secret_key_bundle(current=new_current, previous=new_previous)
+    return SecretKeyRotationPlan(
+        current_value=new_current,
+        previous_value=new_previous,
+        retired_version=key_ring.current.version,
+        new_version=new_version,
+        previous_key_count=len(previous_entries),
     )
 
 
@@ -464,6 +532,14 @@ class SecretEnvelopeService:
     def decrypt_required(self, value: str) -> tuple[str, str]:
         return self.decrypt(value, required=True)
 
+    def current_version_required(self) -> str:
+        key_ring = self._get_key_ring(required=True)
+        if key_ring is None:  # pragma: no cover - required branch raises first
+            raise SecretMaterialMissingError(
+                "Secret material is required but no keys are configured."
+            )
+        return key_ring.current.version
+
     def create_verifier_required(self, value: str, *, context: str) -> str:
         key_ring = self._get_key_ring(required=True)
         if key_ring is None:  # pragma: no cover - required branch raises first
@@ -576,8 +652,11 @@ __all__ = [
     "SecretKeySecretSource",
     "SecretKey",
     "SecretKeyRing",
+    "SecretKeyRotationPlan",
+    "generate_secret_key_entry",
     "parse_secret_key_bundle",
     "parse_secret_key_ring_from_env",
     "parse_secret_key_ring_from_secrets",
     "parse_secret_key_entry",
+    "plan_secret_key_rotation",
 ]

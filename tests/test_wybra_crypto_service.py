@@ -16,10 +16,12 @@ from wybra.services.crypto import (
     SecretKeyRing,
     SecretMaterialMissingError,
     SecretVersionError,
+    generate_secret_key_entry,
     parse_secret_key_bundle,
     parse_secret_key_entry,
     parse_secret_key_ring_from_env,
     parse_secret_key_ring_from_secrets,
+    plan_secret_key_rotation,
 )
 from wybra.services.secrets import MissingSecretError, SecretValue
 
@@ -108,6 +110,77 @@ def test_parse_secret_key_bundle_rejects_duplicate_versions() -> None:
             current=_key_entry("v1", key),
             previous=_key_entry("v1", _key_bundle_key()),
         )
+
+
+def test_generate_secret_key_entry_creates_parseable_unique_key() -> None:
+    current = _key_entry("current", _key_bundle_key())
+    previous = _key_entry("previous", _key_bundle_key())
+
+    generated = generate_secret_key_entry(existing_versions={"current", "previous"})
+
+    version, key = parse_secret_key_entry(generated)
+    assert version not in {"current", "previous"}
+    assert len(key) == 32
+    parse_secret_key_bundle(current=generated, previous=f"{current},{previous}")
+
+
+def test_generate_secret_key_entry_rejects_duplicate_explicit_version() -> None:
+    with pytest.raises(SecretDataError, match="unique"):
+        generate_secret_key_entry(
+            version="current",
+            existing_versions={"current"},
+        )
+
+
+def test_plan_secret_key_rotation_prepends_retired_current_key() -> None:
+    current = _key_entry("current", _key_bundle_key())
+    previous = _key_entry("previous", _key_bundle_key())
+
+    plan = plan_secret_key_rotation(current=current, previous=previous)
+
+    assert plan.retired_version == "current"
+    assert plan.new_version not in {"current", "previous"}
+    assert plan.previous_key_count == 2
+    assert plan.previous_value == f"{current},{previous}"
+    parse_secret_key_bundle(current=plan.current_value, previous=plan.previous_value)
+
+
+def test_plan_secret_key_rotation_initialises_missing_previous_value() -> None:
+    current = _key_entry("current", _key_bundle_key())
+
+    plan = plan_secret_key_rotation(current=current, previous=None)
+
+    assert plan.retired_version == "current"
+    assert plan.previous_key_count == 1
+    assert plan.previous_value == current
+
+
+def test_plan_secret_key_rotation_rejects_invalid_inputs_before_writes() -> None:
+    current = _key_entry("current", _key_bundle_key())
+
+    with pytest.raises(SecretMaterialMissingError):
+        plan_secret_key_rotation(current=None, previous=None)
+
+    with pytest.raises(SecretDataError, match="format"):
+        plan_secret_key_rotation(current="not-a-key-entry", previous=None)
+
+    with pytest.raises(SecretDataError, match="comma-separated"):
+        plan_secret_key_rotation(current=current, previous=",")
+
+    with pytest.raises(SecretDataError, match="unique"):
+        plan_secret_key_rotation(current=current, previous=current)
+
+
+def test_secret_key_rotation_plan_repr_redacts_key_material() -> None:
+    current = _key_entry("current", _key_bundle_key())
+    plan = plan_secret_key_rotation(current=current, previous=None)
+
+    rendered = repr(plan)
+
+    assert plan.current_value not in rendered
+    assert plan.previous_value not in rendered
+    assert current not in rendered
+    assert plan.new_version in rendered
 
 
 def test_parse_secret_key_ring_from_env_returns_none_if_unset() -> None:
