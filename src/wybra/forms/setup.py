@@ -29,7 +29,7 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
     if reference is None:
         return None
 
-    source, key = reference
+    reference_source, reference_identifier = reference
     fallback = settings.fallback_token_secret
     secrets = site.optional_capability(SecretsCapability)
     if secrets is None:
@@ -37,7 +37,10 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
             logger.warning(
                 "Falling back to configured CSRF token secret because "
                 "SecretsCapability is unavailable.",
-                extra={"csrf_secret_source": source, "csrf_secret_key": key},
+                extra={
+                    "csrf_reference_source": reference_source,
+                    "csrf_reference_identifier": reference_identifier,
+                },
             )
             return fallback
         local_fallback = _local_generated_fallback(site, settings)
@@ -49,16 +52,15 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
         )
 
     try:
-        secret = secrets.resolve(source, key).reveal()
+        secret = secrets.resolve(reference_source, reference_identifier).reveal()
     except SecretsError as exc:
         logger.warning(
             "Falling back from keychain-backed CSRF token secret resolution.",
             extra={
-                "csrf_secret_source": source,
-                "csrf_secret_key": key,
+                "csrf_reference_source": reference_source,
+                "csrf_reference_identifier": reference_identifier,
                 "error_type": type(exc).__name__,
             },
-            exc_info=True,
         )
         if fallback is not None:
             return fallback
@@ -67,8 +69,8 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
             return local_fallback
         raise ConfigurationError(
             "Keychain-backed CSRF token secret could not be resolved: "
-            f"source={source}, key={key}. Configure CSRF_SECRET fallback or fix "
-            "the keychain reference."
+            f"source={reference_source}, key={reference_identifier}. "
+            "Configure CSRF_SECRET fallback or fix the keychain reference."
         ) from exc
 
     if secret.strip():
@@ -80,7 +82,8 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
         return local_fallback
     raise ConfigurationError(
         "Keychain-backed CSRF token secret is blank: "
-        f"source={source}, key={key}. Configure a non-blank secret value."
+        f"source={reference_source}, key={reference_identifier}. "
+        "Configure a non-blank secret value."
     )
 
 
