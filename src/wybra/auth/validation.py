@@ -25,6 +25,7 @@ AUTH_SETTINGS_VALIDATION_DESCRIPTION = (
 class AuthValidationSettings(Protocol):
     database_url: str | None
     app_config: AppConfig | None
+    deployment_environment: DeploymentEnvironment | str | None
 
 
 def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
@@ -95,6 +96,9 @@ def _auth_settings_environ(settings: AuthValidationSettings) -> dict[str, str]:
 def _deployment_environment(
     settings: AuthValidationSettings,
 ) -> DeploymentEnvironment | str:
+    deployment_environment = getattr(settings, "deployment_environment", None)
+    if deployment_environment is not None:
+        return normalise_deployment_environment(deployment_environment)
     if settings.app_config is None:
         return DEFAULT_DEPLOYMENT_ENVIRONMENT
 

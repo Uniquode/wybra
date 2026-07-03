@@ -11,6 +11,7 @@ from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
+    CSRF_TOKEN_SECRET_KEY_CURRENT,
     CsrfProtector,
     csrf_exempt,
     request_form_data,
@@ -299,7 +300,10 @@ def test_csrf_settings_load_settings_uses_config_service_sources() -> None:
         ],
     )
 
-    settings = FormsSettings.load_settings(config)
+    settings = FormsSettings.load_settings(
+        config,
+        deployment_environment="production",
+    )
 
     assert settings.deployment_environment == "production"
     assert settings.token_secret == "production-csrf-secret"
@@ -327,7 +331,7 @@ def test_csrf_settings_load_settings_requires_stable_secret_for_non_local() -> N
         ConfigurationError,
         match="Non-local deployments must configure a stable CSRF token secret",
     ):
-        FormsSettings.load_settings(config)
+        FormsSettings.load_settings(config, deployment_environment="production")
 
 
 def test_csrf_settings_load_settings_transforms_secure_cookie_policy() -> None:
@@ -344,17 +348,17 @@ def test_csrf_settings_load_settings_transforms_secure_cookie_policy() -> None:
     assert settings.cookie_secure is False
 
 
-def test_csrf_settings_load_settings_reads_sectioned_mapping_app_config() -> None:
+def test_csrf_settings_load_settings_accepts_sectioned_mapping_environment() -> None:
     from wybra.forms import FormsSettings
 
     settings = FormsSettings.load_settings(
         {
-            "app": {"deployment_environment": "production"},
             "wybra.forms": {
                 "csrf_token_secret": "production-csrf-secret",
                 "csrf_cookie_secure": "true",
             },
-        }
+        },
+        deployment_environment="production",
     )
 
     assert settings.deployment_environment == "production"
@@ -362,16 +366,83 @@ def test_csrf_settings_load_settings_reads_sectioned_mapping_app_config() -> Non
     assert settings.cookie_secure is True
 
 
-def test_csrf_settings_load_settings_rejects_non_table_app_section() -> None:
+def test_csrf_settings_accepts_keychain_reference_without_secret_value() -> None:
+    from wybra.forms import FormsSettings
+
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {"modules": ("wybra.forms",)},
+                    "wybra.forms": {
+                        "csrf_token_secret_source": "keychain",
+                        "csrf_token_secret_key": CSRF_TOKEN_SECRET_KEY_CURRENT,
+                        "csrf_cookie_secure": "true",
+                    },
+                }
+            )
+        ],
+    )
+
+    settings = FormsSettings.load_settings(
+        config,
+        deployment_environment="production",
+    )
+
+    assert settings.csrf_token_secret_reference == (
+        "keychain",
+        CSRF_TOKEN_SECRET_KEY_CURRENT,
+    )
+    assert settings.fallback_token_secret is None
+
+
+def test_csrf_settings_preserves_keychain_and_inline_fallback() -> None:
+    from wybra.forms import FormsSettings
+
+    settings = FormsSettings.load_settings(
+        {
+            "wybra.forms": {
+                "csrf_token_secret_source": "keychain",
+                "csrf_token_secret_key": CSRF_TOKEN_SECRET_KEY_CURRENT,
+                "csrf_token_secret": "fallback-csrf-secret",
+                "csrf_cookie_secure": "true",
+            },
+        },
+        deployment_environment="production",
+    )
+
+    assert settings.csrf_token_secret_reference == (
+        "keychain",
+        CSRF_TOKEN_SECRET_KEY_CURRENT,
+    )
+    assert settings.fallback_token_secret == "fallback-csrf-secret"
+
+
+def test_csrf_settings_uses_default_keychain_reference() -> None:
+    from wybra.forms import FormsSettings
+
+    settings = FormsSettings.load_settings(
+        {
+            "wybra.forms": {"csrf_token_secret_source": "keychain"},
+        },
+        deployment_environment="production",
+    )
+
+    assert settings.csrf_token_secret_reference == (
+        "keychain",
+        CSRF_TOKEN_SECRET_KEY_CURRENT,
+    )
+
+
+def test_csrf_settings_rejects_secret_key_without_source() -> None:
     from wybra.core.exceptions import ConfigurationError
     from wybra.forms import FormsSettings
 
-    with pytest.raises(ConfigurationError, match=r"\[app\] must be a table"):
+    with pytest.raises(ConfigurationError, match="csrf_token_secret_source"):
         FormsSettings.load_settings(
             {
-                "app": "production",
-                "csrf_token_secret": "production-csrf-secret",
-            }
+                "wybra.forms": {"csrf_token_secret_key": CSRF_TOKEN_SECRET_KEY_CURRENT},
+            },
         )
 
 

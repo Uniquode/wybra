@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from wybra.config import ConfigService, MappingConfigSource
+from wybra.forms.settings import FormsSettings
+from wybra.services.secrets import KEYCHAIN_SOURCE
+
+
+def forms_keychain_secret_references(
+    raw_config: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, ...]:
+    config = ConfigService(
+        [MappingConfigSource(raw_config)],
+        config_defs=(FormsSettings.module_config,),
+        discover_module_config=False,
+    )
+    settings = FormsSettings.load_settings(config)
+    reference = settings.csrf_token_secret_reference
+    if reference is None:
+        return ()
+    source, key = reference
+    if source != KEYCHAIN_SOURCE:
+        return ()
+    return (key,)
+
+
+__all__ = ("forms_keychain_secret_references",)

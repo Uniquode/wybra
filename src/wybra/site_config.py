@@ -41,10 +41,7 @@ def app_config_from_site(site: Site) -> AppConfig:
             cors=_asset_cors_options(_section(site, "app.assets.cors")),
         ),
         database_url=_optional_str_value(app_config, "database_url"),
-        deployment_environment=_optional_str_value(
-            app_config,
-            "deployment_environment",
-        ),
+        deployment_environment=site.deployment_environment,
         auth=dict(_section(site, "auth")),
     )
 

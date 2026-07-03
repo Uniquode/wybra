@@ -25,7 +25,7 @@ from wybra.core.composition import (
     TemplateOptions,
 )
 from wybra.core.config import ENV_APP_ENV
-from wybra.core.exceptions import Http404
+from wybra.core.exceptions import ConfigurationError, Http404
 from wybra.core.routes import inspect_route_tree
 from wybra.db.config import ENV_DATABASE_URL
 from wybra.errors.capabilities import ErrorHandlingCapability
@@ -79,13 +79,20 @@ def _write_app_config(
     *,
     modules: tuple[str, ...],
     asset_root: str | None = None,
+    deployment_environment: str | None = None,
 ) -> Path:
     asset_root_config = f'        root = "{asset_root}"\n' if asset_root else ""
+    deployment_config = (
+        f'        deployment_environment = "{deployment_environment}"\n'
+        if deployment_environment is not None
+        else ""
+    )
     path.write_text(
         f"""
         [app]
         modules = {json.dumps(list(modules))}
         database_url = "sqlite+aiosqlite:///app.sqlite3"
+{deployment_config.rstrip()}
 
         [app.routes]
 
@@ -398,7 +405,7 @@ async def test_start_relative_config_source_uses_supplied_app_root(
 
 
 @pytest.mark.anyio
-async def test_start_environment_overrides_database_url_and_deployment_environment(
+async def test_start_environment_overrides_database_url_and_sets_deployment_fallback(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
@@ -418,9 +425,72 @@ async def test_start_environment_overrides_database_url_and_deployment_environme
     try:
         app_config = app_config_from_site(site)
         assert app_config.database_url == "sqlite+aiosqlite:///override.sqlite3"
+        assert site.deployment_environment == "staging"
         assert app_config.deployment_environment == "staging"
     finally:
         await site.close()
+
+
+@pytest.mark.anyio
+async def test_start_config_deployment_environment_precedes_app_env(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _write_app_config(
+        project_root / "app.toml",
+        modules=("wybra.assets",),
+        deployment_environment="production",
+    )
+
+    site = await start(
+        FastAPI(),
+        environ={
+            APP_ROOT_ENV: project_root.as_posix(),
+            APP_CONFIG_ENV: "app.toml",
+            ENV_APP_ENV: "staging",
+        },
+    )
+
+    try:
+        app_config = app_config_from_site(site)
+        assert site.deployment_environment == "production"
+        assert app_config.deployment_environment == "production"
+    finally:
+        await site.close()
+
+
+@pytest.mark.anyio
+async def test_start_defaults_deployment_environment_to_local() -> None:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource({"app": {"modules": ("wybra.assets",)}}),
+        environ={},
+    )
+
+    try:
+        assert site.deployment_environment == "local"
+    finally:
+        await site.close()
+
+
+@pytest.mark.anyio
+async def test_start_rejects_invalid_effective_deployment_environment(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _write_app_config(project_root / "app.toml", modules=("wybra.assets",))
+
+    with pytest.raises(ConfigurationError, match="Deployment environment"):
+        await start(
+            FastAPI(),
+            environ={
+                APP_ROOT_ENV: project_root.as_posix(),
+                APP_CONFIG_ENV: "app.toml",
+                ENV_APP_ENV: "dev",
+            },
+        )
 
 
 @pytest.mark.anyio

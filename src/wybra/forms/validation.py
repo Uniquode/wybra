@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from wybra.config import ConfigService
+from wybra.core.runtime import DEFAULT_DEPLOYMENT_ENVIRONMENT
 from wybra.forms.capabilities import forms_provider_configured
 from wybra.forms.settings import FormsSettings
 from wybra.tools.validation.core import ValidationCheck, ValidationResult, record_check
@@ -13,6 +14,7 @@ class FormsValidationSettings(Protocol):
     def modules(self) -> tuple[str, ...]: ...
 
     config: ConfigService
+    deployment_environment: str | None
 
 
 def validate_forms(settings: FormsValidationSettings) -> ValidationResult:
@@ -45,7 +47,14 @@ def validate_forms(settings: FormsValidationSettings) -> ValidationResult:
         )
 
     try:
-        forms_settings = FormsSettings.load_settings(settings.config)
+        forms_settings = FormsSettings.load_settings(
+            settings.config,
+            deployment_environment=getattr(
+                settings,
+                "deployment_environment",
+                DEFAULT_DEPLOYMENT_ENVIRONMENT,
+            ),
+        )
     except Exception as exc:
         record_check(
             checks,

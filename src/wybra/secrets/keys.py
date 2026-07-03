@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from wybra.core.exceptions import ConfigurationError
+from wybra.forms.secrets import forms_keychain_secret_references
 from wybra.providers.secrets import provider_keychain_secret_references
 from wybra.providers.settings import (
     APPLE_PROVIDER_NAME,
@@ -19,6 +20,7 @@ from wybra.services.crypto import (
 from wybra.services.secrets import KEYCHAIN_SOURCE, SecretSource
 
 SECRET_KEY_OWNER_CRYPTO: Final = "crypto"
+SECRET_KEY_OWNER_FORMS: Final = "forms"
 SECRET_KEY_OWNER_PROVIDERS: Final = "providers"
 
 
@@ -58,6 +60,7 @@ def known_keychain_secret_keys(
 
     keys: list[KnownSecretKey] = []
     keys.extend(_configured_crypto_keys(secrets_settings))
+    keys.extend(_configured_forms_keys(raw_config))
     keys.extend(_configured_provider_keys(raw_config))
     return _deduplicate_keys(keys)
 
@@ -115,6 +118,20 @@ def _configured_provider_keys(
     return tuple(keys)
 
 
+def _configured_forms_keys(
+    raw_config: Mapping[str, Mapping[str, Any]],
+) -> Iterable[KnownSecretKey]:
+    return tuple(
+        KnownSecretKey(
+            key=key,
+            owner=SECRET_KEY_OWNER_FORMS,
+            description="Forms CSRF token secret.",
+            required=True,
+        )
+        for key in forms_keychain_secret_references(raw_config)
+    )
+
+
 def _deduplicate_keys(keys: Iterable[KnownSecretKey]) -> tuple[KnownSecretKey, ...]:
     deduplicated: dict[str, KnownSecretKey] = {}
     for key in keys:
@@ -136,6 +153,7 @@ __all__ = (
     "BUILTIN_CRYPTO_SECRET_KEYS",
     "KnownSecretKey",
     "SECRET_KEY_OWNER_CRYPTO",
+    "SECRET_KEY_OWNER_FORMS",
     "SECRET_KEY_OWNER_PROVIDERS",
     "known_keychain_secret_keys",
 )

@@ -23,6 +23,11 @@ from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.diagnostics import wrapped_error
 from wybra.core.environment import environment_mapping, load_environment
 from wybra.core.exceptions import ConfigurationError
+from wybra.core.runtime import (
+    DEFAULT_DEPLOYMENT_ENVIRONMENT,
+    DeploymentEnvironment,
+    normalise_deployment_environment,
+)
 from wybra.core.settings import (
     SettingsLoadError,
     load_composition_config_from_environment,
@@ -51,6 +56,7 @@ class ProjectSettings(BaseSettings):
     media_url_mode: str = "storage-key"
     template_auto_reload: bool | None = None
     template_cache_size: int = 400
+    deployment_environment: DeploymentEnvironment = DEFAULT_DEPLOYMENT_ENVIRONMENT
 
     @classmethod
     def load_settings(
@@ -206,6 +212,10 @@ def _project_settings_kwargs(
     }
     if database_url is not None:
         settings_kwargs["database_url"] = database_url
+    settings_kwargs["deployment_environment"] = _deployment_environment(
+        app_values,
+        app_config,
+    )
     for field_name in ("migrations_root",):
         if field_name in app_values:
             settings_kwargs[field_name] = app_values[field_name]
@@ -220,6 +230,18 @@ def _project_settings_kwargs(
     if "url_mode" in media_values:
         settings_kwargs["media_url_mode"] = media_values["url_mode"]
     return settings_kwargs
+
+
+def _deployment_environment(
+    app_values: Mapping[str, Any],
+    app_config: AppConfig,
+) -> DeploymentEnvironment:
+    if app_config.deployment_environment is not None:
+        return normalise_deployment_environment(app_config.deployment_environment)
+    value = app_values.get("deployment_environment")
+    if value is not None:
+        return normalise_deployment_environment(value)
+    return DEFAULT_DEPLOYMENT_ENVIRONMENT
 
 
 def _configured_database_url(

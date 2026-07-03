@@ -269,6 +269,11 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         for nested_name, nested_value in secrets_data.items():
             if isinstance(nested_value, Mapping):
                 sections[f"secrets.{nested_name}"] = dict(nested_value)
+    wybra_data = data.get("wybra")
+    if isinstance(wybra_data, Mapping):
+        for nested_name, nested_value in wybra_data.items():
+            if isinstance(nested_value, Mapping):
+                sections[f"wybra.{nested_name}"] = dict(nested_value)
     return sections
 
 
