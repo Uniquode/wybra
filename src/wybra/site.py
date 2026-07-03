@@ -21,16 +21,22 @@ from wybra.config import (
     ConfigSource,
     ConfigSourceError,
     ConfigSourceMetadata,
-    FileConfigSource,
 )
 from wybra.core.composition import (
     APP_CONFIG_ENV,
     APP_ROOT_ENV,
     AppConfig,
+    CompositionError,
+    load_app_config,
     resolve_project_root,
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.environment import EnvironmentMapping, load_environment
+from wybra.core.runtime import (
+    DEFAULT_DEPLOYMENT_ENVIRONMENT,
+    DeploymentEnvironment,
+    normalise_deployment_environment,
+)
 from wybra.core.settings import load_composition_config_from_environment
 from wybra.errors.diagnostics import structured_error, type_name
 from wybra.tools.project import runtime_project_root
@@ -63,6 +69,7 @@ class SiteCapabilityError(RuntimeError):
 class Site:
     app: FastAPI
     config: ConfigService
+    deployment_environment: DeploymentEnvironment = DEFAULT_DEPLOYMENT_ENVIRONMENT
     _capabilities: dict[type[object], object] = field(
         default_factory=dict,
         init=False,
@@ -264,6 +271,13 @@ class SiteCapabilityProxy[T]:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _StartupConfig:
+    source: ConfigSource
+    environ: Mapping[str, str]
+    app_config: AppConfig | None
+
+
 def start_site(
     *,
     config_source: ConfigSourceInput = None,
@@ -315,17 +329,33 @@ async def start(
     module_loader: ModuleLoader | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> Site:
+    startup_config = _startup_config(config_source, environ)
+    config = ConfigService(
+        [startup_config.source],
+        config_defs=(RUNTIME_CONFIG_DEF,),
+        environ=startup_config.environ,
+    )
     site = Site(
         app=app,
-        config=ConfigService(
-            [_normalise_config_source(config_source, environ)],
-            config_defs=(RUNTIME_CONFIG_DEF,),
-            environ=_startup_environ(config_source, environ),
-        ),
+        config=config,
+        deployment_environment=_deployment_environment(config),
     )
     app.state.site = site
     await _compose_site(site, module_loader or import_module)
     return site
+
+
+def _startup_config(
+    config_source: ConfigSourceInput,
+    environ: Mapping[str, str] | None,
+) -> _StartupConfig:
+    startup_environ = _startup_environ(config_source, environ)
+    source, app_config = _normalise_config_source(config_source, environ)
+    return _StartupConfig(
+        source=source,
+        environ=startup_environ,
+        app_config=app_config,
+    )
 
 
 def _startup_environ(
@@ -341,7 +371,7 @@ def _startup_environ(
 def _normalise_config_source(
     config_source: ConfigSourceInput,
     environ: Mapping[str, str] | None,
-) -> ConfigSource:
+) -> tuple[ConfigSource, AppConfig | None]:
     if config_source is None:
         project_root = _startup_project_root(environ)
         env = load_environment(environ=environ, project_root=project_root)
@@ -356,19 +386,49 @@ def _normalise_config_source(
                 "Application config file could not be resolved; pass --config or set "
                 f"{APP_CONFIG_ENV}."
             )
-        return AppConfigSource(app_config)
+        return AppConfigSource(app_config), app_config
     if isinstance(config_source, AppConfig):
-        return AppConfigSource(config_source)
+        return AppConfigSource(config_source), config_source
     if isinstance(config_source, str):
-        return FileConfigSource(
+        app_config = _load_file_config_source(
             _file_config_path(config_source),
             project_root=_explicit_config_project_root(environ),
         )
+        return AppConfigSource(app_config, source="file"), app_config
     if _is_config_source(config_source):
-        return config_source
+        return config_source, None
     raise ConfigSourceError(
         "Config source must be a string, AppConfig, or ConfigSource."
     )
+
+
+def _load_file_config_source(config_path: Path, *, project_root: Path) -> AppConfig:
+    try:
+        return load_app_config(project_root=project_root, config_path=config_path)
+    except CompositionError as exc:
+        raise ConfigSourceError(f"file: {exc}") from exc
+
+
+def _deployment_environment(
+    config: ConfigService,
+) -> DeploymentEnvironment:
+    app_values = config.get_config("app") or {}
+    config_value = app_values.get("deployment_environment")
+    if config_value is not None:
+        return _normalise_configured_deployment_environment(
+            config_value,
+            "app.deployment_environment",
+        )
+    return DEFAULT_DEPLOYMENT_ENVIRONMENT
+
+
+def _normalise_configured_deployment_environment(
+    value: object,
+    name: str,
+) -> DeploymentEnvironment:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigSourceError(f"{name} must be a non-blank string.")
+    return normalise_deployment_environment(value.strip())
 
 
 def _config_source_project_root(

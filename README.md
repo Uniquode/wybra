@@ -392,9 +392,12 @@ startup configuration channel used by ASGI startup:
   changing the project root.
 - `--database-url` sets `DATABASE_URL` for database, auth, validation, and
   migration consumers.
-- `--deploy` sets `APP_ENV` for deployment-policy consumers.
+- `--deploy` sets `APP_ENV`, which is used as the deployment-environment
+  override for this invocation.
 
-Precedence is CLI override, then environment variable, then app config default.
+Runtime override precedence is CLI override, then environment variable, then app
+config default, then built-in default. For deployment environment, this is
+`--deploy`, then `APP_ENV`, then `[app].deployment_environment`, then `local`.
 Relative config paths and relative SQLite database paths are resolved from the
 effective project root.
 
@@ -553,6 +556,7 @@ list before modules that validate or use secret references:
 [app]
 modules = [
     "wybra.secrets",
+    "wybra.forms",
     "wybra.auth",
     "wybra.providers",
 ]
@@ -600,6 +604,28 @@ format. If `[secrets.crypto]` is absent, the crypto service uses
 environment. The previous-keys reference is optional; if the selected source
 does not contain it, only the current key is loaded.
 
+`wybra.forms` uses a separate CSRF signing secret. Do not reuse
+`WYBRA_SECRET_KEY_CURRENT` or another `[secrets.crypto]` key for CSRF tokens.
+For non-local deployments, configure a stable CSRF secret through keychain
+lookup, with `CSRF_SECRET` or inline `csrf_token_secret` as an optional
+fallback:
+
+```toml
+[wybra.forms]
+csrf_token_secret_source = "keychain"
+```
+
+When `csrf_token_secret_source = "keychain"` is configured, `wybra.forms`
+attempts to load the canonical forms CSRF storage key
+`auth/forms/csrf-token-secret/current` during startup. Set
+`csrf_token_secret_key` only when intentionally overriding or migrating that
+storage key. If the key cannot be resolved and `CSRF_SECRET` or inline
+`csrf_token_secret` is configured, the fallback value is used. In non-local
+deployments, startup fails when neither path provides a stable CSRF secret.
+Local deployments may still generate a process-local CSRF secret when no stable
+value is configured. See `docs/SECRET_KEY.md` for generation and storage
+commands.
+
 The `environment` source reads from the resolved process environment and needs
 no optional dependency:
 
@@ -644,11 +670,11 @@ uv run wybra-secret --config config/app.toml list --json
 Use `APP_CONFIG=config/app.toml` instead of `--config` when the selected app
 config should come from the environment. `list` is a list of known keys, not
 platform keychain enumeration: it includes Wybra's built-in crypto key
-references and configured keychain-backed references such as enabled external
-provider client secret keys. External identity providers are implemented by the
-opt-in `wybra.providers` module, with provider authentication configuration
-under `[auth.providers.<name>]`. WebAuthn and passkeys are separate future
-`wybra.passkeys` work, not provider behaviour.
+references and configured keychain-backed references such as the forms CSRF
+token secret and enabled external provider client secret keys. External
+identity providers are implemented by the opt-in `wybra.providers` module, with
+provider authentication configuration under `[auth.providers.<name>]`. WebAuthn
+and passkeys are separate future `wybra.passkeys` work, not provider behaviour.
 
 For Linux keychain verification in the repository development container, start
 the root `wybra-dev` Compose shell. The container starts commands inside a

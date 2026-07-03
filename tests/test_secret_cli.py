@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 import wybra.secrets.cli as secret_cli
 import wybra.secrets.sources as secret_sources
+from wybra.forms import CSRF_TOKEN_SECRET_KEY_CURRENT
 
 
 class FakeKeyring:
@@ -34,7 +35,10 @@ def _app_config(path: Path) -> Path:
     path.write_text(
         """
 [app]
-modules = ["wybra.secrets", "wybra.auth", "wybra.providers"]
+modules = ["wybra.secrets", "wybra.forms", "wybra.auth", "wybra.providers"]
+
+[wybra.forms]
+csrf_token_secret_source = "keychain"
 
 [secrets.keychain]
 appname = "uniquode.io"
@@ -152,6 +156,7 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
                 "uniquode.io",
                 "auth/providers/google/client-secret",
             ): "google",
+            ("uniquode.io", CSRF_TOKEN_SECRET_KEY_CURRENT): "csrf",
         }
     )
     _install_fake_keyring(monkeypatch, keyring)
@@ -168,6 +173,11 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     assert records["SYSTEM_SECRET_KEY"]["username"] == "SYSTEM_SECRET_KEY"
     assert records["SYSTEM_SECRET_KEY"]["exists"] is True
     assert records["SYSTEM_SECRET_KEYS_PREVIOUS"]["exists"] is False
+    assert records[CSRF_TOKEN_SECRET_KEY_CURRENT]["owner"] == "forms"
+    assert records[CSRF_TOKEN_SECRET_KEY_CURRENT]["description"] == (
+        "Forms CSRF token secret."
+    )
+    assert records[CSRF_TOKEN_SECRET_KEY_CURRENT]["exists"] is True
     assert records["auth/providers/google/client-secret"]["exists"] is True
     assert "WYBRA_SECRET_KEY_CURRENT" not in records
     assert "WYBRA_SECRET_KEYS_PREVIOUS" not in records
@@ -190,6 +200,33 @@ modules = ["wybra.secrets"]
 [secrets.crypto]
 source = "environment"
 current_key = "SYSTEM_SECRET_KEY"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        secret_cli.secret_command,
+        ["--config", config_path.as_posix(), "list", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {"keys": []}
+
+
+def test_list_excludes_csrf_fallback_without_keychain_config(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    keyring = FakeKeyring()
+    _install_fake_keyring(monkeypatch, keyring)
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+[app]
+modules = ["wybra.secrets", "wybra.forms"]
+
+[wybra.forms]
+csrf_token_secret = "inline-csrf-secret"
 """.strip(),
         encoding="utf-8",
     )

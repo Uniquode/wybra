@@ -19,7 +19,7 @@ from wybra.core.composition import (
     RouteOptions,
     TemplateOptions,
 )
-from wybra.core.config import RUNTIME_CONFIG_DEF
+from wybra.core.config import ENV_APP_ENV, RUNTIME_CONFIG_DEF
 from wybra.core.routes.validation import validate_routes
 from wybra.errors.validation import validate_errors
 from wybra.security.validation import validate_security
@@ -671,6 +671,24 @@ def test_project_settings_do_not_treat_asset_root_as_runtime_static_root(
 
     assert settings.static_root is None
     assert not settings.uses_filesystem_static_root
+
+
+def test_project_settings_environment_overrides_config_deployment_environment(
+    tmp_path: Path,
+) -> None:
+    app_config = replace(
+        _app_config(tmp_path, ("wybra.assets",)),
+        deployment_environment="production",
+    )
+    config = ConfigService(
+        [AppConfigSource(app_config)],
+        config_defs=(RUNTIME_CONFIG_DEF,),
+        environ={ENV_APP_ENV: "staging"},
+    )
+
+    settings = ProjectSettings.load_settings(config, app_config=app_config)
+
+    assert settings.deployment_environment == "staging"
 
 
 def test_validate_assets_accepts_missing_creatable_default_asset_root(

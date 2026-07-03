@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Any
@@ -11,10 +12,13 @@ from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
+from wybra.core.exceptions import ConfigurationError
 from wybra.core.resources import PackageResourceSource, first_existing_resource
+from wybra.core.runtime import normalise_deployment_environment
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
+    CSRF_TOKEN_SECRET_KEY_CURRENT,
     Attr,
     CheckboxField,
     ChoiceField,
@@ -64,7 +68,9 @@ from wybra.forms import (
 )
 from wybra.forms.context import forms_context
 from wybra.forms.csrf import CsrfProtector
-from wybra.site import start
+from wybra.forms.setup import setup_site as setup_forms_site
+from wybra.services.secrets import MissingSecretError, SecretsCapability, SecretValue
+from wybra.site import Site, start
 from wybra.template.capabilities import DefaultTemplateCapability
 from wybra.template.context import TemplateContext
 from wybra.tools.validate import validate_command
@@ -113,6 +119,39 @@ class PersistenceProbeRecord(ExampleRecord):
 
     def add(self, _record: object) -> None:
         self.add_called = True
+
+
+class FakeSecretsCapability:
+    def __init__(self, values: Mapping[tuple[str, str], str] | None = None) -> None:
+        self.values = dict(values or {})
+
+    def resolve(self, source: str, key: str) -> SecretValue:
+        try:
+            value = self.values[(source, key)]
+        except KeyError as exc:
+            raise MissingSecretError(source=source, key=key) from exc
+        return SecretValue(value, source=source, key=key)
+
+    def exists(self, source: str, key: str) -> bool:
+        return (source, key) in self.values
+
+
+def _forms_site(
+    values: dict[str, dict[str, object]],
+    *,
+    deployment_environment: str = "local",
+    environ: dict[str, str] | None = None,
+) -> Site:
+    return Site(
+        app=FastAPI(),
+        config=ConfigService(
+            [MappingConfigSource(values)],
+            config_defs=(FormsSettings.module_config,),
+            environ=environ,
+            discover_module_config=False,
+        ),
+        deployment_environment=normalise_deployment_environment(deployment_environment),
+    )
 
 
 class ExampleModelForm(ModelForm):
@@ -1816,7 +1855,10 @@ def test_forms_settings_load_settings_uses_config_service_sources() -> None:
         ],
     )
 
-    settings = FormsSettings.load_settings(config)
+    settings = FormsSettings.load_settings(
+        config,
+        deployment_environment="production",
+    )
 
     assert settings.deployment_environment == "production"
     assert settings.token_secret == "production-csrf-secret"
@@ -1855,6 +1897,84 @@ async def test_forms_setup_provides_forms_capability(tmp_path) -> None:
 
     assert site.require_capability(FormsCapability)
     assert isinstance(app.state.csrf, CsrfProtector)
+
+
+@pytest.mark.anyio
+async def test_forms_setup_uses_keychain_csrf_secret_before_fallback() -> None:
+    site = _forms_site(
+        {
+            "wybra.forms": {
+                "csrf_token_secret_source": "keychain",
+                "csrf_cookie_secure": "true",
+            },
+        },
+        deployment_environment="production",
+        environ={"CSRF_SECRET": "fallback-csrf-secret"},
+    )
+    site.provide_capability(
+        SecretsCapability,
+        FakeSecretsCapability(
+            {("keychain", CSRF_TOKEN_SECRET_KEY_CURRENT): "keychain-csrf-secret"}
+        ),
+    )
+
+    await setup_forms_site(site)
+
+    assert site.app.state.csrf.secret == "keychain-csrf-secret"
+    assert site.app.state.csrf.cookie_secure is True
+
+
+@pytest.mark.anyio
+async def test_forms_setup_falls_back_to_configured_csrf_secret() -> None:
+    site = _forms_site(
+        {
+            "wybra.forms": {
+                "csrf_token_secret_source": "keychain",
+                "csrf_cookie_secure": "true",
+            },
+        },
+        deployment_environment="production",
+        environ={"CSRF_SECRET": "fallback-csrf-secret"},
+    )
+
+    await setup_forms_site(site)
+
+    assert site.app.state.csrf.secret == "fallback-csrf-secret"
+
+
+@pytest.mark.anyio
+async def test_forms_setup_fails_when_keychain_and_fallback_are_missing() -> None:
+    site = _forms_site(
+        {
+            "wybra.forms": {
+                "csrf_token_secret_source": "keychain",
+                "csrf_cookie_secure": "true",
+            },
+        },
+        deployment_environment="production",
+    )
+    site.provide_capability(SecretsCapability, FakeSecretsCapability())
+
+    with pytest.raises(ConfigurationError, match=CSRF_TOKEN_SECRET_KEY_CURRENT):
+        await setup_forms_site(site)
+
+
+@pytest.mark.anyio
+async def test_forms_setup_does_not_use_crypto_keyring_as_csrf_secret() -> None:
+    site = _forms_site(
+        {
+            "secrets.crypto": {
+                "source": "environment",
+                "current_key": "WYBRA_SECRET_KEY_CURRENT",
+            },
+            "wybra.forms": {"csrf_cookie_secure": "true"},
+        },
+        deployment_environment="production",
+        environ={"WYBRA_SECRET_KEY_CURRENT": "crypto-secret"},
+    )
+
+    with pytest.raises(ConfigurationError, match="stable CSRF token secret"):
+        await setup_forms_site(site)
 
 
 @pytest.mark.anyio
@@ -1945,3 +2065,33 @@ def test_validate_forms_reports_loaded_settings() -> None:
     assert any(
         check.description.startswith("forms settings load") for check in result.checks
     )
+
+
+def test_validate_forms_accepts_keychain_backed_csrf_config() -> None:
+    from wybra.forms.validation import validate_forms
+
+    result = validate_forms(
+        type(
+            "Settings",
+            (),
+            {
+                "modules": ("wybra.forms",),
+                "deployment_environment": "production",
+                "config": ConfigService(
+                    [
+                        MappingConfigSource(
+                            {
+                                "app": {"modules": ("wybra.forms",)},
+                                "wybra.forms": {
+                                    "csrf_token_secret_source": "keychain",
+                                    "csrf_cookie_secure": "true",
+                                },
+                            }
+                        )
+                    ],
+                ),
+            },
+        )()
+    )
+
+    assert result.is_ok
