@@ -1,3 +1,4 @@
+import logging
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -9,11 +10,13 @@ import click
 from wybra.api.validation import validate_api
 from wybra.assets.validation import validate_assets
 from wybra.core.exceptions import ConfigurationError
+from wybra.core.logging import LoggingConfigurationError
 from wybra.core.routes.validation import validate_routes
 from wybra.errors.validation import validate_errors
 from wybra.forms.validation import validate_forms
 from wybra.security.validation import validate_security
 from wybra.template.validation import validate_template
+from wybra.tools.cli_logging import configure_cli_logging
 from wybra.tools.project import (
     ProjectToolConfigurationError,
     runtime_project_root,
@@ -25,6 +28,8 @@ from wybra.tools.validation.registry import (
     ValidationTarget,
     discover_validation_target_details,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = (
     "UnknownValidationTargetError",
@@ -200,10 +205,13 @@ def validate_command(
         static_url_path=static_url_path,
     )
     try:
+        configure_cli_logging()
         settings = _build_settings(overrides)
-    except ProjectToolConfigurationError as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+        app_config = getattr(settings, "app_config", None)
+        if app_config is not None:
+            configure_cli_logging(app_config)
+    except (LoggingConfigurationError, ProjectToolConfigurationError) as exc:
+        logger.error("configuration: failed: %s", exc)
         return 1
 
     try:
@@ -214,12 +222,10 @@ def validate_command(
             discovered_origins=discovered.origins,
         )
     except ValidationDiscoveryError as exc:
-        print("validation discovery: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+        logger.error("validation discovery: failed: %s", exc)
         return 1
     except ConfigurationError as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+        logger.error("configuration: failed: %s", exc)
         return 1
 
     try:

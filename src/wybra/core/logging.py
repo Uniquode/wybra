@@ -8,13 +8,21 @@ from typing import Any, Final
 from wybra.core.composition import AppConfig
 
 DICT_CONFIG_VERSION = 1
+DEFAULT_LOG_FORMAT: Final = "%(asctime)s %(levelname)s %(name)s %(message)s"
+DEFAULT_LOG_DATE_FORMAT: Final = "%Y-%m-%dT%H:%M:%S%z"
+
+
+class LoggingConfigurationError(ValueError):
+    """Raised when runtime logging configuration cannot be applied."""
+
 
 DEFAULT_LOGGING_CONFIG: Final[dict[str, Any]] = {
     "version": DICT_CONFIG_VERSION,
     "disable_existing_loggers": False,
     "formatters": {
         "simple": {
-            "format": "%(levelname)-5.5s [%(name)s] %(message)s",
+            "format": DEFAULT_LOG_FORMAT,
+            "datefmt": DEFAULT_LOG_DATE_FORMAT,
         },
     },
     "handlers": {
@@ -66,7 +74,24 @@ def merge_logging_config(config: object) -> dict[str, Any]:
 
 
 def configure_logging(config: Mapping[str, Any]) -> None:
-    logging.config.dictConfig(_plain_dict(config))
+    try:
+        logging.config.dictConfig(_plain_dict(config))
+    except (AttributeError, ImportError, TypeError, ValueError) as exc:
+        raise LoggingConfigurationError("Logging configuration is invalid.") from exc
+
+
+def configure_runtime_logging(
+    app_config: AppConfig | None = None,
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    logging_config = (
+        _plain_dict(config)
+        if config is not None
+        else logging_config_from_app_config(app_config)
+    )
+    configure_logging(logging_config)
+    return logging_config
 
 
 def _deep_merge(base: dict[str, Any], overrides: Mapping[Any, Any]) -> dict[str, Any]:
@@ -92,7 +117,11 @@ def _plain_value(value: Any) -> Any:
 
 __all__ = (
     "DEFAULT_LOGGING_CONFIG",
+    "DEFAULT_LOG_DATE_FORMAT",
+    "DEFAULT_LOG_FORMAT",
+    "LoggingConfigurationError",
     "configure_logging",
+    "configure_runtime_logging",
     "default_logging_config",
     "logging_config_from_app_config",
     "merge_logging_config",

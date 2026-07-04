@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -23,6 +25,7 @@ from wybra.core.composition import (
     CompositionError,
     RouteOptions,
     TemplateOptions,
+    load_app_config,
 )
 from wybra.core.config import ENV_APP_ENV
 from wybra.core.exceptions import ConfigurationError, Http404
@@ -80,11 +83,34 @@ def _write_app_config(
     modules: tuple[str, ...],
     asset_root: str | None = None,
     deployment_environment: str | None = None,
+    log_format: str | None = None,
 ) -> Path:
     asset_root_config = f'        root = "{asset_root}"\n' if asset_root else ""
     deployment_config = (
         f'        deployment_environment = "{deployment_environment}"\n'
         if deployment_environment is not None
+        else ""
+    )
+    log_config = (
+        f"""
+        [log]
+        version = 1
+        disable_existing_loggers = false
+
+        [log.formatters.simple]
+        format = "{log_format}"
+
+        [log.handlers.console]
+        class = "logging.StreamHandler"
+        level = "INFO"
+        formatter = "simple"
+        stream = "ext://sys.stderr"
+
+        [log.root]
+        level = "INFO"
+        handlers = ["console"]
+        """
+        if log_format is not None
         else ""
     )
     path.write_text(
@@ -103,6 +129,7 @@ def _write_app_config(
         [app.assets]
         url_path = "/static/"
 {asset_root_config.rstrip()}
+{log_config.rstrip()}
         """,
         encoding="utf-8",
     )
@@ -116,6 +143,85 @@ def _site_from_mapping(values: dict[str, dict[str, object]]) -> Site:
             [MappingConfigSource(values)],
             discover_module_config=False,
         ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def restore_root_logging():
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    original_disabled = logging.root.manager.disable
+    yield
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        if handler not in original_handlers:
+            handler.close()
+    root.handlers[:] = original_handlers
+    root.setLevel(original_level)
+    logging.disable(original_disabled)
+
+
+@pytest.mark.anyio
+async def test_start_applies_logging_before_module_hooks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    package_root = tmp_path / "logging_hook_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text(
+        "import logging\n"
+        "async def setup_site(site):\n"
+        "    logging.getLogger('logging_hook_app').warning('setup hook')\n"
+        "async def post_setup_site(site):\n"
+        "    logging.getLogger('logging_hook_app').warning('post setup hook')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    config_path = _write_app_config(
+        tmp_path / "app.toml",
+        modules=("logging_hook_app",),
+        log_format="CONFIGURED %(levelname)s %(name)s %(message)s",
+    )
+    app_config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    await start(FastAPI(), config_source=app_config)
+
+    output = capsys.readouterr().err
+    assert "CONFIGURED WARNING logging_hook_app setup hook" in output
+    assert "CONFIGURED WARNING logging_hook_app post setup hook" in output
+    assert "WARNING:logging_hook_app:" not in output
+
+
+@pytest.mark.anyio
+async def test_start_applies_default_logging_before_module_hooks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    package_root = tmp_path / "default_logging_hook_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text(
+        "import logging\n"
+        "async def setup_site(site):\n"
+        "    logging.getLogger('default_logging_hook_app').warning('setup hook')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    config_path = _write_app_config(
+        tmp_path / "app.toml",
+        modules=("default_logging_hook_app",),
+    )
+    app_config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    await start(FastAPI(), config_source=app_config)
+
+    output = capsys.readouterr().err.strip()
+    assert re.match(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4} "
+        r"WARNING default_logging_hook_app setup hook",
+        output,
     )
 
 

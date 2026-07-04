@@ -2634,7 +2634,7 @@ async def test_apple_callback_rejects_invalid_token_response(
 
 @pytest.mark.anyio
 async def test_apple_callback_logs_private_key_resolution_failure(
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2645,24 +2645,24 @@ async def test_apple_callback_logs_private_key_resolution_failure(
     cookie_state = _apple_oauth_cookie_state(site, start)
     site._capabilities[SecretsCapability] = MissingSecretsCapability()
 
-    with caplog.at_level("WARNING", logger="wybra.providers.routes"):
-        response = client.post(
-            "/account/providers/apple/callback",
-            data={"code": "code", "state": cookie_state.state},
-            follow_redirects=False,
-        )
+    response = client.post(
+        "/account/providers/apple/callback",
+        data={"code": "code", "state": cookie_state.state},
+        follow_redirects=False,
+    )
+    captured = capsys.readouterr()
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Apple login is not available."
     assert (
         "Apple private key resolution failed: source=environment key=APPLE_PRIVATE_KEY"
-        in caplog.text
+        in captured.err
     )
 
 
 @pytest.mark.anyio
 async def test_apple_callback_logs_client_secret_generation_failure(
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2672,16 +2672,16 @@ async def test_apple_callback_logs_client_secret_generation_failure(
     start = client.get("/account/providers/apple/login", follow_redirects=False)
     cookie_state = _apple_oauth_cookie_state(site, start)
 
-    with caplog.at_level("WARNING", logger="wybra.providers.routes"):
-        response = client.post(
-            "/account/providers/apple/callback",
-            data={"code": "code", "state": cookie_state.state},
-            follow_redirects=False,
-        )
+    response = client.post(
+        "/account/providers/apple/callback",
+        data={"code": "code", "state": cookie_state.state},
+        follow_redirects=False,
+    )
+    captured = capsys.readouterr()
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Apple login is not available."
-    assert "Apple client secret generation failed." in caplog.text
+    assert "Apple client secret generation failed." in captured.err
 
 
 @pytest.mark.anyio

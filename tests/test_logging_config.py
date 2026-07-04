@@ -1,13 +1,37 @@
 from __future__ import annotations
 
+import logging
+import re
+from pathlib import Path
+
 import pytest
 
+import wybra.core.logging as logging_module
 from wybra.core.composition import load_app_config
 from wybra.core.logging import (
+    DEFAULT_LOG_DATE_FORMAT,
+    DEFAULT_LOG_FORMAT,
+    configure_runtime_logging,
     default_logging_config,
     logging_config_from_app_config,
     merge_logging_config,
 )
+
+
+@pytest.fixture(autouse=True)
+def restore_root_logging():
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    original_disabled = logging.root.manager.disable
+    yield
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        if handler not in original_handlers:
+            handler.close()
+    root.handlers[:] = original_handlers
+    root.setLevel(original_level)
+    logging.disable(original_disabled)
 
 
 def test_merge_logging_config_adds_to_defaults_when_not_authoritative() -> None:
@@ -153,3 +177,53 @@ def test_default_logging_config_returns_independent_copy() -> None:
     first["handlers"]["console"]["level"] = "DEBUG"
 
     assert second["handlers"]["console"]["level"] == "INFO"
+
+
+def test_default_logging_config_uses_iso_timestamp_level_logger_and_message() -> None:
+    config = default_logging_config()
+
+    assert config["formatters"]["simple"]["format"] == DEFAULT_LOG_FORMAT
+    assert config["formatters"]["simple"]["datefmt"] == DEFAULT_LOG_DATE_FORMAT
+
+
+def test_configure_runtime_logging_emits_default_format(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_runtime_logging()
+
+    logging.getLogger("wybra.tests.logging").warning("runtime ready")
+
+    output = capsys.readouterr().err.strip()
+    assert re.match(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4} "
+        r"WARNING wybra\.tests\.logging runtime ready",
+        output,
+    )
+    assert not output.startswith("WARNING:wybra.tests.logging:")
+
+
+def test_configure_runtime_logging_replaces_fallback_handlers(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fallback_records: list[str] = []
+
+    class FallbackHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            fallback_records.append(record.getMessage())
+
+    logging.getLogger().addHandler(FallbackHandler())
+
+    configure_runtime_logging()
+    configure_runtime_logging()
+    logging.getLogger("wybra.tests.logging").warning("single record")
+
+    output = capsys.readouterr().err
+    assert output.count("single record") == 1
+    assert fallback_records == []
+    assert len(logging.getLogger().handlers) == 1
+
+
+def test_core_logging_does_not_embed_uvicorn_details() -> None:
+    source = Path(logging_module.__file__).read_text(encoding="utf-8")
+
+    assert "uvicorn" not in source.lower()

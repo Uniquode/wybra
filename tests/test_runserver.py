@@ -3,8 +3,14 @@ from pathlib import Path
 from click.testing import CliRunner
 
 import wybra.tools.runserver as runserver
+import wybra.tools.runserver_uvicorn as runserver_uvicorn
 from wybra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV
 from wybra.core.config import ENV_APP_ENV
+from wybra.core.logging import (
+    DEFAULT_LOG_DATE_FORMAT,
+    DEFAULT_LOG_FORMAT,
+    default_logging_config,
+)
 from wybra.db.config import ENV_DATABASE_URL
 
 
@@ -51,8 +57,9 @@ def test_runserver_command_writes_cli_overrides_to_server_environment(
     monkeypatch.setattr(runserver.os, "environ", {})
     observed: dict[str, object] = {}
 
-    def run_uvicorn_command(args):
+    def run_uvicorn_command(args, *, logging_config):
         observed["args"] = list(args)
+        observed["logging_config"] = logging_config
         observed["environment"] = {
             name: runserver.os.environ.get(name)
             for name in (APP_ROOT_ENV, APP_CONFIG_ENV, ENV_DATABASE_URL, ENV_APP_ENV)
@@ -88,6 +95,12 @@ def test_runserver_command_writes_cli_overrides_to_server_environment(
         "--log-level",
         "debug",
     ]
+    assert observed["logging_config"]["formatters"]["simple"]["format"] == (
+        DEFAULT_LOG_FORMAT
+    )
+    assert observed["logging_config"]["formatters"]["simple"]["datefmt"] == (
+        DEFAULT_LOG_DATE_FORMAT
+    )
     assert observed["environment"] == {
         APP_ROOT_ENV: tmp_path.resolve().as_posix(),
         APP_CONFIG_ENV: "app/app.toml",
@@ -105,8 +118,9 @@ def test_runserver_command_uses_app_config_startup_defaults(
     monkeypatch.setattr(runserver.os, "environ", {"APP_CONFIG_RELOAD": "true"})
     observed: dict[str, object] = {}
 
-    def run_uvicorn_command(args):
+    def run_uvicorn_command(args, *, logging_config):
         observed["args"] = list(args)
+        observed["logging_config"] = logging_config
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runserver, "run_uvicorn_command", run_uvicorn_command)
@@ -125,6 +139,12 @@ def test_runserver_command_uses_app_config_startup_defaults(
         "8000",
         "--reload",
     ]
+    assert observed["logging_config"]["formatters"]["simple"]["format"] == (
+        DEFAULT_LOG_FORMAT
+    )
+    assert observed["logging_config"]["formatters"]["simple"]["datefmt"] == (
+        DEFAULT_LOG_DATE_FORMAT
+    )
 
 
 def test_runserver_rejects_missing_app_config_startup_target(
@@ -144,3 +164,65 @@ def test_runserver_rejects_missing_app_config_startup_target(
 
     assert result.exit_code == 1
     assert "[app.runserver].asgi_app must be configured" in result.output
+
+
+def test_uvicorn_logging_config_adds_uvicorn_loggers_without_colour_formatters() -> (
+    None
+):
+    config = runserver_uvicorn.uvicorn_logging_config(default_logging_config())
+
+    for logger_name in runserver_uvicorn.UVICORN_LOGGER_NAMES:
+        assert config["loggers"][logger_name]["handlers"] == ["console"]
+        assert config["loggers"][logger_name]["propagate"] is False
+
+    assert "DefaultFormatter" not in repr(config)
+    assert "AccessFormatter" not in repr(config)
+    assert "ColourizedFormatter" not in repr(config)
+    assert "\x1b[" not in repr(config)
+
+
+def test_uvicorn_log_config_path_is_added_to_existing_args(tmp_path: Path) -> None:
+    log_config = tmp_path / "uvicorn-log.json"
+
+    args = runserver_uvicorn.build_uvicorn_args_from_existing(
+        ["host.app:app", "--host", "127.0.0.1"],
+        log_config_path=log_config,
+    )
+
+    assert args == [
+        "host.app:app",
+        "--host",
+        "127.0.0.1",
+        "--log-config",
+        log_config.as_posix(),
+    ]
+
+
+def test_effective_client_endpoint_uses_direct_peer_without_trusted_proxy() -> None:
+    endpoint = runserver_uvicorn.effective_client_endpoint(
+        client=("127.0.0.1", 55320),
+        headers=[(b"x-forwarded-for", b"203.0.113.10:443")],
+        trusted_proxy=False,
+    )
+
+    assert endpoint == runserver_uvicorn.ClientEndpoint("127.0.0.1", 55320)
+
+
+def test_effective_client_endpoint_uses_trusted_forwarded_header() -> None:
+    endpoint = runserver_uvicorn.effective_client_endpoint(
+        client=("10.0.0.5", 41234),
+        headers=[(b"forwarded", b'for="203.0.113.10:443";proto=https')],
+        trusted_proxy=True,
+    )
+
+    assert endpoint == runserver_uvicorn.ClientEndpoint("203.0.113.10", 443)
+
+
+def test_effective_client_endpoint_uses_trusted_x_forwarded_for_port_fallback() -> None:
+    endpoint = runserver_uvicorn.effective_client_endpoint(
+        client=("10.0.0.5", 41234),
+        headers=[(b"x-forwarded-for", b"203.0.113.10, 10.0.0.5")],
+        trusted_proxy=True,
+    )
+
+    assert endpoint == runserver_uvicorn.ClientEndpoint("203.0.113.10", 41234)

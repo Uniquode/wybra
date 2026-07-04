@@ -243,8 +243,10 @@ def test_validate_command_reports_missing_project_configuration(capsys) -> None:
 
     assert exit_code == 1
     assert captured.out == ""
+    assert "ERROR wybra.tools.validate configuration: failed:" in captured.err
     assert "configuration: failed" in captured.err
     assert "Application config file could not be resolved" in captured.err
+    assert not captured.err.startswith("ERROR:wybra.tools.validate:")
 
 
 def test_validate_command_help_returns_cleanly(capsys) -> None:
@@ -619,8 +621,10 @@ def test_validate_command_reports_malformed_validation_surface(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert captured.out == ""
+    assert "ERROR wybra.tools.validate validation discovery: failed:" in captured.err
     assert "validation discovery: failed" in captured.err
     assert "must expose `validation_targets` as a mapping" in captured.err
+    assert not captured.err.startswith("ERROR:wybra.tools.validate:")
 
 
 def test_validate_command_unknown_target_returns_usage_error(

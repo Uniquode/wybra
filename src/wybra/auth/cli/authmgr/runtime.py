@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -51,10 +52,12 @@ from wybra.auth.result import Result
 from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.core.composition import CompositionError, load_app_config
 from wybra.core.exceptions import ConfigurationError
+from wybra.core.logging import LoggingConfigurationError
 from wybra.db.persistence import close_database, create_database, session_scope
 from wybra.tools.app_startup import (
     config_source_from_click_context,
 )
+from wybra.tools.cli_logging import configure_cli_logging
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 
 from .args import REVOKE_ALL_PASSKEYS, AuthmgrArgs
@@ -67,6 +70,8 @@ from .output import (
 from .passwords import PasswordSourceError, _read_password, _read_required_password
 from .schema import _verify_identity_schema
 
+logger = logging.getLogger(__name__)
+
 
 def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
     try:
@@ -75,8 +80,8 @@ def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
         )
     except PasswordSourceError as exc:
         raise click.BadParameter(str(exc), param_hint=["--password"]) from exc
-    except ConfigurationError as exc:
-        print(f"configuration: {exc}", file=sys.stderr)
+    except (ConfigurationError, LoggingConfigurationError) as exc:
+        logger.error("configuration: %s", exc)
         exit_code = 1
     except click.Abort:
         raise
@@ -101,7 +106,7 @@ async def _run_command(
 ) -> int:
     handler = _COMMAND_HANDLERS.get(args.command)
     if handler is None:
-        print(f"{args.command}: not implemented", file=sys.stderr)
+        logger.error("%s: not implemented", args.command)
         return 1
     return await handler(session, settings, args)
 
@@ -624,11 +629,13 @@ _COMMAND_HANDLERS: dict[str, CommandHandler] = {
 
 def _load_auth_settings_for_command(config_source: str | None = None) -> AuthSettings:
     try:
+        configure_cli_logging()
         project_root = runtime_project_root()
         app_config = load_app_config(
             project_root=project_root,
             config_path=_config_source_path(config_source),
         )
+        configure_cli_logging(app_config)
     except ProjectToolConfigurationError as exc:
         raise ConfigurationError(str(exc)) from exc
     except CompositionError as exc:

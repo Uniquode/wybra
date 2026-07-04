@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
 
 import click
@@ -47,7 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except click.exceptions.Exit as exc:
         return int(exc.exit_code or 0)
     except click.Abort:
-        print("Aborted!", file=sys.stderr)
+        click.echo("Aborted!", err=True)
         return 1
     except click.ClickException as exc:
         exc.show()

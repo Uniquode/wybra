@@ -1204,72 +1204,72 @@ async def test_provider_capability_is_available_when_module_is_configured(
 
 @pytest.mark.anyio
 async def test_missing_provider_secret_disables_provider_without_startup_failure(
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    with caplog.at_level("ERROR", logger="wybra.providers.capabilities"):
-        site = await start(
-            FastAPI(),
-            config_source=_site_config_source(
-                tmp_path,
-                modules=(
-                    "wybra.secrets",
-                    "wybra.forms",
-                    "wybra.db",
-                    "wybra.auth",
-                    "wybra.providers",
-                ),
-                providers={
-                    GOOGLE_PROVIDER_NAME: {
-                        "enabled": True,
-                        "client_id": "client-id",
-                        "secrets": "environment",
-                        "client_secret_key": "GOOGLE_SECRET",
-                    }
-                },
+    site = await start(
+        FastAPI(),
+        config_source=_site_config_source(
+            tmp_path,
+            modules=(
+                "wybra.secrets",
+                "wybra.forms",
+                "wybra.db",
+                "wybra.auth",
+                "wybra.providers",
             ),
-        )
+            providers={
+                GOOGLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "client_id": "client-id",
+                    "secrets": "environment",
+                    "client_secret_key": "GOOGLE_SECRET",
+                }
+            },
+        ),
+    )
+    captured = capsys.readouterr()
 
     providers = site.require_capability(ProvidersCapability)
 
     assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is False
-    assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in caplog.text
-    assert "client secret is missing" in caplog.text
+    assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in captured.err
+    assert "client secret is missing" in captured.err
 
 
 @pytest.mark.anyio
 async def test_missing_secrets_module_disables_provider_without_startup_failure(
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    with caplog.at_level("ERROR", logger="wybra.providers.capabilities"):
-        site = await start(
-            FastAPI(),
-            config_source=_site_config_source(
-                tmp_path,
-                modules=(
-                    "wybra.forms",
-                    "wybra.db",
-                    "wybra.auth",
-                    "wybra.providers",
-                ),
-                providers={
-                    GOOGLE_PROVIDER_NAME: {
-                        "enabled": True,
-                        "client_id": "client-id",
-                        "secrets": "environment",
-                        "client_secret_key": "GOOGLE_SECRET",
-                    }
-                },
+    site = await start(
+        FastAPI(),
+        config_source=_site_config_source(
+            tmp_path,
+            modules=(
+                "wybra.forms",
+                "wybra.db",
+                "wybra.auth",
+                "wybra.providers",
             ),
-        )
+            providers={
+                GOOGLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "client_id": "client-id",
+                    "secrets": "environment",
+                    "client_secret_key": "GOOGLE_SECRET",
+                }
+            },
+        ),
+    )
+    captured = capsys.readouterr()
 
     providers = site.require_capability(ProvidersCapability)
 
     assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is False
-    assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in caplog.text
-    assert "SecretsCapability is not available" in caplog.text
-    assert "wybra.secrets" in caplog.text
+    assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in captured.err
+    assert "SecretsCapability is not available" in captured.err
+    assert "wybra.secrets" in captured.err
 
 
 @pytest.mark.anyio
