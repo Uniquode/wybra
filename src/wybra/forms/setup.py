@@ -6,6 +6,7 @@ from wybra.core.exceptions import ConfigurationError
 from wybra.forms import context as _context  # noqa: F401
 from wybra.forms.capabilities import DefaultFormsCapability, FormsCapability
 from wybra.forms.middleware import register_forms_response_finalisation_middleware
+from wybra.forms.rotation import normalise_csrf_token_previous_secrets
 from wybra.forms.settings import FormsSettings
 from wybra.services.secrets import MissingSecretError, SecretsCapability, SecretsError
 from wybra.site import Site
@@ -105,25 +106,13 @@ def _csrf_token_previous_secrets(
             f"source={reference_source}, key={reference_identifier}."
         ) from exc
 
-    if not value.strip():
+    try:
+        return normalise_csrf_token_previous_secrets(value)
+    except ValueError as exc:
         raise ConfigurationError(
-            "Keychain-backed previous CSRF token secret is blank: "
-            f"source={reference_source}, key={reference_identifier}. "
-            "Configure a comma-separated list of non-blank previous secrets."
-        )
-    previous_secrets = tuple(entry.strip() for entry in value.split(","))
-    if any(not entry for entry in previous_secrets):
-        raise ConfigurationError(
-            "Keychain-backed previous CSRF token secrets must be "
-            f"comma-separated and non-blank: source={reference_source}, "
-            f"key={reference_identifier}."
-        )
-    if len(set(previous_secrets)) != len(previous_secrets):
-        raise ConfigurationError(
-            "Keychain-backed previous CSRF token secrets must be unique: "
-            f"source={reference_source}, key={reference_identifier}."
-        )
-    return previous_secrets
+            "Keychain-backed previous CSRF token secrets are invalid: "
+            f"source={reference_source}, key={reference_identifier}. {exc}"
+        ) from exc
 
 
 def _local_generated_fallback(site: Site, settings: FormsSettings) -> str | None:

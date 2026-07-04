@@ -61,6 +61,8 @@ class _SecretFieldSpec:
     field: str
 
 
+# Internal registry of Wybra-owned reversible encrypted fields. Add new
+# WYBRA:SECRET columns here with focused dry-run and rewrite coverage.
 _REVERSIBLE_SECRET_FIELDS = (
     _SecretFieldSpec(
         IdentityProvider,

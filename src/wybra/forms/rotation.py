@@ -30,7 +30,7 @@ def plan_csrf_token_secret_rotation(
     previous: str | None,
 ) -> CsrfTokenSecretRotationPlan:
     current_value = _normalise_current_secret(current)
-    previous_values = _normalise_previous_secrets(previous)
+    previous_values = normalise_csrf_token_previous_secrets(previous)
     if current_value in previous_values:
         raise ValueError("CSRF token secrets must be unique.")
     existing_secrets = {current_value, *previous_values}
@@ -49,7 +49,9 @@ def _normalise_current_secret(value: str | None) -> str:
     return value.strip()
 
 
-def _normalise_previous_secrets(value: str | None) -> tuple[str, ...]:
+def normalise_csrf_token_previous_secrets(value: str | None) -> tuple[str, ...]:
+    """Normalise the comma-separated previous CSRF token secret list."""
+
     if value is None:
         return ()
     if not isinstance(value, str) or not value.strip():
@@ -67,5 +69,6 @@ def _normalise_previous_secrets(value: str | None) -> tuple[str, ...]:
 __all__ = (
     "CsrfTokenSecretRotationPlan",
     "generate_csrf_token_secret",
+    "normalise_csrf_token_previous_secrets",
     "plan_csrf_token_secret_rotation",
 )
