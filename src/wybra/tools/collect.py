@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -16,16 +17,21 @@ from wybra.assets import (
 )
 from wybra.core.composition import CompositionError
 from wybra.core.exceptions import ConfigurationError
+from wybra.core.logging import LoggingConfigurationError
 from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
     CONFIG_SOURCE_OPTION,
+    load_required_app_config,
     normalise_cli_config_source,
 )
+from wybra.tools.cli_logging import configure_cli_logging
 from wybra.tools.project import (
     ProjectToolConfigurationError,
     runtime_project_root,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @click.command(
@@ -66,6 +72,13 @@ def collect_command(
 ) -> int:
     try:
         project_root = runtime_project_root()
+        configure_cli_logging()
+        configure_cli_logging(
+            load_required_app_config(
+                project_root=project_root,
+                config_source=config_source,
+            )
+        )
         result = collect_configured_static_assets(
             project_root=project_root,
             config_path=(
@@ -77,13 +90,16 @@ def collect_command(
             root=destination,
             nginx_cors=nginx_cors,
         )
-    except (CompositionError, ConfigurationError, ProjectToolConfigurationError) as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+    except (
+        CompositionError,
+        ConfigurationError,
+        LoggingConfigurationError,
+        ProjectToolConfigurationError,
+    ) as exc:
+        logger.error("configuration: failed: %s", exc)
         return 1
     except StaticCollectionError as exc:
-        print("static collection: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+        logger.error("static collection: failed: %s", exc)
         return 1
 
     _print_collection_result(result)

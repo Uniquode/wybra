@@ -21,6 +21,7 @@ from wybra.core.composition import (
     raw_config_sections,
 )
 from wybra.core.exceptions import ConfigurationError
+from wybra.core.logging import merge_logging_config
 from wybra.db.persistence import close_database, create_database, session_scope
 from wybra.forms.rotation import plan_csrf_token_secret_rotation
 from wybra.forms.settings import FormsSettings
@@ -48,6 +49,7 @@ from wybra.tools.app_startup import (
     CONFIG_SOURCE_OPTION,
     normalise_cli_config_source,
 )
+from wybra.tools.cli_logging import configure_cli_logging
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
 
 PROGRAM_NAME = "wybra-secret"
@@ -322,7 +324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except click.exceptions.Exit as exc:
         return int(exc.exit_code or 0)
     except click.Abort:
-        print("Aborted!", file=sys.stderr)
+        click.echo("Aborted!", err=True)
         return 1
     except click.ClickException as exc:
         exc.show()
@@ -340,11 +342,13 @@ def _secret_command_settings_from_context(ctx: click.Context) -> SecretCommandSe
     root_context = ctx.find_root()
     config_source = _config_source_from_context(root_context)
     try:
+        configure_cli_logging()
         raw_config = _load_optional_raw_config(config_source)
         if raw_config is None:
             secrets_settings = SecretsSettings()
             known_keys = known_keychain_secret_keys()
         else:
+            configure_cli_logging(config=merge_logging_config(raw_config.get("log")))
             secrets_settings = _secrets_settings_from_raw_config(raw_config)
             known_keys = known_keychain_secret_keys(
                 raw_config=raw_config,
@@ -442,6 +446,7 @@ def _auth_settings_from_context(ctx: click.Context) -> AuthSettings:
             project_root=runtime_project_root(),
             config_path=Path(config_source) if config_source is not None else None,
         )
+        configure_cli_logging(app_config)
     except ProjectToolConfigurationError as exc:
         raise click.ClickException(str(exc)) from exc
     except CompositionError as exc:

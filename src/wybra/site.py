@@ -32,6 +32,7 @@ from wybra.core.composition import (
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.environment import EnvironmentMapping, load_environment
+from wybra.core.logging import LoggingConfigurationError, configure_runtime_logging
 from wybra.core.runtime import (
     DEFAULT_DEPLOYMENT_ENVIRONMENT,
     DeploymentEnvironment,
@@ -330,6 +331,10 @@ async def start(
     environ: Mapping[str, str] | None = None,
 ) -> Site:
     startup_config = _startup_config(config_source, environ)
+    try:
+        configure_runtime_logging(startup_config.app_config)
+    except LoggingConfigurationError as exc:
+        raise ConfigSourceError(str(exc)) from exc
     config = ConfigService(
         [startup_config.source],
         config_defs=(RUNTIME_CONFIG_DEF,),

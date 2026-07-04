@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
-import sys
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -21,7 +21,7 @@ from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.exc import SQLAlchemyError
 
 from wybra.core.composition import AppConfig
-from wybra.core.logging import logging_config_from_app_config
+from wybra.core.logging import LoggingConfigurationError, logging_config_from_app_config
 from wybra.db.alembic_attributes import LOGGING_CONFIG_ATTRIBUTE
 from wybra.db.migration_metadata import MigrationConfigError
 from wybra.db.persistence import close_database, create_database_engine
@@ -43,6 +43,7 @@ from wybra.tools.app_startup import (
     CONFIG_SOURCE_OPTION,
     config_source_from_click_context,
 )
+from wybra.tools.cli_logging import configure_cli_logging
 
 DEFAULT_MIGRATIONS_SCRIPT_LOCATION = "wybra.db:migrations"
 ALEMBIC_VERSION_TABLE = "alembic_version"
@@ -58,6 +59,8 @@ REVISION_HELP = (
     "Review generated operations plus down_revision and depends_on; run "
     "wybra-migrate upgrade; then run validation."
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MigrationSettings(Protocol):
@@ -306,15 +309,20 @@ def _run_migration(
     operation: Callable[[Config], None],
 ) -> int:
     try:
+        configure_cli_logging()
         settings = _load_migration_settings(
             settings_loader,
             database_url,
             config_source,
         )
+        configure_cli_logging(settings.app_config)
         config = build_alembic_config(settings)
-    except (MigrationConfigurationError, DataCompositionError) as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+    except (
+        LoggingConfigurationError,
+        MigrationConfigurationError,
+        DataCompositionError,
+    ) as exc:
+        logger.error("configuration: failed: %s", exc)
         return 1
 
     try:
@@ -324,20 +332,16 @@ def _run_migration(
         MigrationConfigError,
         DatabaseProvisioningConfigurationError,
     ) as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+        logger.error("configuration: failed: %s", exc)
         return 1
     except MigrationStateError as exc:
-        print("migration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+        logger.error("migration: failed: %s", exc)
         return 1
     except DatabaseProvisioningError as exc:
-        print("provisioning: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+        logger.error("provisioning: failed: %s", exc)
         return 1
     except (AlembicError, SQLAlchemyError) as exc:
-        print("migration: failed", file=sys.stderr)
-        print(f"- {safe_database_error_message(exc)}", file=sys.stderr)
+        logger.error("migration: failed: %s", safe_database_error_message(exc))
         return 1
     return 0
 
@@ -357,11 +361,13 @@ def _run_revision(
     rev_id: str | None,
 ) -> int:
     try:
+        configure_cli_logging()
         settings = _load_migration_settings(
             settings_loader,
             database_url,
             config_source,
         )
+        configure_cli_logging(settings.app_config)
         version_path = migration_version_location_for_configured_module(
             module_name,
             settings.modules,
@@ -371,9 +377,12 @@ def _run_revision(
             settings,
             additional_version_locations=(version_path,),
         )
-    except (MigrationConfigurationError, DataCompositionError) as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+    except (
+        LoggingConfigurationError,
+        MigrationConfigurationError,
+        DataCompositionError,
+    ) as exc:
+        logger.error("configuration: failed: %s", exc)
         return 1
 
     try:
@@ -389,12 +398,10 @@ def _run_revision(
             depends_on=depends_on,
         )
     except MigrationConfigError as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+        logger.error("configuration: failed: %s", exc)
         return 1
     except (AlembicError, SQLAlchemyError) as exc:
-        print("migration: failed", file=sys.stderr)
-        print(f"- {safe_database_error_message(exc)}", file=sys.stderr)
+        logger.error("migration: failed: %s", safe_database_error_message(exc))
         return 1
     return 0
 

@@ -168,10 +168,12 @@ def test_migrate_current_reports_connection_failure_without_credentials(
 
     captured = capsys.readouterr()
     assert exit_code == 1
+    assert "ERROR wybra.db.migrate migration: failed:" in captured.err
     assert "migration: failed" in captured.err
     assert "postgresql://***:***@db.example/app" in captured.err
     assert "secret" not in captured.err
     assert "Traceback" not in captured.err
+    assert not captured.err.startswith("ERROR:wybra.db.migrate:")
 
 
 def test_migrate_current_preserves_original_error_when_cleanup_fails(
@@ -269,9 +271,11 @@ def test_migrate_reports_runtime_configuration_errors_cleanly(
 
     captured = capsys.readouterr()
     assert exit_code == 1
+    assert "ERROR wybra.db.migrate configuration: failed:" in captured.err
     assert "configuration: failed" in captured.err
     assert "missing database url" in captured.err
     assert "Traceback" not in captured.err
+    assert not captured.err.startswith("ERROR:wybra.db.migrate:")
 
 
 def test_migrate_init_creates_sqlite_migration_state_without_schema(

@@ -22,6 +22,13 @@ type ConfigSourceErrorFactory = Callable[[str], Exception]
 class ConfiguredAppStartup:
     app_target: str
     reload_env_var: str
+    app_config: AppConfig
+
+
+@dataclass(frozen=True, slots=True)
+class ConfiguredAsgiAppTarget:
+    app_target: str
+    app_config: AppConfig
 
 
 def resolve_configured_app_startup(
@@ -44,6 +51,7 @@ def resolve_configured_app_startup(
     return ConfiguredAppStartup(
         app_target=app_target,
         reload_env_var=reload_env_var,
+        app_config=app_config,
     )
 
 
@@ -52,13 +60,27 @@ def resolve_configured_asgi_app_target(
     project_root: Path,
     config_source: str | None,
 ) -> str:
+    return resolve_configured_asgi_app(
+        project_root=project_root,
+        config_source=config_source,
+    ).app_target
+
+
+def resolve_configured_asgi_app(
+    *,
+    project_root: Path,
+    config_source: str | None,
+) -> ConfiguredAsgiAppTarget:
     app_config = load_required_app_config(
         project_root=project_root,
         config_source=config_source,
     )
-    return _required_runserver_value(
-        app_config.runserver.asgi_app,
-        "[app.runserver].asgi_app",
+    return ConfiguredAsgiAppTarget(
+        app_target=_required_runserver_value(
+            app_config.runserver.asgi_app,
+            "[app.runserver].asgi_app",
+        ),
+        app_config=app_config,
     )
 
 
@@ -128,11 +150,13 @@ __all__ = [
     "CONFIG_SOURCE_CONTEXT_KEY",
     "CONFIG_SOURCE_HELP",
     "CONFIG_SOURCE_OPTION",
+    "ConfiguredAsgiAppTarget",
     "ConfiguredAppStartup",
     "config_source_from_click_context",
     "load_required_app_config",
     "normalise_cli_config_source",
     "normalise_config_source",
+    "resolve_configured_asgi_app",
     "resolve_configured_app_startup",
     "resolve_configured_asgi_app_target",
 ]

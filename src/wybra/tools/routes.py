@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
@@ -10,13 +11,15 @@ from typing import Any, TextIO, TypeGuard
 import click
 
 from wybra.core.composition import CompositionError
+from wybra.core.logging import LoggingConfigurationError
 from wybra.core.routes import RouteInspection, inspect_route_tree
 from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
     CONFIG_SOURCE_OPTION,
-    resolve_configured_asgi_app_target,
+    resolve_configured_asgi_app,
 )
+from wybra.tools.cli_logging import configure_cli_logging
 from wybra.tools.project import (
     ProjectToolConfigurationError,
     import_from_string,
@@ -31,14 +34,18 @@ from wybra.tools.route_rendering import (
     render_succinct,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def load_configured_asgi_app(config_source: str | None = None) -> Any:
     project_root = runtime_project_root()
-    app_target = resolve_configured_asgi_app_target(
+    configure_cli_logging()
+    configured_app = resolve_configured_asgi_app(
         project_root=project_root,
         config_source=config_source,
     )
-    return import_from_string(app_target)
+    configure_cli_logging(configured_app.app_config)
+    return import_from_string(configured_app.app_target)
 
 
 @click.command(
@@ -137,6 +144,7 @@ async def _run_routes_command(
         mermaid=mermaid_format,
         json_format=json_format,
     )
+    configure_cli_logging()
 
     try:
         app = (
@@ -144,39 +152,38 @@ async def _run_routes_command(
             if config_source is not None
             else load_configured_asgi_app()
         )
-    except (CompositionError, ProjectToolConfigurationError) as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(f"- {exc}", file=sys.stderr)
+    except (
+        CompositionError,
+        LoggingConfigurationError,
+        ProjectToolConfigurationError,
+    ) as exc:
+        logger.error("configuration: failed: %s", exc)
         return 1
 
     if not hasattr(app, "routes"):
-        print("configuration: failed", file=sys.stderr)
-        print(
-            "- Configured ASGI app target does not expose a route tree.",
-            file=sys.stderr,
+        logger.error(
+            "configuration: failed: configured ASGI app target does not expose "
+            "a route tree."
         )
         return 1
 
     routes = app.routes
     if not _is_supported_route_tree(routes):
-        print("configuration: failed", file=sys.stderr)
-        print(
-            "- Configured ASGI app target exposes an unsupported route tree; "
-            "expected an iterable of route objects on 'app.routes'.",
-            file=sys.stderr,
+        logger.error(
+            "configuration: failed: configured ASGI app target exposes an "
+            "unsupported route tree; expected an iterable of route objects "
+            "on 'app.routes'."
         )
         return 1
 
     try:
         inspection = await _inspect_installed_route_tree(app)
     except TypeError as exc:
-        print("configuration: failed", file=sys.stderr)
-        print(
-            "- Failed to inspect configured ASGI app route tree. Ensure "
-            "'app.routes' is an iterable of Starlette routes.",
-            file=sys.stderr,
+        logger.error(
+            "configuration: failed: Failed to inspect configured ASGI app route "
+            "tree. Ensure 'app.routes' is an iterable of Starlette routes: %s",
+            exc,
         )
-        print(f"- {exc}", file=sys.stderr)
         return 1
     if not quiet:
         _write_output(render_inspection(inspection, route_output_format))
