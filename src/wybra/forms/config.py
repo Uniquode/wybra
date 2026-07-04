@@ -9,6 +9,7 @@ ENV_CSRF_SECRET: Final = "CSRF_SECRET"
 ENV_CSRF_SECURE: Final = "CSRF_SECURE"
 FORMS_CONFIG_SECTION: Final = "wybra.forms"
 CSRF_TOKEN_SECRET_KEY_CURRENT: Final = "auth/forms/csrf-token-secret/current"
+CSRF_TOKEN_SECRET_KEY_PREVIOUS: Final = "auth/forms/csrf-token-secret/previous"
 
 
 def to_csrf_token_secret(value: object) -> str:
@@ -41,6 +42,24 @@ def to_optional_non_blank_string(value: object) -> str | None:
     raise ValueError("must be a non-blank string when configured.")
 
 
+def normalise_optional_positive_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ValueError("must be a positive number when configured.")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("must be a positive number when configured.") from exc
+    if parsed <= 0:
+        raise ValueError("must be a positive number when configured.")
+    return parsed
+
+
+def to_optional_positive_float(value: object) -> float | None:
+    return normalise_optional_positive_float(value)
+
+
 module_config: Final = ConfigDef(
     {
         FORMS_CONFIG_SECTION: ConfigGroup(
@@ -64,6 +83,14 @@ module_config: Final = ConfigDef(
                     name="csrf_token_secret_key",
                     transform=to_optional_non_blank_string,
                 ),
+                ConfigField(
+                    name="csrf_token_secret_previous_key",
+                    transform=to_optional_non_blank_string,
+                ),
+                ConfigField(
+                    name="csrf_token_max_age_seconds",
+                    transform=to_optional_positive_float,
+                ),
             ),
         ),
     }
@@ -74,10 +101,13 @@ __all__ = (
     "ENV_CSRF_SECRET",
     "ENV_CSRF_SECURE",
     "CSRF_TOKEN_SECRET_KEY_CURRENT",
+    "CSRF_TOKEN_SECRET_KEY_PREVIOUS",
     "FORMS_CONFIG_SECTION",
+    "normalise_optional_positive_float",
     "module_config",
     "to_csrf_token_secret",
     "to_optional_non_blank_string",
+    "to_optional_positive_float",
     "to_optional_bool",
     "to_optional_secret_source",
 )

@@ -81,6 +81,9 @@ _.password_command
 _.init_command
 _.revision_command
 _.set_command
+_.rotate_secret_key_command
+_.rotate_csrf_token_secret_command
+_.reencrypt_secrets_command
 _.upgrade_command
 _.downgrade_command
 _.current_command

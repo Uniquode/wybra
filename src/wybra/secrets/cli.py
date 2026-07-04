@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -11,17 +12,36 @@ from typing import Any, TextIO
 
 import click
 
+from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.composition import (
     APP_CONFIG_ENV,
     CompositionError,
+    load_app_config,
     raw_config_sections,
 )
 from wybra.core.exceptions import ConfigurationError
+from wybra.db.persistence import close_database, create_database, session_scope
+from wybra.forms.rotation import plan_csrf_token_secret_rotation
+from wybra.forms.settings import FormsSettings
 from wybra.secrets.config import KeychainSecretSourceSettings, SecretsSettings
 from wybra.secrets.keys import KnownSecretKey, known_keychain_secret_keys
+from wybra.secrets.reencryption import (
+    ReencryptSecretsResult,
+    reencrypt_persisted_secrets,
+)
 from wybra.secrets.sources import KeychainSecretSourceDriver
-from wybra.services.secrets import secret_key_value
+from wybra.services.crypto import (
+    SecretEnvelopeService,
+    SecretKeyRotationPlan,
+    parse_secret_key_bundle,
+    plan_secret_key_rotation,
+)
+from wybra.services.secrets import (
+    KEYCHAIN_SOURCE,
+    MissingSecretError,
+    secret_key_value,
+)
 from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
@@ -37,7 +57,9 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 
 @dataclass(frozen=True, slots=True)
 class SecretCommandSettings:
     keychain: KeychainSecretSourceSettings
+    secrets: SecretsSettings
     known_keys: tuple[KnownSecretKey, ...]
+    raw_config: Mapping[str, Mapping[str, Any]] | None = None
 
 
 @click.group(
@@ -156,6 +178,140 @@ def list_command(ctx: click.Context, json_output: bool) -> None:
         )
 
 
+@secret_command.group(name="rotate")
+def rotate_command() -> None:
+    """Rotate supported Wybra keychain-backed secrets."""
+
+
+@rotate_command.command(name="secret-key")
+@click.option("--dry-run", is_flag=True, help="Validate and report without writing.")
+@click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
+@click.pass_context
+def rotate_secret_key_command(
+    ctx: click.Context,
+    dry_run: bool,
+    json_output: bool,
+) -> None:
+    """Rotate the keychain-backed [secrets.crypto] system secret key."""
+
+    settings = _secret_command_settings_from_context(ctx)
+    crypto = settings.secrets.crypto
+    if crypto.source != KEYCHAIN_SOURCE:
+        raise click.ClickException(
+            "Secret-key rotation is limited to keychain-backed system secret keys."
+        )
+    if crypto.previous_keys is None:
+        raise click.ClickException(
+            "Secret-key rotation requires [secrets.crypto].previous_keys."
+        )
+
+    driver = KeychainSecretSourceDriver(settings.keychain)
+    current = _resolve_required_secret(driver, crypto.current_key, "current secret key")
+    previous = _resolve_optional_secret(driver, crypto.previous_keys)
+    try:
+        plan = plan_secret_key_rotation(current=current, previous=previous)
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not dry_run:
+        _store_secret(driver, crypto.previous_keys, plan.previous_value)
+        _store_secret(driver, crypto.current_key, plan.current_value)
+        _validate_secret_key_rotation(
+            driver,
+            crypto.current_key,
+            crypto.previous_keys,
+            plan,
+        )
+
+    payload = {
+        "target": "secret-key",
+        "dry_run": dry_run,
+        "current_key": crypto.current_key,
+        "previous_keys": crypto.previous_keys,
+        "old_current_version": plan.retired_version,
+        "new_current_version": plan.new_version,
+        "previous_key_count": plan.previous_key_count,
+    }
+    _write_rotation_result(payload, json_output=json_output)
+
+
+@rotate_command.command(name="csrf-token-secret")
+@click.option("--dry-run", is_flag=True, help="Validate and report without writing.")
+@click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
+@click.pass_context
+def rotate_csrf_token_secret_command(
+    ctx: click.Context,
+    dry_run: bool,
+    json_output: bool,
+) -> None:
+    """Rotate the keychain-backed forms CSRF token signing secret."""
+
+    settings = _secret_command_settings_from_context(ctx)
+    forms_settings = _forms_settings_from_command_settings(settings)
+    current_reference = forms_settings.csrf_token_secret_reference
+    previous_reference = forms_settings.csrf_token_secret_previous_reference
+    if current_reference is None or current_reference[0] != KEYCHAIN_SOURCE:
+        raise click.ClickException(
+            "CSRF token-secret rotation is limited to keychain-backed CSRF token "
+            "secrets."
+        )
+    if previous_reference is None or previous_reference[0] != KEYCHAIN_SOURCE:
+        raise click.ClickException(
+            "CSRF token-secret rotation requires a keychain-backed previous "
+            "CSRF token secret reference."
+        )
+
+    driver = KeychainSecretSourceDriver(settings.keychain)
+    _current_source, current_key = current_reference
+    _previous_source, previous_key = previous_reference
+    current = _resolve_required_secret(driver, current_key, "current CSRF token secret")
+    previous = _resolve_optional_secret(driver, previous_key)
+    try:
+        plan = plan_csrf_token_secret_rotation(current=current, previous=previous)
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not dry_run:
+        _store_secret(driver, previous_key, plan.previous_value)
+        _store_secret(driver, current_key, plan.current_value)
+        _validate_csrf_token_secret_rotation(
+            driver,
+            current_key,
+            previous_key,
+            plan.current_value,
+            plan.previous_value,
+        )
+
+    payload = {
+        "target": "csrf-token-secret",
+        "dry_run": dry_run,
+        "current_key": current_key,
+        "previous_key": previous_key,
+        "previous_secret_count": plan.previous_secret_count,
+    }
+    _write_rotation_result(payload, json_output=json_output)
+
+
+@secret_command.command(name="reencrypt-secrets")
+@click.option("--dry-run", is_flag=True, help="Validate and report without writing.")
+@click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
+@click.pass_context
+def reencrypt_secrets_command(
+    ctx: click.Context,
+    dry_run: bool,
+    json_output: bool,
+) -> None:
+    """Re-encrypt reversible persisted secret envelopes with the current key."""
+
+    try:
+        result = asyncio.run(_reencrypt_secrets(ctx, dry_run=dry_run))
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+    _write_reencrypt_result(result, json_output=json_output)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = secret_command.main(
@@ -196,7 +352,9 @@ def _secret_command_settings_from_context(ctx: click.Context) -> SecretCommandSe
             )
         return SecretCommandSettings(
             keychain=secrets_settings.keychain,
+            secrets=secrets_settings,
             known_keys=known_keys,
+            raw_config=raw_config,
         )
     except (CompositionError, ConfigurationError, ProjectToolConfigurationError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -260,6 +418,146 @@ def _secrets_settings_from_raw_config(
         discover_module_config=False,
     )
     return SecretsSettings.load_settings(config)
+
+
+def _forms_settings_from_command_settings(
+    settings: SecretCommandSettings,
+) -> FormsSettings:
+    if settings.raw_config is None:
+        raise click.ClickException(
+            "CSRF token-secret rotation requires application configuration."
+        )
+    config = ConfigService(
+        [MappingConfigSource(settings.raw_config)],
+        config_defs=(FormsSettings.module_config,),
+        discover_module_config=False,
+    )
+    return FormsSettings.load_settings(config)
+
+
+def _auth_settings_from_context(ctx: click.Context) -> AuthSettings:
+    config_source = _config_source_from_context(ctx.find_root())
+    try:
+        app_config = load_app_config(
+            project_root=runtime_project_root(),
+            config_path=Path(config_source) if config_source is not None else None,
+        )
+    except ProjectToolConfigurationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except CompositionError as exc:
+        raise click.ClickException(
+            f"{str(exc).rstrip('.')}. Pass --config or set {APP_CONFIG_ENV}."
+        ) from exc
+    try:
+        return load_auth_settings(app_config=app_config)
+    except ConfigurationError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _secret_envelope_service_from_command_settings(
+    settings: SecretCommandSettings,
+) -> SecretEnvelopeService:
+    crypto = settings.secrets.crypto
+    if crypto.source != KEYCHAIN_SOURCE:
+        raise click.ClickException(
+            "Persisted secret re-encryption requires keychain-backed [secrets.crypto]."
+        )
+    if crypto.previous_keys is None:
+        raise click.ClickException(
+            "Persisted secret re-encryption requires [secrets.crypto].previous_keys."
+        )
+
+    driver = KeychainSecretSourceDriver(settings.keychain)
+    current = _resolve_required_secret(driver, crypto.current_key, "current secret key")
+    previous = _resolve_optional_secret(driver, crypto.previous_keys)
+    return SecretEnvelopeService.from_key_bundle(current, previous)
+
+
+async def _reencrypt_secrets(
+    ctx: click.Context,
+    *,
+    dry_run: bool,
+) -> ReencryptSecretsResult:
+    command_settings = _secret_command_settings_from_context(ctx)
+    secret_service = _secret_envelope_service_from_command_settings(command_settings)
+    auth_settings = _auth_settings_from_context(ctx)
+    database = create_database(auth_settings.database_url)
+    try:
+        async with session_scope(database.session_factory) as session:
+            return await reencrypt_persisted_secrets(
+                session,
+                secret_service,
+                dry_run=dry_run,
+            )
+    finally:
+        await close_database(database)
+
+
+def _resolve_required_secret(
+    driver: KeychainSecretSourceDriver,
+    key: str,
+    label: str,
+) -> str:
+    try:
+        return driver.resolve(key).reveal()
+    except MissingSecretError as exc:
+        raise click.ClickException(
+            f"Configured {label} is missing from the keychain: key={key}."
+        ) from exc
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _resolve_optional_secret(
+    driver: KeychainSecretSourceDriver,
+    key: str,
+) -> str | None:
+    try:
+        return driver.resolve(key).reveal()
+    except MissingSecretError:
+        return None
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _validate_secret_key_rotation(
+    driver: KeychainSecretSourceDriver,
+    current_key: str,
+    previous_keys: str,
+    plan: SecretKeyRotationPlan,
+) -> None:
+    current = _resolve_required_secret(driver, current_key, "current secret key")
+    previous = _resolve_required_secret(driver, previous_keys, "previous secret keys")
+    key_ring = parse_secret_key_bundle(current=current, previous=previous)
+    if key_ring.current.version != plan.new_version:
+        raise click.ClickException(
+            "Post-rotation current secret key validation failed."
+        )
+    if plan.retired_version not in {key.version for key in key_ring.keys}:
+        raise click.ClickException(
+            "Post-rotation previous secret keys do not include the retired current key."
+        )
+
+
+def _validate_csrf_token_secret_rotation(
+    driver: KeychainSecretSourceDriver,
+    current_key: str,
+    previous_key: str,
+    expected_current: str,
+    expected_previous: str,
+) -> None:
+    current = _resolve_required_secret(driver, current_key, "current CSRF token secret")
+    previous = _resolve_required_secret(
+        driver,
+        previous_key,
+        "previous CSRF token secrets",
+    )
+    if current != expected_current or previous != expected_previous:
+        raise click.ClickException("Post-rotation CSRF token secret validation failed.")
 
 
 def _secret_value_from_input(
@@ -359,6 +657,66 @@ def _stored_payload(
 
 def _write_json(payload: Mapping[str, Any]) -> None:
     click.echo(json.dumps(payload, sort_keys=True))
+
+
+def _write_rotation_result(
+    payload: Mapping[str, Any],
+    *,
+    json_output: bool,
+) -> None:
+    if json_output:
+        _write_json(payload)
+        return
+    action = "Planned" if payload["dry_run"] else "Rotated"
+    click.echo(f"{action} {payload['target']}.")
+
+
+def _write_reencrypt_result(
+    result: ReencryptSecretsResult,
+    *,
+    json_output: bool,
+) -> None:
+    payload = _reencrypt_result_payload(result)
+    if json_output:
+        _write_json(payload)
+        return
+    action = "Planned" if result.dry_run else "Re-encrypted"
+    click.echo(
+        f"{action} persisted secrets: scanned={result.scanned} "
+        f"rewritten={result.rewritten} skipped_current={result.skipped_current} "
+        f"skipped_plaintext={result.skipped_plaintext} "
+        "unsupported_recovery_code_verifiers="
+        f"{result.unsupported_recovery_code_verifiers}."
+    )
+
+
+def _reencrypt_result_payload(result: ReencryptSecretsResult) -> dict[str, Any]:
+    return {
+        "target": "reencrypt-secrets",
+        "dry_run": result.dry_run,
+        "scanned": result.scanned,
+        "rewritten": result.rewritten,
+        "skipped_current": result.skipped_current,
+        "skipped_plaintext": result.skipped_plaintext,
+        "unsupported_recovery_code_verifiers": (
+            result.unsupported_recovery_code_verifiers
+        ),
+        "fields": [
+            {
+                "table": field.table,
+                "field": field.field,
+                "scanned": field.scanned,
+                "rewritten": field.rewritten,
+                "skipped_current": field.skipped_current,
+                "skipped_plaintext": field.skipped_plaintext,
+                "versions": [
+                    {"version": version.version, "count": version.count}
+                    for version in field.versions
+                ],
+            }
+            for field in result.fields
+        ],
+    }
 
 
 __all__ = ("main", "secret_command")

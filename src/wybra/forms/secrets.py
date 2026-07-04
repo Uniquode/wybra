@@ -23,7 +23,13 @@ def forms_keychain_secret_references(
     source, key = reference
     if source != KEYCHAIN_SOURCE:
         return ()
-    return (key,)
+    previous_reference = settings.csrf_token_secret_previous_reference
+    if previous_reference is None:
+        return (key,)
+    previous_source, previous_key = previous_reference
+    if previous_source != KEYCHAIN_SOURCE:
+        return (key,)
+    return (key, previous_key)
 
 
 __all__ = ("forms_keychain_secret_references",)

@@ -4,8 +4,9 @@ import base64
 import hashlib
 import hmac
 import logging
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from secrets import token_urlsafe
 from typing import Any
 
@@ -24,6 +25,7 @@ CSRF_NONCE_MAX_LENGTH = 256
 CSRF_NONCE_MIN_LENGTH = 32
 CSRF_RESPONSE_FINALISATION_STATE_ATTR = "wybra_forms_csrf_finalise_response"
 CSRF_TOKEN_BYTES = 32
+CSRF_TOKEN_MAX_AGE_SECONDS = 3_600
 CSRF_TOKEN_SEPARATOR = "."
 CSRF_EXEMPT_ENDPOINT_ATTR = "__wybra_csrf_exempt__"
 
@@ -70,11 +72,38 @@ def csrf_response_finalisation_requested(request: Request) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class CsrfProtector:
-    secret: str
+    secret: str = field(repr=False)
+    previous_secrets: tuple[str, ...] = field(default=(), repr=False)
     cookie_name: str = CSRF_COOKIE_NAME
     field_name: str = CSRF_FIELD_NAME
     cookie_secure: bool = False
     max_form_body_bytes: int = CSRF_MAX_FORM_BODY_BYTES
+    token_max_age_seconds: float = CSRF_TOKEN_MAX_AGE_SECONDS
+    clock: Callable[[], float] = field(
+        default=time.time,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.secret, str) or not self.secret.strip():
+            raise ValueError("CSRF token secret must be a non-blank string.")
+        previous_secrets: list[str] = []
+        for index, raw_secret in enumerate(self.previous_secrets):
+            if not isinstance(raw_secret, str):
+                raise ValueError(
+                    f"Previous CSRF token secret at index {index} is not a string."
+                )
+            secret = raw_secret.strip()
+            if not secret:
+                raise ValueError(
+                    f"Previous CSRF token secret at index {index} is blank."
+                )
+            previous_secrets.append(secret)
+        if self.token_max_age_seconds <= 0:
+            raise ValueError("CSRF token max age must be positive.")
+        object.__setattr__(self, "secret", self.secret.strip())
+        object.__setattr__(self, "previous_secrets", tuple(previous_secrets))
 
     def token_context(self, request: Request) -> dict[str, str]:
         return {
@@ -125,15 +154,35 @@ class CsrfProtector:
         return self._reject(request, "invalid_form_token")
 
     def create_token(self, nonce: str) -> str:
-        return f"{nonce}{CSRF_TOKEN_SEPARATOR}{self._signature(nonce)}"
+        issued_at = _format_timestamp(self.clock())
+        payload = f"{nonce}{CSRF_TOKEN_SEPARATOR}{issued_at}"
+        return f"{payload}{CSRF_TOKEN_SEPARATOR}{self._signature(payload)}"
 
     def validate_token(self, token: str, cookie_nonce: str) -> bool:
-        nonce, separator, signature = token.partition(CSRF_TOKEN_SEPARATOR)
-        if separator != CSRF_TOKEN_SEPARATOR or nonce != cookie_nonce:
+        parts = token.split(CSRF_TOKEN_SEPARATOR)
+        if len(parts) == 2:
+            nonce, signature = parts
+            if nonce != cookie_nonce:
+                return False
+            # Rollout compatibility for pre-expiry tokens. These validate only
+            # against the current secret, so CSRF secret rotation retires them.
+            return hmac.compare_digest(signature, self._signature(nonce))
+
+        if len(parts) != 3:
             return False
 
-        expected_signature = self._signature(nonce)
-        return hmac.compare_digest(signature, expected_signature)
+        nonce, issued_at, signature = parts
+        if nonce != cookie_nonce:
+            return False
+
+        if not self._is_fresh_timestamp(issued_at):
+            return False
+
+        payload = f"{nonce}{CSRF_TOKEN_SEPARATOR}{issued_at}"
+        return any(
+            hmac.compare_digest(signature, self._signature(payload, secret=secret))
+            for secret in (self.secret, *self.previous_secrets)
+        )
 
     def _request_nonce(self, request: Request) -> str:
         existing_nonce = getattr(request.state, "csrf_nonce", None)
@@ -149,13 +198,21 @@ class CsrfProtector:
         request.state.csrf_nonce = nonce
         return nonce
 
-    def _signature(self, nonce: str) -> str:
+    def _signature(self, payload: str, *, secret: str | None = None) -> str:
         digest = hmac.new(
-            self.secret.encode("utf-8"),
-            nonce.encode("utf-8"),
+            (secret or self.secret).encode("utf-8"),
+            payload.encode("utf-8"),
             hashlib.sha256,
         ).digest()
         return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+    def _is_fresh_timestamp(self, issued_at: str) -> bool:
+        try:
+            issued_timestamp = float(issued_at)
+        except ValueError:
+            return False
+        age = self.clock() - issued_timestamp
+        return 0 <= age <= self.token_max_age_seconds
 
     @staticmethod
     def _is_valid_nonce(nonce: str) -> bool:
@@ -197,6 +254,10 @@ class CsrfProtector:
         return False
 
 
+def _format_timestamp(timestamp: float) -> str:
+    return str(int(timestamp))
+
+
 __all__ = (
     "CSRF_COOKIE_NAME",
     "CSRF_EXEMPT_ENDPOINT_ATTR",
@@ -208,6 +269,7 @@ __all__ = (
     "CSRF_NONCE_MIN_LENGTH",
     "CSRF_RESPONSE_FINALISATION_STATE_ATTR",
     "CSRF_TOKEN_BYTES",
+    "CSRF_TOKEN_MAX_AGE_SECONDS",
     "CSRF_TOKEN_SEPARATOR",
     "CsrfProtector",
     "csrf_exempt",

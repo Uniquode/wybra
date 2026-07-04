@@ -11,12 +11,16 @@ from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
+    CSRF_TOKEN_MAX_AGE_SECONDS,
     CSRF_TOKEN_SECRET_KEY_CURRENT,
+    CSRF_TOKEN_SECRET_KEY_PREVIOUS,
     CsrfProtector,
     csrf_exempt,
     request_form_data,
     validate_csrf,
 )
+from wybra.forms.rotation import plan_csrf_token_secret_rotation
+from wybra.forms.secrets import forms_keychain_secret_references
 
 
 def csrf_request(
@@ -100,6 +104,143 @@ def test_csrf_form_validation_caches_parsed_form_for_downstream_views() -> None:
         assert form_data.get("field") == "value"
 
     asyncio.run(assert_form_cache())
+
+
+def test_csrf_tokens_include_signed_issue_time() -> None:
+    nonce = "a" * 32
+    protector = CsrfProtector("current-secret", clock=lambda: 1_000.0)
+
+    token = protector.create_token(nonce)
+
+    token_nonce, issued_at, signature = token.split(".")
+    assert token_nonce == nonce
+    assert issued_at == "1000"
+    assert signature
+    assert protector.validate_token(token, nonce)
+
+
+def test_csrf_token_validation_rejects_expired_current_secret_token() -> None:
+    nonce = "a" * 32
+    renderer = CsrfProtector("current-secret", clock=lambda: 1_000.0)
+    validator = CsrfProtector(
+        "current-secret",
+        token_max_age_seconds=60,
+        clock=lambda: 1_061.0,
+    )
+
+    assert validator.validate_token(renderer.create_token(nonce), nonce) is False
+
+
+def test_csrf_token_validation_accepts_previous_secret_within_max_age() -> None:
+    nonce = "a" * 32
+    renderer = CsrfProtector("previous-secret", clock=lambda: 1_000.0)
+    validator = CsrfProtector(
+        "current-secret",
+        previous_secrets=("previous-secret",),
+        token_max_age_seconds=60,
+        clock=lambda: 1_060.0,
+    )
+
+    assert validator.validate_token(renderer.create_token(nonce), nonce) is True
+
+
+def test_csrf_token_validation_rejects_expired_previous_secret_token() -> None:
+    nonce = "a" * 32
+    renderer = CsrfProtector("previous-secret", clock=lambda: 1_000.0)
+    validator = CsrfProtector(
+        "current-secret",
+        previous_secrets=("previous-secret",),
+        token_max_age_seconds=60,
+        clock=lambda: 1_061.0,
+    )
+
+    assert validator.validate_token(renderer.create_token(nonce), nonce) is False
+
+
+def test_csrf_protector_rejects_invalid_previous_secret_entries() -> None:
+    with pytest.raises(ValueError, match="index 1 is not a string") as non_string:
+        CsrfProtector("current-secret", previous_secrets=("previous-secret", 7))  # type: ignore[arg-type]
+
+    assert "7" not in str(non_string.value)
+
+    with pytest.raises(ValueError, match="index 0 is blank"):
+        CsrfProtector("current-secret", previous_secrets=("   ",))
+
+
+def test_csrf_legacy_token_compatibility_is_current_secret_only() -> None:
+    nonce = "a" * 32
+    current = CsrfProtector("current-secret")
+    previous = CsrfProtector("previous-secret")
+    validator = CsrfProtector(
+        "current-secret",
+        previous_secrets=("previous-secret",),
+    )
+    current_legacy_token = f"{nonce}.{current._signature(nonce)}"
+    previous_legacy_token = f"{nonce}.{previous._signature(nonce)}"
+
+    assert validator.validate_token(current_legacy_token, nonce) is True
+    assert validator.validate_token(previous_legacy_token, nonce) is False
+
+
+def test_plan_csrf_token_secret_rotation_prepends_retired_current_secret() -> None:
+    plan = plan_csrf_token_secret_rotation(
+        current="current-csrf-secret",
+        previous="previous-csrf-secret,older-csrf-secret",
+    )
+
+    assert plan.previous_secret_count == 3
+    assert plan.previous_value == (
+        "current-csrf-secret,previous-csrf-secret,older-csrf-secret"
+    )
+    assert plan.current_value not in {
+        "current-csrf-secret",
+        "previous-csrf-secret",
+        "older-csrf-secret",
+    }
+
+
+def test_plan_csrf_token_secret_rotation_initialises_missing_previous_value() -> None:
+    plan = plan_csrf_token_secret_rotation(
+        current="current-csrf-secret",
+        previous=None,
+    )
+
+    assert plan.previous_secret_count == 1
+    assert plan.previous_value == "current-csrf-secret"
+
+
+def test_plan_csrf_token_secret_rotation_rejects_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match="current CSRF token secret"):
+        plan_csrf_token_secret_rotation(current=None, previous=None)
+
+    with pytest.raises(ValueError, match="current CSRF token secret"):
+        plan_csrf_token_secret_rotation(current="   ", previous=None)
+
+    with pytest.raises(ValueError, match="comma-separated"):
+        plan_csrf_token_secret_rotation(
+            current="current-csrf-secret",
+            previous=",",
+        )
+
+    with pytest.raises(ValueError, match="unique"):
+        plan_csrf_token_secret_rotation(
+            current="current-csrf-secret",
+            previous="current-csrf-secret",
+        )
+
+
+def test_csrf_token_secret_rotation_plan_repr_redacts_secret_values() -> None:
+    plan = plan_csrf_token_secret_rotation(
+        current="current-csrf-secret",
+        previous=None,
+    )
+
+    rendered = repr(plan)
+
+    assert plan.current_value not in rendered
+    assert plan.previous_value not in rendered
+    assert "current-csrf-secret" not in rendered
+    assert str(plan.previous_secret_count) in rendered
 
 
 def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
@@ -348,6 +489,38 @@ def test_csrf_settings_load_settings_transforms_secure_cookie_policy() -> None:
     assert settings.cookie_secure is False
 
 
+def test_csrf_settings_load_settings_transforms_token_max_age() -> None:
+    from wybra.forms import FormsSettings
+
+    settings = FormsSettings.load_settings(
+        {
+            "csrf_token_secret": "production-csrf-secret",
+            "csrf_token_max_age_seconds": "120",
+            "deployment_environment": "local",
+        }
+    )
+
+    assert settings.csrf_token_max_age_seconds == 120
+    assert settings.protector().token_max_age_seconds == 120
+
+
+def test_csrf_settings_load_settings_rejects_invalid_token_max_age() -> None:
+    with pytest.raises(ConfigSourceError, match="csrf_token_max_age_seconds"):
+        ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app": {"modules": ("wybra.forms",)},
+                        "wybra.forms": {
+                            "csrf_token_secret": "production-csrf-secret",
+                            "csrf_token_max_age_seconds": "0",
+                        },
+                    }
+                )
+            ],
+        )
+
+
 def test_csrf_settings_load_settings_accepts_sectioned_mapping_environment() -> None:
     from wybra.forms import FormsSettings
 
@@ -393,6 +566,10 @@ def test_csrf_settings_accepts_keychain_reference_without_secret_value() -> None
         "keychain",
         CSRF_TOKEN_SECRET_KEY_CURRENT,
     )
+    assert settings.csrf_token_secret_previous_reference == (
+        "keychain",
+        CSRF_TOKEN_SECRET_KEY_PREVIOUS,
+    )
     assert settings.token_secret is None
     assert settings.fallback_token_secret is None
 
@@ -433,6 +610,32 @@ def test_csrf_settings_uses_default_keychain_reference() -> None:
         "keychain",
         CSRF_TOKEN_SECRET_KEY_CURRENT,
     )
+    assert settings.csrf_token_secret_previous_reference == (
+        "keychain",
+        CSRF_TOKEN_SECRET_KEY_PREVIOUS,
+    )
+    assert settings.csrf_token_max_age_seconds == CSRF_TOKEN_MAX_AGE_SECONDS
+
+
+def test_csrf_settings_accepts_previous_key_override() -> None:
+    from wybra.forms import FormsSettings
+
+    settings = FormsSettings.load_settings(
+        {
+            "wybra.forms": {
+                "csrf_token_secret_source": "keychain",
+                "csrf_token_secret_key": "custom/current",
+                "csrf_token_secret_previous_key": "custom/previous",
+            },
+        },
+        deployment_environment="production",
+    )
+
+    assert settings.csrf_token_secret_reference == ("keychain", "custom/current")
+    assert settings.csrf_token_secret_previous_reference == (
+        "keychain",
+        "custom/previous",
+    )
 
 
 def test_csrf_settings_rejects_secret_key_without_source() -> None:
@@ -443,6 +646,15 @@ def test_csrf_settings_rejects_secret_key_without_source() -> None:
         FormsSettings.load_settings(
             {
                 "wybra.forms": {"csrf_token_secret_key": CSRF_TOKEN_SECRET_KEY_CURRENT},
+            },
+        )
+
+    with pytest.raises(ConfigurationError, match="csrf_token_secret_source"):
+        FormsSettings.load_settings(
+            {
+                "wybra.forms": {
+                    "csrf_token_secret_previous_key": CSRF_TOKEN_SECRET_KEY_PREVIOUS
+                },
             },
         )
 
@@ -459,3 +671,34 @@ def test_csrf_settings_load_settings_rejects_blank_token_secret() -> None:
                 )
             ],
         )
+
+
+def test_csrf_settings_load_settings_rejects_blank_previous_key() -> None:
+    with pytest.raises(ConfigSourceError, match="csrf_token_secret_previous_key"):
+        ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app": {"modules": ("wybra.forms",)},
+                        "wybra.forms": {
+                            "csrf_token_secret_source": "keychain",
+                            "csrf_token_secret_previous_key": "   ",
+                        },
+                    }
+                )
+            ],
+        )
+
+
+def test_forms_keychain_secret_references_include_csrf_current_and_previous() -> None:
+    references = forms_keychain_secret_references(
+        {
+            "app": {"modules": ("wybra.forms",)},
+            "wybra.forms": {"csrf_token_secret_source": "keychain"},
+        }
+    )
+
+    assert references == (
+        CSRF_TOKEN_SECRET_KEY_CURRENT,
+        CSRF_TOKEN_SECRET_KEY_PREVIOUS,
+    )
