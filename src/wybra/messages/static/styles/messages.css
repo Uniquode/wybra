@@ -62,6 +62,16 @@
     margin: 0;
 }
 
+.wybra-visually-hidden {
+    block-size: 1px;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    inline-size: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+}
+
 @keyframes wybra-alert-auto-dismiss {
     to {
         opacity: 0;

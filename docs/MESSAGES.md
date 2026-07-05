@@ -66,6 +66,14 @@ message_ttl_seconds = 86400
 that depth, the oldest alerts are discarded. `message_ttl_seconds` controls how
 long cache and database alerts remain eligible for display.
 
+When `wybra.messages` uses session storage and `wybra.sessions` uses cookie
+storage, queued alerts are stored in the session cookie. The default
+`queue_depth` and `message_max_length` are deliberately generous and can exceed
+the default cookie payload limit if many long alerts are queued. For cookie
+sessions, keep alert messages short, reduce `queue_depth` or
+`message_max_length`, or use a server-side session backend such as `file`,
+`cache`, or `database`.
+
 ## Severities
 
 Supported alert severities are:

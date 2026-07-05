@@ -1,12 +1,27 @@
 {% if alerts is defined and alerts %}
-<section class="wybra-alerts wybra-alerts--under-header" aria-label="Messages">
+<section class="wybra-alerts wybra-alerts--under-header" aria-label="Page notifications">
   {% for alert in alerts %}
   <article
     class="wybra-alert wybra-alert--{{ alert.severity }}"
     data-alert-severity="{{ alert.severity }}"
     data-alert-created-at="{{ alert.created_at }}"
     role="{% if alert.severity == 'error' %}alert{% else %}status{% endif %}"
+    aria-labelledby="wybra-alert-{{ loop.index }}-heading"
   >
+    <p
+      id="wybra-alert-{{ loop.index }}-heading"
+      class="wybra-alert__severity wybra-alert__severity--{{ alert.severity }} wybra-visually-hidden"
+    >
+      {% if alert.severity == 'error' %}
+      Error notification
+      {% elif alert.severity == 'warning' %}
+      Warning notification
+      {% elif alert.severity == 'success' %}
+      Success notification
+      {% else %}
+      Notification
+      {% endif %}
+    </p>
     <p class="wybra-alert__message">{{ alert.message }}</p>
   </article>
   {% endfor %}

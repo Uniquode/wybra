@@ -5,6 +5,7 @@ import importlib
 import json
 import uuid
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -151,13 +152,14 @@ class FileSessionStorage:
 
     async def save(self, session_id: str, record: SessionRecord) -> None:
         payload = _record_json(record, max_bytes=self.payload_max_bytes)
-        await self.directory.mkdir(parents=True, exist_ok=True)
+        await self._ensure_directory()
         temporary_path = self.directory / f".{session_id}.{uuid.uuid4().hex}.tmp"
         try:
             await temporary_path.write_text(payload, encoding="utf-8")
             await temporary_path.replace(self._path(session_id))
         except OSError as exc:
-            await temporary_path.unlink(missing_ok=True)
+            with suppress(OSError):
+                await temporary_path.unlink(missing_ok=True)
             raise SessionStorageError("Session file could not be written.") from exc
 
     async def delete(self, session_id: str) -> None:
@@ -174,7 +176,15 @@ class FileSessionStorage:
             await _cleanup_session_data(self.cleanup_registry, cleanup_data)
 
     async def validate(self) -> None:
-        await self.directory.mkdir(parents=True, exist_ok=True)
+        await self._ensure_directory()
+
+    async def _ensure_directory(self) -> None:
+        try:
+            await self.directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise SessionStorageError(
+                f"Session file directory is not available: {self.directory}"
+            ) from exc
         if not await self.directory.is_dir():
             raise SessionStorageError(
                 f"Session file directory is not available: {self.directory}"
@@ -210,11 +220,11 @@ class CookieSessionStorage:
 
     def load_cookie(
         self,
-        value: str,
+        cookie_value: str,
         *,
         now: float,
     ) -> tuple[str, SessionRecord] | None:
-        loaded = self.decode_cookie(value)
+        loaded = self.decode_cookie(cookie_value)
         if loaded is None:
             return None
         _session_id, record = loaded
@@ -258,7 +268,8 @@ class CookieSessionStorage:
         return encrypted
 
     async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
-        loaded = self.load_cookie(session_id, now=now)
+        cookie_value = session_id
+        loaded = self.load_cookie(cookie_value, now=now)
         return None if loaded is None else loaded[1]
 
     async def save(self, session_id: str, record: SessionRecord) -> None:

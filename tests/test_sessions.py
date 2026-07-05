@@ -206,6 +206,26 @@ async def test_file_storage_writes_loads_deletes_and_cleans_expired_records(
     assert await storage.load(active_id, now=10.0) is None
 
 
+@pytest.mark.anyio
+async def test_file_storage_save_wraps_directory_errors(tmp_path: Path) -> None:
+    file_path = tmp_path / "sessions"
+    file_path.write_text("not a directory", encoding="utf-8")
+    storage = FileSessionStorage(directory=file_path, payload_max_bytes=1024)
+
+    with pytest.raises(SessionStorageError, match="directory is not available"):
+        await storage.save(create_session_id(now=1.0), _record())
+
+
+@pytest.mark.anyio
+async def test_file_storage_validate_wraps_directory_errors(tmp_path: Path) -> None:
+    file_path = tmp_path / "sessions"
+    file_path.write_text("not a directory", encoding="utf-8")
+    storage = FileSessionStorage(directory=file_path, payload_max_bytes=1024)
+
+    with pytest.raises(SessionStorageError, match="directory is not available"):
+        await storage.validate()
+
+
 def test_cookie_storage_encrypts_and_validates_payloads() -> None:
     storage = CookieSessionStorage(
         service=SecretEnvelopeService.for_testing(),

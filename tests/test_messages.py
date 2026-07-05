@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -267,11 +268,17 @@ async def test_redis_cache_storage_clamps_subsecond_ttl() -> None:
         def __init__(self) -> None:
             self.expires: list[int] = []
 
-        async def get(self, queue_key: str) -> str | None:
-            return None
-
-        async def set(self, queue_key: str, payload: str, *, ex: int) -> None:
-            self.expires.append(ex)
+        async def eval(
+            self,
+            script: str,
+            key_count: int,
+            queue_key: str,
+            payload: str,
+            queue_depth: str,
+            ttl_seconds: str,
+        ) -> int:
+            self.expires.append(int(ttl_seconds))
+            return 1
 
     client = FakeRedisClient()
     backend = RedisCacheQueueBackend("redis://cache.example/0")
@@ -285,6 +292,30 @@ async def test_redis_cache_storage_clamps_subsecond_ttl() -> None:
     )
 
     assert client.expires == [1]
+
+
+@pytest.mark.anyio
+async def test_redis_cache_storage_pops_queue_with_atomic_script() -> None:
+    class FakeRedisClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, str]] = []
+
+        async def eval(self, script: str, key_count: int, queue_key: str) -> str:
+            self.calls.append((key_count, queue_key))
+            return json.dumps(
+                [{"severity": SUCCESS_ALERT, "message": "Saved", "created_at": 1.0}]
+            )
+
+    client = FakeRedisClient()
+    backend = RedisCacheQueueBackend("redis://cache.example/0")
+    backend._client = client
+
+    alerts = await backend.pop("queue")
+
+    assert client.calls == [(1, "queue")]
+    assert alerts == (
+        {"severity": SUCCESS_ALERT, "message": "Saved", "created_at": 1.0},
+    )
 
 
 @pytest.mark.anyio
@@ -525,6 +556,10 @@ def test_default_alert_component_escapes_message_text() -> None:
     assert "&lt;strong&gt;Unsafe&lt;/strong&gt;" in content
     assert "<strong>Unsafe</strong>" not in content
     assert 'data-alert-severity="error"' in content
+    assert 'aria-label="Page notifications"' in content
+    assert 'aria-labelledby="wybra-alert-1-heading"' in content
+    assert "Error notification" in content
+    assert "wybra-visually-hidden" in content
 
 
 async def _message_alert_count(

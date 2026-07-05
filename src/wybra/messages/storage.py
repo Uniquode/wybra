@@ -225,6 +225,40 @@ class InMemoryCacheQueueBackend:
             self._queues.clear()
 
 
+_REDIS_APPEND_QUEUE_SCRIPT = """
+local raw_queue = redis.call('GET', KEYS[1])
+local queue = {}
+if raw_queue then
+  local ok, decoded = pcall(cjson.decode, raw_queue)
+  if ok and type(decoded) == 'table' then
+    queue = decoded
+  end
+end
+
+local ok, payload = pcall(cjson.decode, ARGV[1])
+if not ok then
+  return redis.error_reply('invalid alert payload')
+end
+
+table.insert(queue, payload)
+local queue_depth = tonumber(ARGV[2])
+while #queue > queue_depth do
+  table.remove(queue, 1)
+end
+
+redis.call('SET', KEYS[1], cjson.encode(queue), 'EX', tonumber(ARGV[3]))
+return 1
+"""
+
+_REDIS_POP_QUEUE_SCRIPT = """
+local raw_queue = redis.call('GET', KEYS[1])
+if raw_queue then
+  redis.call('DEL', KEYS[1])
+end
+return raw_queue
+"""
+
+
 @dataclass(slots=True)
 class RedisCacheQueueBackend:
     url: str
@@ -238,21 +272,21 @@ class RedisCacheQueueBackend:
         queue_depth: int,
         ttl_seconds: float,
     ) -> None:
-        client = self._redis_client()
-        raw_queue = await client.get(queue_key)
-        queue = _payloads_from_json(raw_queue)
-        queue.append(payload)
-        queue = queue[-queue_depth:]
-        await client.set(queue_key, json.dumps(queue), ex=max(1, int(ttl_seconds)))
+        await self._redis_client().eval(
+            _REDIS_APPEND_QUEUE_SCRIPT,
+            1,
+            queue_key,
+            json.dumps(payload),
+            str(queue_depth),
+            str(max(1, int(ttl_seconds))),
+        )
 
     async def pop(self, queue_key: str) -> tuple[AlertPayload, ...]:
-        client = self._redis_client()
-        if hasattr(client, "getdel"):
-            raw_queue = await client.getdel(queue_key)
-        else:
-            raw_queue = await client.get(queue_key)
-            if raw_queue is not None:
-                await client.delete(queue_key)
+        raw_queue = await self._redis_client().eval(
+            _REDIS_POP_QUEUE_SCRIPT,
+            1,
+            queue_key,
+        )
         return tuple(_payloads_from_json(raw_queue))
 
     async def peek(self, queue_key: str) -> tuple[AlertPayload, ...]:
