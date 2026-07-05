@@ -26,6 +26,7 @@ from wybra.core.conventions import (
     module_surface_name,
 )
 from wybra.core.diagnostics import configured_module_message, surface_message
+from wybra.core.modules import CORE_MODULES
 
 _MAX_AVAILABLE_ATTRIBUTE_NAMES: Final = 20
 _METADATA_CACHE_SIZE: Final = 32
@@ -39,7 +40,7 @@ def model_packages_from_modules(
     module_names: tuple[str, ...],
 ) -> tuple[str, ...]:
     model_packages: list[str] = []
-    for module_name in module_names:
+    for module_name in _data_modules(module_names):
         _require_configured_module(module_name)
         model_package = model_package_name(module_name)
         if _find_module_spec(model_package) is not None:
@@ -64,7 +65,7 @@ def migration_version_locations_from_modules(
     module_names: tuple[str, ...],
 ) -> tuple[Path, ...]:
     version_locations: list[Path] = []
-    for module_name in module_names:
+    for module_name in _data_modules(module_names):
         _require_configured_module(module_name)
         version_locations.extend(discover_migration_version_locations(module_name))
 
@@ -162,6 +163,10 @@ def _require_configured_module(module_name: str) -> None:
         raise DataCompositionError(
             configured_module_message(module_name, "could not be imported.")
         )
+
+
+def _data_modules(module_names: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*CORE_MODULES, *module_names)))
 
 
 def _find_module_spec(module_name: str) -> object | None:

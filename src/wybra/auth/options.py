@@ -95,7 +95,7 @@ ACCOUNT_CREATION_POLICY_ERROR: Final = (
 )
 
 _GENERATE_LOCAL_SECRET = "__generate-local-identity-secret__"
-DEFAULT_SESSION_COOKIE_NAME: Final = "wybra_session"
+DEFAULT_SESSION_COOKIE_NAME: Final = "wybra_auth"
 
 
 def identity_env_setting_name(integration: IdentityIntegration) -> str:

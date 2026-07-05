@@ -27,6 +27,7 @@ from wybra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
     discover_model_metadata,
+    migration_version_location_for_configured_module,
     migration_version_locations_from_modules,
     model_package_name,
     model_packages_from_modules,
@@ -435,6 +436,70 @@ def test_validate_persistence_fails_initialisation_when_module_discovery_fails(
     )
 
 
+def test_validate_persistence_requires_migrations_for_configured_model_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "models_without_migrations"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "models.py").write_text(
+        "from sqlalchemy import MetaData\nmetadata = MetaData()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    result = validate_persistence(
+        _persistence_settings(tmp_path, modules=("models_without_migrations",))
+    )
+
+    assert (
+        "At least one configured module migration version location is required."
+        in result.errors
+    )
+    assert "Development database initialisation requires migrations." in result.errors
+    assert not _check_passed(
+        result,
+        "development database initialisation command is available",
+    )
+
+
+def test_validate_persistence_accepts_configured_model_surface_with_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "models_with_migrations"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "models.py").write_text(
+        "from sqlalchemy import MetaData\nmetadata = MetaData()\n",
+        encoding="utf-8",
+    )
+    versions_root = package_root / "migrations" / "versions"
+    versions_root.mkdir(parents=True)
+    (versions_root / "0001_initial.py").write_text(
+        "revision = '0001'\ndown_revision = None\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    result = validate_persistence(
+        _persistence_settings(tmp_path, modules=("models_with_migrations",))
+    )
+
+    assert (
+        "At least one configured module migration version location is required."
+        not in result.errors
+    )
+    assert "At least one Alembic migration revision is required." not in result.errors
+    assert _check_passed(
+        result,
+        "development database initialisation command is available",
+    )
+
+
 def _check_passed(result: ValidationResult, description_prefix: str) -> bool:
     return any(
         check.description.startswith(description_prefix) and check.passed
@@ -489,9 +554,20 @@ def test_migration_version_locations_are_discovered_from_configured_modules(
         ("host_app", "wybra.auth")
     )
 
-    assert len(version_locations) == 1
-    assert version_locations[0].as_posix().endswith("wybra/auth/migrations/versions")
+    assert len(version_locations) == 2
+    assert (
+        version_locations[0].as_posix().endswith("wybra/sessions/migrations/versions")
+    )
+    assert version_locations[1].as_posix().endswith("wybra/auth/migrations/versions")
     assert discover_migration_version_locations("host_app") == ()
+
+
+def test_core_sessions_revision_location_requires_module_config() -> None:
+    with pytest.raises(DataCompositionError, match="wybra.sessions"):
+        migration_version_location_for_configured_module(
+            "wybra.sessions",
+            (),
+        )
 
 
 def test_model_packages_from_modules_uses_conventional_models_surface(
@@ -510,6 +586,7 @@ def test_model_packages_from_modules_uses_conventional_models_surface(
 
     assert model_package_name("models_surface_app") == "models_surface_app.models"
     assert model_packages_from_modules(("models_surface_app",)) == (
+        "wybra.sessions.models",
         "models_surface_app.models",
     )
     assert isinstance(discover_model_metadata("models_surface_app"), MetaData)

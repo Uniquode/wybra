@@ -15,6 +15,7 @@ import wybra.db.provisioning as provisioning_module
 import wybra.tools.migrate as tools_migrate
 from wybra.core.composition import AppConfig, load_app_config
 from wybra.db.alembic_attributes import LOGGING_CONFIG_ATTRIBUTE
+from wybra.db.surfaces import discover_migration_version_locations
 
 
 @dataclass(frozen=True, slots=True)
@@ -693,6 +694,7 @@ def test_migrate_revision_passes_module_version_path_and_graph_options(
     )
 
     version_path = tmp_path / "revision_app" / "migrations" / "versions"
+    sessions_version_path = discover_migration_version_locations("wybra.sessions")[0]
     assert exit_code == 0
     assert observed["message"] == "add revision"
     assert observed["autogenerate"] is True
@@ -706,6 +708,7 @@ def test_migrate_revision_passes_module_version_path_and_graph_options(
     assert observed["version_path_separator"] is None
     assert version_path.as_posix() in str(observed["version_locations"])
     assert set(observed["version_locations_list"] or []) == {
+        sessions_version_path.resolve().as_posix(),
         base_version_path.resolve().as_posix(),
         version_path.resolve().as_posix(),
     }
@@ -738,6 +741,26 @@ def test_migrate_revision_rejects_unconfigured_module(
     assert "configuration: failed" in captured.err
     assert "unused_app" in captured.err
     assert not (module_path / "migrations").exists()
+
+
+def test_migrate_revision_rejects_unconfigured_core_sessions(capsys) -> None:
+    exit_code = run_migrate(
+        [
+            "--database-url",
+            "sqlite+aiosqlite:///:memory:",
+            "revision",
+            "--module",
+            "wybra.sessions",
+            "-m",
+            "add revision",
+        ],
+        modules=("wybra.auth",),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "configuration: failed" in captured.err
+    assert "wybra.sessions" in captured.err
 
 
 def test_migrate_revision_requires_module_and_message() -> None:

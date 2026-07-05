@@ -17,10 +17,12 @@ from fastapi import FastAPI
 
 from wybra.config import (
     AppConfigSource,
+    ConfigDef,
     ConfigService,
     ConfigSource,
     ConfigSourceError,
     ConfigSourceMetadata,
+    discover_module_config_defs,
 )
 from wybra.core.composition import (
     APP_CONFIG_ENV,
@@ -33,6 +35,7 @@ from wybra.core.composition import (
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.environment import EnvironmentMapping, load_environment
 from wybra.core.logging import LoggingConfigurationError, configure_runtime_logging
+from wybra.core.modules import CORE_MODULES
 from wybra.core.runtime import (
     DEFAULT_DEPLOYMENT_ENVIRONMENT,
     DeploymentEnvironment,
@@ -337,7 +340,7 @@ async def start(
         raise ConfigSourceError(str(exc)) from exc
     config = ConfigService(
         [startup_config.source],
-        config_defs=(RUNTIME_CONFIG_DEF,),
+        config_defs=_core_config_defs(),
         environ=startup_config.environ,
     )
     site = Site(
@@ -348,6 +351,10 @@ async def start(
     app.state.site = site
     await _compose_site(site, module_loader or import_module)
     return site
+
+
+def _core_config_defs() -> tuple[ConfigDef, ...]:
+    return (RUNTIME_CONFIG_DEF, *discover_module_config_defs(CORE_MODULES))
 
 
 def _startup_config(
@@ -548,9 +555,16 @@ async def _compose_site(site: Site, module_loader: ModuleLoader) -> None:
     """
 
     loaded_modules = await _setup_module_hooks(site, module_loader)
+    await _setup_core_sessions(site)
     _register_configured_routes(site)
     _validate_registered_route_dependencies(site)
     await _post_setup_module_hooks(site, loaded_modules)
+
+
+async def _setup_core_sessions(site: Site) -> None:
+    from wybra.sessions.setup import setup_core_sessions
+
+    await setup_core_sessions(site)
 
 
 async def _setup_module_hooks(

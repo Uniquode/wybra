@@ -29,6 +29,7 @@ from wybra.forms import (
     FieldResult,
     FileUploadField,
     Form,
+    FormPostHandler,
     FormsCapability,
     FormsSettings,
     HiddenField,
@@ -70,6 +71,12 @@ from wybra.forms import (
 from wybra.forms.context import forms_context
 from wybra.forms.csrf import CsrfProtector
 from wybra.forms.setup import setup_site as setup_forms_site
+from wybra.messages import (
+    AlertRecord,
+    DefaultMessagesCapability,
+    MessagesCapability,
+    MessagesSettings,
+)
 from wybra.services.secrets import (
     MissingSecretError,
     SecretsCapability,
@@ -149,6 +156,50 @@ class FailingPreviousCsrfSecretsCapability(FakeSecretsCapability):
         return super().resolve(source, key)
 
 
+class RecordingMessagesStorage:
+    def __init__(self) -> None:
+        self.alerts: list[tuple[str, object]] = []
+
+    async def enqueue(
+        self,
+        request: Request,
+        alert: AlertRecord,
+    ) -> None:
+        self.alerts.append((alert.severity, alert.message))
+
+    async def peek(self, request: Request, *, now: float) -> tuple[AlertRecord, ...]:
+        return ()
+
+    async def acknowledge(self, request: Request, *, now: float) -> None:
+        return None
+
+    async def pop(self, request: Request, *, now: float) -> tuple[AlertRecord, ...]:
+        return ()
+
+    async def cleanup_session_data(self, session_data: Mapping[str, Any]) -> None:
+        return None
+
+    async def cleanup(self, *, now: float) -> None:
+        return None
+
+    async def validate(self) -> None:
+        return None
+
+
+class RecordingMessagesCapability(DefaultMessagesCapability):
+    def __init__(self) -> None:
+        storage = RecordingMessagesStorage()
+        super().__init__(
+            settings=MessagesSettings.load_settings({"wybra.messages": {}}),
+            storage=storage,
+        )
+        object.__setattr__(self, "_recording_storage", storage)
+
+    @property
+    def alerts(self) -> list[tuple[str, object]]:
+        return self._recording_storage.alerts
+
+
 def _forms_site(
     values: dict[str, dict[str, object]],
     *,
@@ -165,6 +216,61 @@ def _forms_site(
         ),
         deployment_environment=normalise_deployment_environment(deployment_environment),
     )
+
+
+def form_post_request(
+    messages: RecordingMessagesCapability | None = None,
+) -> Request:
+    app = FastAPI()
+    site = Site(
+        app=app,
+        config=ConfigService([], discover_module_config=False),
+    )
+    app.state.site = site
+    if messages is not None:
+        site.provide_capability(MessagesCapability, messages)
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/submit",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 50000),
+            "app": app,
+        },
+        receive,
+    )
+
+
+@pytest.mark.anyio
+async def test_recording_messages_capability_noop_methods_preserve_alerts() -> None:
+    messages = RecordingMessagesCapability()
+    request = form_post_request(messages)
+
+    assert isinstance(messages, MessagesCapability)
+
+    await messages.success(request, "Saved")
+    await messages.error(request, "Failed")
+    alerts = list(messages.alerts)
+
+    assert await messages.peek_alerts(request) == ()
+    renderable_alerts = await messages.renderable_alerts(request)
+    assert tuple(renderable_alerts) == ()
+    assert await messages.consume_alerts(request) == ()
+
+    await messages.acknowledge_alerts(request)
+    await messages.cleanup_session_data({})
+    await messages.cleanup_expired(now=1.0)
+    await messages.validate()
+
+    assert messages.alerts == alerts
 
 
 class ExampleModelForm(ModelForm):
@@ -454,6 +560,144 @@ def test_model_form_remains_plain_object_compatible() -> None:
     form.apply(record)
 
     assert record.preferred_name == "Plain"
+
+
+@pytest.mark.anyio
+async def test_form_post_handler_adds_success_message_after_valid_commit() -> None:
+    messages = RecordingMessagesCapability()
+
+    class SavingPostHandler(FormPostHandler[ExampleForm]):
+        success_message = "Saved"
+
+        def __init__(self, form: ExampleForm) -> None:
+            super().__init__(form)
+            self.committed = False
+
+        def commit(self, request: Request, form: ExampleForm) -> None:
+            self.committed = True
+
+    handler = SavingPostHandler(ExampleForm())
+
+    result = await handler.handle(
+        form_post_request(messages),
+        {"preferred_name": "David"},
+    )
+
+    assert result.is_valid
+    assert result.committed
+    assert handler.committed
+    assert messages.alerts == [("success", "Saved")]
+
+
+@pytest.mark.anyio
+async def test_form_post_handler_without_success_message_emits_no_alert() -> None:
+    messages = RecordingMessagesCapability()
+
+    class SilentPostHandler(FormPostHandler[ExampleForm]):
+        def __init__(self, form: ExampleForm) -> None:
+            super().__init__(form)
+            self.committed = False
+
+        def commit(self, request: Request, form: ExampleForm) -> None:
+            self.committed = True
+
+    handler = SilentPostHandler(ExampleForm())
+
+    result = await handler.handle(
+        form_post_request(messages),
+        {"preferred_name": "David"},
+    )
+
+    assert result.is_valid
+    assert result.committed
+    assert handler.committed
+    assert messages.alerts == []
+
+
+@pytest.mark.anyio
+async def test_form_post_handler_adds_failure_message_for_invalid_form() -> None:
+    messages = RecordingMessagesCapability()
+
+    class SavingPostHandler(FormPostHandler[ExampleForm]):
+        failure_message = "Failed"
+
+        def __init__(self, form: ExampleForm) -> None:
+            super().__init__(form)
+            self.committed = False
+
+        def commit(self, request: Request, form: ExampleForm) -> None:
+            self.committed = True
+
+    handler = SavingPostHandler(ExampleForm())
+
+    result = await handler.handle(
+        form_post_request(messages),
+        {"preferred_name": ""},
+    )
+
+    assert not result.is_valid
+    assert not result.committed
+    assert not handler.committed
+    assert messages.alerts == [("error", "Failed")]
+
+
+@pytest.mark.anyio
+async def test_form_post_handler_adds_failure_message_when_commit_adds_error() -> None:
+    messages = RecordingMessagesCapability()
+
+    class SavingPostHandler(FormPostHandler[ExampleForm]):
+        failure_message = "Failed"
+
+        def commit(self, request: Request, form: ExampleForm) -> None:
+            form.add_error(None, "Could not save.")
+
+    handler = SavingPostHandler(ExampleForm())
+
+    result = await handler.handle(
+        form_post_request(messages),
+        {"preferred_name": "David"},
+    )
+
+    assert not result.is_valid
+    assert not result.committed
+    assert result.result.errors[None] == ("Could not save.",)
+    assert messages.alerts == [("error", "Failed")]
+
+
+@pytest.mark.anyio
+async def test_form_post_handler_allows_message_hooks() -> None:
+    messages = RecordingMessagesCapability()
+
+    class HookedPostHandler(FormPostHandler[ExampleForm]):
+        def get_success_message(self) -> str | None:
+            return f"Saved {self.form.values['preferred_name']}."
+
+    handler = HookedPostHandler(ExampleForm())
+
+    result = await handler.handle(
+        form_post_request(messages),
+        {"preferred_name": "David"},
+    )
+
+    assert result.committed
+    assert messages.alerts == [("success", "Saved David.")]
+
+
+@pytest.mark.anyio
+async def test_form_post_handler_does_not_require_messages_capability() -> None:
+    handler = FormPostHandler(
+        ExampleForm(),
+        success_message="Saved",
+        failure_message="Failed",
+    )
+
+    result = await handler.handle(
+        form_post_request(),
+        {"preferred_name": "David"},
+    )
+
+    assert result.is_valid
+    assert result.committed
 
 
 @pytest.mark.parametrize(

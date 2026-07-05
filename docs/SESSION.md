@@ -1,0 +1,150 @@
+# Session Configuration
+
+Wybra installs its own session middleware as core application infrastructure.
+Applications and Wybra modules use the standard `request.session` value; do not
+also install Starlette `SessionMiddleware`.
+
+Sessions are used for short-lived request state such as queued alerts. They are
+separate from authentication tokens and do not replace login, MFA, or account
+verification policy.
+
+## Storage Backend
+
+Local deployments default to cookie storage when no backend is configured:
+
+```toml
+[app]
+deployment_environment = "local"
+```
+
+For staging and production, configure a backend explicitly:
+
+```toml
+[app]
+deployment_environment = "production"
+
+[wybra.sessions]
+storage_backend = "database"
+```
+
+Supported values are:
+
+- `cookie`: encrypted and signed cookie storage for small session payloads.
+- `memory`: in-process storage for local development only. Sessions are lost on
+  restart and are not shared between workers.
+- `file`: server-side session files under a configured directory.
+- `cache`: Redis-compatible cache storage.
+- `database`: durable SQLAlchemy-backed storage.
+
+## Recommended Production Backends
+
+Use `database` when the application already has a database and session durability
+matters:
+
+```toml
+[wybra.sessions]
+storage_backend = "database"
+database_connection_name = "default"
+```
+
+Wybra includes the lightweight session table migration in the application
+migration graph as core infrastructure. This keeps switching to the `database`
+backend operationally straightforward later, even when a deployment currently
+uses another backend.
+
+Use `cache` when Redis or a compatible cache is the operational session store:
+
+```toml
+[wybra.sessions]
+storage_backend = "cache"
+cache_url = "redis://localhost:6379/0"
+cache_key_prefix = "wybra:sessions:"
+```
+
+Use `file` only when a single host or shared filesystem is appropriate:
+
+```toml
+[wybra.sessions]
+storage_backend = "file"
+file_directory = ".wybra/sessions"
+```
+
+Use `cookie` only for small, non-sensitive payloads that can safely travel with
+each request:
+
+```toml
+[wybra.sessions]
+storage_backend = "cookie"
+cookie_payload_max_bytes = 3800
+```
+
+Cookie storage uses Wybra's secret-envelope key material. Configure
+`WYBRA_SECRET_KEY_CURRENT` and, during rotation, `WYBRA_SECRET_KEYS_PREVIOUS`.
+See [`SECRET_KEY.md`](SECRET_KEY.md) and
+[`SECRET_ROTATION.md`](SECRET_ROTATION.md).
+
+For local unconfigured deployments, Wybra generates process-local cookie
+encryption material. Local session cookies therefore do not survive application
+restarts unless you configure `WYBRA_SECRET_KEY_CURRENT`.
+
+## Lifetime And Cookie Settings
+
+The default session lifetime is 14 days. Configure it in seconds:
+
+```toml
+[wybra.sessions]
+lifetime_seconds = 1209600
+```
+
+Cookie settings can also be adjusted:
+
+```toml
+[wybra.sessions]
+cookie_name = "wybra_session"
+cookie_path = "/"
+cookie_domain = "example.com"
+cookie_secure = true
+cookie_same_site = "lax"
+```
+
+If `cookie_secure` is not configured, Wybra uses insecure cookies only for the
+`local` deployment environment and secure cookies elsewhere.
+
+## Payload Limits
+
+Wybra validates stored session payloads as JSON-serialisable mappings and
+rejects oversized payloads.
+
+```toml
+[wybra.sessions]
+payload_max_bytes = 65536
+cookie_payload_max_bytes = 3800
+```
+
+`payload_max_bytes` applies to server-side storage. `cookie_payload_max_bytes`
+applies to the final encrypted cookie value for the `cookie` backend.
+
+## Validation
+
+Run:
+
+```sh
+uv run wybra-validate sessions
+```
+
+Full validation also includes sessions because they are core infrastructure:
+
+```sh
+uv run wybra-validate
+```
+
+## Custom Session Storage
+
+Applications with specialised storage requirements may provide a compatible
+session storage implementation during site setup. The replacement storage must
+support asynchronous `load`, `save`, `delete`, `validate`, `cleanup`, and
+`close` operations and must preserve Wybra's serialisable session data and
+lifecycle metadata contract.
+
+Request handlers and modules still use `request.session`; storage details should
+not be exposed to page, API, or alert code.

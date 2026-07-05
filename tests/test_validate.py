@@ -424,7 +424,7 @@ def test_validate_command_runs_discovered_module_targets(
     assert exit_code == 0
     assert captured.out == (
         "api: ok\nassets: ok\nerrors: ok\nforms: ok\nroutes: ok\nsecurity: ok\n"
-        "template: ok\ncommand-target: ok\n"
+        "sessions: ok\ntemplate: ok\ncommand-target: ok\n"
     )
     assert captured.err == ""
 

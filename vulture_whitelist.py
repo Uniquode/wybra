@@ -39,6 +39,8 @@ _.finalised
 _.unavailable
 _.template_context_middleware
 _.session_cookie_cleanup_middleware
+_.wybra_messages_middleware
+_.wybra_session_middleware
 _.session
 _.transaction
 _.close
@@ -238,6 +240,10 @@ _.filename
 _.exception_message
 _.traceback
 _.htmx
+_.committed
+_.consume_alerts
+_.accessed
+_.mark_accessed
 _.normalised_phone_contact
 _.display_label
 _.icon_token
