@@ -406,9 +406,8 @@ class DatabaseSessionStorage:
             row = await session.get(SessionRecordModel, session_id)
             if row is None:
                 return None
-            try:
-                record = _record_from_json(row.payload)
-            except SessionStorageError:
+            record = _record_from_database_row(row)
+            if record is None:
                 await session.delete(row)
                 return None
             if row.expires_at <= now:
@@ -422,16 +421,16 @@ class DatabaseSessionStorage:
         return loaded
 
     async def save(self, session_id: str, record: SessionRecord) -> None:
-        payload = _record_json(record, max_bytes=self.payload_max_bytes)
+        data = _session_data_json(record.data, max_bytes=self.payload_max_bytes)
         async with self.database.require().transaction(self.connection_name) as session:
-            if await self._update_existing(session, session_id, record, payload):
+            if await self._update_existing(session, session_id, record, data):
                 return
             try:
                 async with session.begin_nested():
                     session.add(
                         SessionRecordModel(
                             id=session_id,
-                            payload=payload,
+                            data=data,
                             created_at=record.created_at,
                             updated_at=record.updated_at,
                             expires_at=record.expires_at,
@@ -443,7 +442,7 @@ class DatabaseSessionStorage:
                     session,
                     session_id,
                     record,
-                    payload,
+                    data,
                 )
                 if not updated_after_conflict:
                     raise SessionStorageError(
@@ -455,13 +454,13 @@ class DatabaseSessionStorage:
         session: Any,
         session_id: str,
         record: SessionRecord,
-        payload: str,
+        data: str,
     ) -> bool:
         result = await session.execute(
             update(SessionRecordModel)
             .where(SessionRecordModel.id == session_id)
             .values(
-                payload=payload,
+                data=data,
                 updated_at=record.updated_at,
                 expires_at=record.expires_at,
             )
@@ -473,7 +472,7 @@ class DatabaseSessionStorage:
         async with self.database.require().transaction(self.connection_name) as session:
             row = await session.get(SessionRecordModel, session_id)
             if row is not None:
-                cleanup_data = _record_data_from_json(row.payload)
+                cleanup_data = _session_data_from_json(row.data)
                 await session.delete(row)
         if cleanup_data is not None:
             await _cleanup_session_data(self.cleanup_registry, cleanup_data)
@@ -489,7 +488,7 @@ class DatabaseSessionStorage:
             )
             rows = tuple(result.scalars())
             for row in rows:
-                cleanup_data = _record_data_from_json(row.payload)
+                cleanup_data = _session_data_from_json(row.data)
                 if cleanup_data is not None:
                     cleanup_records.append(cleanup_data)
                 await session.delete(row)
@@ -571,6 +570,56 @@ def _record_data_from_json(value: object) -> dict[str, Any] | None:
         return dict(_record_from_json(value).data)
     except SessionStorageError:
         return None
+
+
+def _session_data_json(data: Mapping[str, Any], *, max_bytes: int) -> str:
+    _validate_data(data)
+    try:
+        payload = json.dumps(
+            dict(data),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise SessionStorageError("Session data must be JSON serialisable.") from exc
+    _check_size(payload, max_bytes)
+    return payload
+
+
+def _session_data_from_json(value: object) -> dict[str, Any] | None:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if not isinstance(value, str):
+        return None
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(decoded, Mapping):
+        return None
+    try:
+        _validate_data(cast(Mapping[str, Any], decoded))
+    except SessionStorageError:
+        return None
+    return dict(cast(Mapping[str, Any], decoded))
+
+
+def _record_from_database_row(row: SessionRecordModel) -> SessionRecord | None:
+    data = _session_data_from_json(row.data)
+    if data is None:
+        return None
+    if not isinstance(row.created_at, (int, float)):
+        return None
+    if not isinstance(row.updated_at, (int, float)):
+        return None
+    if not isinstance(row.expires_at, (int, float)):
+        return None
+    return SessionRecord(
+        data=data,
+        created_at=float(row.created_at),
+        updated_at=float(row.updated_at),
+        expires_at=float(row.expires_at),
+    )
 
 
 async def _cleanup_session_data(

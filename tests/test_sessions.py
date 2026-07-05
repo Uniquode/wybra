@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -279,6 +280,13 @@ async def test_database_storage_persists_session_records() -> None:
         assert await storage.load("session", now=2.0) == _record(
             data={"value": "database"}
         )
+        async with capability.transaction("default") as session:
+            row = await session.get(SessionRecordModel, "session")
+            assert row is not None
+            assert json.loads(row.data) == {"value": "database"}
+            assert row.created_at == 1.0
+            assert row.updated_at == 1.0
+            assert row.expires_at == 60.0
 
         await storage.save(
             "session",

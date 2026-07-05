@@ -143,8 +143,8 @@ uv run wybra-validate
 Applications with specialised storage requirements may provide a compatible
 session storage implementation during site setup. The replacement storage must
 support asynchronous `load`, `save`, `delete`, `validate`, `cleanup`, and
-`close` operations and must preserve Wybra's serialisable session payload
-contract.
+`close` operations and must preserve Wybra's serialisable session data and
+lifecycle metadata contract.
 
 Request handlers and modules still use `request.session`; storage details should
 not be exposed to page, API, or alert code.

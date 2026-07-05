@@ -20,7 +20,7 @@ def upgrade() -> None:
     op.create_table(
         "sessions_session",
         sa.Column("id", sa.String(length=128), nullable=False),
-        sa.Column("payload", sa.Text(), nullable=False),
+        sa.Column("data", sa.Text(), nullable=False),
         sa.Column("created_at", sa.Float(), nullable=False),
         sa.Column("updated_at", sa.Float(), nullable=False),
         sa.Column("expires_at", sa.Float(), nullable=False),

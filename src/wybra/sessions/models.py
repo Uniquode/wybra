@@ -12,7 +12,7 @@ class SessionRecordModel(Base):
     __tablename__ = "sessions_session"
 
     id: Mapped[str] = mapped_column(String(length=128), primary_key=True)
-    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    data: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     updated_at: Mapped[float] = mapped_column(Float, nullable=False)
     expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
