@@ -15,6 +15,7 @@ from wybra.core.routes.validation import validate_routes
 from wybra.errors.validation import validate_errors
 from wybra.forms.validation import validate_forms
 from wybra.security.validation import validate_security
+from wybra.sessions.validation import validate_sessions
 from wybra.template.validation import validate_template
 from wybra.tools.cli_logging import configure_cli_logging
 from wybra.tools.project import (
@@ -50,6 +51,7 @@ BUILTIN_VALIDATION_TARGETS: Mapping[str, ValidationTarget] = {
     "forms": validate_forms,
     "routes": validate_routes,
     "security": validate_security,
+    "sessions": validate_sessions,
     "template": validate_template,
 }
 

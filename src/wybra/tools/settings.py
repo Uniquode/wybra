@@ -23,6 +23,7 @@ from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.diagnostics import wrapped_error
 from wybra.core.environment import environment_mapping, load_environment
 from wybra.core.exceptions import ConfigurationError
+from wybra.core.modules import CORE_MODULES
 from wybra.core.runtime import (
     DEFAULT_DEPLOYMENT_ENVIRONMENT,
     DeploymentEnvironment,
@@ -184,7 +185,11 @@ def load_project_settings(
 
 
 def _project_config_defs(app_config: AppConfig) -> tuple[ConfigDef, ...]:
-    return (RUNTIME_CONFIG_DEF, *discover_module_config_defs(app_config.modules))
+    return (
+        RUNTIME_CONFIG_DEF,
+        *discover_module_config_defs(CORE_MODULES),
+        *discover_module_config_defs(app_config.modules),
+    )
 
 
 def _project_settings_kwargs(

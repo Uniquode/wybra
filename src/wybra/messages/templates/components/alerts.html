@@ -1,0 +1,14 @@
+{% if alerts is defined and alerts %}
+<section class="wybra-alerts wybra-alerts--under-header" aria-label="Messages">
+  {% for alert in alerts %}
+  <article
+    class="wybra-alert wybra-alert--{{ alert.severity }}"
+    data-alert-severity="{{ alert.severity }}"
+    data-alert-created-at="{{ alert.created_at }}"
+    role="{% if alert.severity == 'error' %}alert{% else %}status{% endif %}"
+  >
+    <p class="wybra-alert__message">{{ alert.message }}</p>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}

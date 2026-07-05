@@ -12,8 +12,9 @@ from wybra.db.persistence import (
 )
 from wybra.db.surfaces import (
     DataCompositionError,
-    migration_version_locations_from_modules,
-    model_packages_from_modules,
+    discover_migration_version_locations,
+    discover_model_metadata,
+    model_package_name,
 )
 from wybra.db.urls import parse_sqlite_database_url, redact_database_url
 from wybra.tools.validation.core import (
@@ -134,8 +135,7 @@ def _record_migration_root_checks(
         )
 
     try:
-        model_packages = model_packages_from_modules(settings.modules)
-        version_locations = migration_version_locations_from_modules(settings.modules)
+        model_packages, version_locations = _configured_data_surfaces(settings.modules)
     except DataCompositionError as exc:
         record_check(
             checks,
@@ -194,6 +194,19 @@ def _record_migration_root_checks(
         )
 
     return migration_root_valid
+
+
+def _configured_data_surfaces(
+    module_names: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[Path, ...]]:
+    model_packages: list[str] = []
+    version_locations: list[Path] = []
+    for module_name in module_names:
+        if discover_model_metadata(module_name) is not None:
+            model_packages.append(model_package_name(module_name))
+        version_locations.extend(discover_migration_version_locations(module_name))
+
+    return tuple(model_packages), tuple(version_locations)
 
 
 validation_targets = {"persistence": validate_persistence}

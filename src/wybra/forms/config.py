@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from typing import Final
 
-from wybra.config import ConfigDef, ConfigField, ConfigGroup, to_bool
+from wybra.config import (
+    ConfigDef,
+    ConfigField,
+    ConfigGroup,
+    to_bool,
+    to_non_blank_string,
+    to_optional_non_blank_string,
+)
+from wybra.config import (
+    to_optional_positive_float as _to_optional_positive_float,
+)
 from wybra.services.secrets import SecretSource, normalise_secret_source
 
 ENV_CSRF_SECRET: Final = "CSRF_SECRET"
@@ -14,12 +24,7 @@ CSRF_TOKEN_SECRET_KEY_PREVIOUS: Final = "auth/forms/csrf-token-secret/previous"
 
 def to_csrf_token_secret(value: object) -> str:
     """Normalise an explicitly configured CSRF token secret."""
-    if not isinstance(value, str):
-        raise ValueError("must be a non-blank string.")
-    secret = value.strip()
-    if not secret:
-        raise ValueError("must be a non-blank string.")
-    return secret
+    return to_non_blank_string(value)
 
 
 def to_optional_bool(value: object) -> bool | None:
@@ -34,26 +39,8 @@ def to_optional_secret_source(value: object) -> SecretSource | None:
     return normalise_secret_source(value, name="CSRF token secret source")
 
 
-def to_optional_non_blank_string(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    raise ValueError("must be a non-blank string when configured.")
-
-
 def normalise_optional_positive_float(value: object) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-        raise ValueError("must be a positive number when configured.")
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("must be a positive number when configured.") from exc
-    if parsed <= 0:
-        raise ValueError("must be a positive number when configured.")
-    return parsed
+    return _to_optional_positive_float(value)
 
 
 def to_optional_positive_float(value: object) -> float | None:

@@ -136,6 +136,18 @@ def _write_app_config(
     return path
 
 
+def _append_explicit_file_sessions_config(path: Path, directory: Path) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"""
+
+            [wybra.sessions]
+            storage_backend = "file"
+            file_directory = "{directory.as_posix()}"
+            """
+        )
+
+
 def _site_from_mapping(values: dict[str, dict[str, object]]) -> Site:
     return Site(
         app=FastAPI(),
@@ -516,7 +528,10 @@ async def test_start_environment_overrides_database_url_and_sets_deployment_fall
 ) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
-    _write_app_config(project_root / "app.toml", modules=("wybra.db",))
+    _append_explicit_file_sessions_config(
+        _write_app_config(project_root / "app.toml", modules=("wybra.db",)),
+        tmp_path / "sessions",
+    )
 
     site = await start(
         FastAPI(),
@@ -543,10 +558,13 @@ async def test_start_app_env_overrides_config_deployment_environment(
 ) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
-    _write_app_config(
-        project_root / "app.toml",
-        modules=("wybra.assets",),
-        deployment_environment="production",
+    _append_explicit_file_sessions_config(
+        _write_app_config(
+            project_root / "app.toml",
+            modules=("wybra.assets",),
+            deployment_environment="production",
+        ),
+        tmp_path / "sessions",
     )
 
     site = await start(
@@ -567,7 +585,9 @@ async def test_start_app_env_overrides_config_deployment_environment(
 
 
 @pytest.mark.anyio
-async def test_start_app_env_overrides_mapping_config_deployment_environment() -> None:
+async def test_start_app_env_overrides_mapping_config_deployment_environment(
+    tmp_path: Path,
+) -> None:
     site = await start(
         FastAPI(),
         config_source=MappingConfigSource(
@@ -575,6 +595,10 @@ async def test_start_app_env_overrides_mapping_config_deployment_environment() -
                 "app": {
                     "modules": ("wybra.assets",),
                     "deployment_environment": "production",
+                },
+                "wybra.sessions": {
+                    "storage_backend": "file",
+                    "file_directory": (tmp_path / "sessions").as_posix(),
                 },
             }
         ),

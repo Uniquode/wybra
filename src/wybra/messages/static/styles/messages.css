@@ -1,0 +1,70 @@
+.wybra-alerts {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0 auto;
+    max-width: min(100% - 2rem, 72rem);
+    padding: 1rem 0;
+}
+
+.wybra-alerts--header,
+.wybra-alerts--under-header {
+    width: 100%;
+}
+
+.wybra-alerts--footer {
+    margin-top: 1rem;
+}
+
+.wybra-alerts--sticky {
+    position: sticky;
+    top: calc(var(--web-core-page-header-height, 0rem) + 0.5rem);
+    z-index: calc(var(--web-core-page-header-z-index, 10) + 1);
+}
+
+.wybra-alerts--closable .wybra-alert {
+    padding-right: 3rem;
+}
+
+.wybra-alerts--timed .wybra-alert {
+    animation: wybra-alert-auto-dismiss 260ms ease 8s forwards;
+}
+
+.wybra-alert {
+    border: 1px solid transparent;
+    border-radius: var(--web-core-radius-panel, 0.5rem);
+    box-shadow: 0 0.25rem 0.75rem rgb(0 0 0 / 0.08);
+    color: var(--wybra-alert-colour, #1f2937);
+    padding: 0.85rem 1rem;
+}
+
+.wybra-alert--success {
+    --wybra-alert-colour: #14532d;
+
+    background: #dcfce7;
+    border-color: #86efac;
+}
+
+.wybra-alert--warning {
+    --wybra-alert-colour: #713f12;
+
+    background: #fef3c7;
+    border-color: #fcd34d;
+}
+
+.wybra-alert--error {
+    --wybra-alert-colour: #7f1d1d;
+
+    background: #fee2e2;
+    border-color: #fca5a5;
+}
+
+.wybra-alert__message {
+    margin: 0;
+}
+
+@keyframes wybra-alert-auto-dismiss {
+    to {
+        opacity: 0;
+        transform: translateY(-0.25rem);
+    }
+}

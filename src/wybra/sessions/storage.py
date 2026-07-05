@@ -1,0 +1,660 @@
+from __future__ import annotations
+
+import asyncio
+import importlib
+import json
+import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any, Protocol, cast, runtime_checkable
+
+from anyio import Path as AsyncPath
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
+
+from wybra.core.runtime import LOCAL_ENVIRONMENT
+from wybra.db import DatabaseCapability
+from wybra.services.crypto import (
+    ENV_WYBRA_SECRET_KEY_CURRENT,
+    ENV_WYBRA_SECRET_KEYS_PREVIOUS,
+    ENVELOPE_PREFIX,
+    SecretDataError,
+    SecretEnvelopeService,
+    SecretMaterialMissingError,
+)
+from wybra.sessions.cleanup import SessionCleanupRegistry
+from wybra.sessions.config import SessionStorageBackend
+from wybra.sessions.exceptions import (
+    SessionsConfigurationError,
+    SessionStorageError,
+)
+from wybra.sessions.models import SessionRecordModel
+from wybra.sessions.settings import SessionsSettings
+from wybra.site import Site, SiteCapabilityProxy
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRecord:
+    data: dict[str, Any]
+    created_at: float
+    updated_at: float
+    expires_at: float
+
+    def expired(self, now: float) -> bool:
+        return self.expires_at <= now
+
+
+@runtime_checkable
+class SessionStorage(Protocol):
+    async def load(self, session_id: str, *, now: float) -> SessionRecord | None: ...
+
+    async def save(self, session_id: str, record: SessionRecord) -> None: ...
+
+    async def delete(self, session_id: str) -> None: ...
+
+    async def validate(self) -> None: ...
+
+    async def cleanup(self, *, now: float) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+@dataclass(slots=True)
+class MemorySessionStorage:
+    payload_max_bytes: int
+    cleanup_registry: SessionCleanupRegistry | None = None
+    _records: dict[str, SessionRecord] = field(default_factory=dict)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
+        cleanup_data: dict[str, Any] | None = None
+        async with self._lock:
+            record = self._records.get(session_id)
+            if record is None:
+                return None
+            if record.expired(now):
+                self._records.pop(session_id, None)
+                cleanup_data = dict(record.data)
+                loaded = None
+            else:
+                loaded = _copy_record(record)
+        if cleanup_data is not None:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+        return loaded
+
+    async def save(self, session_id: str, record: SessionRecord) -> None:
+        _record_json(record, max_bytes=self.payload_max_bytes)
+        async with self._lock:
+            self._records[session_id] = _copy_record(record)
+
+    async def delete(self, session_id: str) -> None:
+        cleanup_data: dict[str, Any] | None = None
+        async with self._lock:
+            record = self._records.pop(session_id, None)
+            if record is not None:
+                cleanup_data = dict(record.data)
+        if cleanup_data is not None:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+
+    async def validate(self) -> None:
+        return None
+
+    async def cleanup(self, *, now: float) -> None:
+        cleanup_records: list[dict[str, Any]] = []
+        async with self._lock:
+            expired_ids = [
+                session_id
+                for session_id, record in self._records.items()
+                if record.expired(now)
+            ]
+            for session_id in expired_ids:
+                record = self._records.pop(session_id, None)
+                if record is not None:
+                    cleanup_records.append(dict(record.data))
+        for cleanup_data in cleanup_records:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+
+    async def close(self) -> None:
+        async with self._lock:
+            self._records.clear()
+
+
+@dataclass(frozen=True, slots=True)
+class FileSessionStorage:
+    directory: AsyncPath
+    payload_max_bytes: int
+    cleanup_registry: SessionCleanupRegistry | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.directory, AsyncPath):
+            object.__setattr__(self, "directory", AsyncPath(self.directory))
+
+    async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
+        path = self._path(session_id)
+        try:
+            raw_payload = await path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise SessionStorageError(
+                f"Session file could not be read: {path}"
+            ) from exc
+        try:
+            record = _record_from_json(raw_payload)
+        except SessionStorageError:
+            return None
+        if record.expired(now):
+            await path.unlink(missing_ok=True)
+            await _cleanup_session_data(self.cleanup_registry, record.data)
+            return None
+        return record
+
+    async def save(self, session_id: str, record: SessionRecord) -> None:
+        payload = _record_json(record, max_bytes=self.payload_max_bytes)
+        await self.directory.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.directory / f".{session_id}.{uuid.uuid4().hex}.tmp"
+        try:
+            await temporary_path.write_text(payload, encoding="utf-8")
+            await temporary_path.replace(self._path(session_id))
+        except OSError as exc:
+            await temporary_path.unlink(missing_ok=True)
+            raise SessionStorageError("Session file could not be written.") from exc
+
+    async def delete(self, session_id: str) -> None:
+        path = self._path(session_id)
+        cleanup_data: dict[str, Any] | None = None
+        try:
+            record = _record_from_json(await path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, SessionStorageError):
+            record = None
+        if record is not None:
+            cleanup_data = dict(record.data)
+        await path.unlink(missing_ok=True)
+        if cleanup_data is not None:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+
+    async def validate(self) -> None:
+        await self.directory.mkdir(parents=True, exist_ok=True)
+        if not await self.directory.is_dir():
+            raise SessionStorageError(
+                f"Session file directory is not available: {self.directory}"
+            )
+
+    async def cleanup(self, *, now: float) -> None:
+        if not await self.directory.is_dir():
+            return
+        cleanup_records: list[dict[str, Any]] = []
+        async for path in self.directory.glob("s1_*.json"):
+            try:
+                record = _record_from_json(await path.read_text(encoding="utf-8"))
+            except (OSError, SessionStorageError):
+                continue
+            if record.expired(now):
+                await path.unlink(missing_ok=True)
+                cleanup_records.append(dict(record.data))
+        for cleanup_data in cleanup_records:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+
+    async def close(self) -> None:
+        return None
+
+    def _path(self, session_id: str) -> AsyncPath:
+        return self.directory / f"{session_id}.json"
+
+
+@dataclass(frozen=True, slots=True)
+class CookieSessionStorage:
+    service: SecretEnvelopeService
+    payload_max_bytes: int
+    cookie_payload_max_bytes: int
+
+    def load_cookie(
+        self,
+        value: str,
+        *,
+        now: float,
+    ) -> tuple[str, SessionRecord] | None:
+        loaded = self.decode_cookie(value)
+        if loaded is None:
+            return None
+        _session_id, record = loaded
+        if record.expired(now):
+            return None
+        return loaded
+
+    def decode_cookie(self, value: str) -> tuple[str, SessionRecord] | None:
+        if not value.startswith(ENVELOPE_PREFIX):
+            return None
+        try:
+            payload, _version = self.service.decrypt_required(value)
+            decoded = json.loads(payload)
+        except (
+            SecretDataError,
+            SecretMaterialMissingError,
+            json.JSONDecodeError,
+        ):
+            return None
+        if not isinstance(decoded, Mapping):
+            return None
+        session_id = decoded.get("id")
+        raw_record = decoded.get("record")
+        if not isinstance(session_id, str) or not isinstance(raw_record, Mapping):
+            return None
+        try:
+            record = _record_from_mapping(raw_record)
+        except SessionStorageError:
+            return None
+        return session_id, record
+
+    def dump_cookie(self, session_id: str, record: SessionRecord) -> str:
+        payload = json.dumps(
+            {"id": session_id, "record": _record_payload(record)},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        _check_size(payload, self.payload_max_bytes)
+        encrypted = self.service.encrypt_required(payload)
+        _check_size(encrypted, self.cookie_payload_max_bytes)
+        return encrypted
+
+    async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
+        loaded = self.load_cookie(session_id, now=now)
+        return None if loaded is None else loaded[1]
+
+    async def save(self, session_id: str, record: SessionRecord) -> None:
+        self.dump_cookie(session_id, record)
+
+    async def delete(self, session_id: str) -> None:
+        return None
+
+    async def validate(self) -> None:
+        self.service.current_version_required()
+
+    async def cleanup(self, *, now: float) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class CacheSessionStorage:
+    url: str
+    key_prefix: str
+    payload_max_bytes: int
+    cleanup_registry: SessionCleanupRegistry | None = None
+    _client: Any = field(default=None, init=False, repr=False, compare=False)
+    _memory: MemorySessionStorage | None = field(default=None, init=False, repr=False)
+
+    async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
+        if self.url.startswith("memory://"):
+            return await self._memory_storage().load(session_id, now=now)
+        raw_payload = await self._redis_client().get(self._key(session_id))
+        if raw_payload is None:
+            return None
+        if isinstance(raw_payload, bytes):
+            raw_payload = raw_payload.decode("utf-8")
+        if not isinstance(raw_payload, str):
+            return None
+        try:
+            record = _record_from_json(raw_payload)
+        except SessionStorageError:
+            return None
+        if record.expired(now):
+            await self.delete(session_id)
+            return None
+        return record
+
+    async def save(self, session_id: str, record: SessionRecord) -> None:
+        if self.url.startswith("memory://"):
+            await self._memory_storage().save(session_id, record)
+            return
+        payload = _record_json(record, max_bytes=self.payload_max_bytes)
+        await self._redis_client().set(
+            self._key(session_id),
+            payload,
+            ex=max(1, int(record.expires_at - record.updated_at)),
+        )
+
+    async def delete(self, session_id: str) -> None:
+        if self.url.startswith("memory://"):
+            await self._memory_storage().delete(session_id)
+            return
+        client = self._redis_client()
+        raw_payload = await client.get(self._key(session_id))
+        cleanup_data = _record_data_from_json(raw_payload)
+        await client.delete(self._key(session_id))
+        if cleanup_data is not None:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+
+    async def validate(self) -> None:
+        if self.url.startswith("memory://"):
+            return None
+        try:
+            await self._redis_client().ping()
+        except Exception as exc:  # pragma: no cover - external service
+            raise SessionStorageError("Redis session cache is unavailable.") from exc
+
+    async def cleanup(self, *, now: float) -> None:
+        if self.url.startswith("memory://"):
+            await self._memory_storage().cleanup(now=now)
+
+    async def close(self) -> None:
+        if self._memory is not None:
+            await self._memory.close()
+        client = self._client
+        if client is None:
+            return
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close is not None:
+            result = close()
+            if asyncio.iscoroutine(result):
+                await result
+        object.__setattr__(self, "_client", None)
+
+    def _memory_storage(self) -> MemorySessionStorage:
+        if self._memory is None:
+            object.__setattr__(
+                self,
+                "_memory",
+                MemorySessionStorage(
+                    payload_max_bytes=self.payload_max_bytes,
+                    cleanup_registry=self.cleanup_registry,
+                ),
+            )
+        assert self._memory is not None
+        return self._memory
+
+    def _redis_client(self) -> Any:
+        if self._client is not None:
+            return self._client
+        try:
+            redis_module = importlib.import_module("redis.asyncio")
+        except ImportError as exc:
+            raise SessionsConfigurationError(
+                "Redis session cache requires the optional redis package."
+            ) from exc
+        client = redis_module.Redis.from_url(self.url, decode_responses=True)
+        object.__setattr__(self, "_client", client)
+        return client
+
+    def _key(self, session_id: str) -> str:
+        return f"{self.key_prefix}{session_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseSessionStorage:
+    database: SiteCapabilityProxy[DatabaseCapability]
+    connection_name: str
+    payload_max_bytes: int
+    cleanup_registry: SessionCleanupRegistry | None = None
+
+    async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
+        cleanup_data: dict[str, Any] | None = None
+        async with self.database.require().transaction(self.connection_name) as session:
+            row = await session.get(SessionRecordModel, session_id)
+            if row is None:
+                return None
+            try:
+                record = _record_from_json(row.payload)
+            except SessionStorageError:
+                await session.delete(row)
+                return None
+            if row.expires_at <= now:
+                cleanup_data = dict(record.data)
+                await session.delete(row)
+                loaded = None
+            else:
+                loaded = record
+        if cleanup_data is not None:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+        return loaded
+
+    async def save(self, session_id: str, record: SessionRecord) -> None:
+        payload = _record_json(record, max_bytes=self.payload_max_bytes)
+        async with self.database.require().transaction(self.connection_name) as session:
+            if await self._update_existing(session, session_id, record, payload):
+                return
+            try:
+                async with session.begin_nested():
+                    session.add(
+                        SessionRecordModel(
+                            id=session_id,
+                            payload=payload,
+                            created_at=record.created_at,
+                            updated_at=record.updated_at,
+                            expires_at=record.expires_at,
+                        )
+                    )
+                    await session.flush()
+            except IntegrityError as exc:
+                updated_after_conflict = await self._update_existing(
+                    session,
+                    session_id,
+                    record,
+                    payload,
+                )
+                if not updated_after_conflict:
+                    raise SessionStorageError(
+                        "Session record could not be saved after insert conflict."
+                    ) from exc
+
+    async def _update_existing(
+        self,
+        session: Any,
+        session_id: str,
+        record: SessionRecord,
+        payload: str,
+    ) -> bool:
+        result = await session.execute(
+            update(SessionRecordModel)
+            .where(SessionRecordModel.id == session_id)
+            .values(
+                payload=payload,
+                updated_at=record.updated_at,
+                expires_at=record.expires_at,
+            )
+        )
+        return bool(getattr(result, "rowcount", 0))
+
+    async def delete(self, session_id: str) -> None:
+        cleanup_data: dict[str, Any] | None = None
+        async with self.database.require().transaction(self.connection_name) as session:
+            row = await session.get(SessionRecordModel, session_id)
+            if row is not None:
+                cleanup_data = _record_data_from_json(row.payload)
+                await session.delete(row)
+        if cleanup_data is not None:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+
+    async def validate(self) -> None:
+        self.database.require()
+
+    async def cleanup(self, *, now: float) -> None:
+        cleanup_records: list[dict[str, Any]] = []
+        async with self.database.require().transaction(self.connection_name) as session:
+            result = await session.execute(
+                select(SessionRecordModel).where(SessionRecordModel.expires_at <= now)
+            )
+            rows = tuple(result.scalars())
+            for row in rows:
+                cleanup_data = _record_data_from_json(row.payload)
+                if cleanup_data is not None:
+                    cleanup_records.append(cleanup_data)
+                await session.delete(row)
+        for cleanup_data in cleanup_records:
+            await _cleanup_session_data(self.cleanup_registry, cleanup_data)
+
+    async def close(self) -> None:
+        return None
+
+
+def storage_from_settings(
+    site: Site,
+    settings: SessionsSettings,
+    *,
+    cleanup_registry: SessionCleanupRegistry | None = None,
+) -> SessionStorage:
+    if settings.resolved_storage_backend is SessionStorageBackend.MEMORY:
+        return MemorySessionStorage(
+            payload_max_bytes=settings.resolved_payload_max_bytes,
+            cleanup_registry=cleanup_registry,
+        )
+    if settings.resolved_storage_backend is SessionStorageBackend.COOKIE:
+        return CookieSessionStorage(
+            service=_cookie_secret_service(site, settings),
+            payload_max_bytes=settings.resolved_payload_max_bytes,
+            cookie_payload_max_bytes=settings.resolved_cookie_payload_max_bytes,
+        )
+    if settings.resolved_storage_backend is SessionStorageBackend.FILE:
+        return FileSessionStorage(
+            directory=AsyncPath(settings.resolved_file_directory),
+            payload_max_bytes=settings.resolved_payload_max_bytes,
+            cleanup_registry=cleanup_registry,
+        )
+    if settings.resolved_storage_backend is SessionStorageBackend.CACHE:
+        assert settings.cache_url is not None
+        return CacheSessionStorage(
+            url=settings.cache_url,
+            key_prefix=settings.cache_key_prefix,
+            payload_max_bytes=settings.resolved_payload_max_bytes,
+            cleanup_registry=cleanup_registry,
+        )
+    if settings.resolved_storage_backend is SessionStorageBackend.DATABASE:
+        return DatabaseSessionStorage(
+            database=site.capability_proxy(DatabaseCapability),
+            connection_name=settings.database_connection_name,
+            payload_max_bytes=settings.resolved_payload_max_bytes,
+            cleanup_registry=cleanup_registry,
+        )
+    raise SessionsConfigurationError("Unsupported sessions storage backend.")
+
+
+def _cookie_secret_service(
+    site: Site,
+    settings: SessionsSettings,
+) -> SecretEnvelopeService:
+    environ = site.config.environ
+    if _has_configured_secret_key(environ):
+        return SecretEnvelopeService.from_env(environ)
+    if settings.deployment_environment == LOCAL_ENVIRONMENT:
+        return SecretEnvelopeService.for_testing(version="local")
+    return SecretEnvelopeService.from_env(environ)
+
+
+def _has_configured_secret_key(environ: Mapping[str, str] | None) -> bool:
+    if environ is None:
+        return False
+    return any(
+        isinstance(environ.get(name), str) and bool(environ[name].strip())
+        for name in (ENV_WYBRA_SECRET_KEY_CURRENT, ENV_WYBRA_SECRET_KEYS_PREVIOUS)
+    )
+
+
+def _record_data_from_json(value: object) -> dict[str, Any] | None:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if not isinstance(value, str):
+        return None
+    try:
+        return dict(_record_from_json(value).data)
+    except SessionStorageError:
+        return None
+
+
+async def _cleanup_session_data(
+    cleanup_registry: SessionCleanupRegistry | None,
+    data: Mapping[str, Any],
+) -> None:
+    if cleanup_registry is not None:
+        await cleanup_registry.cleanup_session_data(data)
+
+
+def _copy_record(record: SessionRecord) -> SessionRecord:
+    return SessionRecord(
+        data=dict(record.data),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        expires_at=record.expires_at,
+    )
+
+
+def _record_payload(record: SessionRecord) -> dict[str, Any]:
+    _validate_data(record.data)
+    return {
+        "data": dict(record.data),
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "expires_at": record.expires_at,
+    }
+
+
+def _record_json(record: SessionRecord, *, max_bytes: int) -> str:
+    try:
+        payload = json.dumps(
+            _record_payload(record),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise SessionStorageError("Session data must be JSON serialisable.") from exc
+    _check_size(payload, max_bytes)
+    return payload
+
+
+def _record_from_json(value: str) -> SessionRecord:
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise SessionStorageError("Stored session payload is invalid JSON.") from exc
+    if not isinstance(decoded, Mapping):
+        raise SessionStorageError("Stored session payload must be a mapping.")
+    return _record_from_mapping(decoded)
+
+
+def _record_from_mapping(value: Mapping[object, object]) -> SessionRecord:
+    data = value.get("data")
+    created_at = value.get("created_at")
+    updated_at = value.get("updated_at")
+    expires_at = value.get("expires_at")
+    if not isinstance(data, Mapping):
+        raise SessionStorageError("Stored session data must be a mapping.")
+    if not all(isinstance(key, str) for key in data):
+        raise SessionStorageError("Stored session data keys must be strings.")
+    if not isinstance(created_at, (int, float)):
+        raise SessionStorageError("Stored session created timestamp is invalid.")
+    if not isinstance(updated_at, (int, float)):
+        raise SessionStorageError("Stored session updated timestamp is invalid.")
+    if not isinstance(expires_at, (int, float)):
+        raise SessionStorageError("Stored session expiry timestamp is invalid.")
+    return SessionRecord(
+        data=dict(cast(Mapping[str, Any], data)),
+        created_at=float(created_at),
+        updated_at=float(updated_at),
+        expires_at=float(expires_at),
+    )
+
+
+def _validate_data(value: Mapping[str, Any]) -> None:
+    if not all(isinstance(key, str) for key in value):
+        raise SessionStorageError("Session data keys must be strings.")
+
+
+def _check_size(value: str, max_bytes: int) -> None:
+    size = len(value.encode("utf-8"))
+    if size > max_bytes:
+        raise SessionStorageError(
+            f"Session payload exceeds configured limit: {size} > {max_bytes} bytes."
+        )
+
+
+__all__ = (
+    "CacheSessionStorage",
+    "CookieSessionStorage",
+    "DatabaseSessionStorage",
+    "FileSessionStorage",
+    "MemorySessionStorage",
+    "SessionRecord",
+    "SessionStorage",
+    "storage_from_settings",
+)
