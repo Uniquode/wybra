@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import wybra.media as media_module
 import wybra.media.capabilities as media_capabilities
+from support_database import sqlite_file_url
 from wybra.auth import models as auth_models  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core import InputValidationError
@@ -75,7 +76,7 @@ def _site_with_media_database(tmp_path: Path) -> Site:
             discover_module_config=False,
         ),
     )
-    database = create_database(f"sqlite+aiosqlite:///{tmp_path / 'media.sqlite3'}")
+    database = create_database(sqlite_file_url(tmp_path / "media.sqlite3"))
     site.provide_capability(
         DatabaseCapability,
         SqlAlchemyDatabaseCapability.from_connections({"default": database}),
@@ -661,7 +662,7 @@ async def test_media_setup_registers_capability_and_serves_files(
                 "app": {
                     "project_root": tmp_path,
                     "modules": ("wybra.media", "wybra.db"),
-                    "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+                    "database_url": sqlite_file_url(tmp_path / "app.sqlite3"),
                 },
                 "wybra.media": {"root": "media", "mount_path": "/media"},
             }
@@ -686,7 +687,7 @@ async def test_media_setup_registers_capability_before_database_exists(
                 "app": {
                     "project_root": tmp_path,
                     "modules": ("wybra.media", "wybra.db"),
-                    "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+                    "database_url": sqlite_file_url(tmp_path / "app.sqlite3"),
                 },
                 "wybra.media": {"root": "media", "mount_path": "/media"},
             }
@@ -725,7 +726,7 @@ async def test_media_setup_skips_serving_when_disabled(tmp_path: Path) -> None:
                 "app": {
                     "project_root": tmp_path,
                     "modules": ("wybra.media", "wybra.db"),
-                    "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+                    "database_url": sqlite_file_url(tmp_path / "app.sqlite3"),
                 },
                 "wybra.media": {"serve": False},
             }

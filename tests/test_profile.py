@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
+from support_database import sqlite_file_url
 from wybra.auth import AuthCapability, login_required  # noqa: F401
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core import InputValidationError
@@ -196,7 +197,7 @@ def _site_with_database(tmp_path: Path) -> Site:
             discover_module_config=False,
         ),
     )
-    database = create_database(f"sqlite+aiosqlite:///{tmp_path / 'profile.sqlite3'}")
+    database = create_database(sqlite_file_url(tmp_path / "profile.sqlite3"))
     site.provide_capability(
         DatabaseCapability,
         SqlAlchemyDatabaseCapability.from_connections({"default": database}),
@@ -228,9 +229,7 @@ def _profile_route_site(
         app=app,
         config=ConfigService([MappingConfigSource(config_data)]),
     )
-    database = create_database(
-        f"sqlite+aiosqlite:///{tmp_path / 'profile-route.sqlite3'}"
-    )
+    database = create_database(sqlite_file_url(tmp_path / "profile-route.sqlite3"))
     site.provide_capability(
         DatabaseCapability,
         SqlAlchemyDatabaseCapability.from_connections({"default": database}),

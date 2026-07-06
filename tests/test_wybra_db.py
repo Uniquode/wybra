@@ -1,5 +1,6 @@
 import ast
 import importlib
+import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import MetaData, text
 
+from support_database import sqlite_file_url
 from wybra import SiteCapabilityError
 from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability
@@ -105,7 +107,7 @@ def _database_config_source(tmp_path: Path) -> MappingConfigSource:
         {
             "app": {
                 "modules": ("wybra.db",),
-                "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+                "database_url": sqlite_file_url(tmp_path / "app.sqlite3"),
             }
         }
     )
@@ -332,10 +334,23 @@ def test_wybra_db_owns_database_url_helpers(tmp_path: Path) -> None:
     )
 
 
+def test_database_url_parser_handles_windows_absolute_sqlite_path() -> None:
+    sqlite_url = parse_sqlite_database_url("sqlite+aiosqlite:///C:/data/app.sqlite3")
+
+    assert sqlite_url is not None
+    assert sqlite_url.path.as_posix() == "C:/data/app.sqlite3"
+
+
 @pytest.mark.parametrize(
     "database_url",
     (
-        "sqlite+aiosqlite:////tmp/absolute.sqlite3",
+        pytest.param(
+            "sqlite+aiosqlite:////tmp/absolute.sqlite3",
+            marks=pytest.mark.skipif(
+                os.name == "nt",
+                reason="POSIX absolute SQLite paths are not Windows file paths.",
+            ),
+        ),
         "postgresql+asyncpg://user:password@example.test/app",
     ),
 )
@@ -343,6 +358,18 @@ def test_resolve_database_url_leaves_absolute_and_non_sqlite_urls_unchanged(
     tmp_path: Path,
     database_url: str,
 ) -> None:
+    assert resolve_database_url(database_url, tmp_path) == database_url
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows absolute SQLite URL resolution requires Windows path semantics.",
+)
+def test_resolve_database_url_leaves_windows_absolute_sqlite_url_unchanged(
+    tmp_path: Path,
+) -> None:
+    database_url = "sqlite+aiosqlite:///C:/data/app.sqlite3"
+
     assert resolve_database_url(database_url, tmp_path) == database_url
 
 

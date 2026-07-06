@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from provider_test_keys import apple_private_key_pem as _apple_private_key_pem
+from support_database import sqlite_file_url
 from wybra.auth import AuthCapability, anonymous_required, login_required
 from wybra.auth.accounts.manager import create_user_manager
 from wybra.auth.accounts.schemas import UserCreate
@@ -178,7 +179,7 @@ def _site_config_source(
             "config_path": tmp_path / "app.toml",
             "project_root": tmp_path,
             "modules": modules,
-            "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+            "database_url": sqlite_file_url(tmp_path / "app.sqlite3"),
         },
         "app.routes": {"prefixes": route_prefixes},
         "app.templates": {"auto_reload": True, "cache_size": 0},

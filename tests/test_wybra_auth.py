@@ -14,6 +14,7 @@ from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 
 import wybra.auth.context as auth_context
 import wybra.auth.mfa.webauthn as webauthn_mfa
+from support_database import sqlite_file_url
 from wybra.auth import (
     ERROR_ALREADY_EXISTS,
     ERROR_INVALID_PASSWORD,
@@ -115,10 +116,6 @@ from wybra.services.crypto import (
     SecretEnvelopeService,
 )
 from wybra.template.context import TemplateContext
-
-
-def sqlite_file_url(path: Path) -> str:
-    return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
 
 
 async def initialise_auth_database(database_url: str):

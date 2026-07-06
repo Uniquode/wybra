@@ -75,6 +75,20 @@ def _macos_keychain_available() -> bool:
     return True
 
 
+def _windows_credential_manager_available() -> bool:
+    if sys.platform != "win32":
+        return False
+    if importlib.util.find_spec("keyring") is None:
+        return False
+    try:
+        import keyring
+
+        keyring.get_password(_keyring_probe_service(), _keyring_probe_username())
+    except Exception:
+        return False
+    return True
+
+
 def _keyring_probe_service() -> str:
     return secret_tokens.token_hex(8)
 
@@ -93,6 +107,13 @@ macos_keychain = pytest.mark.skipif(
 linux_secret_service = pytest.mark.skipif(
     not _linux_secret_service_available(),
     reason="Linux Secret Service integration requires D-Bus and a provider.",
+)
+windows_credential_manager = pytest.mark.skipif(
+    not _windows_credential_manager_available(),
+    reason=(
+        "Windows Credential Manager integration requires Windows, keyring, and "
+        "an accessible Credential Manager backend."
+    ),
 )
 
 
@@ -403,6 +424,14 @@ class TestKeychainSource:
 
     @linux_secret_service
     def test_linux_secret_service_missing_key_is_reported(self) -> None:
+        driver = KeychainSecretSourceDriver(
+            KeychainSecretSourceSettings(appname=_keyring_probe_service())
+        )
+
+        assert driver.exists(_keyring_probe_username()) is False
+
+    @windows_credential_manager
+    def test_windows_credential_manager_missing_key_is_reported(self) -> None:
         driver = KeychainSecretSourceDriver(
             KeychainSecretSourceSettings(appname=_keyring_probe_service())
         )
