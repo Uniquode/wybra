@@ -4,15 +4,14 @@ import time
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Final, Literal
+from typing import Final
 
-DiagnosticLevel = Literal["info", "debug", "trace"]
+from wybra.diagnostics.levels import (
+    DIAGNOSTIC_LEVEL_VALUES,
+    DiagnosticLevel,
+    normalise_diagnostics_level,
+)
 
-DIAGNOSTIC_LEVEL_VALUES: Final[dict[DiagnosticLevel, int]] = {
-    "trace": 5,
-    "debug": 10,
-    "info": 20,
-}
 SENSITIVE_ATTRIBUTE_PARTS: Final = (
     "authorisation",
     "authorization",
@@ -204,14 +203,6 @@ class RequestDiagnostics:
             "template_total_duration_seconds": self.template_total_duration_seconds,
             "backend_operation_count": self.backend_operation_count,
         }
-
-
-def normalise_diagnostics_level(value: object) -> DiagnosticLevel:
-    if isinstance(value, str):
-        normalised = value.strip().lower()
-        if normalised in DIAGNOSTIC_LEVEL_VALUES:
-            return normalised  # ty: ignore[invalid-return-type]
-    raise ValueError("Diagnostics level must be one of: info, debug, trace.")
 
 
 def _safe_attributes(attributes: Mapping[str, object]) -> dict[str, object]:

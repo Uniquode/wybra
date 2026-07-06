@@ -54,7 +54,7 @@ error pages can replace that response.
 
 Diagnostics are separate from ordinary operational logging. They collect
 structured event records and summary statistics. File and console logs are not
-the primary diagnostics collector.
+the primary diagnostics collectors.
 
 Enable diagnostics explicitly:
 

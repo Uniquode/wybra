@@ -22,7 +22,6 @@ from wybra.diagnostics.events import (
     normalise_diagnostics_level,
 )
 from wybra.diagnostics.settings import DiagnosticsSettings
-from wybra.diagnostics.setup import setup_core_diagnostics
 
 __all__ = (
     "DiagnosticEvent",
@@ -39,7 +38,6 @@ __all__ = (
     "record_sql_query",
     "record_template_render",
     "request_diagnostics",
-    "setup_core_diagnostics",
     "template_render_diagnostics",
     "trace",
 )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Final
 
 from wybra.config import ConfigDef, ConfigField, ConfigGroup, to_bool, to_positive_float
+from wybra.diagnostics.levels import to_diagnostics_level
 
 ENV_APP_ENV: Final = "APP_ENV"
 ENV_APP_DEBUG: Final = "APP_DEBUG"
@@ -10,17 +11,6 @@ ENV_WYBRA_DIAGNOSTICS_ENABLED: Final = "WYBRA_DIAGNOSTICS_ENABLED"
 ENV_WYBRA_DIAGNOSTICS_LEVEL: Final = "WYBRA_DIAGNOSTICS_LEVEL"
 ENV_WYBRA_DIAGNOSTICS_LOGGING_BRIDGE: Final = "WYBRA_DIAGNOSTICS_LOGGING_BRIDGE"
 ENV_WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS: Final = "WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS"
-
-DIAGNOSTICS_LEVELS: Final = frozenset({"info", "debug", "trace"})
-
-
-def to_diagnostics_level(value: object) -> str:
-    if isinstance(value, str):
-        normalised = value.strip().lower()
-        if normalised in DIAGNOSTICS_LEVELS:
-            return normalised
-    raise ValueError("must be one of: info, debug, trace.")
-
 
 RUNTIME_CONFIG_DEF: Final = ConfigDef(
     {
@@ -70,7 +60,6 @@ RUNTIME_CONFIG_DEF: Final = ConfigDef(
 )
 
 __all__ = (
-    "DIAGNOSTICS_LEVELS",
     "ENV_APP_DEBUG",
     "ENV_APP_ENV",
     "ENV_WYBRA_DIAGNOSTICS_ENABLED",

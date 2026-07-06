@@ -593,7 +593,7 @@ async def _compose_site(site: Site, module_loader: ModuleLoader) -> None:
 
 
 def _setup_core_diagnostics(site: Site) -> None:
-    from wybra.diagnostics import setup_core_diagnostics
+    from wybra.diagnostics.setup import setup_core_diagnostics
 
     setup_core_diagnostics(site)
 

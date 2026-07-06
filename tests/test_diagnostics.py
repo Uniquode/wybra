@@ -25,6 +25,8 @@ from wybra.diagnostics.context import (
 )
 from wybra.diagnostics.events import RequestDiagnostics
 from wybra.diagnostics.logging import emit_request_diagnostics
+from wybra.diagnostics.sqlalchemy import instrument_sqlalchemy_engine
+from wybra.site import start
 from wybra.template.capabilities import DefaultTemplateCapability
 
 
@@ -248,3 +250,87 @@ def test_sql_template_and_backend_diagnostics_are_collected(tmp_path: Path) -> N
     assert response.json()["sql"] == 1
     assert response.json()["templates"] == 1
     assert response.json()["backend"] >= 1
+
+
+def test_sqlalchemy_instrumentation_is_idempotent() -> None:
+    database = create_database("sqlite+aiosqlite:///:memory:")
+    instrument_sqlalchemy_engine(database.engine)
+    diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
+    token = set_current_diagnostics(diagnostics)
+
+    async def query_once() -> None:
+        async with database.session_factory() as session:
+            await session.execute(text("select 1"))
+
+    try:
+        import anyio
+
+        anyio.run(query_once)
+    finally:
+        reset_current_diagnostics(token)
+        import anyio
+
+        anyio.run(close_database, database)
+
+    assert diagnostics.sql_query_count == 1
+
+
+@pytest.mark.anyio
+async def test_diagnostics_middleware_wraps_module_middleware(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "diagnostics_order_app"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text(
+        "from collections.abc import Awaitable, Callable\n"
+        "from fastapi import Request\n"
+        "from fastapi.responses import Response\n\n"
+        "async def setup_site(site):\n"
+        "    @site.app.middleware('http')\n"
+        "    async def module_middleware(\n"
+        "        request: Request,\n"
+        "        call_next: Callable[[Request], Awaitable[Response]],\n"
+        "    ) -> Response:\n"
+        "        response = await call_next(request)\n"
+        "        response.headers['X-Middleware-Order'] = 'module'\n"
+        "        return response\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    app = FastAPI()
+
+    @app.get("/status")
+    async def status(request: Request) -> dict[str, object]:
+        return {"diagnostics": request_diagnostics(request) is not None}
+
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "modules": ("diagnostics_order_app",),
+                    "deployment_environment": "local",
+                },
+                "wybra.diagnostics": {
+                    "enabled": True,
+                    "level": "trace",
+                },
+            }
+        ),
+    )
+
+    try:
+        # Starlette inserts newly registered middleware first; registering
+        # diagnostics after module setup makes it the outer user middleware.
+        assert app.user_middleware[0].kwargs["dispatch"].__name__ == (
+            "diagnostics_middleware"
+        )
+
+        with TestClient(app) as client:
+            response = client.get("/status")
+    finally:
+        await site.close()
+
+    assert response.json() == {"diagnostics": True}
+    assert response.headers["X-Middleware-Order"] == "module"
