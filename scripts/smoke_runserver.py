@@ -218,24 +218,20 @@ def _subprocess_creation_flags() -> int:
 
 def _request_process_exit(process: subprocess.Popen[str]) -> None:
     if os.name == "nt":
-        ctrl_break_event = getattr(signal, "CTRL_BREAK_EVENT", None)
-        if ctrl_break_event is not None:
-            try:
-                process.send_signal(ctrl_break_event)
-                return
-            except OSError:
-                pass
-    process.terminate()
+        _kill_windows_process_tree(process)
+        return
+
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        process.terminate()
 
 
 def _kill_process_tree(process: subprocess.Popen[str]) -> None:
     if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+        _kill_windows_process_tree(process)
         if process.poll() is None:
             process.kill()
         return
@@ -247,6 +243,15 @@ def _kill_process_tree(process: subprocess.Popen[str]) -> None:
     except OSError:
         if process.poll() is None:
             process.kill()
+
+
+def _kill_windows_process_tree(process: subprocess.Popen[str]) -> None:
+    subprocess.run(
+        ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
 
 
 def _read_process_output(output_path: Path) -> str:
