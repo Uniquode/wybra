@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -129,6 +130,8 @@ def _start_runserver(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        creationflags=_subprocess_creation_flags(),
+        start_new_session=os.name != "nt",
     )
 
 
@@ -173,12 +176,51 @@ def _http_get(port: int, path: str) -> tuple[int, str]:
 
 def _stop_process(process: subprocess.Popen[str]) -> tuple[str, str]:
     if process.poll() is None:
-        process.terminate()
+        _request_process_exit(process)
     try:
         return process.communicate(timeout=SHUTDOWN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        process.kill()
+        _kill_process_tree(process)
         return process.communicate(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+
+
+def _subprocess_creation_flags() -> int:
+    if os.name == "nt":
+        return getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    return 0
+
+
+def _request_process_exit(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt":
+        ctrl_break_event = getattr(signal, "CTRL_BREAK_EVENT", None)
+        if ctrl_break_event is not None:
+            try:
+                process.send_signal(ctrl_break_event)
+                return
+            except OSError:
+                pass
+    process.terminate()
+
+
+def _kill_process_tree(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if process.poll() is None:
+            process.kill()
+        return
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        if process.poll() is None:
+            process.kill()
 
 
 def _print_process_output(output: tuple[str, str]) -> None:
