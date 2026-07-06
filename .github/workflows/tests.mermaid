@@ -1,0 +1,28 @@
+---
+config:
+  theme: default
+  look: handDrawn
+  layout: elk
+---
+flowchart TD
+    Start["push / pull_request"]
+
+    Start --> Format["Format<br>ubuntu-latest"]
+    Start --> Lint["Lint<br>ubuntu-latest"]
+    Start --> Typecheck["Type check<br>ubuntu-latest"]
+    Start --> PytestLinux["Pytest<br>ubuntu-latest"]
+    Start --> PytestWindows["Pytest<br>windows-latest"]
+    Start --> SmokeLinux["Smoke runserver<br>ubuntu-latest"]
+    Start --> SmokeWindows["Smoke runserver<br>windows-latest"]
+    Start --> Build["Build package<br>ubuntu-latest"]
+
+    Format --> Required["Tests<br>required aggregate check"]
+    Lint --> Required
+    Typecheck --> Required
+    PytestLinux --> Required
+    PytestWindows --> Required
+    SmokeLinux --> Required
+    SmokeWindows --> Required
+    Build --> Required
+
+    Required --> Done["pass / fail PR gate"]
