@@ -11,7 +11,8 @@ from inspect import iscoroutinefunction
 from pathlib import Path
 from types import ModuleType
 from typing import Any, NoReturn, Protocol, TypeGuard, TypeVar, cast
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from fastapi import FastAPI
 
@@ -528,7 +529,7 @@ def _file_config_path(config_source: str) -> Path:
             )
         if not parsed.path:
             raise ConfigSourceError("file:// config source URI must include a path.")
-        return Path(unquote(parsed.path))
+        return Path(url2pathname(parsed.path))
 
     return Path(value)
 

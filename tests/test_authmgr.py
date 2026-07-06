@@ -4892,7 +4892,7 @@ def test_authmgr_interactive_password_mismatch_aborts_when_input_ends(
     )
 
     assert result.exit_code == 1
-    assert result.stdout == ""
+    assert result.stdout.strip() == ""
     assert "The two entered values do not match" in result.stderr
     assert "Aborted" in result.stderr
     assert identity_users_from_database(database_url) == []
@@ -4918,7 +4918,7 @@ def test_authmgr_interactive_password_prompt_retries_after_mismatch(
     )
 
     assert result.exit_code == 0
-    assert result.stdout == "created user: retry@example.com\n"
+    assert result.stdout.strip() == "created user: retry@example.com"
     assert "Password:" in result.stderr
     assert "The two entered values do not match" in result.stderr
     [user] = identity_users_from_database(database_url)
@@ -4992,7 +4992,7 @@ def test_authmgr_password_command_prompts_by_default(
     )
 
     assert result.exit_code == 0
-    assert result.stdout == "changed password: default-prompt@example.com\n"
+    assert result.stdout.strip() == "changed password: default-prompt@example.com"
     assert "Password:" in result.stderr
 
 

@@ -1,4 +1,5 @@
 import ast
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from textwrap import dedent
@@ -222,7 +223,9 @@ def test_runtime_project_root_reports_malformed_pyproject(
     pyproject_path.write_text("[project\n", encoding="utf-8")
     monkeypatch.chdir(child)
 
-    with pytest.raises(ProjectToolConfigurationError, match=str(pyproject_path)):
+    with pytest.raises(
+        ProjectToolConfigurationError, match=re.escape(str(pyproject_path))
+    ):
         runtime_project_root()
 
 
