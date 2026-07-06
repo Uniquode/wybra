@@ -5,8 +5,80 @@ on:
   pull_request:
 
 jobs:
-  tests:
-    name: Tests (${{ matrix.os }})
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Check formatting
+        run: uv run ruff format --check src tests
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Type check
+        run: uv run ty check src/
+
+  pytest:
+    name: Pytest (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -32,20 +104,59 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Check formatting
-        run: uv run ruff format --check src tests
-
-      - name: Lint
-        run: uv run ruff check src tests
-
-      - name: Type check
-        run: uv run ty check src/
-
       - name: Test
         run: uv run pytest -q
 
+  smoke-runserver:
+    name: Smoke runserver (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync
+
       - name: Smoke runserver
         run: uv run python scripts/smoke_runserver.py
+
+  build:
+    name: Build package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync
 
       - name: Build package
         run: uv build
@@ -53,13 +164,21 @@ jobs:
   tests-required-check:
     name: Tests
     runs-on: ubuntu-latest
-    needs: tests
+    needs:
+      - format
+      - lint
+      - typecheck
+      - pytest
+      - smoke-runserver
+      - build
     if: ${{ always() }}
 
     steps:
-      - name: Require matrix tests to pass
+      - name: Require test jobs to pass
         run: |
-          if [ "${{ needs.tests.result }}" != "success" ]; then
-            echo "Matrix tests result: ${{ needs.tests.result }}"
+          echo '${{ toJson(needs) }}'
+          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ] || \
+             [ "${{ contains(needs.*.result, 'cancelled') }}" = "true" ] || \
+             [ "${{ contains(needs.*.result, 'skipped') }}" = "true" ]; then
             exit 1
           fi

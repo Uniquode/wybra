@@ -1,6 +1,5 @@
 import ast
 import importlib
-import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -328,6 +327,7 @@ def test_wybra_db_owns_database_url_helpers(tmp_path: Path) -> None:
 
     assert sqlite_url is not None
     assert sqlite_url.path == tmp_path / "local.sqlite3"
+    assert sqlite_url.is_absolute is True
     assert (
         redact_database_url("postgresql+asyncpg://user:password@host.example/app")
         == "postgresql+asyncpg://***:***@host.example/app"
@@ -339,18 +339,14 @@ def test_database_url_parser_handles_windows_absolute_sqlite_path() -> None:
 
     assert sqlite_url is not None
     assert sqlite_url.path.as_posix() == "C:/data/app.sqlite3"
+    assert sqlite_url.is_absolute is True
 
 
 @pytest.mark.parametrize(
     "database_url",
     (
-        pytest.param(
-            "sqlite+aiosqlite:////tmp/absolute.sqlite3",
-            marks=pytest.mark.skipif(
-                os.name == "nt",
-                reason="POSIX absolute SQLite paths are not Windows file paths.",
-            ),
-        ),
+        "sqlite+aiosqlite:////tmp/absolute.sqlite3",
+        "sqlite+aiosqlite:///C:/data/app.sqlite3",
         "postgresql+asyncpg://user:password@example.test/app",
     ),
 )
@@ -361,16 +357,22 @@ def test_resolve_database_url_leaves_absolute_and_non_sqlite_urls_unchanged(
     assert resolve_database_url(database_url, tmp_path) == database_url
 
 
-@pytest.mark.skipif(
-    os.name != "nt",
-    reason="Windows absolute SQLite URL resolution requires Windows path semantics.",
+@pytest.mark.parametrize(
+    ("database_url", "suffix"),
+    (
+        ("sqlite+aiosqlite:///app.db", ""),
+        ("sqlite+aiosqlite:///app.db?cache=shared", "?cache=shared"),
+        ("sqlite+aiosqlite:///app.db?mode=rwc#fragment", "?mode=rwc#fragment"),
+    ),
 )
-def test_resolve_database_url_leaves_windows_absolute_sqlite_url_unchanged(
+def test_resolve_database_url_preserves_relative_suffix(
     tmp_path: Path,
+    database_url: str,
+    suffix: str,
 ) -> None:
-    database_url = "sqlite+aiosqlite:///C:/data/app.sqlite3"
-
-    assert resolve_database_url(database_url, tmp_path) == database_url
+    assert resolve_database_url(database_url, tmp_path) == (
+        f"{sqlite_file_url(tmp_path / 'app.db')}{suffix}"
+    )
 
 
 def test_wybra_db_owns_default_migration_script_location() -> None:

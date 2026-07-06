@@ -4,7 +4,6 @@ import csv
 import io
 import json
 import logging
-import os
 import sqlite3
 import sys
 import tomllib
@@ -5285,25 +5284,24 @@ def test_auth_database_url_parser_handles_relative_sqlite_paths(
 
     assert relative_url is not None
     assert relative_url.path == Path("relative.db")
+    assert relative_url.is_absolute is False
     assert resolve_database_url(
         "sqlite+aiosqlite:///relative.db", tmp_path
     ) == sqlite_file_url(tmp_path / "relative.db")
 
 
-@pytest.mark.skipif(
-    os.name == "nt",
-    reason="POSIX absolute SQLite paths are not Windows file paths.",
-)
 def test_auth_database_url_parser_handles_posix_absolute_sqlite_paths(
     tmp_path: Path,
 ) -> None:
     absolute_url = parse_sqlite_database_url("sqlite+aiosqlite:////tmp/auth.db")
 
     assert absolute_url is not None
-    assert absolute_url.path == Path("/tmp/auth.db")
-    assert resolve_database_url(
-        "sqlite+aiosqlite:////tmp/auth.db", tmp_path
-    ) == sqlite_file_url(Path("/tmp/auth.db"))
+    assert absolute_url.path.as_posix() == "/tmp/auth.db"
+    assert absolute_url.is_absolute is True
+    assert (
+        resolve_database_url("sqlite+aiosqlite:////tmp/auth.db", tmp_path)
+        == "sqlite+aiosqlite:////tmp/auth.db"
+    )
 
 
 def test_auth_database_url_parser_handles_windows_absolute_sqlite_path() -> None:
@@ -5311,12 +5309,9 @@ def test_auth_database_url_parser_handles_windows_absolute_sqlite_path() -> None
 
     assert sqlite_url is not None
     assert sqlite_url.path.as_posix() == "C:/data/auth.db"
+    assert sqlite_url.is_absolute is True
 
 
-@pytest.mark.skipif(
-    os.name != "nt",
-    reason="Windows absolute SQLite URL resolution requires Windows path semantics.",
-)
 def test_auth_database_url_resolves_windows_absolute_sqlite_path(
     tmp_path: Path,
 ) -> None:
