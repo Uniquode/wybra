@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi_users_db_sqlalchemy.generics import GUID
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -16,6 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from wybra.db.models import Base, metadata
+from wybra.db.types import GUID
 from wybra.profile.types import ProfileLinks, Pronouns
 
 

@@ -3,10 +3,7 @@ from fastapi.responses import RedirectResponse, Response
 
 from wybra.auth.ids import log_safe_uuid
 from wybra.auth.mfa.recovery import generate_recovery_codes
-from wybra.auth.mfa.storage import (
-    TOTP_PENDING_STATUS,
-    SqlAlchemyChallengeStore,
-)
+from wybra.auth.mfa.storage import TOTP_PENDING_STATUS
 from wybra.auth.mfa.totp import generate_totp_secret, totp_auth_uri
 from wybra.auth.options import TOTP_REQUIRED
 from wybra.auth.provider_support import (
@@ -95,14 +92,13 @@ async def totp_setup(request: Request) -> Response:
         setup_code = _form_value(form_data, "setup_totp_code").strip()
 
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
+    async with session_factory() as scope:
         authenticated_user = await resolve_current_user(request)
-        challenge_store = SqlAlchemyChallengeStore(session)
         setup_challenge = None
         if setup_challenge_id:
-            challenge = await challenge_store.get_challenge(setup_challenge_id)
+            challenge = await scope.challenges.get_challenge(setup_challenge_id)
             if challenge is None:
-                await session.commit()
+                await scope.commit()
             if (
                 challenge is not None
                 and is_totp_setup_challenge(challenge)
@@ -115,7 +111,7 @@ async def totp_setup(request: Request) -> Response:
                 )
 
         challenge_user = (
-            await _load_user_by_id(session, setup_challenge.user_id)
+            await _load_user_by_id(scope, setup_challenge.user_id)
             if setup_challenge is not None
             else None
         )
@@ -145,14 +141,14 @@ async def totp_setup(request: Request) -> Response:
                 setup_error=TOTP_SETUP_PAGE_MESSAGES["verify_email"],
             )
 
-        store = totp_credential_store(request, session)
+        store = totp_credential_store(request, scope)
         pending_credential_id = await store.get_pending_totp_credential(str(user.id))
         if pending_credential_id is None:
             pending_credential_id = await store.create_pending_totp_credential(
                 str(user.id),
                 generate_totp_secret(),
             )
-            await session.commit()
+            await scope.commit()
 
         credential = await store.get_totp_credential(pending_credential_id)
         if credential is None:
@@ -194,7 +190,7 @@ async def totp_setup(request: Request) -> Response:
             counter,
             setup_challenge_error,
         ) = await verify_totp_code_for_credential(
-            session=session,
+            session=scope,
             store=store,
             credential_id=str(credential.id),
             user_id=str(user.id),
@@ -216,7 +212,7 @@ async def totp_setup(request: Request) -> Response:
             )
 
         await store.activate_totp_credential(str(credential.id))
-        recovery_store = recovery_code_store(request, session)
+        recovery_store = recovery_code_store(request, scope)
         recovery_codes = generate_recovery_codes()
         await recovery_store.replace_recovery_codes(
             str(user.id),
@@ -224,9 +220,9 @@ async def totp_setup(request: Request) -> Response:
             recovery_codes,
         )
         if setup_challenge is not None:
-            await challenge_store.consume_challenge(setup_challenge.id)
+            await scope.challenges.consume_challenge(setup_challenge.id)
 
-        await session.commit()
+        await scope.commit()
 
         response = render_totp_setup_page(
             request,
@@ -286,8 +282,8 @@ async def disable_totp(request: Request) -> Response:
     user = await _require_authenticated_user(request)
 
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        store = totp_credential_store(request, session)
+    async with session_factory() as scope:
+        store = totp_credential_store(request, scope)
         active_credential_id = await store.get_active_totp_credential(str(user.id))
         if active_credential_id is None:
             return RedirectResponse(
@@ -303,7 +299,7 @@ async def disable_totp(request: Request) -> Response:
                 button_label="Disable authenticator",
             )
 
-        if not await _user_has_usable_account_sign_in(request, session, user):
+        if not await _user_has_usable_account_sign_in(request, scope, user):
             return _totp_action_confirmation_page(
                 request,
                 page_title="Disable authenticator",
@@ -316,7 +312,7 @@ async def disable_totp(request: Request) -> Response:
         if not await _fresh_security_assertion_satisfied(
             request,
             user,
-            session,
+            scope,
             active_credential_id=active_credential_id,
         ):
             return _totp_action_confirmation_page(
@@ -329,7 +325,7 @@ async def disable_totp(request: Request) -> Response:
             )
 
         await store.disable_totp_credential(active_credential_id)
-        await session.commit()
+        await scope.commit()
 
     return RedirectResponse(url=_route_path(request, "auth:security"), status_code=303)
 
@@ -345,8 +341,8 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
     user = await _require_authenticated_user(request)
 
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        store = totp_credential_store(request, session)
+    async with session_factory() as scope:
+        store = totp_credential_store(request, scope)
         active_credential_id = await store.get_active_totp_credential(str(user.id))
         if active_credential_id is None:
             return RedirectResponse(
@@ -366,7 +362,7 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
         if not await _fresh_single_security_assertion_satisfied(
             request,
             user,
-            session,
+            scope,
             active_credential_id=active_credential_id,
         ):
             return _totp_action_confirmation_page(
@@ -380,13 +376,13 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
             )
 
         recovery_codes = generate_recovery_codes()
-        recovery_store = recovery_code_store(request, session)
+        recovery_store = recovery_code_store(request, scope)
         await recovery_store.replace_recovery_codes(
             str(user.id),
             active_credential_id,
             recovery_codes,
         )
-        await session.commit()
+        await scope.commit()
 
     return _totp_action_confirmation_page(
         request,
@@ -440,10 +436,10 @@ async def reset_totp(request: Request) -> Response:
         return RedirectResponse(url="/account", status_code=303)
 
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        store = totp_credential_store(request, session)
+    async with session_factory() as scope:
+        store = totp_credential_store(request, scope)
         await store.clear_totp_credentials(str(user.id))
-        await session.commit()
+        await scope.commit()
 
     options = _identity_options(request)
     redirect_to = (

@@ -6,54 +6,21 @@ import logging
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, TextIO, cast
-from uuid import UUID
+from typing import Any, TextIO
 
 import click
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from wybra.auth.admin.management import (
-    ERROR_INVALID_GROUP_ID,
     ERROR_NO_CHANGES,
-    ERROR_NOT_FOUND,
-    add_child_group_to_group_for_management,
-    add_scope_to_group_for_management,
-    add_user_to_group_for_management,
-    create_group_for_management,
-    create_local_user_for_management,
-    create_scope_for_management,
-    deactivate_local_user_for_management,
-    delete_group_for_management,
-    delete_local_user_for_management,
-    delete_scope_for_management,
-    disable_totp_for_management,
-    effective_scopes_for_user_for_management,
-    get_group_for_management,
-    group_target_error_message,
-    list_groups_for_management,
-    list_local_users_for_management,
-    list_scopes_for_management,
-    provision_totp_for_management,
-    remove_child_group_from_group_for_management,
-    remove_scope_from_group_for_management,
-    remove_user_from_group_for_management,
-    resolve_user_target,
-    revoke_passkeys_for_management,
-    rotate_totp_recovery_codes_for_management,
-    target_error_message,
-    update_group_for_management,
-    update_local_user_for_management,
-    update_scope_for_management,
-    user_record,
 )
-from wybra.auth.models import Group, GroupUser
+from wybra.auth.persistence import auth_persistence_session
+from wybra.auth.persistence.contracts import AuthManagementStore, AuthPersistenceScope
 from wybra.auth.result import Result
 from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.core.composition import CompositionError, load_app_config
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.logging import LoggingConfigurationError
-from wybra.db.persistence import close_database, create_database, session_scope
+from wybra.db.persistence import close_database, create_database
 from wybra.tools.app_startup import (
     config_source_from_click_context,
 )
@@ -68,7 +35,7 @@ from .output import (
     _print_user_records,
 )
 from .passwords import PasswordSourceError, _read_password, _read_required_password
-from .schema import _verify_identity_schema
+from .schema import verify_identity_schema_for_database
 
 logger = logging.getLogger(__name__)
 
@@ -92,15 +59,15 @@ async def _main_async(args: AuthmgrArgs, *, config_source: str | None = None) ->
     settings = _load_auth_settings_for_command(config_source=config_source)
     database = create_database(settings.database_url)
     try:
-        async with session_scope(database.session_factory) as session:
-            await _verify_identity_schema(session)
-            return await _run_command(session, settings, args)
+        await verify_identity_schema_for_database(database)
+        async with auth_persistence_session(database) as scope:
+            return await _run_command(scope, settings, args)
     finally:
         await close_database(database)
 
 
 async def _run_command(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
@@ -108,30 +75,22 @@ async def _run_command(
     if handler is None:
         logger.error("%s: not implemented", args.command)
         return 1
-    return await handler(session, settings, args)
+    return await handler(scope, settings, args)
 
 
 async def _handle_user_create(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    replacement_group_ids: list[UUID] = []
+    management = scope.management
     if args.add_groups:
-        group_result = await _resolve_group_targets_for_set(
-            session,
-            args.add_groups,
-        )
+        group_result = await management.validate_group_targets(args.add_groups)
         if group_result.is_failure():
             return _print_failure(group_result.error_type, group_result.message)
-        replacement_group_ids = cast(
-            list[UUID],
-            (group_result.value or {}).get("group_ids", []),
-        )
 
     password = _read_required_password(args.password)
-    result = await create_local_user_for_management(
-        session,
+    result = await management.create_local_user(
         settings.identity_options,
         email=args.email,
         password=password,
@@ -144,24 +103,20 @@ async def _handle_user_create(
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
-    user, target_error = await resolve_user_target(session, args.email)
-    if target_error is not None:
-        return _print_failure(target_error, target_error_message(target_error))
-    if user is None:
-        return _print_failure(ERROR_NOT_FOUND, "No matching user was found.")
-
-    for group_id in dict.fromkeys(replacement_group_ids):
-        session.add(GroupUser(group_id=group_id, user_id=user.id))
-    if replacement_group_ids:
-        await session.commit()
+    if args.add_groups:
+        result = await management.update_user_groups(
+            target=args.email,
+            set_group_targets=args.add_groups,
+        )
+        if result.is_failure():
+            return _print_failure(result.error_type, result.message)
 
     value = result.value or {}
     totp_value: dict[str, Any] | None = None
     if args.totp:
-        totp_result = await provision_totp_for_management(
-            session,
+        totp_result = await management.provision_totp(
             settings.identity_options,
-            user=user,
+            target=args.email,
         )
         if totp_result.is_failure():
             return _print_failure(totp_result.error_type, totp_result.message)
@@ -182,15 +137,15 @@ async def _handle_user_create(
 
 
 async def _handle_user_update(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
+    management = scope.management
     password = _read_password(args.password) if args.password is not None else None
     result: Result[dict[str, Any]] = Result.ok({})
     if _user_metadata_update_requested(args, password):
-        result = await update_local_user_for_management(
-            session,
+        result = await management.update_local_user(
             settings.identity_options,
             target=args.target,
             is_admin=args.is_admin,
@@ -214,11 +169,11 @@ async def _handle_user_update(
             or _user_passkey_operation_requested(args)
         ):
             return _print_failure(ERROR_NO_CHANGES, "No user changes were requested.")
-        result = await _resolve_target_record(session, args.target)
+        result = await _resolve_target_record(management, args.target)
         if result.is_failure():
             return _print_failure(result.error_type, result.message)
 
-    membership_result = await _update_user_groups_from_args(session, args)
+    membership_result = await _update_user_groups_from_args(management, args)
     if membership_result.is_failure():
         return _print_failure(
             membership_result.error_type,
@@ -229,10 +184,10 @@ async def _handle_user_update(
         **(result.value or {}),
         **(membership_result.value or {}),
     }
-    totp_value = await _update_user_totp_from_args(session, settings, args)
+    totp_value = await _update_user_totp_from_args(management, settings, args)
     if totp_value.is_failure():
         return _print_failure(totp_value.error_type, totp_value.message)
-    passkey_value = await _update_user_passkeys_from_args(session, args)
+    passkey_value = await _update_user_passkeys_from_args(management, args)
     if passkey_value.is_failure():
         return _print_failure(passkey_value.error_type, passkey_value.message)
     payload = _user_operation_payload(
@@ -255,19 +210,20 @@ async def _handle_user_update(
 
 
 async def _handle_user_delete(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
+    management = scope.management
     if not args.force:
-        target_result = await _resolve_target_record(session, args.target)
+        target_result = await _resolve_target_record(management, args.target)
         if target_result.is_failure():
             return _print_failure(target_result.error_type, target_result.message)
         target_record = target_result.value or {}
         if not _confirm_destructive("delete", target_record):
             return 1
 
-    result = await delete_local_user_for_management(session, target=args.target)
+    result = await management.delete_local_user(target=args.target)
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
@@ -277,19 +233,20 @@ async def _handle_user_delete(
 
 
 async def _handle_user_deactivate(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
+    management = scope.management
     if not args.force:
-        target_result = await _resolve_target_record(session, args.target)
+        target_result = await _resolve_target_record(management, args.target)
         if target_result.is_failure():
             return _print_failure(target_result.error_type, target_result.message)
         target_record = target_result.value or {}
         if not _confirm_destructive("deactivate", target_record):
             return 1
 
-    result = await deactivate_local_user_for_management(session, target=args.target)
+    result = await management.deactivate_local_user(target=args.target)
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
@@ -299,12 +256,11 @@ async def _handle_user_deactivate(
 
 
 async def _handle_user_list(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await list_local_users_for_management(
-        session,
+    result = await scope.management.list_local_users(
         email_pattern=args.email_pattern,
         domain_pattern=args.domain_pattern,
         is_admin=args.is_admin,
@@ -335,13 +291,12 @@ async def _handle_user_list(
 
 
 async def _handle_user_password(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
     password = _read_required_password(args.password)
-    result = await update_local_user_for_management(
-        session,
+    result = await scope.management.update_local_user(
         settings.identity_options,
         target=args.target,
         password=password,
@@ -356,12 +311,11 @@ async def _handle_user_password(
 
 
 async def _handle_scope_create(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await create_scope_for_management(
-        session,
+    result = await scope.management.create_scope(
         scope=args.scope,
         description=args.description,
     )
@@ -374,12 +328,11 @@ async def _handle_scope_create(
 
 
 async def _handle_scope_update(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await update_scope_for_management(
-        session,
+    result = await scope.management.update_scope(
         scope=args.scope,
         description=args.description,
     )
@@ -392,11 +345,11 @@ async def _handle_scope_update(
 
 
 async def _handle_scope_delete(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await delete_scope_for_management(session, scope=args.scope)
+    result = await scope.management.delete_scope(scope=args.scope)
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
@@ -406,11 +359,11 @@ async def _handle_scope_delete(
 
 
 async def _handle_scope_list(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await list_scopes_for_management(session)
+    result = await scope.management.list_scopes()
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
@@ -424,23 +377,22 @@ async def _handle_scope_list(
 
 
 async def _handle_group_create(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await create_group_for_management(
-        session,
+    management = scope.management
+    result = await management.create_group(
         abbrev=args.group_target,
         description=args.description or "",
     )
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
-    for scope in args.add_scopes:
-        result = await add_scope_to_group_for_management(
-            session,
+    for scope_name in args.add_scopes:
+        result = await management.add_scope_to_group(
             group_target=args.group_target,
-            scope=scope,
+            scope=scope_name,
         )
         if result.is_failure():
             return _print_failure(result.error_type, result.message)
@@ -451,11 +403,11 @@ async def _handle_group_create(
 
 
 async def _handle_group_list(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await list_groups_for_management(session)
+    result = await scope.management.list_groups()
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
@@ -477,11 +429,11 @@ async def _handle_group_list(
 
 
 async def _handle_group_show(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await get_group_for_management(session, target=args.group_target)
+    result = await scope.management.get_group(target=args.group_target)
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
@@ -490,11 +442,11 @@ async def _handle_group_show(
 
 
 async def _handle_group_update(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await _update_group_from_args(session, args)
+    result = await _update_group_from_args(scope.management, args)
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
@@ -504,11 +456,11 @@ async def _handle_group_update(
 
 
 async def _handle_group_delete(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await delete_group_for_management(session, target=args.group_target)
+    result = await scope.management.delete_group(target=args.group_target)
     if result.is_failure():
         return _print_failure(result.error_type, result.message)
 
@@ -518,12 +470,11 @@ async def _handle_group_delete(
 
 
 async def _handle_group_add_user(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await add_user_to_group_for_management(
-        session,
+    result = await scope.management.add_user_to_group(
         group_target=args.group_target,
         user_target=args.user_target,
     )
@@ -535,12 +486,11 @@ async def _handle_group_add_user(
 
 
 async def _handle_group_remove_user(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await remove_user_from_group_for_management(
-        session,
+    result = await scope.management.remove_user_from_group(
         group_target=args.group_target,
         user_target=args.user_target,
     )
@@ -552,12 +502,11 @@ async def _handle_group_remove_user(
 
 
 async def _handle_group_add_group(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await add_child_group_to_group_for_management(
-        session,
+    result = await scope.management.add_child_group_to_group(
         parent_target=args.group_target,
         child_target=args.child_group_target,
     )
@@ -569,12 +518,11 @@ async def _handle_group_add_group(
 
 
 async def _handle_group_remove_group(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await remove_child_group_from_group_for_management(
-        session,
+    result = await scope.management.remove_child_group_from_group(
         parent_target=args.group_target,
         child_target=args.child_group_target,
     )
@@ -586,12 +534,11 @@ async def _handle_group_remove_group(
 
 
 async def _handle_group_effective_scopes(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     _settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> int:
-    result = await effective_scopes_for_user_for_management(
-        session,
+    result = await scope.management.effective_scopes_for_user(
         user_target=args.user_target,
     )
     if result.is_failure():
@@ -601,7 +548,10 @@ async def _handle_group_effective_scopes(
     return 0
 
 
-CommandHandler = Callable[[AsyncSession, AuthSettings, AuthmgrArgs], Awaitable[int]]
+CommandHandler = Callable[
+    [AuthPersistenceScope, AuthSettings, AuthmgrArgs],
+    Awaitable[int],
+]
 
 _COMMAND_HANDLERS: dict[str, CommandHandler] = {
     "create": _handle_user_create,
@@ -664,17 +614,10 @@ def _config_source_path(config_source: str | None) -> Path | None:
 
 
 async def _resolve_target_record(
-    session: AsyncSession,
+    management: AuthManagementStore,
     target: str,
 ) -> Result[dict[str, Any]]:
-    user, target_error = await resolve_user_target(session, target)
-    if target_error is not None:
-        return Result.failure(target_error, target_error_message(target_error))
-
-    if user is None:
-        return Result.failure(ERROR_NOT_FOUND)
-
-    return Result.ok(user_record(user))
+    return await management.resolve_user_record(target)
 
 
 def _confirm_destructive(action: str, record: dict[str, Any]) -> bool:
@@ -685,33 +628,30 @@ def _confirm_destructive(action: str, record: dict[str, Any]) -> bool:
 
 
 async def _update_group_from_args(
-    session: AsyncSession,
+    management: AuthManagementStore,
     args: AuthmgrArgs,
 ) -> Result[dict[str, Any]]:
     result: Result[dict[str, Any]] | None = None
     if args.description is not None:
-        result = await update_group_for_management(
-            session,
+        result = await management.update_group(
             target=args.group_target,
             description=args.description,
         )
         if result.is_failure():
             return result
 
-    for scope in args.add_scopes:
-        result = await add_scope_to_group_for_management(
-            session,
+    for scope_name in args.add_scopes:
+        result = await management.add_scope_to_group(
             group_target=args.group_target,
-            scope=scope,
+            scope=scope_name,
         )
         if result.is_failure():
             return result
 
-    for scope in args.remove_scopes:
-        result = await remove_scope_from_group_for_management(
-            session,
+    for scope_name in args.remove_scopes:
+        result = await management.remove_scope_from_group(
             group_target=args.group_target,
-            scope=scope,
+            scope=scope_name,
         )
         if result.is_failure():
             return result
@@ -753,47 +693,33 @@ def _user_passkey_operation_requested(args: AuthmgrArgs) -> bool:
 
 
 async def _update_user_totp_from_args(
-    session: AsyncSession,
+    management: AuthManagementStore,
     settings: AuthSettings,
     args: AuthmgrArgs,
 ) -> Result[dict[str, Any]]:
     if not _user_totp_operation_requested(args):
         return Result.ok({})
 
-    user, target_error = await resolve_user_target(session, args.target)
-    if target_error is not None:
-        return Result.failure(target_error, target_error_message(target_error))
-    if user is None:
-        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
-
     if args.totp:
-        return await provision_totp_for_management(
-            session,
+        return await management.provision_totp(
             settings.identity_options,
-            user=user,
+            target=args.target,
         )
     if args.no_totp:
-        return await disable_totp_for_management(session, user=user)
+        return await management.disable_totp(target=args.target)
 
-    return await rotate_totp_recovery_codes_for_management(session, user=user)
+    return await management.rotate_totp_recovery_codes(target=args.target)
 
 
 async def _update_user_passkeys_from_args(
-    session: AsyncSession,
+    management: AuthManagementStore,
     args: AuthmgrArgs,
 ) -> Result[dict[str, Any]]:
     if not _user_passkey_operation_requested(args):
         return Result.ok({})
 
-    user, target_error = await resolve_user_target(session, args.target)
-    if target_error is not None:
-        return Result.failure(target_error, target_error_message(target_error))
-    if user is None:
-        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
-
-    return await revoke_passkeys_for_management(
-        session,
-        user=user,
+    return await management.revoke_passkeys(
+        target=args.target,
         credential=_passkey_credential_from_args(args),
     )
 
@@ -953,108 +879,15 @@ def _totp_material_fields(
 
 
 async def _update_user_groups_from_args(
-    session: AsyncSession,
+    management: AuthManagementStore,
     args: AuthmgrArgs,
 ) -> Result[dict[str, Any]]:
     if not (args.add_groups or args.remove_groups or args.set_groups):
         return Result.ok({})
 
-    user, target_error = await resolve_user_target(session, args.target)
-    if target_error is not None:
-        return Result.failure(target_error, target_error_message(target_error))
-    if user is None:
-        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
-
-    if args.set_groups:
-        replacement_group_result = await _resolve_group_targets_for_set(
-            session,
-            args.set_groups,
-        )
-        if replacement_group_result.is_failure():
-            return replacement_group_result
-        replacement_group_ids = cast(
-            list[UUID],
-            (replacement_group_result.value or {}).get("group_ids", []),
-        )
-
-        await session.execute(delete(GroupUser).where(GroupUser.user_id == user.id))
-        for group_id in dict.fromkeys(replacement_group_ids):
-            session.add(GroupUser(group_id=group_id, user_id=user.id))
-        await session.commit()
-
-    for group_target in args.add_groups:
-        result = await add_user_to_group_for_management(
-            session,
-            group_target=group_target,
-            user_target=args.target,
-        )
-        if result.is_failure():
-            return result
-
-    for group_target in args.remove_groups:
-        result = await remove_user_from_group_for_management(
-            session,
-            group_target=group_target,
-            user_target=args.target,
-        )
-        if result.is_failure():
-            return result
-
-    return Result.ok(user_record(user))
-
-
-async def _resolve_group_targets_for_set(
-    session: AsyncSession,
-    group_targets: tuple[str, ...],
-) -> Result[dict[str, Any]]:
-    unique_targets = tuple(dict.fromkeys(group_targets))
-    groups_by_abbrev = {
-        group.abbrev: group
-        for group in (
-            await session.execute(select(Group).where(Group.abbrev.in_(unique_targets)))
-        )
-        .scalars()
-        .all()
-    }
-    parsed_ids: dict[str, UUID] = {}
-    invalid_targets: set[str] = set()
-    for target in unique_targets:
-        if target in groups_by_abbrev:
-            continue
-        try:
-            parsed_ids[target] = UUID(target)
-        except ValueError:
-            invalid_targets.add(target)
-
-    groups_by_id: dict[UUID, Group] = {}
-    if parsed_ids:
-        groups_by_id = {
-            group.id: group
-            for group in (
-                await session.execute(
-                    select(Group).where(Group.id.in_(parsed_ids.values()))
-                )
-            )
-            .scalars()
-            .all()
-        }
-
-    group_ids = []
-    for target in group_targets:
-        if target in groups_by_abbrev:
-            group_ids.append(groups_by_abbrev[target].id)
-            continue
-
-        if target in invalid_targets:
-            return Result.failure(
-                ERROR_INVALID_GROUP_ID,
-                group_target_error_message(ERROR_INVALID_GROUP_ID),
-            )
-
-        group_id = parsed_ids[target]
-        group = groups_by_id.get(group_id)
-        if group is None:
-            return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
-        group_ids.append(group.id)
-
-    return Result.ok({"group_ids": group_ids})
+    return await management.update_user_groups(
+        target=args.target,
+        add_group_targets=args.add_groups,
+        remove_group_targets=args.remove_groups,
+        set_group_targets=args.set_groups,
+    )

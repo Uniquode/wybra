@@ -35,6 +35,7 @@ from wybra.media import (
     MediaNotFoundError,
     MediaSettings,
 )
+from wybra.media.persistence import SqlAlchemyMediaCatalogueRepository
 from wybra.profile import (
     DEFAULT_EDITABLE_PROFILE_FIELDS,
     PROFILE_FIELD_METADATA,
@@ -51,6 +52,7 @@ from wybra.profile import (
 )
 from wybra.profile.forms import ProfileEditForm
 from wybra.profile.models import UserPhoneContact, UserProfile
+from wybra.profile.persistence import SqlAlchemyProfileRepository
 from wybra.profile.routes import profile_router
 from wybra.profile.validation import validate_profile
 from wybra.site import Site, SiteCapabilityError, start
@@ -65,6 +67,13 @@ from wybra.widgets.navigation import (
 )
 
 _CREATED_SITES: list[Site] = []
+
+
+def _profile_capability(site: Site) -> SiteProfileCapability:
+    return SiteProfileCapability(
+        site.capability_proxy(MediaCapability),
+        SqlAlchemyProfileRepository(site.capability_proxy(DatabaseCapability)),
+    )
 
 
 def _resource_text(package: str, resource_path: str) -> str:
@@ -160,7 +169,6 @@ class ProfileTemplateStub:
 
 class AuthCapabilityStub:
     settings = None
-    fastapi_users = None
 
     def __init__(self, user: ProfileUser | None) -> None:
         self._user = user
@@ -236,7 +244,7 @@ def _profile_route_site(
     )
     site.provide_capability(
         ProfileCapability,
-        SiteProfileCapability(site.capability_proxy(MediaCapability)),
+        _profile_capability(site),
     )
     site.require_capability(ProfileCapability).media.finalise_optional()
     site.provide_capability(FormsCapability, DefaultFormsCapability(app.state.csrf))
@@ -273,7 +281,7 @@ def _widget_site(
     site.provide_capability(AuthCapability, AuthCapabilityStub(user))
     site.provide_capability(
         ProfileCapability,
-        SiteProfileCapability(site.capability_proxy(MediaCapability)),
+        _profile_capability(site),
     )
     app.state.site = site
     app.state.widgets_settings = WidgetsSettings()
@@ -500,14 +508,7 @@ async def test_profile_edit_route_renders_without_creating_profile(
     assert response.status_code == 200
     assert "profile/pages/edit.html" in response.text
     assert "preferred_name=" in response.text
-    async with site.require_capability(DatabaseCapability).session() as session:
-        assert (
-            await site.require_capability(ProfileCapability).get_profile(
-                session,
-                user.id,
-            )
-            is None
-        )
+    assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
 
 
 @pytest.mark.anyio
@@ -581,11 +582,7 @@ async def test_profile_edit_route_post_creates_profile(
 
     assert response.status_code == 303
     assert response.headers["location"] == "http://testserver/profile"
-    async with site.require_capability(DatabaseCapability).session() as session:
-        profile = await site.require_capability(ProfileCapability).get_profile(
-            session,
-            user.id,
-        )
+    profile = await site.require_capability(ProfileCapability).get_profile(user.id)
     assert profile is not None
     assert profile.preferred_name == "David"
     assert profile.display_name == "David Nugent"
@@ -621,14 +618,7 @@ async def test_profile_edit_route_valid_noop_returns_to_invoking_page(
 
     assert response.status_code == 303
     assert response.headers["location"] == "/account"
-    async with site.require_capability(DatabaseCapability).session() as session:
-        assert (
-            await site.require_capability(ProfileCapability).get_profile(
-                session,
-                user.id,
-            )
-            is None
-        )
+    assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
 
 
 @pytest.mark.anyio
@@ -668,11 +658,7 @@ async def test_profile_edit_route_clears_existing_profile_fields(
     )
 
     assert response.status_code == 303
-    async with site.require_capability(DatabaseCapability).session() as session:
-        profile = await site.require_capability(ProfileCapability).get_profile(
-            session,
-            user.id,
-        )
+    profile = await site.require_capability(ProfileCapability).get_profile(user.id)
     assert profile is not None
     assert profile.preferred_name is None
     assert profile.display_name is None
@@ -705,14 +691,7 @@ async def test_profile_edit_route_re_renders_invalid_form(
     assert response.status_code == 400
     assert "preferred_name=David" in response.text
     assert "profile_link_website:Profile link URL scheme" in response.text
-    async with site.require_capability(DatabaseCapability).session() as session:
-        assert (
-            await site.require_capability(ProfileCapability).get_profile(
-                session,
-                user.id,
-            )
-            is None
-        )
+    assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
 
 
 @pytest.mark.anyio
@@ -750,11 +729,7 @@ async def test_profile_edit_route_ignores_disabled_submitted_fields(
     )
 
     assert response.status_code == 303
-    async with site.require_capability(DatabaseCapability).session() as session:
-        profile = await site.require_capability(ProfileCapability).get_profile(
-            session,
-            user.id,
-        )
+    profile = await site.require_capability(ProfileCapability).get_profile(user.id)
     assert profile is not None
     assert profile.preferred_name == "David"
     assert profile.bio == "Existing bio"
@@ -1428,7 +1403,7 @@ async def test_profile_image_descriptor_uses_email_initial_without_media(
     tmp_path: Path,
 ) -> None:
     site = _site_with_database(tmp_path)
-    capability = SiteProfileCapability(site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
     capability.media.finalise_optional()
 
     image = await capability.profile_image_for_user(
@@ -1445,19 +1420,17 @@ async def test_profile_capability_saves_phone_contact(
     tmp_path: Path,
 ) -> None:
     site = _site_with_database(tmp_path)
-    capability = SiteProfileCapability(site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
 
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        contact = await capability.save_phone_contact(
-            session,
-            user_id,
-            number="0412 345 678",
-            country_code="AU",
-            subdivision_code="AU-VIC",
-        )
+    contact = await capability.save_phone_contact(
+        user_id,
+        number="0412 345 678",
+        country_code="AU",
+        subdivision_code="AU-VIC",
+    )
 
     assert contact.user_id == user_id
     assert contact.country_code == "AU"
@@ -1473,24 +1446,22 @@ async def test_profile_capability_saves_enabled_profile_fields(
     tmp_path: Path,
 ) -> None:
     site = _site_with_database(tmp_path)
-    capability = SiteProfileCapability(site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
 
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        profile = await capability.save_profile_fields(
-            session,
-            user_id,
-            {
-                "preferred_name": " David ",
-                "display_name": "David Nugent",
-                "pronouns": {"direct": "he", "possessive": "his"},
-                "profile_links": {"website": "https://example.test/profile"},
-                "bio": "Hello <script>alert(1)</script>",
-            },
-            settings=ProfileSettings(),
-        )
+    profile = await capability.save_profile_fields(
+        user_id,
+        {
+            "preferred_name": " David ",
+            "display_name": "David Nugent",
+            "pronouns": {"direct": "he", "possessive": "his"},
+            "profile_links": {"website": "https://example.test/profile"},
+            "bio": "Hello <script>alert(1)</script>",
+        },
+        settings=ProfileSettings(),
+    )
 
     assert profile.user_id == user_id
     assert profile.preferred_name == "David"
@@ -1508,18 +1479,16 @@ async def test_profile_capability_rejects_disabled_profile_fields(
     tmp_path: Path,
 ) -> None:
     site = _site_with_database(tmp_path)
-    capability = SiteProfileCapability(site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
 
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        with pytest.raises(ProfileInputError, match="not editable"):
-            await capability.save_profile_fields(
-                session,
-                uuid.uuid4(),
-                {"bio": "not allowed"},
-                settings=ProfileSettings(editable_fields=("preferred_name",)),
-            )
+    with pytest.raises(ProfileInputError, match="not editable"):
+        await capability.save_profile_fields(
+            uuid.uuid4(),
+            {"bio": "not allowed"},
+            settings=ProfileSettings(editable_fields=("preferred_name",)),
+        )
 
 
 @pytest.mark.anyio
@@ -1527,25 +1496,22 @@ async def test_profile_capability_validates_profile_links_and_bio_length(
     tmp_path: Path,
 ) -> None:
     site = _site_with_database(tmp_path)
-    capability = SiteProfileCapability(site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
 
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        with pytest.raises(ProfileInputError, match="URL scheme"):
-            await capability.save_profile_fields(
-                session,
-                uuid.uuid4(),
-                {"profile_links": {"website": "javascript:alert(1)"}},
-                settings=ProfileSettings(),
-            )
-        with pytest.raises(ProfileInputError, match="Bio"):
-            await capability.save_profile_fields(
-                session,
-                uuid.uuid4(),
-                {"bio": "x" * 1025},
-                settings=ProfileSettings(),
-            )
+    with pytest.raises(ProfileInputError, match="URL scheme"):
+        await capability.save_profile_fields(
+            uuid.uuid4(),
+            {"profile_links": {"website": "javascript:alert(1)"}},
+            settings=ProfileSettings(),
+        )
+    with pytest.raises(ProfileInputError, match="Bio"):
+        await capability.save_profile_fields(
+            uuid.uuid4(),
+            {"bio": "x" * 1025},
+            settings=ProfileSettings(),
+        )
 
 
 @pytest.mark.anyio
@@ -1553,7 +1519,7 @@ async def test_profile_capability_resets_phone_verification_on_number_edit(
     tmp_path: Path,
 ) -> None:
     site = _site_with_database(tmp_path)
-    capability = SiteProfileCapability(site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
@@ -1569,13 +1535,12 @@ async def test_profile_capability_resets_phone_verification_on_number_edit(
         )
         session.add(contact)
         await session.flush()
-        edited = await capability.save_phone_contact(
-            session,
-            user_id,
-            contact_id=contact.id,
-            number="0412 345 679",
-            country_code="AU",
-        )
+    edited = await capability.save_phone_contact(
+        user_id,
+        contact_id=contact.id,
+        number="0412 345 679",
+        country_code="AU",
+    )
 
     assert edited.id == contact.id
     assert edited.normalised_number == "+61412345679"
@@ -1587,7 +1552,7 @@ async def test_profile_capability_recovery_eligibility_requires_verified_unique_
     tmp_path: Path,
 ) -> None:
     site = _site_with_database(tmp_path)
-    capability = SiteProfileCapability(site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
@@ -1636,12 +1601,9 @@ async def test_profile_capability_recovery_eligibility_requires_verified_unique_
         session.add_all([eligible, duplicate, other_duplicate, fixed_line, unverified])
         await session.flush()
 
-        contacts = await capability.recovery_eligible_phone_contacts(
-            session,
-            user_id,
-        )
+    contacts = await capability.recovery_eligible_phone_contacts(user_id)
 
-    assert contacts == (eligible,)
+    assert [contact.id for contact in contacts] == [eligible.id]
 
 
 @pytest.mark.anyio
@@ -1650,10 +1612,12 @@ async def test_profile_image_descriptor_resolves_media_reference(
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
 ) -> None:
     site = _site_with_database(tmp_path)
-    capability = SiteProfileCapability(media=site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
     media_capability = FilesystemMediaCapability(
         MediaSettings(root=tmp_path),
-        database=site.capability_proxy(DatabaseCapability),
+        catalogue=SqlAlchemyMediaCatalogueRepository(
+            site.capability_proxy(DatabaseCapability)
+        ),
     )
     site.provide_capability(
         MediaCapability,
@@ -1738,7 +1702,7 @@ async def test_profile_image_descriptor_falls_back_when_media_is_unavailable(
             return None
 
     site.provide_capability(MediaCapability, MissingMedia())
-    capability = SiteProfileCapability(media=site.capability_proxy(MediaCapability))
+    capability = _profile_capability(site)
 
     image = await capability.profile_image_for_user(
         ProfileUser(id=uuid.uuid4(), email="david@example.test"),

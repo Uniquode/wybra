@@ -9,7 +9,8 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-from fastapi_users_db_sqlalchemy import generics
+
+from wybra.db import types as generics
 
 revision: str = "34736375e2f8"
 down_revision: str | Sequence[str] | None = None

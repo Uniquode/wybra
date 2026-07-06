@@ -20,11 +20,6 @@ import pytest
 from click.testing import CliRunner
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Request
-from fastapi_users.exceptions import (
-    InvalidPasswordException,
-    UserAlreadyExists,
-    UserNotExists,
-)
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,7 +39,13 @@ import wybra.auth.sessions as identity_sessions
 import wybra.db.migrate as migrate_module
 from support_database import sqlite_file_url, sync_sqlite_file_url
 from wybra.auth import ERROR_EMAIL_VERIFICATION_REQUIRED, ERROR_INACTIVE_USER
-from wybra.auth.accounts.manager import UserManager, create_user_manager
+from wybra.auth.accounts.manager import (
+    InvalidPasswordException,
+    UserAlreadyExists,
+    UserManager,
+    UserNotExists,
+    create_user_manager,
+)
 from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.models import (
     Base,
@@ -60,7 +61,12 @@ from wybra.auth.models import (
     User,
 )
 from wybra.auth.options import PROVIDER, IdentityOptions
-from wybra.auth.persistence import create_database_strategy, create_user_database
+from wybra.auth.persistence import (
+    SqlAlchemyAuthPersistenceCapability,
+    create_database_strategy,
+    create_user_database,
+)
+from wybra.auth.persistence.contracts import AuthPersistenceCapability
 from wybra.auth.persistence.database import (
     SQLITE_MEMORY_DATABASE_URL,
     parse_sqlite_database_url,
@@ -217,6 +223,10 @@ def create_auth_test_app(
         SqlAlchemyDatabaseCapability.from_connections(
             {"default": database, "reader": database, "writer": database}
         ),
+    )
+    site.provide_capability(
+        AuthPersistenceCapability,
+        SqlAlchemyAuthPersistenceCapability(site.capability_proxy(DatabaseCapability)),
     )
     app.state.site = site
     return app

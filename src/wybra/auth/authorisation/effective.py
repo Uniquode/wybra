@@ -5,11 +5,16 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wybra.auth.models import Group, GroupGroup, GroupScope, GroupUser, User
+from wybra.auth.models import Group, GroupGroup, GroupScope, GroupUser
+from wybra.auth.persistence.contracts import LocalUserRecord
 from wybra.auth.timestamps import current_timestamp
 
 
-def is_user_effectively_active(user: User, *, now: float | None = None) -> bool:
+def is_user_effectively_active(
+    user: LocalUserRecord,
+    *,
+    now: float | None = None,
+) -> bool:
     """Return whether the account is active at ``now``.
 
     ``expires_at`` is an exclusive upper bound: accounts are inactive at or

@@ -12,8 +12,9 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-from fastapi_users_db_sqlalchemy import generics
 from pydantic import EmailStr, TypeAdapter, ValidationError
+
+from wybra.db import types as generics
 
 revision: str = "b9c4f2a8d0a1"
 down_revision: str | Sequence[str] | None = "a8c2d1f7b9e0"

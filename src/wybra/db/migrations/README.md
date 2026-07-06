@@ -5,6 +5,10 @@ Host applications inject their settings through the command adapter and Alembic
 configuration options; this package does not import the host application
 settings module.
 
+`wybra-migrate` dispatches command operations through a Wybra migration backend
+interface. The default backend is Alembic, so these environment files remain
+the active implementation for current SQLAlchemy-backed projects.
+
 Revision files do not live in this directory. Modules that own SQLAlchemy models
 bundle their own revision history alongside those models, under a conventional
 `migrations/versions/` directory. The migration command discovers version

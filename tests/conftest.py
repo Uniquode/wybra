@@ -41,7 +41,12 @@ def isolate_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def create_database_schema() -> Callable[[Any], Awaitable[None]]:
     async def _create_database_schema(capability: Any) -> None:
-        async with capability.database.transaction() as db_session:
+        database = getattr(
+            capability,
+            "database",
+            getattr(getattr(capability, "catalogue", None), "database", None),
+        )
+        async with database.transaction() as db_session:
 
             def _create_all(sync_session: Any) -> None:
                 metadata.create_all(sync_session.get_bind())

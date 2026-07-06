@@ -20,6 +20,7 @@ from wybra.auth.models import (
     User,
 )
 from wybra.core.exceptions import ConfigurationError
+from wybra.db.persistence import Database, session_scope
 
 SCHEMA_MIGRATION_MESSAGE = (
     "Auth database schema is not up to date; run `uv run wybra-migrate init` "
@@ -43,6 +44,11 @@ class IdentitySchemaStatus:
     table_exists: bool
     missing_columns: tuple[str, ...]
     missing_tables: tuple[str, ...] = ()
+
+
+async def verify_identity_schema_for_database(database: Database) -> None:
+    async with session_scope(database.session_factory) as session:
+        await _verify_identity_schema(session)
 
 
 async def _verify_identity_schema(session: AsyncSession) -> None:

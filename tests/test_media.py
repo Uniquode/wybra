@@ -32,6 +32,7 @@ from wybra.media import (
     MediaStorageReadinessError,
 )
 from wybra.media.models import MediaItem
+from wybra.media.persistence import SqlAlchemyMediaCatalogueRepository
 from wybra.media.validation import validate_media
 from wybra.site import Site, SiteCapabilityError, start
 
@@ -100,7 +101,9 @@ def _capability(
     site = _site_with_media_database(tmp_path)
     return FilesystemMediaCapability(
         MediaSettings(root=tmp_path, url_mode=url_mode),
-        database=site.capability_proxy(DatabaseCapability),
+        catalogue=SqlAlchemyMediaCatalogueRepository(
+            site.capability_proxy(DatabaseCapability)
+        ),
     )
 
 
@@ -242,7 +245,9 @@ def test_media_capability_rejects_missing_writable_root(tmp_path: Path) -> None:
     site = _site_with_media_database(tmp_path)
     capability = FilesystemMediaCapability(
         MediaSettings(root=tmp_path / "missing"),
-        database=site.capability_proxy(DatabaseCapability),
+        catalogue=SqlAlchemyMediaCatalogueRepository(
+            site.capability_proxy(DatabaseCapability)
+        ),
     )
 
     with pytest.raises(MediaStorageReadinessError, match="does not exist") as excinfo:

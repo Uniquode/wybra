@@ -11,6 +11,7 @@ from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.delivery import IdentityDelivery
 from wybra.auth.models import InitialAdminBootstrap, User
 from wybra.auth.options import IdentityOptions
+from wybra.auth.persistence.contracts import LocalUserRecord
 
 _INITIAL_ADMIN_BOOTSTRAP_ID = 1
 _INITIAL_ADMIN_BOOTSTRAP_LOOKUP_ATTEMPTS = 10
@@ -26,7 +27,7 @@ class InitialAdminCredentials:
 @dataclass(frozen=True, slots=True)
 class InitialAdminBootstrapResult:
     created: bool
-    user: User
+    user: LocalUserRecord
 
 
 async def find_administrative_user(session: AsyncSession) -> User | None:

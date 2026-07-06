@@ -106,11 +106,103 @@ class MigrationStateError(RuntimeError):
     """Raised when a migration operation is invalid for the database state."""
 
 
+class UnsupportedMigrationOperationError(RuntimeError):
+    """Raised when a migration backend cannot support a command operation."""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationState:
     initialised: bool
     current_revisions: tuple[str, ...] = ()
     detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationContext:
+    """Resolved migration command context passed to migration backends."""
+
+    settings: MigrationSettings
+    config: Config
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionRequest:
+    """Backend-neutral revision-generation request."""
+
+    message: str
+    autogenerate: bool
+    head: str
+    splice: bool
+    branch_label: str | None
+    version_path: Path
+    rev_id: str | None
+    depends_on: str | None
+
+
+class MigrationBackend(Protocol):
+    """Backend boundary for migration lifecycle operations."""
+
+    def initialise(
+        self,
+        context: MigrationContext,
+        *,
+        admin_database_url: str | None,
+    ) -> None: ...
+
+    def upgrade(self, context: MigrationContext, revision: str) -> None: ...
+
+    def downgrade(self, context: MigrationContext, revision: str) -> None: ...
+
+    def current(self, context: MigrationContext) -> None: ...
+
+    def history(self, context: MigrationContext) -> None: ...
+
+    def revision(
+        self,
+        context: MigrationContext,
+        request: RevisionRequest,
+    ) -> None: ...
+
+
+class AlembicMigrationBackend:
+    """Alembic-backed migration backend."""
+
+    def initialise(
+        self,
+        context: MigrationContext,
+        *,
+        admin_database_url: str | None,
+    ) -> None:
+        _initialise_database(context.config, admin_database_url)
+
+    def upgrade(self, context: MigrationContext, revision: str) -> None:
+        _upgrade_initialised_database(context.config, revision)
+
+    def downgrade(self, context: MigrationContext, revision: str) -> None:
+        command.downgrade(context.config, revision)
+
+    def current(self, context: MigrationContext) -> None:
+        _show_current_revision(context.config)
+
+    def history(self, context: MigrationContext) -> None:
+        command.history(context.config)
+
+    def revision(
+        self,
+        context: MigrationContext,
+        request: RevisionRequest,
+    ) -> None:
+        command.revision(
+            context.config,
+            message=request.message,
+            autogenerate=request.autogenerate,
+            head=request.head,
+            splice=request.splice,
+            branch_label=request.branch_label,
+            version_path=request.version_path,
+            rev_id=request.rev_id,
+            depends_on=request.depends_on,
+        )
 
 
 def _database_url_option[F: Callable[..., Any]](function: F) -> F:
@@ -166,7 +258,10 @@ def create_migrate_command(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            lambda config: _initialise_database(config, admin_database_url),
+            lambda backend, context: backend.initialise(
+                context,
+                admin_database_url=admin_database_url,
+            ),
         )
 
     @migrate_command.command("upgrade", help="Upgrade schema revisions.")
@@ -180,7 +275,7 @@ def create_migrate_command(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            lambda config: _upgrade_initialised_database(config, revision),
+            lambda backend, context: backend.upgrade(context, revision),
         )
 
     @migrate_command.command("downgrade", help="Downgrade schema revisions.")
@@ -194,7 +289,7 @@ def create_migrate_command(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            lambda config: command.downgrade(config, revision),
+            lambda backend, context: backend.downgrade(context, revision),
         )
 
     @migrate_command.command("current", help="Show the current database revision.")
@@ -205,7 +300,7 @@ def create_migrate_command(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            _show_current_revision,
+            lambda backend, context: backend.current(context),
         )
 
     @migrate_command.command("history", help="Show migration history.")
@@ -216,7 +311,7 @@ def create_migrate_command(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            command.history,
+            lambda backend, context: backend.history(context),
         )
 
     @migrate_command.command("revision", help=REVISION_HELP)
@@ -306,7 +401,7 @@ def _run_migration(
     settings_loader: MigrationSettingsLoader,
     database_url: str | None,
     config_source: str | None,
-    operation: Callable[[Config], None],
+    operation: Callable[[MigrationBackend, MigrationContext], None],
 ) -> int:
     try:
         configure_cli_logging()
@@ -316,7 +411,8 @@ def _run_migration(
             config_source,
         )
         configure_cli_logging(settings.app_config)
-        config = build_alembic_config(settings)
+        context = build_migration_context(settings)
+        backend: MigrationBackend = AlembicMigrationBackend()
     except (
         LoggingConfigurationError,
         MigrationConfigurationError,
@@ -326,7 +422,7 @@ def _run_migration(
         return 1
 
     try:
-        operation(config)
+        operation(backend, context)
     except (
         MigrationConfigurationError,
         MigrationConfigError,
@@ -336,6 +432,9 @@ def _run_migration(
         return 1
     except MigrationStateError as exc:
         logger.error("migration: failed: %s", exc)
+        return 1
+    except UnsupportedMigrationOperationError as exc:
+        logger.error("migration backend: unsupported: %s", exc)
         return 1
     except DatabaseProvisioningError as exc:
         logger.error("provisioning: failed: %s", exc)
@@ -373,10 +472,11 @@ def _run_revision(
             settings.modules,
         )
         version_path.mkdir(parents=True, exist_ok=True)
-        config = build_alembic_config(
+        context = build_migration_context(
             settings,
             additional_version_locations=(version_path,),
         )
+        backend: MigrationBackend = AlembicMigrationBackend()
     except (
         LoggingConfigurationError,
         MigrationConfigurationError,
@@ -386,16 +486,18 @@ def _run_revision(
         return 1
 
     try:
-        command.revision(
-            config,
-            message=message,
-            autogenerate=autogenerate,
-            head=head,
-            splice=splice,
-            branch_label=branch_label,
-            version_path=version_path,
-            rev_id=rev_id,
-            depends_on=depends_on,
+        backend.revision(
+            context,
+            RevisionRequest(
+                message=message,
+                autogenerate=autogenerate,
+                head=head,
+                splice=splice,
+                branch_label=branch_label,
+                version_path=version_path,
+                rev_id=rev_id,
+                depends_on=depends_on,
+            ),
         )
     except MigrationConfigError as exc:
         logger.error("configuration: failed: %s", exc)
@@ -512,6 +614,20 @@ def build_alembic_config(
         config.set_main_option("app_config", settings.app_config.config_path.as_posix())
     config.attributes[LOGGING_CONFIG_ATTRIBUTE] = _logging_config_for_settings(settings)
     return config
+
+
+def build_migration_context(
+    settings: MigrationSettings,
+    *,
+    additional_version_locations: Sequence[Path] = (),
+) -> MigrationContext:
+    return MigrationContext(
+        settings=settings,
+        config=build_alembic_config(
+            settings,
+            additional_version_locations=additional_version_locations,
+        ),
+    )
 
 
 def _logging_config_for_settings(settings: MigrationSettings) -> dict[str, Any]:

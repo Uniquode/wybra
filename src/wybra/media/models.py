@@ -3,11 +3,11 @@ from __future__ import annotations
 import time
 import uuid
 
-from fastapi_users_db_sqlalchemy.generics import GUID
 from sqlalchemy import Float, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from wybra.db.models import Base, metadata
+from wybra.db.types import GUID
 
 
 class MediaItem(Base):

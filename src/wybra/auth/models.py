@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from fastapi_users_db_sqlalchemy import SQLAlchemyBaseUserTableUUID
-from fastapi_users_db_sqlalchemy.access_token import SQLAlchemyBaseAccessTokenTableUUID
-from fastapi_users_db_sqlalchemy.generics import GUID
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -25,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from wybra.auth.email_normalisation import normalise_email
 from wybra.auth.timestamps import current_timestamp
 from wybra.db.models import Base
+from wybra.db.types import GUID, TIMESTAMPAware, now_utc
 
 
 class InitialAdminBootstrap(Base):
@@ -162,7 +161,7 @@ class IdentityUserEmail(Base):
         return normalise_email(value)
 
 
-class User(SQLAlchemyBaseUserTableUUID, Base):
+class User(Base):
     """Canonical local user account."""
 
     __tablename__ = "identity_user"
@@ -176,10 +175,28 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     )
 
     # Store Unix timestamps as `float` for cross-database consistency.
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    email: Mapped[str] = mapped_column(
+        String(length=320),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
     hashed_password: Mapped[str | None] = mapped_column(
         String(length=1024),
         nullable=True,
     )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_superuser: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     password_login_enabled: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
@@ -239,10 +256,8 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
 if TYPE_CHECKING:
 
     class LocalUser(User):
-        """Local account view for the current FastAPI Users type boundary."""
+        """Local account view for password-backed authentication paths."""
 
-        # FastAPI Users currently requires a non-null hash in its user protocol.
-        # Runtime LocalUser is still User, whose password hash may be absent.
         hashed_password: str
 
 else:
@@ -495,11 +510,18 @@ class GroupGroup(Base):
     )
 
 
-class AccessToken(SQLAlchemyBaseAccessTokenTableUUID, Base):
-    """Server-side browser session token managed by FastAPI Users."""
+class AccessToken(Base):
+    """Server-side browser session token."""
 
     __tablename__ = "identity_access_token"
 
+    token: Mapped[str] = mapped_column(String(length=43), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPAware(timezone=True),
+        index=True,
+        nullable=False,
+        default=now_utc,
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("identity_user.id", ondelete="cascade"),
