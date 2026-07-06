@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from http.client import HTTPConnection
 from pathlib import Path
 from textwrap import dedent
@@ -15,6 +16,7 @@ SMOKE_PATH = "/__wybra_smoke__"
 EXPECTED_BODY = "wybra smoke ok\n"
 STARTUP_TIMEOUT_SECONDS = 20.0
 SHUTDOWN_TIMEOUT_SECONDS = 10.0
+START_ATTEMPTS = 3
 
 
 def main() -> int:
@@ -22,17 +24,14 @@ def main() -> int:
         project_root = Path(directory)
         _write_host_app(project_root)
         config_path = _write_app_config(project_root)
-        port = _unused_loopback_port()
-        process = _start_runserver(project_root, config_path, port)
-        try:
-            _wait_for_response(port, process)
-        except SmokeFailure as exc:
-            output = _stop_process(process)
-            print(str(exc), file=sys.stderr)
-            _print_process_output(output)
+        runserver, failure = _start_responding_runserver(project_root, config_path)
+        if runserver is None:
+            assert failure is not None
+            print(failure.message, file=sys.stderr)
+            _print_process_output(failure.output)
             return 1
 
-        _stop_process(process)
+        _stop_process(runserver)
 
     return 0
 
@@ -103,36 +102,61 @@ def _unused_loopback_port() -> int:
         return int(probe.getsockname()[1])
 
 
+def _start_responding_runserver(
+    project_root: Path,
+    config_path: Path,
+) -> tuple[RunserverProcess | None, SmokeAttemptFailure | None]:
+    last_failure: SmokeAttemptFailure | None = None
+    for attempt in range(START_ATTEMPTS):
+        port = _unused_loopback_port()
+        runserver = _start_runserver(project_root, config_path, port, attempt)
+        try:
+            _wait_for_response(port, runserver.process)
+            return runserver, None
+        except SmokeFailure as exc:
+            output = _stop_process(runserver)
+            last_failure = SmokeAttemptFailure(str(exc), output)
+            if attempt + 1 < START_ATTEMPTS and _is_port_bind_failure(output):
+                continue
+            return None, last_failure
+
+    return None, last_failure
+
+
 def _start_runserver(
     project_root: Path,
     config_path: Path,
     port: int,
-) -> subprocess.Popen[str]:
+    attempt: int,
+) -> RunserverProcess:
     env = os.environ.copy()
     env["PYTHONPATH"] = _python_path_with(project_root, env.get("PYTHONPATH"))
-    return subprocess.Popen(
-        [
-            "uv",
-            "run",
-            "wybra-runserver",
-            "--project",
-            project_root.as_posix(),
-            "--config",
-            config_path.name,
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--no-reload",
-        ],
-        cwd=Path(__file__).resolve().parents[1],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        creationflags=_subprocess_creation_flags(),
-        start_new_session=os.name != "nt",
-    )
+    output_path = project_root / f"runserver-{attempt}.log"
+    with output_path.open("w", encoding="utf-8") as output:
+        process = subprocess.Popen(
+            [
+                "uv",
+                "run",
+                "wybra-runserver",
+                "--project",
+                project_root.as_posix(),
+                "--config",
+                config_path.name,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--no-reload",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=_subprocess_creation_flags(),
+            start_new_session=os.name != "nt",
+        )
+    return RunserverProcess(process=process, output_path=output_path)
 
 
 def _python_path_with(project_root: Path, existing: str | None) -> str:
@@ -174,14 +198,16 @@ def _http_get(port: int, path: str) -> tuple[int, str]:
         connection.close()
 
 
-def _stop_process(process: subprocess.Popen[str]) -> tuple[str, str]:
-    if process.poll() is None:
-        _request_process_exit(process)
+def _stop_process(runserver: RunserverProcess) -> str:
+    process = runserver.process
     try:
-        return process.communicate(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        if process.poll() is None:
+            _request_process_exit(process)
+        process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         _kill_process_tree(process)
-        return process.communicate(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+    return _read_process_output(runserver.output_path)
 
 
 def _subprocess_creation_flags() -> int:
@@ -223,14 +249,42 @@ def _kill_process_tree(process: subprocess.Popen[str]) -> None:
             process.kill()
 
 
-def _print_process_output(output: tuple[str, str]) -> None:
-    stdout, stderr = output
-    if stdout:
-        print("wybra-runserver stdout:", file=sys.stderr)
-        print(stdout, file=sys.stderr)
-    if stderr:
-        print("wybra-runserver stderr:", file=sys.stderr)
-        print(stderr, file=sys.stderr)
+def _read_process_output(output_path: Path) -> str:
+    if output_path.exists():
+        return output_path.read_text(encoding="utf-8", errors="replace")
+    return ""
+
+
+def _is_port_bind_failure(output: str) -> bool:
+    lower_output = output.lower()
+    return any(
+        phrase in lower_output
+        for phrase in (
+            "address already in use",
+            "only one usage of each socket address",
+            "error while attempting to bind",
+            "errno 98",
+            "winerror 10048",
+        )
+    )
+
+
+def _print_process_output(output: str) -> None:
+    if output:
+        print("wybra-runserver output:", file=sys.stderr)
+        print(output, file=sys.stderr)
+
+
+@dataclass(frozen=True, slots=True)
+class RunserverProcess:
+    process: subprocess.Popen[str]
+    output_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class SmokeAttemptFailure:
+    message: str
+    output: str
 
 
 class SmokeFailure(RuntimeError):

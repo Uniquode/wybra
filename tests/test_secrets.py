@@ -414,24 +414,18 @@ class TestKeychainSource:
         with pytest.raises(MissingSecretSourceDependencyError, match="`keychain`"):
             driver.exists("api-token")
 
-    @macos_keychain
-    def test_macos_keychain_missing_key_is_reported(self) -> None:
-        driver = KeychainSecretSourceDriver(
-            KeychainSecretSourceSettings(appname=_keyring_probe_service())
-        )
-
-        assert driver.exists(_keyring_probe_username()) is False
-
-    @linux_secret_service
-    def test_linux_secret_service_missing_key_is_reported(self) -> None:
-        driver = KeychainSecretSourceDriver(
-            KeychainSecretSourceSettings(appname=_keyring_probe_service())
-        )
-
-        assert driver.exists(_keyring_probe_username()) is False
-
-    @windows_credential_manager
-    def test_windows_credential_manager_missing_key_is_reported(self) -> None:
+    @pytest.mark.parametrize(
+        "_probe_platform",
+        [
+            pytest.param("macos", id="macos", marks=macos_keychain),
+            pytest.param("linux", id="linux", marks=linux_secret_service),
+            pytest.param("windows", id="windows", marks=windows_credential_manager),
+        ],
+    )
+    def test_platform_keychain_missing_key_is_reported(
+        self,
+        _probe_platform: str,
+    ) -> None:
         driver = KeychainSecretSourceDriver(
             KeychainSecretSourceSettings(appname=_keyring_probe_service())
         )
