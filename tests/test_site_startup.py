@@ -33,7 +33,7 @@ from wybra.core.routes import inspect_route_tree
 from wybra.db.config import ENV_DATABASE_URL
 from wybra.errors.capabilities import ErrorHandlingCapability
 from wybra.errors.handlers import EmptyBodyResponseException
-from wybra.site import start
+from wybra.site import _local_file_uri_path, start
 from wybra.site_config import app_config_from_site
 
 
@@ -757,6 +757,13 @@ async def test_start_accepts_file_uri_source_string(tmp_path: Path) -> None:
     site = await start(FastAPI(), config_source=config_path.as_uri())
 
     assert site.modules == ("wybra.assets",)
+
+
+def test_local_file_uri_path_normalises_windows_drive_paths() -> None:
+    assert (
+        _local_file_uri_path("/C:/Users/David%20N/app.toml", windows=True)
+        == "C:/Users/David N/app.toml"
+    )
 
 
 @pytest.mark.anyio
