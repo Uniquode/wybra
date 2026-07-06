@@ -214,7 +214,10 @@ def _stop_process(runserver: RunserverProcess) -> str:
         try:
             process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
-            pass
+            with suppress(OSError):
+                process.kill()
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
     return _read_process_output(runserver.output_path)
 
 

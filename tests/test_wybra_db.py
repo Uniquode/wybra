@@ -357,6 +357,24 @@ def test_resolve_database_url_leaves_absolute_and_non_sqlite_urls_unchanged(
     assert resolve_database_url(database_url, tmp_path) == database_url
 
 
+@pytest.mark.parametrize(
+    ("database_url", "suffix"),
+    (
+        ("sqlite+aiosqlite:///app.db", ""),
+        ("sqlite+aiosqlite:///app.db?cache=shared", "?cache=shared"),
+        ("sqlite+aiosqlite:///app.db?mode=rwc#fragment", "?mode=rwc#fragment"),
+    ),
+)
+def test_resolve_database_url_preserves_relative_suffix(
+    tmp_path: Path,
+    database_url: str,
+    suffix: str,
+) -> None:
+    assert resolve_database_url(database_url, tmp_path) == (
+        f"{sqlite_file_url(tmp_path / 'app.db')}{suffix}"
+    )
+
+
 def test_wybra_db_owns_default_migration_script_location() -> None:
     script_root = migration_script_root()
 
