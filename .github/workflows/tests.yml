@@ -49,3 +49,17 @@ jobs:
 
       - name: Build package
         run: uv build
+
+  tests-required-check:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: tests
+    if: ${{ always() }}
+
+    steps:
+      - name: Require matrix tests to pass
+        run: |
+          if [ "${{ needs.tests.result }}" != "success" ]; then
+            echo "Matrix tests result: ${{ needs.tests.result }}"
+            exit 1
+          fi
