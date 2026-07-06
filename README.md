@@ -63,6 +63,10 @@ uv run ty check src/
 uv build
 ```
 
+Windows compatibility is validated in CI alongside Linux. See
+[`docs/WINDOWS.md`](docs/WINDOWS.md) for the Windows runner coverage, local
+check commands, SQLite URL guidance, and optional OS-service boundaries.
+
 The framework project does not contain host application settings, `app.toml`,
 or change-management artifacts. Host-facing commands resolve the configured
 application through the host app config file selected by `--config`,

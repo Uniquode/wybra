@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -528,7 +529,7 @@ def _file_config_path(config_source: str) -> Path:
             )
         if not parsed.path:
             raise ConfigSourceError("file:// config source URI must include a path.")
-        return Path(unquote(parsed.path))
+        return Path(_local_file_uri_path(parsed.path))
 
     return Path(value)
 
@@ -542,6 +543,13 @@ def _is_config_source(value: object) -> TypeGuard[ConfigSource]:
 
 def _is_windows_absolute_path(value: str) -> bool:
     return re.match(r"^[A-Za-z]:(?:\\|/)", value) is not None
+
+
+def _local_file_uri_path(path: str, *, windows: bool = os.name == "nt") -> str:
+    decoded = unquote(path)
+    if windows and re.match(r"^/[A-Za-z]:(?:/|\\)", decoded):
+        return decoded[1:]
+    return decoded
 
 
 def _matches_capability_type(value: object, capability_type: type[object]) -> bool:

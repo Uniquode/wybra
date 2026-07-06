@@ -13,6 +13,7 @@ from provider_test_keys import (
 from provider_test_keys import (
     oidc_rsa_private_key,
 )
+from support_database import sqlite_file_url
 from wybra.auth.timestamps import current_timestamp
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
@@ -1325,7 +1326,7 @@ def _site_config_source(
             "config_path": tmp_path / "app.toml",
             "project_root": tmp_path,
             "modules": modules,
-            "database_url": f"sqlite+aiosqlite:///{tmp_path / 'app.sqlite3'}",
+            "database_url": sqlite_file_url(tmp_path / "app.sqlite3"),
         },
         "app.routes": {
             "prefixes": {

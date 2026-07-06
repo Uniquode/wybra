@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 import wybra.db.migrate as migrate_module
 import wybra.db.provisioning as provisioning_module
 import wybra.tools.migrate as tools_migrate
+from support_database import sqlite_file_url
 from wybra.core.composition import AppConfig, load_app_config
 from wybra.db.alembic_attributes import LOGGING_CONFIG_ATTRIBUTE
 from wybra.db.surfaces import discover_migration_version_locations
@@ -34,10 +35,6 @@ class MigrationCommandFixture:
 
     def cleanup(self) -> None:
         self.app_config.unlink(missing_ok=True)
-
-
-def sqlite_file_url(path: Path) -> str:
-    return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
 
 
 def create_migrate_command(

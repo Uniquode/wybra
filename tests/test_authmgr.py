@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import os
 import sqlite3
 import sys
 import tomllib
@@ -42,6 +43,7 @@ import wybra.auth.cli.authmgr.timestamps as authmgr_timestamps
 import wybra.auth.cli.authmgr.users as authmgr_users
 import wybra.auth.sessions as identity_sessions
 import wybra.db.migrate as migrate_module
+from support_database import sqlite_file_url, sync_sqlite_file_url
 from wybra.auth import ERROR_EMAIL_VERIFICATION_REQUIRED, ERROR_INACTIVE_USER
 from wybra.auth.accounts.manager import UserManager, create_user_manager
 from wybra.auth.accounts.schemas import UserCreate
@@ -180,10 +182,6 @@ class ResetPasswordDelivery:
     ) -> None:
         del request
         self.reset_tokens.append((user.email, token))
-
-
-def sqlite_file_url(path: Path) -> str:
-    return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
 
 
 def create_auth_test_app(
@@ -2468,7 +2466,8 @@ def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
 def test_migrate_upgrade_creates_user_management_metadata_columns(
     tmp_path: Path,
 ) -> None:
-    database_url = f"sqlite+aiosqlite:///{(tmp_path / 'metadata.sqlite3').as_posix()}"
+    database_path = tmp_path / "metadata.sqlite3"
+    database_url = sqlite_file_url(database_path)
 
     assert run_auth_migration(["--database-url", database_url, "init"]) == 0
     exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
@@ -2477,7 +2476,7 @@ def test_migrate_upgrade_creates_user_management_metadata_columns(
 
     from sqlalchemy import create_engine
 
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.sqlite3'}")
+    engine = create_engine(sync_sqlite_file_url(database_path))
     try:
         inspector = sqlalchemy_inspect(engine)
         columns = {column["name"] for column in inspector.get_columns("identity_user")}
@@ -2509,7 +2508,8 @@ def test_migrate_upgrade_creates_user_management_metadata_columns(
 def test_migrate_upgrade_creates_authorisation_group_tables(
     tmp_path: Path,
 ) -> None:
-    database_url = f"sqlite+aiosqlite:///{(tmp_path / 'groups.sqlite3').as_posix()}"
+    database_path = tmp_path / "groups.sqlite3"
+    database_url = sqlite_file_url(database_path)
 
     assert run_auth_migration(["--database-url", database_url, "init"]) == 0
     exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
@@ -2518,7 +2518,7 @@ def test_migrate_upgrade_creates_authorisation_group_tables(
 
     from sqlalchemy import create_engine
 
-    engine = create_engine(f"sqlite:///{tmp_path / 'groups.sqlite3'}")
+    engine = create_engine(sync_sqlite_file_url(database_path))
     try:
         inspector = sqlalchemy_inspect(engine)
         table_names = set(inspector.get_table_names())
@@ -2589,7 +2589,8 @@ def test_migrate_upgrade_creates_authorisation_group_tables(
 def test_migrate_upgrade_creates_identity_user_email_table(
     tmp_path: Path,
 ) -> None:
-    database_url = f"sqlite+aiosqlite:///{(tmp_path / 'user-email.sqlite3').as_posix()}"
+    database_path = tmp_path / "user-email.sqlite3"
+    database_url = sqlite_file_url(database_path)
 
     assert run_auth_migration(["--database-url", database_url, "init"]) == 0
     exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
@@ -2598,7 +2599,7 @@ def test_migrate_upgrade_creates_identity_user_email_table(
 
     from sqlalchemy import create_engine
 
-    engine = create_engine(f"sqlite:///{tmp_path / 'user-email.sqlite3'}")
+    engine = create_engine(sync_sqlite_file_url(database_path))
     try:
         inspector = sqlalchemy_inspect(engine)
         assert "identity_user_email" in set(inspector.get_table_names())
@@ -2638,7 +2639,8 @@ def test_migrate_upgrade_creates_identity_user_email_table(
 def test_migrate_upgrade_creates_webauthn_credential_table(
     tmp_path: Path,
 ) -> None:
-    database_url = f"sqlite+aiosqlite:///{(tmp_path / 'webauthn.sqlite3').as_posix()}"
+    database_path = tmp_path / "webauthn.sqlite3"
+    database_url = sqlite_file_url(database_path)
 
     assert run_auth_migration(["--database-url", database_url, "init"]) == 0
     exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
@@ -2647,7 +2649,7 @@ def test_migrate_upgrade_creates_webauthn_credential_table(
 
     from sqlalchemy import create_engine
 
-    engine = create_engine(f"sqlite:///{tmp_path / 'webauthn.sqlite3'}")
+    engine = create_engine(sync_sqlite_file_url(database_path))
     try:
         inspector = sqlalchemy_inspect(engine)
         assert "identity_webauthn_credential" in set(inspector.get_table_names())
@@ -4890,7 +4892,7 @@ def test_authmgr_interactive_password_mismatch_aborts_when_input_ends(
     )
 
     assert result.exit_code == 1
-    assert result.stdout == ""
+    assert result.stdout.strip() == ""
     assert "The two entered values do not match" in result.stderr
     assert "Aborted" in result.stderr
     assert identity_users_from_database(database_url) == []
@@ -4916,7 +4918,7 @@ def test_authmgr_interactive_password_prompt_retries_after_mismatch(
     )
 
     assert result.exit_code == 0
-    assert result.stdout == "created user: retry@example.com\n"
+    assert result.stdout.strip() == "created user: retry@example.com"
     assert "Password:" in result.stderr
     assert "The two entered values do not match" in result.stderr
     [user] = identity_users_from_database(database_url)
@@ -4990,7 +4992,7 @@ def test_authmgr_password_command_prompts_by_default(
     )
 
     assert result.exit_code == 0
-    assert result.stdout == "changed password: default-prompt@example.com\n"
+    assert result.stdout.strip() == "changed password: default-prompt@example.com"
     assert "Password:" in result.stderr
 
 
@@ -5276,24 +5278,51 @@ def test_authmgr_timezone_name_uses_available_tzinfo_name(
     assert authmgr_timestamps._timezone_name_from_tzinfo(tzinfo) == expected
 
 
-def test_auth_database_url_parser_handles_relative_and_absolute_sqlite_paths(
+def test_auth_database_url_parser_handles_relative_sqlite_paths(
     tmp_path: Path,
 ) -> None:
     relative_url = parse_sqlite_database_url("sqlite+aiosqlite:///relative.db")
-    absolute_url = parse_sqlite_database_url("sqlite+aiosqlite:////tmp/auth.db")
 
     assert relative_url is not None
     assert relative_url.path == Path("relative.db")
+    assert resolve_database_url(
+        "sqlite+aiosqlite:///relative.db", tmp_path
+    ) == sqlite_file_url(tmp_path / "relative.db")
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX absolute SQLite paths are not Windows file paths.",
+)
+def test_auth_database_url_parser_handles_posix_absolute_sqlite_paths(
+    tmp_path: Path,
+) -> None:
+    absolute_url = parse_sqlite_database_url("sqlite+aiosqlite:////tmp/auth.db")
+
     assert absolute_url is not None
     assert absolute_url.path == Path("/tmp/auth.db")
-    assert (
-        resolve_database_url("sqlite+aiosqlite:///relative.db", tmp_path)
-        == f"sqlite+aiosqlite:///{(tmp_path / 'relative.db').resolve().as_posix()}"
-    )
-    assert (
-        resolve_database_url("sqlite+aiosqlite:////tmp/auth.db", tmp_path)
-        == f"sqlite+aiosqlite:///{Path('/tmp/auth.db').resolve().as_posix()}"
-    )
+    assert resolve_database_url(
+        "sqlite+aiosqlite:////tmp/auth.db", tmp_path
+    ) == sqlite_file_url(Path("/tmp/auth.db"))
+
+
+def test_auth_database_url_parser_handles_windows_absolute_sqlite_path() -> None:
+    sqlite_url = parse_sqlite_database_url("sqlite+aiosqlite:///C:/data/auth.db")
+
+    assert sqlite_url is not None
+    assert sqlite_url.path.as_posix() == "C:/data/auth.db"
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows absolute SQLite URL resolution requires Windows path semantics.",
+)
+def test_auth_database_url_resolves_windows_absolute_sqlite_path(
+    tmp_path: Path,
+) -> None:
+    database_url = "sqlite+aiosqlite:///C:/data/auth.db"
+
+    assert resolve_database_url(database_url, tmp_path) == database_url
 
 
 def test_auth_database_url_rejects_sqlite_authority_form(tmp_path: Path) -> None:

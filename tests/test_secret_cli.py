@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 import wybra.secrets.cli as secret_cli
 import wybra.secrets.sources as secret_sources
+from support_database import sqlite_file_url
 from wybra.auth.mfa.storage import TOTP_ACTIVE_STATUS
 from wybra.auth.models import (
     IdentityProvider,
@@ -168,7 +169,7 @@ previous_keys = "SYSTEM_SECRET_KEYS_PREVIOUS"
 
 
 def _database_url(path: Path) -> str:
-    return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
+    return sqlite_file_url(path)
 
 
 async def _create_reencrypt_database(
