@@ -2,7 +2,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -12,13 +11,35 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from wybra.core.exceptions import ConfigurationError
+from wybra.db.urls import (
+    SQLITE_ASYNC_DATABASE_URL_PREFIX,
+    SQLITE_MEMORY_DATABASE_URL,
+    SUPPORTED_DATABASE_URL_PREFIXES,
+    SqliteDatabaseUrl,
+    is_memory_database_url,
+    is_supported_database_url,
+    parse_sqlite_database_url,
+)
+from wybra.db.urls import (
+    resolve_database_url as resolve_config_database_url,
+)
 from wybra.diagnostics.sqlalchemy import instrument_sqlalchemy_engine
 
-SQLITE_ASYNC_DATABASE_URL_PREFIX = "sqlite+aiosqlite:///"
-SQLITE_MEMORY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
-SUPPORTED_DATABASE_URL_PREFIXES = (
-    "sqlite+aiosqlite://",
-    "postgresql+asyncpg://",
+__all__ = (
+    "Database",
+    "SQLITE_ASYNC_DATABASE_URL_PREFIX",
+    "SQLITE_MEMORY_DATABASE_URL",
+    "SUPPORTED_DATABASE_URL_PREFIXES",
+    "SqliteDatabaseUrl",
+    "close_database",
+    "create_database",
+    "create_database_engine",
+    "create_session_factory",
+    "is_memory_database_url",
+    "is_supported_database_url",
+    "parse_sqlite_database_url",
+    "resolve_database_url",
+    "session_scope",
 )
 
 
@@ -26,68 +47,6 @@ SUPPORTED_DATABASE_URL_PREFIXES = (
 class Database:
     engine: AsyncEngine
     session_factory: async_sessionmaker[AsyncSession]
-
-
-@dataclass(frozen=True, slots=True)
-class SqliteDatabaseUrl:
-    path: Path
-    query: str = ""
-    fragment: str = ""
-
-    @property
-    def suffix(self) -> str:
-        value = f"?{self.query}" if self.query else ""
-        if self.fragment:
-            value = f"{value}#{self.fragment}"
-
-        return value
-
-
-def is_supported_database_url(database_url: str) -> bool:
-    return database_url.startswith(SUPPORTED_DATABASE_URL_PREFIXES)
-
-
-def is_memory_database_url(database_url: str) -> bool:
-    return database_url == SQLITE_MEMORY_DATABASE_URL
-
-
-def parse_sqlite_database_url(database_url: str) -> SqliteDatabaseUrl | None:
-    """Parse supported sqlite+aiosqlite URLs without authority components.
-
-    Supported path forms are explicit:
-
-    - ``sqlite+aiosqlite:///relative.db`` maps to ``relative.db``.
-    - ``sqlite+aiosqlite:////tmp/db.sqlite`` maps to ``/tmp/db.sqlite``.
-
-    Authority/netloc forms such as ``sqlite+aiosqlite://host/path`` are not
-    accepted, avoiding UNC-like ambiguity in package-owned configuration.
-    """
-
-    if is_memory_database_url(database_url):
-        return None
-
-    if not database_url.startswith(SQLITE_ASYNC_DATABASE_URL_PREFIX):
-        return None
-
-    parsed = urlsplit(database_url)
-    if parsed.scheme != "sqlite+aiosqlite" or parsed.netloc or not parsed.path:
-        return None
-
-    raw_path = parsed.path
-    if not raw_path.startswith("/"):
-        return None
-
-    leading_slashes = len(raw_path) - len(raw_path.lstrip("/"))
-    if leading_slashes == 1:
-        path = raw_path.removeprefix("/")
-    else:
-        path = f"/{raw_path.lstrip('/')}"
-
-    return SqliteDatabaseUrl(
-        path=Path(unquote(path)),
-        query=parsed.query,
-        fragment=parsed.fragment,
-    )
 
 
 def resolve_database_url(database_url: str, base_path: Path) -> str:
@@ -109,20 +68,8 @@ def resolve_database_url(database_url: str, base_path: Path) -> str:
                 "sqlite+aiosqlite:////absolute/path.db; authority forms such as "
                 "sqlite+aiosqlite://host/path are not supported."
             )
-    else:
-        sqlite_url = None
 
-    if sqlite_url is None:
-        return database_url
-
-    database_path = sqlite_url.path
-    if not database_path.is_absolute():
-        database_path = base_path / database_path
-
-    return (
-        f"{SQLITE_ASYNC_DATABASE_URL_PREFIX}"
-        f"{database_path.resolve().as_posix()}{sqlite_url.suffix}"
-    )
+    return resolve_config_database_url(database_url, base_path)
 
 
 def create_database_engine(database_url: str) -> AsyncEngine:

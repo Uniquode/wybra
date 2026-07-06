@@ -37,6 +37,7 @@ DATABASE_URL_TEXT_PATTERN = re.compile(
 @dataclass(frozen=True, slots=True)
 class SqliteDatabaseUrl:
     path: Path
+    is_absolute: bool = False
     query: str = ""
     fragment: str = ""
 
@@ -58,6 +59,12 @@ def is_memory_database_url(database_url: str) -> bool:
 
 
 def parse_sqlite_database_url(database_url: str) -> SqliteDatabaseUrl | None:
+    """Parse supported sqlite+aiosqlite URLs without authority components.
+
+    URL text determines path absoluteness so the same configuration resolves
+    consistently on POSIX and Windows hosts.
+    """
+
     if is_memory_database_url(database_url):
         return None
 
@@ -68,14 +75,21 @@ def parse_sqlite_database_url(database_url: str) -> SqliteDatabaseUrl | None:
     if parsed.scheme != "sqlite+aiosqlite" or parsed.netloc or not parsed.path:
         return None
 
-    path = parsed.path
-    if path.startswith("//"):
-        path = path[1:]
+    raw_path = parsed.path
+    if not raw_path.startswith("/"):
+        return None
+
+    leading_slashes = len(raw_path) - len(raw_path.lstrip("/"))
+    if leading_slashes == 1:
+        path = raw_path.removeprefix("/")
+        is_absolute = _is_windows_absolute_path_text(path)
     else:
-        path = path.removeprefix("/")
+        path = f"/{raw_path.lstrip('/')}"
+        is_absolute = True
 
     return SqliteDatabaseUrl(
         path=Path(unquote(path)),
+        is_absolute=is_absolute,
         query=parsed.query,
         fragment=parsed.fragment,
     )
@@ -87,15 +101,15 @@ def resolve_database_url(database_url: str, project_root: Path) -> str:
         return database_url
 
     database_path = sqlite_url.path
-    if database_path.is_absolute():
+    if sqlite_url.is_absolute:
         return database_url
-    if not database_path.is_absolute():
-        database_path = project_root / database_path
+    database_path = project_root / database_path
 
-    return (
-        f"{SQLITE_ASYNC_DATABASE_URL_PREFIX}"
-        f"{database_path.resolve().as_posix()}{sqlite_url.suffix}"
-    )
+    return f"{sqlite_file_url(database_path)}{sqlite_url.suffix}"
+
+
+def sqlite_file_url(path: Path) -> str:
+    return f"{SQLITE_ASYNC_DATABASE_URL_PREFIX}{path.resolve().as_posix()}"
 
 
 def sqlite_database_path(database_url: str) -> Path | None:
@@ -169,3 +183,7 @@ def _redact_query(query: str) -> str:
         for name, value in query_items
     ]
     return urlencode(redacted_items)
+
+
+def _is_windows_absolute_path_text(path: str) -> bool:
+    return re.match(r"^[A-Za-z]:(?:/|\\)", path) is not None

@@ -168,10 +168,6 @@ previous_keys = "SYSTEM_SECRET_KEYS_PREVIOUS"
     return path
 
 
-def _database_url(path: Path) -> str:
-    return sqlite_file_url(path)
-
-
 async def _create_reencrypt_database(
     database_url: str,
     *,
@@ -619,7 +615,7 @@ def test_reencrypt_secrets_dry_run_reports_without_writing_database_rows(
         "recovery-code",
         context="totp-recovery-code",
     )
-    database_url = _database_url(tmp_path / "reencrypt.sqlite3")
+    database_url = sqlite_file_url(tmp_path / "reencrypt.sqlite3")
     asyncio.run(
         _create_reencrypt_database(
             database_url,
@@ -690,7 +686,7 @@ def test_reencrypt_secrets_rewrites_previous_version_provider_and_totp_secrets(
         "recovery-code",
         context="totp-recovery-code",
     )
-    database_url = _database_url(tmp_path / "reencrypt.sqlite3")
+    database_url = sqlite_file_url(tmp_path / "reencrypt.sqlite3")
     asyncio.run(
         _create_reencrypt_database(
             database_url,
@@ -759,7 +755,7 @@ def test_reencrypt_secrets_skips_current_and_plaintext_values(
         "recovery-code",
         context="totp-recovery-code",
     )
-    database_url = _database_url(tmp_path / "reencrypt.sqlite3")
+    database_url = sqlite_file_url(tmp_path / "reencrypt.sqlite3")
     asyncio.run(
         _create_reencrypt_database(
             database_url,

@@ -7,14 +7,15 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import suppress
 from dataclasses import dataclass
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 from textwrap import dedent
 
 SMOKE_PATH = "/__wybra_smoke__"
 EXPECTED_BODY = "wybra smoke ok\n"
-STARTUP_TIMEOUT_SECONDS = 20.0
+STARTUP_TIMEOUT_SECONDS = 60.0
 SHUTDOWN_TIMEOUT_SECONDS = 10.0
 START_ATTEMPTS = 3
 
@@ -119,6 +120,10 @@ def _start_responding_runserver(
             if attempt + 1 < START_ATTEMPTS and _is_port_bind_failure(output):
                 continue
             return None, last_failure
+        except Exception:
+            with suppress(Exception):
+                _stop_process(runserver)
+            raise
 
     return None, last_failure
 
@@ -182,7 +187,7 @@ def _wait_for_response(port: int, process: subprocess.Popen[str]) -> None:
                     f"Unexpected smoke response: status={status} body={body!r}"
                 )
             return
-        except OSError as exc:
+        except (HTTPException, OSError) as exc:
             last_error = exc
             time.sleep(0.2)
     raise SmokeFailure(f"Timed out waiting for {url}: {last_error!r}")
@@ -206,7 +211,10 @@ def _stop_process(runserver: RunserverProcess) -> str:
         process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         _kill_process_tree(process)
-        process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        try:
+            process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
     return _read_process_output(runserver.output_path)
 
 

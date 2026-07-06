@@ -6,6 +6,7 @@ import secrets as secret_tokens
 import sys
 import zlib
 from collections.abc import Mapping
+from functools import cache
 from typing import Any
 
 import pytest
@@ -46,9 +47,22 @@ from wybra.secrets.source_errors import (
 from wybra.services.crypto import ENVELOPE_PREFIX, SecretEnvelopeService
 from wybra.site import Site, start
 
+_KEYRING_PLATFORM_SKIP_REASONS = {
+    "macos": (
+        "macOS Keychain integration requires Darwin, keyring, and an "
+        "accessible Keychain."
+    ),
+    "linux": "Linux Secret Service integration requires D-Bus and a provider.",
+    "windows": (
+        "Windows Credential Manager integration requires Windows, keyring, and "
+        "an accessible Credential Manager backend."
+    ),
+}
 
-def _linux_secret_service_available() -> bool:
-    if not sys.platform.startswith("linux"):
+
+@cache
+def _keyring_backend_available(probe_platform: str) -> bool:
+    if not _keyring_platform_matches(probe_platform):
         return False
     if importlib.util.find_spec("keyring") is None:
         return False
@@ -61,32 +75,14 @@ def _linux_secret_service_available() -> bool:
     return True
 
 
-def _macos_keychain_available() -> bool:
-    if sys.platform != "darwin":
-        return False
-    if importlib.util.find_spec("keyring") is None:
-        return False
-    try:
-        import keyring
-
-        keyring.get_password(_keyring_probe_service(), _keyring_probe_username())
-    except Exception:
-        return False
-    return True
-
-
-def _windows_credential_manager_available() -> bool:
-    if sys.platform != "win32":
-        return False
-    if importlib.util.find_spec("keyring") is None:
-        return False
-    try:
-        import keyring
-
-        keyring.get_password(_keyring_probe_service(), _keyring_probe_username())
-    except Exception:
-        return False
-    return True
+def _keyring_platform_matches(probe_platform: str) -> bool:
+    if probe_platform == "linux":
+        return sys.platform.startswith("linux")
+    if probe_platform == "macos":
+        return sys.platform == "darwin"
+    if probe_platform == "windows":
+        return sys.platform == "win32"
+    raise ValueError(f"Unsupported keyring probe platform: {probe_platform}")
 
 
 def _keyring_probe_service() -> str:
@@ -95,26 +91,6 @@ def _keyring_probe_service() -> str:
 
 def _keyring_probe_username() -> str:
     return secret_tokens.token_hex(8)
-
-
-macos_keychain = pytest.mark.skipif(
-    not _macos_keychain_available(),
-    reason=(
-        "macOS Keychain integration requires Darwin, keyring, and an "
-        "accessible Keychain."
-    ),
-)
-linux_secret_service = pytest.mark.skipif(
-    not _linux_secret_service_available(),
-    reason="Linux Secret Service integration requires D-Bus and a provider.",
-)
-windows_credential_manager = pytest.mark.skipif(
-    not _windows_credential_manager_available(),
-    reason=(
-        "Windows Credential Manager integration requires Windows, keyring, and "
-        "an accessible Credential Manager backend."
-    ),
-)
 
 
 def _crypto_key_entry(version: str = "current") -> str:
@@ -417,15 +393,18 @@ class TestKeychainSource:
     @pytest.mark.parametrize(
         "_probe_platform",
         [
-            pytest.param("macos", id="macos", marks=macos_keychain),
-            pytest.param("linux", id="linux", marks=linux_secret_service),
-            pytest.param("windows", id="windows", marks=windows_credential_manager),
+            pytest.param("macos", id="macos"),
+            pytest.param("linux", id="linux"),
+            pytest.param("windows", id="windows"),
         ],
     )
     def test_platform_keychain_missing_key_is_reported(
         self,
         _probe_platform: str,
     ) -> None:
+        if not _keyring_backend_available(_probe_platform):
+            pytest.skip(_KEYRING_PLATFORM_SKIP_REASONS[_probe_platform])
+
         driver = KeychainSecretSourceDriver(
             KeychainSecretSourceSettings(appname=_keyring_probe_service())
         )
