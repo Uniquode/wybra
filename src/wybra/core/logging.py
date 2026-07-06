@@ -1,15 +1,49 @@
 from __future__ import annotations
 
 import copy
+import logging
 import logging.config
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Any, Final, Protocol, cast
 
 from wybra.core.composition import AppConfig
 
 DICT_CONFIG_VERSION = 1
 DEFAULT_LOG_FORMAT: Final = "%(asctime)s %(levelname)s %(name)s %(message)s"
 DEFAULT_LOG_DATE_FORMAT: Final = "%Y-%m-%dT%H:%M:%S%z"
+TRACE_LEVEL: Final = 5
+TRACE_LEVEL_NAME: Final = "TRACE"
+
+
+class TraceLogger(Protocol):
+    def trace(self, msg: object, *args: object, **kwargs: object) -> None: ...
+
+
+def _trace(
+    self: logging.Logger,
+    msg: object,
+    *args: object,
+    **kwargs: Any,
+) -> None:
+    self.log(TRACE_LEVEL, msg, *args, **kwargs)
+
+
+def register_trace_level() -> None:
+    logging.addLevelName(TRACE_LEVEL, TRACE_LEVEL_NAME)
+    if not hasattr(logging.Logger, "trace"):
+        logging.Logger.trace = _trace  # ty: ignore[unresolved-attribute]
+
+
+def get_logger(name: str) -> logging.Logger:
+    register_trace_level()
+    return logging.getLogger(name)
+
+
+def get_trace_logger(name: str) -> TraceLogger:
+    return cast(TraceLogger, get_logger(name))
+
+
+register_trace_level()
 
 
 class LoggingConfigurationError(ValueError):
@@ -74,6 +108,7 @@ def merge_logging_config(config: object) -> dict[str, Any]:
 
 
 def configure_logging(config: Mapping[str, Any]) -> None:
+    register_trace_level()
     try:
         logging.config.dictConfig(_plain_dict(config))
     except (AttributeError, ImportError, TypeError, ValueError) as exc:
@@ -120,9 +155,15 @@ __all__ = (
     "DEFAULT_LOG_DATE_FORMAT",
     "DEFAULT_LOG_FORMAT",
     "LoggingConfigurationError",
+    "TRACE_LEVEL",
+    "TRACE_LEVEL_NAME",
+    "TraceLogger",
     "configure_logging",
     "configure_runtime_logging",
     "default_logging_config",
+    "get_logger",
+    "get_trace_logger",
     "logging_config_from_app_config",
     "merge_logging_config",
+    "register_trace_level",
 )

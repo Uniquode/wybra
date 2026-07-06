@@ -5,7 +5,7 @@ from click.testing import CliRunner
 import wybra.tools.runserver as runserver
 import wybra.tools.runserver_uvicorn as runserver_uvicorn
 from wybra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV
-from wybra.core.config import ENV_APP_ENV
+from wybra.core.config import ENV_APP_DEBUG, ENV_APP_ENV
 from wybra.core.logging import (
     DEFAULT_LOG_DATE_FORMAT,
     DEFAULT_LOG_FORMAT,
@@ -107,6 +107,86 @@ def test_runserver_command_writes_cli_overrides_to_server_environment(
         ENV_DATABASE_URL: "sqlite+aiosqlite:///runtime.sqlite3",
         ENV_APP_ENV: "staging",
     }
+
+
+def test_runserver_command_writes_debug_override_to_server_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "configured.toml"
+    _write_app_config(config_path)
+    monkeypatch.setattr(runserver.os, "environ", {})
+    observed: dict[str, str | None] = {}
+
+    def run_uvicorn_command(args, *, logging_config):
+        observed["debug"] = runserver.os.environ.get(ENV_APP_DEBUG)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runserver, "run_uvicorn_command", run_uvicorn_command)
+
+    result = CliRunner().invoke(
+        runserver.runserver_command,
+        ["--config", config_path.as_posix(), "--debug"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed["debug"] == "true"
+
+
+def test_runserver_command_writes_no_debug_override_to_server_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "configured.toml"
+    _write_app_config(config_path)
+    monkeypatch.setattr(runserver.os, "environ", {})
+    observed: dict[str, str | None] = {}
+
+    def run_uvicorn_command(args, *, logging_config):
+        observed["debug"] = runserver.os.environ.get(ENV_APP_DEBUG)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runserver, "run_uvicorn_command", run_uvicorn_command)
+
+    result = CliRunner().invoke(
+        runserver.runserver_command,
+        ["--config", config_path.as_posix(), "--no-debug"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed["debug"] == "false"
+
+
+def test_runserver_command_omits_debug_override_when_not_supplied(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "configured.toml"
+    _write_app_config(config_path)
+    monkeypatch.setattr(runserver.os, "environ", {})
+    observed: dict[str, str | None] = {}
+
+    def run_uvicorn_command(args, *, logging_config):
+        observed["debug"] = runserver.os.environ.get(ENV_APP_DEBUG)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runserver, "run_uvicorn_command", run_uvicorn_command)
+
+    result = CliRunner().invoke(
+        runserver.runserver_command,
+        ["--config", config_path.as_posix()],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed["debug"] is None
+
+
+def test_runserver_debug_help_distinguishes_logging_verbosity() -> None:
+    result = CliRunner().invoke(runserver.runserver_command, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--debug / --no-debug" in result.output
+    assert "not logging verbosity" in result.output
 
 
 def test_runserver_command_uses_app_config_startup_defaults(

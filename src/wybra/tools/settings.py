@@ -58,6 +58,7 @@ class ProjectSettings(BaseSettings):
     template_auto_reload: bool | None = None
     template_cache_size: int = 400
     deployment_environment: DeploymentEnvironment = DEFAULT_DEPLOYMENT_ENVIRONMENT
+    debug: bool = False
 
     @classmethod
     def load_settings(
@@ -131,6 +132,11 @@ class ProjectSettings(BaseSettings):
             "template_cache_size",
             _non_negative_int(self.template_cache_size, "template_cache_size"),
         )
+        object.__setattr__(self, "debug", _required_bool(self.debug, "debug"))
+        if self.debug and self.deployment_environment != "local":
+            raise ConfigurationError(
+                "app.debug is only allowed when deployment_environment is local."
+            )
 
     @property
     def modules(self) -> tuple[str, ...]:
@@ -221,6 +227,7 @@ def _project_settings_kwargs(
         app_values,
         app_config,
     )
+    settings_kwargs["debug"] = app_values.get("debug", False)
     for field_name in ("migrations_root",):
         if field_name in app_values:
             settings_kwargs[field_name] = app_values[field_name]

@@ -15,6 +15,7 @@ from wybra.db.urls import (
     is_supported_database_url,
     sqlite_database_path,
 )
+from wybra.diagnostics.sqlalchemy import instrument_sqlalchemy_engine
 
 __all__ = (
     "Database",
@@ -42,10 +43,12 @@ class Database:
 
 
 def create_database_engine(settings_or_url: DatabaseUrlSettings | str) -> AsyncEngine:
-    return create_async_engine(
+    engine = create_async_engine(
         _database_url_from(settings_or_url),
         pool_pre_ping=True,
     )
+    instrument_sqlalchemy_engine(engine)
+    return engine
 
 
 def create_session_factory(

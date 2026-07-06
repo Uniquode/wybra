@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response
 
 from wybra.auth.timestamps import current_timestamp
+from wybra.diagnostics import backend_operation_diagnostics
 from wybra.sessions.cleanup import SessionCleanupRegistry
 from wybra.sessions.ids import create_session_id, validate_session_id
 from wybra.sessions.settings import SessionsSettings
@@ -25,11 +26,16 @@ class SessionMiddlewareContext:
     _last_cleanup_at: float | None = field(default=None, init=False, repr=False)
 
     async def load_session(self, request: Request, *, now: float) -> RequestSession:
-        await self.cleanup_expired(now=now)
-        cookie_value = request.cookies.get(self.settings.cookie_name)
-        if isinstance(self.storage, CookieSessionStorage):
-            return await self._load_cookie_session(cookie_value, now=now)
-        return await self._load_server_side_session(cookie_value, now=now)
+        async with backend_operation_diagnostics(
+            "session",
+            "load",
+            attributes={"backend": type(self.storage).__name__},
+        ):
+            await self.cleanup_expired(now=now)
+            cookie_value = request.cookies.get(self.settings.cookie_name)
+            if isinstance(self.storage, CookieSessionStorage):
+                return await self._load_cookie_session(cookie_value, now=now)
+            return await self._load_server_side_session(cookie_value, now=now)
 
     async def cleanup_expired(self, *, now: float) -> None:
         last_cleanup_at = self._last_cleanup_at
@@ -48,33 +54,41 @@ class SessionMiddlewareContext:
         *,
         now: float,
     ) -> None:
-        if session.cleared or (session.modified and not session):
-            await self._cleanup_session_data(session.cleanup_data())
-            if session.session_id is not None:
-                await self.storage.delete(session.session_id)
-            self._delete_cookie(response)
-            return
-        if not session.modified:
-            if session.invalid_cookie:
+        async with backend_operation_diagnostics(
+            "session",
+            "finalise",
+            attributes=lambda: {
+                "backend": type(self.storage).__name__,
+                "modified": session.modified,
+            },
+        ):
+            if session.cleared or (session.modified and not session):
+                await self._cleanup_session_data(session.cleanup_data())
+                if session.session_id is not None:
+                    await self.storage.delete(session.session_id)
                 self._delete_cookie(response)
-            return
-        session_id = session.session_id or create_session_id(now=now)
-        created_at = session.created_at if session.created_at is not None else now
-        record = SessionRecord(
-            data=dict(session.data),
-            created_at=created_at,
-            updated_at=now,
-            expires_at=now + self.settings.resolved_lifetime_seconds,
-        )
-        if isinstance(self.storage, CookieSessionStorage):
-            cookie_value = self.storage.dump_cookie(session_id, record)
-        else:
-            await self.storage.save(session_id, record)
-            cookie_value = session_id
-        session.session_id = session_id
-        session.created_at = created_at
-        session.expires_at = record.expires_at
-        self._set_cookie(response, cookie_value)
+                return
+            if not session.modified:
+                if session.invalid_cookie:
+                    self._delete_cookie(response)
+                return
+            session_id = session.session_id or create_session_id(now=now)
+            created_at = session.created_at if session.created_at is not None else now
+            record = SessionRecord(
+                data=dict(session.data),
+                created_at=created_at,
+                updated_at=now,
+                expires_at=now + self.settings.resolved_lifetime_seconds,
+            )
+            if isinstance(self.storage, CookieSessionStorage):
+                cookie_value = self.storage.dump_cookie(session_id, record)
+            else:
+                await self.storage.save(session_id, record)
+                cookie_value = session_id
+            session.session_id = session_id
+            session.created_at = created_at
+            session.expires_at = record.expires_at
+            self._set_cookie(response, cookie_value)
 
     async def _load_cookie_session(
         self,

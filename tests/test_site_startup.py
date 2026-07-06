@@ -27,7 +27,7 @@ from wybra.core.composition import (
     TemplateOptions,
     load_app_config,
 )
-from wybra.core.config import ENV_APP_ENV
+from wybra.core.config import ENV_APP_DEBUG, ENV_APP_ENV
 from wybra.core.exceptions import ConfigurationError, Http404
 from wybra.core.routes import inspect_route_tree
 from wybra.db.config import ENV_DATABASE_URL
@@ -83,6 +83,7 @@ def _write_app_config(
     modules: tuple[str, ...],
     asset_root: str | None = None,
     deployment_environment: str | None = None,
+    debug: bool | None = None,
     log_format: str | None = None,
 ) -> Path:
     asset_root_config = f'        root = "{asset_root}"\n' if asset_root else ""
@@ -90,6 +91,9 @@ def _write_app_config(
         f'        deployment_environment = "{deployment_environment}"\n'
         if deployment_environment is not None
         else ""
+    )
+    debug_config = (
+        f"        debug = {str(debug).lower()}\n" if debug is not None else ""
     )
     log_config = (
         f"""
@@ -119,6 +123,7 @@ def _write_app_config(
         modules = {json.dumps(list(modules))}
         database_url = "sqlite+aiosqlite:///app.sqlite3"
 {deployment_config.rstrip()}
+{debug_config.rstrip()}
 
         [app.routes]
 
@@ -625,6 +630,102 @@ async def test_start_defaults_deployment_environment_to_local() -> None:
         assert site.deployment_environment == "local"
     finally:
         await site.close()
+
+
+@pytest.mark.anyio
+async def test_start_defaults_debug_to_disabled() -> None:
+    app = FastAPI()
+    site = await start(
+        app,
+        config_source=MappingConfigSource({"app": {"modules": ("wybra.assets",)}}),
+        environ={},
+    )
+
+    try:
+        assert app.debug is False
+        assert site.config.get_config("app")["debug"] is False
+    finally:
+        await site.close()
+
+
+@pytest.mark.anyio
+async def test_start_applies_configured_local_debug(tmp_path: Path) -> None:
+    app = FastAPI()
+    app.middleware_stack = object()
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "modules": ("wybra.assets",),
+                    "deployment_environment": "local",
+                    "debug": True,
+                }
+            }
+        ),
+    )
+
+    try:
+        assert app.debug is True
+        assert app.middleware_stack is None
+        assert site.config.get_config("app")["debug"] is True
+    finally:
+        await site.close()
+
+
+@pytest.mark.anyio
+async def test_start_app_debug_environment_overrides_config(tmp_path: Path) -> None:
+    app = FastAPI()
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {
+                    "modules": ("wybra.assets",),
+                    "deployment_environment": "local",
+                    "debug": False,
+                }
+            }
+        ),
+        environ={ENV_APP_DEBUG: "true"},
+    )
+
+    try:
+        assert app.debug is True
+        assert site.config.get_config("app")["debug"] is True
+    finally:
+        await site.close()
+
+
+@pytest.mark.anyio
+async def test_start_rejects_invalid_debug_environment() -> None:
+    with pytest.raises(ConfigSourceError, match="app.debug"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource({"app": {"modules": ("wybra.assets",)}}),
+            environ={ENV_APP_DEBUG: "maybe"},
+        )
+
+
+@pytest.mark.anyio
+async def test_start_rejects_debug_outside_local() -> None:
+    with pytest.raises(ConfigurationError, match="app.debug is only allowed"):
+        await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.assets",),
+                        "deployment_environment": "production",
+                        "debug": True,
+                    },
+                    "wybra.sessions": {
+                        "storage_backend": "file",
+                        "file_directory": "/tmp/wybra-debug-test-sessions",
+                    },
+                }
+            ),
+        )
 
 
 @pytest.mark.anyio

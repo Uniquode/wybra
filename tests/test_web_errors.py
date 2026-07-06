@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from wybra import start_site
 from wybra.api import ApiCapability
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.errors.capabilities import ErrorHandlingCapability
@@ -110,6 +111,59 @@ def test_errors_are_translated_through_error_handling_capability() -> None:
 
     assert response.status_code == 599
     assert response.json() == {"custom_error": "RuntimeError", "path": "/fail"}
+
+
+def test_debug_mode_returns_starlette_traceback_response() -> None:
+    app = FastAPI(
+        lifespan=start_site(
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.errors",),
+                        "deployment_environment": "local",
+                        "debug": True,
+                    }
+                }
+            )
+        )
+    )
+
+    @app.get("/fail")
+    async def fail() -> Response:
+        raise RuntimeError("boom")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/fail")
+
+    assert response.status_code == 500
+    assert "Traceback" in response.text
+    assert "RuntimeError: boom" in response.text
+
+
+def test_debug_disabled_uses_safe_error_response() -> None:
+    app = FastAPI(
+        lifespan=start_site(
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.errors",),
+                        "deployment_environment": "local",
+                        "debug": False,
+                    }
+                }
+            )
+        )
+    )
+
+    @app.get("/fail")
+    async def fail() -> Response:
+        raise RuntimeError("boom")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/fail")
+
+    assert response.status_code == 500
+    assert "Traceback" not in response.text
 
 
 def test_api_errors_are_rendered_through_api_capability() -> None:

@@ -34,6 +34,7 @@ from wybra.core.composition import (
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.environment import EnvironmentMapping, load_environment
+from wybra.core.exceptions import ConfigurationError
 from wybra.core.logging import LoggingConfigurationError, configure_runtime_logging
 from wybra.core.modules import CORE_MODULES
 from wybra.core.runtime import (
@@ -343,13 +344,18 @@ async def start(
         config_defs=_core_config_defs(),
         environ=startup_config.environ,
     )
+    deployment_environment = _deployment_environment(config)
+    _apply_runtime_debug(app, config, deployment_environment)
+    # Startup hooks register middleware, so clear any stale stack once first.
+    _reset_middleware_stack(app)
     site = Site(
         app=app,
         config=config,
-        deployment_environment=_deployment_environment(config),
+        deployment_environment=deployment_environment,
     )
     app.state.site = site
     await _compose_site(site, module_loader or import_module)
+    _setup_core_diagnostics(site)
     return site
 
 
@@ -432,6 +438,31 @@ def _deployment_environment(
             "app.deployment_environment",
         )
     return DEFAULT_DEPLOYMENT_ENVIRONMENT
+
+
+def _runtime_debug(config: ConfigService) -> bool:
+    app_values = config.get_config("app") or {}
+    value = app_values.get("debug", False)
+    if not isinstance(value, bool):
+        raise ConfigSourceError("app.debug must be a boolean value.")
+    return value
+
+
+def _apply_runtime_debug(
+    app: FastAPI,
+    config: ConfigService,
+    deployment_environment: DeploymentEnvironment,
+) -> None:
+    debug = _runtime_debug(config)
+    if debug and deployment_environment != "local":
+        raise ConfigurationError(
+            "app.debug is only allowed when deployment_environment is local."
+        )
+    app.debug = debug
+
+
+def _reset_middleware_stack(app: FastAPI) -> None:
+    app.middleware_stack = None
 
 
 def _normalise_configured_deployment_environment(
@@ -559,6 +590,12 @@ async def _compose_site(site: Site, module_loader: ModuleLoader) -> None:
     _register_configured_routes(site)
     _validate_registered_route_dependencies(site)
     await _post_setup_module_hooks(site, loaded_modules)
+
+
+def _setup_core_diagnostics(site: Site) -> None:
+    from wybra.diagnostics.setup import setup_core_diagnostics
+
+    setup_core_diagnostics(site)
 
 
 async def _setup_core_sessions(site: Site) -> None:

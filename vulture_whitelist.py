@@ -38,9 +38,12 @@ _.setup_site
 _.finalised
 _.unavailable
 _.template_context_middleware
+_.diagnostics_middleware
 _.session_cookie_cleanup_middleware
 _.wybra_messages_middleware
 _.wybra_session_middleware
+_._before_cursor_execute
+_._after_cursor_execute
 _.session
 _.transaction
 _.close
