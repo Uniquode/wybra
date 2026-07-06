@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from wybra.core.exceptions import ConfigurationError
+from wybra.diagnostics.sqlalchemy import instrument_sqlalchemy_engine
 
 SQLITE_ASYNC_DATABASE_URL_PREFIX = "sqlite+aiosqlite:///"
 SQLITE_MEMORY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -125,7 +126,9 @@ def resolve_database_url(database_url: str, base_path: Path) -> str:
 
 
 def create_database_engine(database_url: str) -> AsyncEngine:
-    return create_async_engine(database_url, pool_pre_ping=True)
+    engine = create_async_engine(database_url, pool_pre_ping=True)
+    instrument_sqlalchemy_engine(engine)
+    return engine
 
 
 def create_session_factory(

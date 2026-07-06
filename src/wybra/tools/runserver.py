@@ -8,7 +8,7 @@ import click
 
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV, CompositionError
-from wybra.core.config import ENV_APP_ENV
+from wybra.core.config import ENV_APP_DEBUG, ENV_APP_ENV
 from wybra.core.environment import load_environment
 from wybra.core.logging import LoggingConfigurationError
 from wybra.core.runtime import ALLOWED_DEPLOYMENT_ENVIRONMENTS
@@ -55,6 +55,7 @@ def runserver_environment_overrides(
     config_source: str | None,
     database_url: str | None,
     deployment_environment: str | None,
+    debug: bool | None = None,
 ) -> dict[str, str]:
     overrides: dict[str, str] = {}
     if project_root is not None:
@@ -65,6 +66,8 @@ def runserver_environment_overrides(
         overrides[ENV_DATABASE_URL] = _non_blank_option(database_url, "--database-url")
     if deployment_environment is not None:
         overrides[ENV_APP_ENV] = _non_blank_option(deployment_environment, "--deploy")
+    if debug is not None:
+        overrides[ENV_APP_DEBUG] = "true" if debug else "false"
     return overrides
 
 
@@ -130,6 +133,15 @@ def load_runserver_config(
     type=click.Choice(ALLOWED_DEPLOYMENT_ENVIRONMENTS),
     help="Override APP_ENV or configured default.",
 )
+@click.option(
+    "--debug/--no-debug",
+    "debug_requested",
+    default=None,
+    help=(
+        "Override APP_DEBUG; controls local FastAPI debug responses and Wybra "
+        "diagnostics availability, not logging verbosity."
+    ),
+)
 @click.argument("uvicorn_args", nargs=-1, type=click.UNPROCESSED)
 def runserver_command(
     host: str,
@@ -139,6 +151,7 @@ def runserver_command(
     config_source: str | None,
     database_url: str | None,
     deployment_environment: str | None,
+    debug_requested: bool | None,
     uvicorn_args: tuple[str, ...],
 ) -> None:
     selected_project_root = (
@@ -177,6 +190,7 @@ def runserver_command(
             config_source=config_source,
             database_url=database_url,
             deployment_environment=deployment_environment,
+            debug=debug_requested,
         )
     )
     run_uvicorn_command(

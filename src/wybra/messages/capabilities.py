@@ -7,6 +7,7 @@ from typing import Any, Protocol, overload, runtime_checkable
 
 from fastapi import Request
 
+from wybra.diagnostics import backend_operation_diagnostics
 from wybra.messages.records import (
     ERROR_ALERT,
     SUCCESS_ALERT,
@@ -97,24 +98,32 @@ class DefaultMessagesCapability:
         severity: str,
         message: object,
     ) -> None:
-        if getattr(request.state, REQUEST_ALERTS_RENDERED_ATTRIBUTE, False):
-            await self.storage.acknowledge(request, now=time.time())
-        await self.storage.enqueue(
-            request,
-            AlertRecord.create(
-                severity,
-                message,
-                max_message_length=self.settings.resolved_message_max_length,
-            ),
-        )
-        for attribute in (
-            REQUEST_PEEKED_ALERTS_ATTRIBUTE,
-            REQUEST_ALERTS_RENDERED_ATTRIBUTE,
-            REQUEST_ALERTS_ACKNOWLEDGED_ATTRIBUTE,
-            RENDERABLE_ALERTS_STATE_ATTRIBUTE,
+        async with backend_operation_diagnostics(
+            "messages",
+            "add_alert",
+            attributes={
+                "severity": severity,
+                "storage": type(self.storage).__name__,
+            },
         ):
-            if hasattr(request.state, attribute):
-                delattr(request.state, attribute)
+            if getattr(request.state, REQUEST_ALERTS_RENDERED_ATTRIBUTE, False):
+                await self.storage.acknowledge(request, now=time.time())
+            await self.storage.enqueue(
+                request,
+                AlertRecord.create(
+                    severity,
+                    message,
+                    max_message_length=self.settings.resolved_message_max_length,
+                ),
+            )
+            for attribute in (
+                REQUEST_PEEKED_ALERTS_ATTRIBUTE,
+                REQUEST_ALERTS_RENDERED_ATTRIBUTE,
+                REQUEST_ALERTS_ACKNOWLEDGED_ATTRIBUTE,
+                RENDERABLE_ALERTS_STATE_ATTRIBUTE,
+            ):
+                if hasattr(request.state, attribute):
+                    delattr(request.state, attribute)
 
     async def success(self, request: Request, message: object) -> None:
         await self.add_alert(request, SUCCESS_ALERT, message)
@@ -129,9 +138,14 @@ class DefaultMessagesCapability:
         cached = getattr(request.state, REQUEST_PEEKED_ALERTS_ATTRIBUTE, None)
         if cached is not None:
             return cached
-        alerts = await self.storage.peek(request, now=time.time())
-        setattr(request.state, REQUEST_PEEKED_ALERTS_ATTRIBUTE, alerts)
-        return alerts
+        async with backend_operation_diagnostics(
+            "messages",
+            "peek_alerts",
+            attributes={"storage": type(self.storage).__name__},
+        ):
+            alerts = await self.storage.peek(request, now=time.time())
+            setattr(request.state, REQUEST_PEEKED_ALERTS_ATTRIBUTE, alerts)
+            return alerts
 
     async def renderable_alerts(self, request: Request) -> RenderableAlerts:
         cached = getattr(request.state, RENDERABLE_ALERTS_STATE_ATTRIBUTE, None)
@@ -145,15 +159,20 @@ class DefaultMessagesCapability:
         return alerts
 
     async def acknowledge_alerts(self, request: Request) -> None:
-        await self.storage.acknowledge(request, now=time.time())
-        for attribute in (
-            REQUEST_PEEKED_ALERTS_ATTRIBUTE,
-            REQUEST_ALERTS_RENDERED_ATTRIBUTE,
-            REQUEST_ALERTS_ACKNOWLEDGED_ATTRIBUTE,
-            RENDERABLE_ALERTS_STATE_ATTRIBUTE,
+        async with backend_operation_diagnostics(
+            "messages",
+            "acknowledge_alerts",
+            attributes={"storage": type(self.storage).__name__},
         ):
-            if hasattr(request.state, attribute):
-                delattr(request.state, attribute)
+            await self.storage.acknowledge(request, now=time.time())
+            for attribute in (
+                REQUEST_PEEKED_ALERTS_ATTRIBUTE,
+                REQUEST_ALERTS_RENDERED_ATTRIBUTE,
+                REQUEST_ALERTS_ACKNOWLEDGED_ATTRIBUTE,
+                RENDERABLE_ALERTS_STATE_ATTRIBUTE,
+            ):
+                if hasattr(request.state, attribute):
+                    delattr(request.state, attribute)
 
     async def consume_alerts(self, request: Request) -> tuple[AlertRecord, ...]:
         cached = getattr(request.state, REQUEST_PEEKED_ALERTS_ATTRIBUTE, None)

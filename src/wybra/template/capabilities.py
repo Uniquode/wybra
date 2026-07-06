@@ -11,6 +11,7 @@ from jinja2 import Environment, select_autoescape
 
 from wybra.assets import StaticAssetCapability, require_static_asset_capability
 from wybra.core.resources import PackageResourceSource
+from wybra.diagnostics import template_render_diagnostics
 from wybra.site import SiteCapabilityProxy
 from wybra.template.context import TemplateContext, get_request_context
 from wybra.template.templating import build_template_loader
@@ -67,7 +68,8 @@ class DefaultTemplateCapability:
         self._asset_url = self._resolve_asset_url()
 
     def render_template(self, template_name: str, context: dict[str, Any]) -> str:
-        return self.environment.get_template(template_name).render(context)
+        with template_render_diagnostics(template_name):
+            return self.environment.get_template(template_name).render(context)
 
     def render_page(
         self,
