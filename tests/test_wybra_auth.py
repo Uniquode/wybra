@@ -558,6 +558,58 @@ def test_deactivate_local_user_rechecks_locked_superuser(
     asyncio.run(assert_deactivate_protects_promoted_user())
 
 
+def test_update_local_user_uses_locked_current_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def assert_update_preserves_current_user_fields() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "update-current-user.sqlite3")
+        )
+        try:
+            async with connection_scope(database) as session:
+                stale_user = await create_test_user(
+                    session,
+                    email="updated-current@example.com",
+                )
+                await (
+                    User.filter(id=stale_user.id)
+                    .using_db(session)
+                    .update(preferred_timezone="Australia/Melbourne")
+                )
+
+                async def stale_resolve_user_target(
+                    connection: BaseDBAsyncClient,
+                    target: str,
+                ):
+                    del connection, target
+                    return stale_user, None
+
+                monkeypatch.setattr(
+                    auth_management,
+                    "resolve_user_target",
+                    stale_resolve_user_target,
+                )
+
+                result = await auth_management.update_local_user_for_management(
+                    session,
+                    IdentityOptions(),
+                    target="updated-current@example.com",
+                    is_admin=True,
+                )
+                current_user = await User.get(id=stale_user.id, using_db=session)
+
+            assert result.is_ok() is True
+            assert result.value["is_admin"] is True
+            assert result.value["preferred_timezone"] == "Australia/Melbourne"
+            assert current_user.is_admin is True
+            assert current_user.preferred_timezone == "Australia/Melbourne"
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_update_preserves_current_user_fields())
+
+
 def test_authorisation_scope_delete_rejects_used_scope(tmp_path: Path) -> None:
     async def assert_used_scope_delete() -> None:
         database = await initialise_auth_database(

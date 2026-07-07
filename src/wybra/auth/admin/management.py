@@ -1484,6 +1484,13 @@ async def update_local_user_for_management(
     if preferred_timezone is not None and not _valid_timezone(preferred_timezone):
         return Result.failure(ERROR_INVALID_TIMEZONE)
 
+    locked_user = (
+        await User.filter(id=user.id).using_db(connection).select_for_update().first()
+    )
+    if locked_user is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+    user = locked_user
+
     has_changes = False
     if is_admin is not None:
         user.is_admin = is_admin
