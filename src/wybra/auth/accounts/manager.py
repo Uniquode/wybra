@@ -183,6 +183,7 @@ class UserManager:
             return None
 
         if not user.password_login_enabled or not user.hashed_password:
+            self.password_helper.hash(password)
             return None
 
         verified, updated_password_hash = self.password_helper.verify_and_update(
@@ -377,15 +378,22 @@ class UserManager:
         update_dict: dict[str, object],
     ) -> LocalUserRecord:
         validated_update_dict: dict[str, object] = {}
+        primary_email: str | None = None
         for field, value in update_dict.items():
-            if field == "email" and value != user.email:
+            if field == "email":
                 if not isinstance(value, str):
                     continue
+                normalised_email = normalise_email_target(value)
+                if normalised_email is None:
+                    raise UserAlreadyExists()
+                if normalised_email == user.email:
+                    continue
                 try:
-                    await self.get_by_email(value)
+                    await self.get_by_email(normalised_email)
                     raise UserAlreadyExists()
                 except UserNotExists:
-                    validated_update_dict["email"] = value
+                    primary_email = normalised_email
+                    validated_update_dict["email"] = normalised_email
                     validated_update_dict["is_verified"] = False
             elif field == "password" and value is not None:
                 await self.validate_password(str(value), user)
@@ -398,7 +406,11 @@ class UserManager:
         for key, value in validated_update_dict.items():
             setattr(user, key, value)
         try:
-            return await self.user_store.save_user(user)
+            return await self.user_store.save_user(
+                user,
+                primary_email=primary_email,
+                primary_email_verified=False if primary_email is not None else None,
+            )
         except DuplicateIdentityError as exc:
             raise UserAlreadyExists() from exc
 

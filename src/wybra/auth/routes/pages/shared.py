@@ -192,7 +192,6 @@ async def _fresh_security_assertion_satisfied(
     if totp_code and active_credential_id is not None:
         store = totp_credential_store(request, scope)
         accepted, _counter, _error = await verify_totp_code_for_credential(
-            session=scope,
             store=store,
             credential_id=active_credential_id,
             user_id=str(user.id),
@@ -228,7 +227,6 @@ async def _fresh_single_security_assertion_satisfied(
 
         store = totp_credential_store(request, scope)
         accepted, _counter, _error = await verify_totp_code_for_credential(
-            session=scope,
             store=store,
             credential_id=active_credential_id,
             user_id=str(user.id),

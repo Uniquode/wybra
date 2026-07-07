@@ -136,7 +136,13 @@ class UserStore(Protocol):
         after_create: Callable[[LocalUserRecord], Awaitable[None]] | None = None,
     ) -> LocalUserRecord: ...
 
-    async def save_user(self, user: LocalUserRecord) -> LocalUserRecord: ...
+    async def save_user(
+        self,
+        user: LocalUserRecord,
+        *,
+        primary_email: str | None = None,
+        primary_email_verified: bool | None = None,
+    ) -> LocalUserRecord: ...
 
 
 class SessionTokenStore(Protocol):
@@ -152,6 +158,8 @@ class SessionTokenStore(Protocol):
     ) -> str | None: ...
 
     async def delete(self, token: str) -> None: ...
+
+    async def delete_for_user(self, user: LocalUserRecord) -> None: ...
 
 
 class IdentityEmailStore(Protocol):

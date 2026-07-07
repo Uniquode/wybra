@@ -46,6 +46,11 @@ _IDENTITY_USER_EMAIL_UNIQUE_CONSTRAINTS: frozenset[str] = frozenset(
         "identity_user_email_email_key",
     }
 )
+_USER_EMAIL_UNIQUE_CONSTRAINTS: frozenset[str] = frozenset(
+    {
+        "identity_user_email_key",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,23 +97,70 @@ class SqlAlchemyUserStore:
             ):
                 await _create_and_persist_user()
         except IntegrityError as exc:
-            if _is_identity_email_unique_violation(exc):
+            if _is_identity_unique_violation(exc):
                 raise DuplicateIdentityError() from exc
             raise
 
         await self.session.refresh(created_user)
         return created_user
 
-    async def save_user(self, user: LocalUserRecord) -> LocalUserRecord:
-        self.session.add(user)
+    async def save_user(
+        self,
+        user: LocalUserRecord,
+        *,
+        primary_email: str | None = None,
+        primary_email_verified: bool | None = None,
+    ) -> LocalUserRecord:
         try:
+            self.session.add(user)
+            if primary_email is not None:
+                await self._set_primary_email(
+                    user,
+                    primary_email,
+                    is_verified=(
+                        user.is_verified
+                        if primary_email_verified is None
+                        else primary_email_verified
+                    ),
+                )
             await self.session.commit()
             await self.session.refresh(user)
         except IntegrityError as exc:
-            if _is_identity_email_unique_violation(exc):
+            await self.session.rollback()
+            if _is_identity_unique_violation(exc):
                 raise DuplicateIdentityError() from exc
             raise
         return user
+
+    async def _set_primary_email(
+        self,
+        user: LocalUserRecord,
+        email: str,
+        *,
+        is_verified: bool,
+    ) -> None:
+        primary_email = await self.session.scalar(
+            select(IdentityUserEmail)
+            .where(
+                IdentityUserEmail.user_id == user.id,
+                IdentityUserEmail.is_primary.is_(True),
+            )
+            .with_for_update()
+        )
+        if primary_email is None:
+            self.session.add(
+                IdentityUserEmail(
+                    user_id=user.id,
+                    email=email,
+                    is_primary=True,
+                    is_verified=is_verified,
+                )
+            )
+            return
+
+        primary_email.email = email
+        primary_email.is_verified = is_verified
+        self.session.add(primary_email)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +174,7 @@ class SqlAlchemyAccessTokenStore:
         max_age_seconds: int | None,
     ) -> str | None:
         statement = select(AccessToken).where(AccessToken.token == token)
-        if max_age_seconds:
+        if max_age_seconds is not None:
             max_age = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
             statement = statement.where(AccessToken.created_at >= max_age)
         access_token = (await self.session.execute(statement)).scalar_one_or_none()
@@ -143,6 +195,12 @@ class SqlAlchemyAccessTokenStore:
 
     async def delete_by_token(self, token: str) -> None:
         await self.delete(token)
+
+    async def delete_for_user(self, user: LocalUserRecord) -> None:
+        await self.session.execute(
+            delete(AccessToken).where(AccessToken.user_id == user.id)
+        )
+        await self.session.commit()
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,14 +367,18 @@ def create_user_database(
     return SqlAlchemyUserStore(session)
 
 
-def _is_identity_email_unique_violation(exc: IntegrityError) -> bool:
+def _is_identity_unique_violation(exc: IntegrityError) -> bool:
     constraint_name = getattr(
         getattr(exc.orig, "diag", None),
         "constraint_name",
         None,
     )
-    if constraint_name and constraint_name in _IDENTITY_USER_EMAIL_UNIQUE_CONSTRAINTS:
+    if constraint_name and constraint_name in (
+        _IDENTITY_USER_EMAIL_UNIQUE_CONSTRAINTS | _USER_EMAIL_UNIQUE_CONSTRAINTS
+    ):
         return True
 
     message = str(exc.orig).lower() if exc.orig else str(exc).lower()
-    return "identity_user_email.email" in message and "unique" in message
+    return "unique" in message and (
+        "identity_user.email" in message or "identity_user_email.email" in message
+    )

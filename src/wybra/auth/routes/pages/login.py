@@ -400,7 +400,6 @@ async def _handle_login_totp_challenge(
         if is_valid_totp_code(code):
             verification_timestamp = current_timestamp()
             accepted, counter, _challenge_error = await verify_totp_code_for_credential(
-                session=scope,
                 store=store,
                 credential_id=credential_id,
                 user_id=str(user.id),

@@ -164,9 +164,7 @@ class SqlAlchemyTOTPCredentialStore:
         try:
             await self._session.flush()
         except IntegrityError as exc:
-            raise AuthPersistenceError(
-                "WebAuthn credential could not be stored."
-            ) from exc
+            raise AuthPersistenceError("TOTP credential could not be stored.") from exc
         return str(credential.id)
 
     async def get_totp_credential(

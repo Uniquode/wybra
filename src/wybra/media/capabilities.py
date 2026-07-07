@@ -11,7 +11,10 @@ import anyio
 from wybra.core import InputValidationError
 from wybra.media.config import MediaSettings
 from wybra.media.models import MediaItem
-from wybra.media.persistence import MediaCatalogueRepository
+from wybra.media.persistence import (
+    MediaCatalogueRepository,
+    MediaResourceKeyConflictError,
+)
 
 
 class MediaError(RuntimeError):
@@ -237,7 +240,13 @@ class FilesystemMediaCapability:
         if validated_resource_key is None:
             raise MediaInputError("Media resource key must not be blank.")
         _ = await self.get(media_id)
-        await self.catalogue.assign_resource_key(media_id, validated_resource_key)
+        try:
+            await self.catalogue.assign_resource_key(media_id, validated_resource_key)
+        except MediaResourceKeyConflictError as exc:
+            raise MediaInputError(
+                f"Media resource key is already assigned: "
+                f"resource_key={validated_resource_key}."
+            ) from exc
 
     def path_for_key(self, storage_key: str | Path) -> Path:
         key_path = _key_path(storage_key)

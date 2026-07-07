@@ -322,7 +322,6 @@ def totp_credential_problem(
 
 async def verify_totp_code_for_credential(
     *,
-    session: object,
     store: TOTPCredentialStore,
     credential_id: str,
     user_id: str,
@@ -331,7 +330,6 @@ async def verify_totp_code_for_credential(
     expected_status: str = TOTP_ACTIVE_STATUS,
     timestamp: float | None = None,
 ) -> tuple[bool, int | None, str | None]:
-    del session
     parsed_credential_id = parse_uuid(credential_id)
     if parsed_credential_id is None:
         return False, None, None

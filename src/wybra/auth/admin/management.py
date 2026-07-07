@@ -1985,7 +1985,7 @@ def _reverse_order(order: str, direction: str | None) -> bool:
 def _valid_timezone(value: str) -> bool:
     try:
         ZoneInfo(value)
-    except ZoneInfoNotFoundError:
+    except (ValueError, ZoneInfoNotFoundError):
         return False
 
     return True

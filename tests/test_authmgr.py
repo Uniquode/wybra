@@ -46,8 +46,9 @@ from wybra.auth.accounts.manager import (
     UserNotExists,
     create_user_manager,
 )
-from wybra.auth.accounts.schemas import UserCreate
+from wybra.auth.accounts.schemas import UserCreate, UserUpdate
 from wybra.auth.models import (
+    AccessToken,
     Base,
     Group,
     GroupGroup,
@@ -154,25 +155,15 @@ class CaptureDelivery:
         self.verification_tokens.append((user.email, token))
 
 
-@dataclass(slots=True)
-class TimestampVisibleVerificationDelivery:
-    session_factory: object
-    verification_tokens: list[tuple[str, str]]
-    visible_timestamp: float | None = None
-
+class FailingVerificationDelivery:
     async def send_verification_token(
         self,
         user: User,
         token: str,
         request: Request | None = None,
     ) -> None:
-        async with session_scope(self.session_factory) as session:  # type: ignore[arg-type]
-            refreshed_user = (
-                await session.execute(select(User).where(User.email == user.email))
-            ).scalar_one()
-            self.visible_timestamp = refreshed_user.email_verification_sent_at
-
-        self.verification_tokens.append((user.email, token))
+        del user, token, request
+        raise RuntimeError("verification delivery failed")
 
 
 @dataclass(slots=True)
@@ -2310,16 +2301,103 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
         asyncio.run(close_database(_database_from_app(web_app)))
 
 
+def test_identity_session_reset_password_revokes_existing_sessions(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "reset-password-revokes.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+    web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
+
+    async def assert_reset_revokes_sessions() -> None:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.auth_settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="reset-revoke@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(AccessToken(token="existing-session", user_id=user.id))
+            await session.commit()
+
+        await identity_sessions.request_password_reset(
+            Request({"type": "http", "app": web_app}),
+            "reset-revoke@example.com",
+        )
+        [(_email, reset_token)] = web_app.state.identity_delivery.reset_tokens
+
+        assert await identity_sessions.reset_password(
+            Request({"type": "http", "app": web_app}),
+            reset_token,
+            UPDATED_STRONG_TEST_PASSWORD,
+        )
+
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            tokens = (await session.execute(select(AccessToken))).scalars().all()
+            assert tokens == []
+
+    try:
+        asyncio.run(assert_reset_revokes_sessions())
+    finally:
+        asyncio.run(close_database(_database_from_app(web_app)))
+
+
+def test_user_manager_update_email_updates_primary_owned_email(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "update-primary-email.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    async def assert_email_update_is_synchronised() -> None:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.auth_settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="old@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                    is_verified=True,
+                ),
+                safe=True,
+            )
+
+            updated_user = await manager.update(
+                UserUpdate(email="New@Example.com"),
+                user,
+                safe=True,
+            )
+
+            assert updated_user.email == "new@example.com"
+            assert updated_user.is_verified is False
+            with pytest.raises(UserNotExists):
+                await manager.get_by_email("old@example.com")
+            assert (await manager.get_by_email("new@example.com")).id == user.id
+
+    try:
+        asyncio.run(assert_email_update_is_synchronised())
+        [primary_email] = identity_user_emails_from_database(database_url)
+        assert primary_email.email == "new@example.com"
+        assert primary_email.is_primary is True
+        assert primary_email.is_verified is False
+    finally:
+        asyncio.run(close_database(_database_from_app(web_app)))
+
+
 def test_request_verification_uses_secondary_email_alias_for_lookup(
     tmp_path: Path,
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "request-verification-secondary.sqlite3")
     initialise_identity_database(database_url)
     web_app = create_auth_test_app(database_url=database_url)
-    web_app.state.identity_delivery = TimestampVisibleVerificationDelivery(
-        session_factory=_session_factory_from_app(web_app),
-        verification_tokens=[],
-    )
+    web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_verification_alias_resolution() -> None:
         async with _database_from_app(web_app).engine.begin() as connection:
@@ -2358,7 +2436,6 @@ def test_request_verification_uses_secondary_email_alias_for_lookup(
                 web_app.state.identity_delivery.verification_tokens[0][1],
             ),
         ]
-        assert web_app.state.identity_delivery.visible_timestamp is not None
 
     try:
         asyncio.run(assert_verification_alias_resolution())
@@ -3124,13 +3201,9 @@ def test_request_verification_records_email_verification_sent_timestamp() -> Non
         asyncio.run(close_database(_database_from_app(web_app)))
 
 
-def test_request_verification_commits_timestamp_before_delivery() -> None:
+def test_request_verification_does_not_record_timestamp_when_delivery_fails() -> None:
     web_app = create_auth_test_app()
-    delivery = TimestampVisibleVerificationDelivery(
-        session_factory=_session_factory_from_app(web_app),
-        verification_tokens=[],
-    )
-    web_app.state.identity_delivery = delivery
+    web_app.state.identity_delivery = FailingVerificationDelivery()
 
     async def seed_user() -> None:
         async with _database_from_app(web_app).engine.begin() as connection:
@@ -3149,20 +3222,24 @@ def test_request_verification_commits_timestamp_before_delivery() -> None:
                 safe=True,
             )
 
-    async def assert_timestamp_visible_to_delivery() -> None:
-        await identity_sessions.request_verification(
-            Request({"type": "http", "app": web_app}),
-            "verify-atomic@example.com",
-        )
+    async def assert_failed_delivery_does_not_throttle_user() -> None:
+        with pytest.raises(RuntimeError, match="verification delivery failed"):
+            await identity_sessions.request_verification(
+                Request({"type": "http", "app": web_app}),
+                "verify-atomic@example.com",
+            )
 
-        assert len(delivery.verification_tokens) == 1
-        assert delivery.verification_tokens[0][0] == "verify-atomic@example.com"
-        assert isinstance(delivery.visible_timestamp, float)
-        assert delivery.visible_timestamp > 0
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            user = (
+                await session.execute(
+                    select(User).where(User.email == "verify-atomic@example.com")
+                )
+            ).scalar_one()
+            assert user.email_verification_sent_at is None
 
     try:
         asyncio.run(seed_user())
-        asyncio.run(assert_timestamp_visible_to_delivery())
+        asyncio.run(assert_failed_delivery_does_not_throttle_user())
     finally:
         asyncio.run(close_database(_database_from_app(web_app)))
 
@@ -4322,10 +4399,15 @@ def test_authmgr_create_rejects_invalid_timezone_without_creating_user(
     assert identity_users_from_database(database_url) == []
 
 
+@pytest.mark.parametrize(
+    "invalid_timezone",
+    ["Not/AZone", "../UTC"],
+)
 def test_authmgr_update_rejects_invalid_timezone_without_updating_user(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    invalid_timezone: str,
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "invalid-update-timezone.sqlite3")
     initialise_identity_database(database_url)
@@ -4353,7 +4435,7 @@ def test_authmgr_update_rejects_invalid_timezone_without_updating_user(
             "update",
             "invalid-update-timezone@example.com",
             "--timezone",
-            "Not/AZone",
+            invalid_timezone,
         ]
     )
 

@@ -486,10 +486,11 @@ async def reset_password(request: Request, token: str, password: str) -> bool:
             return False
 
         try:
-            await manager.reset_password(token, password, request)
+            user = await manager.reset_password(token, password, request)
         except (InvalidResetPasswordToken, UserInactive, InvalidPasswordException):
             return False
 
+        await scope.session_tokens.delete_for_user(user)
         return True
 
 
@@ -518,9 +519,6 @@ async def request_verification(request: Request, email: str) -> None:
             if elapsed_seconds < EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS:
                 return
 
-        user.email_verification_sent_at = now
-        await scope.commit()
-
         try:
             await manager.request_verify(user, request)
         except (UserInactive, UserAlreadyVerified):
@@ -529,6 +527,9 @@ async def request_verification(request: Request, email: str) -> None:
                 exc_info=True,
             )
             return
+
+        user.email_verification_sent_at = now
+        await scope.commit()
 
 
 async def _active_user_from_verification_token(

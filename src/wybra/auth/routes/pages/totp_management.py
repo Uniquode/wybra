@@ -190,7 +190,6 @@ async def totp_setup(request: Request) -> Response:
             counter,
             setup_challenge_error,
         ) = await verify_totp_code_for_credential(
-            session=scope,
             store=store,
             credential_id=str(credential.id),
             user_id=str(user.id),

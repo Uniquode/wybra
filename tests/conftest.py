@@ -46,6 +46,10 @@ def create_database_schema() -> Callable[[Any], Awaitable[None]]:
             "database",
             getattr(getattr(capability, "catalogue", None), "database", None),
         )
+        if database is None:
+            raise RuntimeError(
+                "Test capability does not expose a database for schema creation."
+            )
         async with database.transaction() as db_session:
 
             def _create_all(sync_session: Any) -> None:

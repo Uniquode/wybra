@@ -1501,7 +1501,6 @@ def test_wybra_auth_totp_verification_fails_closed_without_secret_keys(
                     SecretEnvelopeService.from_env({}),
                 )
                 accepted, counter, error = await verify_totp_code_for_credential(
-                    session=session,
                     store=missing_key_store,
                     credential_id=credential_id,
                     user_id=str(user.id),

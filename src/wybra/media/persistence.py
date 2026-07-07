@@ -10,6 +10,10 @@ from wybra.media.models import MediaItem, MediaResourceKey
 from wybra.site import SiteCapabilityProxy
 
 
+class MediaResourceKeyConflictError(RuntimeError):
+    """Raised when a resource key belongs to another media item."""
+
+
 class MediaCatalogueRepository(Protocol):
     """Storage-neutral catalogue operations required by media capability."""
 
@@ -109,6 +113,7 @@ class SqlAlchemyMediaCatalogueRepository:
                         resource_key=resource_key,
                     )
                 )
+            elif existing.media_id == media_id:
+                return
             else:
-                existing.media_id = media_id
-                session.add(existing)
+                raise MediaResourceKeyConflictError(resource_key)
