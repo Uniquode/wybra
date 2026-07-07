@@ -4,7 +4,7 @@ from starlette.datastructures import FormData
 
 from wybra.auth.ids import log_safe_uuid
 from wybra.auth.mfa.recovery import RECOVERY_CODE_LENGTH
-from wybra.auth.mfa.storage import TOTP_ACTIVE_STATUS, SqlAlchemyChallengeStore
+from wybra.auth.mfa.storage import TOTP_ACTIVE_STATUS
 from wybra.auth.mfa.totp import is_valid_totp_code
 from wybra.auth.models import User
 from wybra.auth.options import TOTP_DISABLED, TOTP_REQUIRED
@@ -163,8 +163,8 @@ async def _handle_totp_post_authentication_decision(
         return await _complete_login_ceremony(request, user, return_to=return_to)
 
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        credential_id = await _load_active_totp_credential_id(session, user.id)
+    async with session_factory() as scope:
+        credential_id = await _load_active_totp_credential_id(scope, user.id)
         if credential_id:
             challenge_id, login_nonce = await _create_totp_login_challenge(
                 request,
@@ -218,11 +218,10 @@ async def _handle_login_totp_challenge(
     session_factory = _session_factory_from_request(request)
     challenge_step = "totp"
 
-    async with session_factory() as session:
-        challenge_store = SqlAlchemyChallengeStore(session)
-        challenge = await challenge_store.get_challenge(challenge_id)
+    async with session_factory() as scope:
+        challenge = await scope.challenges.get_challenge(challenge_id)
         if challenge is None:
-            await session.commit()
+            await scope.commit()
             return _totp_login_error_response(
                 request,
                 email=email,
@@ -234,7 +233,7 @@ async def _handle_login_totp_challenge(
 
         if is_totp_setup_challenge(challenge):
             challenge_step = "setup"
-            challenge_user = await _load_user_by_id(session, challenge.user_id)
+            challenge_user = await _load_user_by_id(scope, challenge.user_id)
             now = current_timestamp()
             if (
                 challenge_user is None
@@ -258,8 +257,8 @@ async def _handle_login_totp_challenge(
                 default=return_to,
             )
             if setup_bypass:
-                await challenge_store.consume_challenge(challenge_id)
-                await session.commit()
+                await scope.challenges.consume_challenge(challenge_id)
+                await scope.commit()
 
                 ceremony_result = await complete_authentication_ceremony(
                     request,
@@ -321,7 +320,7 @@ async def _handle_login_totp_challenge(
                 challenge_step=challenge_step,
             )
 
-        user = await _load_user_by_id(session, challenge.user_id)
+        user = await _load_user_by_id(scope, challenge.user_id)
         if user is None:
             return _totp_login_error_response(
                 request,
@@ -368,7 +367,7 @@ async def _handle_login_totp_challenge(
                 challenge_step=challenge_step,
             )
 
-        store = totp_credential_store(request, session)
+        store = totp_credential_store(request, scope)
         credential = await store.get_totp_credential(credential_id)
         credential_problem = totp_credential_problem(
             credential,
@@ -384,8 +383,8 @@ async def _handle_login_totp_challenge(
                 log_safe_uuid(user.id),
                 credential_problem,
             )
-            await challenge_store.consume_challenge(challenge_id)
-            await session.commit()
+            await scope.challenges.consume_challenge(challenge_id)
+            await scope.commit()
             return _totp_login_error_response(
                 request,
                 email=email,
@@ -401,7 +400,6 @@ async def _handle_login_totp_challenge(
         if is_valid_totp_code(code):
             verification_timestamp = current_timestamp()
             accepted, counter, _challenge_error = await verify_totp_code_for_credential(
-                session=session,
                 store=store,
                 credential_id=credential_id,
                 user_id=str(user.id),
@@ -434,7 +432,7 @@ async def _handle_login_totp_challenge(
                     challenge_step=challenge_step,
                 )
 
-            recovery_store = recovery_code_store(request, session)
+            recovery_store = recovery_code_store(request, scope)
             if not await recovery_store.consume_recovery_code(
                 str(user.id),
                 recovery_code,
@@ -460,8 +458,8 @@ async def _handle_login_totp_challenge(
                 challenge_step=challenge_step,
             )
 
-        await challenge_store.consume_challenge(challenge_id)
-        await session.commit()
+        await scope.challenges.consume_challenge(challenge_id)
+        await scope.commit()
 
     ceremony_result = await complete_authentication_ceremony(
         request,

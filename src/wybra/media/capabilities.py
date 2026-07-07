@@ -7,13 +7,14 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import anyio
-from sqlalchemy import select
 
 from wybra.core import InputValidationError
-from wybra.db import DatabaseCapability
 from wybra.media.config import MediaSettings
-from wybra.media.models import MediaItem, MediaResourceKey
-from wybra.site import SiteCapabilityProxy
+from wybra.media.models import MediaItem
+from wybra.media.persistence import (
+    MediaCatalogueRepository,
+    MediaResourceKeyConflictError,
+)
 
 
 class MediaError(RuntimeError):
@@ -108,7 +109,7 @@ class MediaUpload(Protocol):
 @dataclass(frozen=True, slots=True)
 class FilesystemMediaCapability:
     settings: MediaSettings
-    database: SiteCapabilityProxy[DatabaseCapability]
+    catalogue: MediaCatalogueRepository
     _writable_root_validated: bool = field(default=False, init=False, repr=False)
 
     @property
@@ -137,24 +138,19 @@ class FilesystemMediaCapability:
         resource_key: str | None = None,
     ) -> MediaItem:
         media_resource_key = _resource_key_value(resource_key)
-        item = MediaItem(
-            category=_category_value(category),
-            storage_key=_storage_key(storage_key),
-            content_type=content_type,
-            size=_size_value(size),
-        )
-        async with self.database.transaction() as session:
-            session.add(item)
-            await session.flush()
-            if media_resource_key is not None:
-                session.add(
-                    MediaResourceKey(
-                        media_id=item.id,
-                        resource_key=media_resource_key,
-                    )
-                )
-            await session.refresh(item)
-        return item
+        try:
+            return await self.catalogue.create_item(
+                category=_category_value(category),
+                storage_key=_storage_key(storage_key),
+                content_type=content_type,
+                size=_size_value(size),
+                resource_key=media_resource_key,
+            )
+        except MediaResourceKeyConflictError as exc:
+            raise MediaInputError(
+                f"Media resource key is already assigned: "
+                f"resource_key={media_resource_key}."
+            ) from exc
 
     async def store(
         self,
@@ -216,10 +212,7 @@ class FilesystemMediaCapability:
             raise
 
     async def get(self, media_id: uuid.UUID) -> MediaItem:
-        async with self.database.session() as session:
-            item = await session.scalar(
-                select(MediaItem).where(MediaItem.id == media_id)
-            )
+        item = await self.catalogue.get_item(media_id)
         if item is None:
             raise MediaNotFoundError(f"Unknown media item: media_id={media_id}.")
         return item
@@ -235,15 +228,9 @@ class FilesystemMediaCapability:
 
     async def get_by_resource_key(self, resource_key: str) -> MediaItem:
         validated_resource_key = _resource_key_value(resource_key)
-        async with self.database.session() as session:
-            media = await session.scalar(
-                select(MediaItem)
-                .join(
-                    MediaResourceKey,
-                    MediaItem.id == MediaResourceKey.media_id,
-                )
-                .where(MediaResourceKey.resource_key == validated_resource_key)
-            )
+        if validated_resource_key is None:
+            raise MediaInputError("Media resource key must not be blank.")
+        media = await self.catalogue.get_item_by_resource_key(validated_resource_key)
         if media is None:
             raise MediaNotFoundError(
                 f"Unknown media resource key: resource_key={resource_key}."
@@ -256,23 +243,16 @@ class FilesystemMediaCapability:
         resource_key: str,
     ) -> None:
         validated_resource_key = _resource_key_value(resource_key)
+        if validated_resource_key is None:
+            raise MediaInputError("Media resource key must not be blank.")
         _ = await self.get(media_id)
-        async with self.database.transaction() as session:
-            existing = await session.scalar(
-                select(MediaResourceKey).where(
-                    MediaResourceKey.resource_key == validated_resource_key
-                )
-            )
-            if existing is None:
-                session.add(
-                    MediaResourceKey(
-                        media_id=media_id,
-                        resource_key=validated_resource_key,
-                    )
-                )
-            else:
-                existing.media_id = media_id
-                session.add(existing)
+        try:
+            await self.catalogue.assign_resource_key(media_id, validated_resource_key)
+        except MediaResourceKeyConflictError as exc:
+            raise MediaInputError(
+                f"Media resource key is already assigned: "
+                f"resource_key={validated_resource_key}."
+            ) from exc
 
     def path_for_key(self, storage_key: str | Path) -> Path:
         key_path = _key_path(storage_key)

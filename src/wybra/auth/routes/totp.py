@@ -12,8 +12,6 @@ import qrcode.image.svg
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from markupsafe import Markup
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from wybra.auth.ids import parse_uuid
 from wybra.auth.mfa.challenges import (
@@ -24,13 +22,16 @@ from wybra.auth.mfa.challenges import (
 )
 from wybra.auth.mfa.storage import (
     TOTP_ACTIVE_STATUS,
+    TOTP_CODE_REPLAY_MESSAGE,
     ChallengeRecord,
-    SqlAlchemyRecoveryCodeStore,
-    SqlAlchemyTOTPCredentialStore,
 )
-from wybra.auth.mfa.totp import DEFAULT_TOTP_DIGITS, is_valid_totp_code, verify_totp
-from wybra.auth.models import IdentityTotpCredential
+from wybra.auth.mfa.totp import DEFAULT_TOTP_DIGITS, is_valid_totp_code
 from wybra.auth.options import TOTP_DISABLED, IdentityOptions
+from wybra.auth.persistence.contracts import (
+    AuthPersistenceScope,
+    RecoveryCodeStore,
+    TOTPCredentialStore,
+)
 from wybra.auth.result import (
     ERROR_TOTP_CODE_REQUIRED,
     ERROR_TOTP_INVALID,
@@ -41,7 +42,6 @@ from wybra.auth.result import (
 from wybra.auth.sessions import session_cookie_secure_for_request
 from wybra.auth.settings import auth_settings_from_state, identity_options_from_state
 from wybra.auth.timestamps import current_timestamp
-from wybra.services.crypto import SecretDataError, SecretMaterialMissingError
 from wybra.template import render_page
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,6 @@ TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE: Final[dict[str, str]] = {
     ),
     ERROR_VERIFICATION_CODE_INVALID: "Verification code is invalid.",
 }
-TOTP_CODE_REPLAY_MESSAGE: Final[str] = "Authenticator code has already been used."
 RECOVERY_CODES_DOWNLOAD_FILENAME: Final[str] = "recovery-codes.txt"
 TOTP_SETUP_PAGE_MESSAGES: Final[dict[str, str]] = {
     "complete": "Your authenticator has been enabled.",
@@ -146,24 +145,18 @@ def totp_issuer(request: Request) -> str:
 
 def totp_credential_store(
     request: Request,
-    session: AsyncSession,
-) -> SqlAlchemyTOTPCredentialStore:
-    secret_service = getattr(request.app.state, "secret_envelope_service", None)
-    if secret_service is None:
-        return SqlAlchemyTOTPCredentialStore(session)
-
-    return SqlAlchemyTOTPCredentialStore(session, secret_service)
+    scope: AuthPersistenceScope,
+) -> TOTPCredentialStore:
+    del request
+    return scope.totp_credentials
 
 
 def recovery_code_store(
     request: Request,
-    session: AsyncSession,
-) -> SqlAlchemyRecoveryCodeStore:
-    secret_service = getattr(request.app.state, "secret_envelope_service", None)
-    if secret_service is None:
-        return SqlAlchemyRecoveryCodeStore(session)
-
-    return SqlAlchemyRecoveryCodeStore(session, secret_service)
+    scope: AuthPersistenceScope,
+) -> RecoveryCodeStore:
+    del request
+    return scope.recovery_codes
 
 
 def login_context(
@@ -312,24 +305,24 @@ def clear_totp_setup_nonce_cookie(response: Response, request: Request) -> None:
 
 
 def totp_credential_problem(
-    credential: IdentityTotpCredential | None,
+    credential: object | None,
     *,
     expected_user_id: str,
     expected_status: str,
 ) -> str | None:
     if credential is None:
         return "missing_credential"
-    if str(credential.user_id) != expected_user_id:
+    if str(getattr(credential, "user_id", "")) != expected_user_id:
         return "user_mismatch"
-    if credential.status != expected_status:
-        return f"invalid_status:{credential.status}"
+    credential_status = getattr(credential, "status", None)
+    if credential_status != expected_status:
+        return f"invalid_status:{credential_status}"
     return None
 
 
 async def verify_totp_code_for_credential(
     *,
-    session: AsyncSession,
-    store: SqlAlchemyTOTPCredentialStore,
+    store: TOTPCredentialStore,
     credential_id: str,
     user_id: str,
     code: str,
@@ -344,49 +337,15 @@ async def verify_totp_code_for_credential(
     if not is_valid_totp_code(code):
         return False, None, None
 
-    credential = (
-        await session.execute(
-            select(IdentityTotpCredential)
-            .where(IdentityTotpCredential.id == parsed_credential_id)
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if (
-        credential is None
-        or str(credential.user_id) != user_id
-        or credential.status != expected_status
-    ):
-        return False, None, None
-
-    verification_time = current_timestamp() if timestamp is None else timestamp
-    try:
-        secret = store.decrypt_totp_secret(credential)
-    except (SecretDataError, SecretMaterialMissingError) as exc:
-        logger.error(
-            "Unable to verify TOTP credential because secret material "
-            "is unavailable or invalid: credential_id=%s user_id=%s",
-            credential_id,
-            user_id,
-            exc_info=exc,
-        )
-        return False, None, None
-
-    accepted, counter = verify_totp(
-        secret,
-        code,
-        timestamp=verification_time,
-        period=options.totp_period_seconds,
+    return await store.verify_totp_credential(
+        credential_id=str(parsed_credential_id),
+        user_id=user_id,
+        code=code,
+        period_seconds=options.totp_period_seconds,
         allowed_drift=options.totp_allowed_drift,
+        expected_status=expected_status,
+        timestamp=timestamp,
     )
-    if not accepted or counter is None:
-        return False, None, None
-
-    last_used_counter = getattr(credential, "last_used_counter", None)
-    if last_used_counter is not None and counter <= last_used_counter:
-        return False, None, TOTP_CODE_REPLAY_MESSAGE
-
-    credential.last_used_counter = counter
-    return True, counter, None
 
 
 def render_totp_login_challenge(

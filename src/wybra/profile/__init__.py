@@ -14,6 +14,7 @@ from wybra.profile.capabilities import (
     profile_picture_storage_key,
 )
 from wybra.profile.editing import render_profile_bio
+from wybra.profile.persistence import SqlAlchemyProfileRepository
 from wybra.profile.phone import (
     CountryChoice,
     NormalisedPhoneContact,
@@ -37,7 +38,10 @@ from wybra.site import Site
 async def setup_site(site: Site) -> None:
     site.provide_capability(
         ProfileCapability,
-        SiteProfileCapability(site.capability_proxy(MediaCapability)),
+        SiteProfileCapability(
+            site.capability_proxy(MediaCapability),
+            SqlAlchemyProfileRepository(site.capability_proxy(DatabaseCapability)),
+        ),
     )
 
 
@@ -49,6 +53,8 @@ async def post_setup_site(site: Site) -> None:
     capability = site.require_capability(ProfileCapability)
     if isinstance(capability, SiteProfileCapability):
         capability.media.finalise_optional()
+        if isinstance(capability.repository, SqlAlchemyProfileRepository):
+            capability.repository.database.finalise_required()
 
 
 __all__ = (

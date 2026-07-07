@@ -20,11 +20,6 @@ import pytest
 from click.testing import CliRunner
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Request
-from fastapi_users.exceptions import (
-    InvalidPasswordException,
-    UserAlreadyExists,
-    UserNotExists,
-)
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,9 +39,16 @@ import wybra.auth.sessions as identity_sessions
 import wybra.db.migrate as migrate_module
 from support_database import sqlite_file_url, sync_sqlite_file_url
 from wybra.auth import ERROR_EMAIL_VERIFICATION_REQUIRED, ERROR_INACTIVE_USER
-from wybra.auth.accounts.manager import UserManager, create_user_manager
-from wybra.auth.accounts.schemas import UserCreate
+from wybra.auth.accounts.manager import (
+    InvalidPasswordException,
+    UserAlreadyExists,
+    UserManager,
+    UserNotExists,
+    create_user_manager,
+)
+from wybra.auth.accounts.schemas import UserCreate, UserUpdate
 from wybra.auth.models import (
+    AccessToken,
     Base,
     Group,
     GroupGroup,
@@ -60,7 +62,12 @@ from wybra.auth.models import (
     User,
 )
 from wybra.auth.options import PROVIDER, IdentityOptions
-from wybra.auth.persistence import create_database_strategy, create_user_database
+from wybra.auth.persistence import (
+    SqlAlchemyAuthPersistenceCapability,
+    create_database_strategy,
+    create_user_database,
+)
+from wybra.auth.persistence.contracts import AuthPersistenceCapability
 from wybra.auth.persistence.database import (
     SQLITE_MEMORY_DATABASE_URL,
     parse_sqlite_database_url,
@@ -81,10 +88,14 @@ from wybra.auth.settings import (
     PASSWORD_POLICY_SECTION_FIELD,
     PASSWORD_SECTION_FIELD,
     AuthSettings,
-    load_auth_settings,
     validate_auth_settings,
 )
-from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
+from wybra.config import (
+    AppConfigSource,
+    ConfigService,
+    ConfigSourceError,
+    MappingConfigSource,
+)
 from wybra.core.composition import (
     AppConfig,
     AssetOptions,
@@ -92,6 +103,7 @@ from wybra.core.composition import (
     TemplateOptions,
     load_app_config,
 )
+from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
 from wybra.db.persistence import (
@@ -148,25 +160,15 @@ class CaptureDelivery:
         self.verification_tokens.append((user.email, token))
 
 
-@dataclass(slots=True)
-class TimestampVisibleVerificationDelivery:
-    session_factory: object
-    verification_tokens: list[tuple[str, str]]
-    visible_timestamp: float | None = None
-
+class FailingVerificationDelivery:
     async def send_verification_token(
         self,
         user: User,
         token: str,
         request: Request | None = None,
     ) -> None:
-        async with session_scope(self.session_factory) as session:  # type: ignore[arg-type]
-            refreshed_user = (
-                await session.execute(select(User).where(User.email == user.email))
-            ).scalar_one()
-            self.visible_timestamp = refreshed_user.email_verification_sent_at
-
-        self.verification_tokens.append((user.email, token))
+        del user, token, request
+        raise RuntimeError("verification delivery failed")
 
 
 @dataclass(slots=True)
@@ -217,6 +219,10 @@ def create_auth_test_app(
         SqlAlchemyDatabaseCapability.from_connections(
             {"default": database, "reader": database, "writer": database}
         ),
+    )
+    site.provide_capability(
+        AuthPersistenceCapability,
+        SqlAlchemyAuthPersistenceCapability(site.capability_proxy(DatabaseCapability)),
     )
     app.state.site = site
     return app
@@ -285,6 +291,14 @@ def load_auth_test_app_config(
             *auth_lines,
             database_url=database_url,
         ),
+    )
+
+
+def auth_settings_config(app_config: AppConfig) -> ConfigService:
+    return ConfigService(
+        [AppConfigSource(app_config)],
+        config_defs=(RUNTIME_CONFIG_DEF, AuthSettings.module_config),
+        discover_module_config=False,
     )
 
 
@@ -747,6 +761,30 @@ def test_authmgr_loads_app_auth_configuration(
     assert user.email == email
 
 
+def test_authmgr_command_secret_service_uses_configured_crypto_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured_key_name = "AUTHMGR_CONFIGURED_SECRET_KEY"
+    monkeypatch.setenv(ENV_WYBRA_SECRET_KEY_CURRENT, secret_key_entry_for_tests())
+    monkeypatch.setenv(configured_key_name, secret_key_entry_for_tests("configured"))
+    config_path = write_auth_app_toml(tmp_path / "app.toml")
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"""
+
+[secrets.crypto]
+source = "environment"
+current_key = "{configured_key_name}"
+"""
+        )
+    app_config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    service = authmgr_runtime._secret_envelope_service_for_command(app_config)
+
+    assert service.current_version_required() == "configured"
+
+
 def test_authmgr_config_option_overrides_app_config_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -869,7 +907,8 @@ def test_app_database_url_precedence(
         for key, value in environ_template.items()
     }
 
-    settings = load_auth_settings(
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
         app_config=app_config,
         environ=environ,
     )
@@ -886,7 +925,11 @@ def test_app_database_url_resolves_relative_sqlite_path_from_config_directory(
         database_url="sqlite+aiosqlite:///relative-auth.sqlite3",
     )
 
-    settings = load_auth_settings(app_config=app_config, environ={})
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
+        app_config=app_config,
+        environ={},
+    )
 
     assert settings.database_url == sqlite_file_url(
         config_path.parent / "relative-auth.sqlite3"
@@ -904,7 +947,11 @@ def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None
     )
 
     with pytest.raises(ConfigurationError, match=r"\[app\]\.database_url"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_app_auth_config_rejects_unknown_auth_options(tmp_path: Path) -> None:
@@ -914,7 +961,11 @@ def test_app_auth_config_rejects_unknown_auth_options(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigurationError, match="session_lifetme_seconds"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_app_auth_config_rejects_stale_auth_database_url(tmp_path: Path) -> None:
@@ -924,7 +975,11 @@ def test_app_auth_config_rejects_stale_auth_database_url(tmp_path: Path) -> None
     )
 
     with pytest.raises(ConfigurationError, match="database_url"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
@@ -935,7 +990,8 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
         "passkey_enabled = true",
     )
 
-    settings = load_auth_settings(
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
         app_config=app_config,
         environ={
             "PROVIDER_ENABLED": "false",
@@ -974,7 +1030,11 @@ def test_app_auth_configures_passkey_options(tmp_path: Path) -> None:
         'counter_policy = "reject-regression"',
     )
 
-    settings = load_auth_settings(app_config=app_config, environ={})
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
+        app_config=app_config,
+        environ={},
+    )
 
     assert settings.identity_options.passkey_enabled is True
     assert settings.identity_options.passkey_rp_id == "app.example.com"
@@ -1088,7 +1148,11 @@ def test_app_auth_rejects_unknown_passkey_options(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigurationError, match="credential_policy"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 @pytest.mark.parametrize(
@@ -1111,7 +1175,11 @@ def test_app_auth_config_rejects_non_positive_duration_settings(
         ConfigSourceError,
         match=rf"auth\.{setting_name} is invalid: .*positive integer",
     ):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 @pytest.mark.parametrize(
@@ -1132,7 +1200,11 @@ def test_app_auth_env_rejects_non_positive_duration_settings(
     app_config = load_auth_test_app_config(tmp_path / "app.toml")
 
     with pytest.raises(ConfigurationError, match=message):
-        load_auth_settings(app_config=app_config, environ={env_name: env_value})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={env_name: env_value},
+        )
 
 
 def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None:
@@ -1315,7 +1387,11 @@ def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:
         'common_fragments = ["example"]',
     )
 
-    settings = load_auth_settings(app_config=app_config, environ={})
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
+        app_config=app_config,
+        environ={},
+    )
 
     assert settings.identity_options.session_cookie_force_secure is True
     policy = settings.identity_options.resolved_password_policy()
@@ -1516,7 +1592,11 @@ def test_app_auth_rejects_invalid_password_common_fragments(
     )
 
     with pytest.raises(ConfigurationError, match="common fragments"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_app_auth_rejects_unknown_password_policy_options(tmp_path: Path) -> None:
@@ -1528,7 +1608,11 @@ def test_app_auth_rejects_unknown_password_policy_options(tmp_path: Path) -> Non
     )
 
     with pytest.raises(ConfigurationError, match="minimum_strenth"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 @pytest.mark.parametrize("command", ["group", "scope", "user"])
@@ -2300,16 +2384,103 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
         asyncio.run(close_database(_database_from_app(web_app)))
 
 
+def test_identity_session_reset_password_revokes_existing_sessions(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "reset-password-revokes.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+    web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
+
+    async def assert_reset_revokes_sessions() -> None:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.auth_settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="reset-revoke@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                ),
+                safe=True,
+            )
+            session.add(AccessToken(token="existing-session", user_id=user.id))
+            await session.commit()
+
+        await identity_sessions.request_password_reset(
+            Request({"type": "http", "app": web_app}),
+            "reset-revoke@example.com",
+        )
+        [(_email, reset_token)] = web_app.state.identity_delivery.reset_tokens
+
+        assert await identity_sessions.reset_password(
+            Request({"type": "http", "app": web_app}),
+            reset_token,
+            UPDATED_STRONG_TEST_PASSWORD,
+        )
+
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            tokens = (await session.execute(select(AccessToken))).scalars().all()
+            assert tokens == []
+
+    try:
+        asyncio.run(assert_reset_revokes_sessions())
+    finally:
+        asyncio.run(close_database(_database_from_app(web_app)))
+
+
+def test_user_manager_update_email_updates_primary_owned_email(
+    tmp_path: Path,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "update-primary-email.sqlite3")
+    initialise_identity_database(database_url)
+    web_app = create_auth_test_app(database_url=database_url)
+
+    async def assert_email_update_is_synchronised() -> None:
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            manager = create_user_manager(
+                session,
+                web_app.state.auth_settings.identity_options,
+            )
+            user = await manager.create(
+                UserCreate(
+                    email="old@example.com",
+                    password=STRONG_TEST_PASSWORD,
+                    is_verified=True,
+                ),
+                safe=True,
+            )
+
+            updated_user = await manager.update(
+                UserUpdate(email="New@Example.com"),
+                user,
+                safe=True,
+            )
+
+            assert updated_user.email == "new@example.com"
+            assert updated_user.is_verified is False
+            with pytest.raises(UserNotExists):
+                await manager.get_by_email("old@example.com")
+            assert (await manager.get_by_email("new@example.com")).id == user.id
+
+    try:
+        asyncio.run(assert_email_update_is_synchronised())
+        [primary_email] = identity_user_emails_from_database(database_url)
+        assert primary_email.email == "new@example.com"
+        assert primary_email.is_primary is True
+        assert primary_email.is_verified is False
+    finally:
+        asyncio.run(close_database(_database_from_app(web_app)))
+
+
 def test_request_verification_uses_secondary_email_alias_for_lookup(
     tmp_path: Path,
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "request-verification-secondary.sqlite3")
     initialise_identity_database(database_url)
     web_app = create_auth_test_app(database_url=database_url)
-    web_app.state.identity_delivery = TimestampVisibleVerificationDelivery(
-        session_factory=_session_factory_from_app(web_app),
-        verification_tokens=[],
-    )
+    web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_verification_alias_resolution() -> None:
         async with _database_from_app(web_app).engine.begin() as connection:
@@ -2348,7 +2519,6 @@ def test_request_verification_uses_secondary_email_alias_for_lookup(
                 web_app.state.identity_delivery.verification_tokens[0][1],
             ),
         ]
-        assert web_app.state.identity_delivery.visible_timestamp is not None
 
     try:
         asyncio.run(assert_verification_alias_resolution())
@@ -3114,13 +3284,9 @@ def test_request_verification_records_email_verification_sent_timestamp() -> Non
         asyncio.run(close_database(_database_from_app(web_app)))
 
 
-def test_request_verification_commits_timestamp_before_delivery() -> None:
+def test_request_verification_does_not_record_timestamp_when_delivery_fails() -> None:
     web_app = create_auth_test_app()
-    delivery = TimestampVisibleVerificationDelivery(
-        session_factory=_session_factory_from_app(web_app),
-        verification_tokens=[],
-    )
-    web_app.state.identity_delivery = delivery
+    web_app.state.identity_delivery = FailingVerificationDelivery()
 
     async def seed_user() -> None:
         async with _database_from_app(web_app).engine.begin() as connection:
@@ -3139,20 +3305,24 @@ def test_request_verification_commits_timestamp_before_delivery() -> None:
                 safe=True,
             )
 
-    async def assert_timestamp_visible_to_delivery() -> None:
-        await identity_sessions.request_verification(
-            Request({"type": "http", "app": web_app}),
-            "verify-atomic@example.com",
-        )
+    async def assert_failed_delivery_does_not_throttle_user() -> None:
+        with pytest.raises(RuntimeError, match="verification delivery failed"):
+            await identity_sessions.request_verification(
+                Request({"type": "http", "app": web_app}),
+                "verify-atomic@example.com",
+            )
 
-        assert len(delivery.verification_tokens) == 1
-        assert delivery.verification_tokens[0][0] == "verify-atomic@example.com"
-        assert isinstance(delivery.visible_timestamp, float)
-        assert delivery.visible_timestamp > 0
+        async with session_scope(_session_factory_from_app(web_app)) as session:
+            user = (
+                await session.execute(
+                    select(User).where(User.email == "verify-atomic@example.com")
+                )
+            ).scalar_one()
+            assert user.email_verification_sent_at is None
 
     try:
         asyncio.run(seed_user())
-        asyncio.run(assert_timestamp_visible_to_delivery())
+        asyncio.run(assert_failed_delivery_does_not_throttle_user())
     finally:
         asyncio.run(close_database(_database_from_app(web_app)))
 
@@ -4312,10 +4482,15 @@ def test_authmgr_create_rejects_invalid_timezone_without_creating_user(
     assert identity_users_from_database(database_url) == []
 
 
+@pytest.mark.parametrize(
+    "invalid_timezone",
+    ["Not/AZone", "../UTC"],
+)
 def test_authmgr_update_rejects_invalid_timezone_without_updating_user(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    invalid_timezone: str,
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "invalid-update-timezone.sqlite3")
     initialise_identity_database(database_url)
@@ -4343,7 +4518,7 @@ def test_authmgr_update_rejects_invalid_timezone_without_updating_user(
             "update",
             "invalid-update-timezone@example.com",
             "--timezone",
-            "Not/AZone",
+            invalid_timezone,
         ]
     )
 

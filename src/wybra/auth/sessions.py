@@ -1,34 +1,28 @@
 from __future__ import annotations
 
 import logging
-import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import Final, cast
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import Response
-from fastapi.security import OAuth2PasswordRequestForm
-from fastapi_users import FastAPIUsers
-from fastapi_users.authentication import AuthenticationBackend, CookieTransport
-from fastapi_users.authentication.strategy.db import DatabaseStrategy
-from fastapi_users.exceptions import (
-    FastAPIUsersException,
+from jwt import PyJWTError
+from pydantic import ValidationError
+
+from wybra.auth.accounts.manager import (
     InvalidID,
     InvalidPasswordException,
+    InvalidResetPasswordToken,
     InvalidVerifyToken,
     UserAlreadyExists,
     UserAlreadyVerified,
-    UserNotExists,
-)
-from fastapi_users.jwt import decode_jwt
-from jwt import PyJWTError
-from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from wybra.auth.accounts.manager import (
+    UserInactive,
     UserManager,
-    create_user_manager,
+    UserNotExists,
+    create_user_manager_from_store,
+    decode_identity_jwt,
     public_password_error_type,
 )
 from wybra.auth.accounts.schemas import UserCreate
@@ -39,11 +33,15 @@ from wybra.auth.mfa.challenges import (
     AuthenticationMethod,
     assertions_satisfy_required_methods,
 )
-from wybra.auth.models import AccessToken, LocalUser, User
+from wybra.auth.models import User
 from wybra.auth.options import IdentityOptions
 from wybra.auth.persistence import (
-    create_database_strategy,
-    delete_session_token_by_value,
+    PersistentSessionTokenStrategy,
+)
+from wybra.auth.persistence.contracts import (
+    AuthPersistenceCapability,
+    AuthPersistenceScope,
+    LocalUserRecord,
 )
 from wybra.auth.result import (
     ERROR_ALREADY_EXISTS,
@@ -60,7 +58,6 @@ from wybra.auth.result import (
 )
 from wybra.auth.settings import identity_options_from_state
 from wybra.auth.timestamps import current_timestamp
-from wybra.db import DatabaseCapability
 from wybra.site import get_site
 
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"
@@ -87,18 +84,24 @@ _logged_forward_header_misconfig = False
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class PasswordCredentials:
+    username: str
+    password: str
+
+
 def _identity_options_from_request(request: Request) -> IdentityOptions:
     return identity_options_from_state(request.app.state)
 
 
-def _database_from_request(request: Request) -> DatabaseCapability:
-    return get_site(request.app).require_capability(DatabaseCapability)
+def _persistence_from_request(request: Request) -> AuthPersistenceCapability:
+    return get_site(request.app).require_capability(AuthPersistenceCapability)
 
 
-def _session_from_request(
+def _persistence_scope_from_request(
     request: Request,
-) -> AbstractAsyncContextManager[AsyncSession]:
-    return _database_from_request(request).session()
+) -> AbstractAsyncContextManager[AuthPersistenceScope]:
+    return _persistence_from_request(request).session()
 
 
 def _delivery_from_request(request: Request) -> IdentityDelivery:
@@ -111,76 +114,17 @@ def _delivery_from_request(request: Request) -> IdentityDelivery:
 
 def _profile_lookup_from_request(
     request: Request,
-    session: AsyncSession,
-) -> Callable[[User], Awaitable[object | None]] | None:
+) -> Callable[[LocalUserRecord], Awaitable[object | None]] | None:
     from wybra.profile.capabilities import ProfileCapability
 
     profile_capability = get_site(request.app).optional_capability(ProfileCapability)
     if profile_capability is None:
         return None
 
-    async def lookup(user: User) -> object | None:
-        return await profile_capability.get_profile(session, user.id)
+    async def lookup(user: LocalUserRecord) -> object | None:
+        return await profile_capability.get_profile(user.id)
 
     return lookup
-
-
-def create_user_manager_dependency(
-    options: IdentityOptions,
-) -> Callable[[Request], AsyncIterator[UserManager]]:
-    async def get_user_manager(request: Request) -> AsyncIterator[UserManager]:
-        database = _database_from_request(request)
-        async with database.session() as session:
-            yield create_user_manager(
-                session,
-                options,
-                _delivery_from_request(request),
-                _profile_lookup_from_request(request, session),
-            )
-
-    return get_user_manager
-
-
-def create_database_strategy_dependency(
-    options: IdentityOptions,
-) -> Callable[
-    [Request],
-    AsyncIterator[DatabaseStrategy[LocalUser, uuid.UUID, AccessToken]],
-]:
-    async def get_database_strategy(
-        request: Request,
-    ) -> AsyncIterator[DatabaseStrategy[LocalUser, uuid.UUID, AccessToken]]:
-        database = _database_from_request(request)
-        async with database.session() as session:
-            yield create_database_strategy(session, options)
-
-    return get_database_strategy
-
-
-def create_authentication_backend(
-    options: IdentityOptions,
-) -> AuthenticationBackend[LocalUser, uuid.UUID]:
-    transport = CookieTransport(
-        cookie_name=options.session_cookie_name,
-        cookie_max_age=options.session_lifetime_seconds,
-        cookie_secure=options.session_cookie_force_secure,
-        cookie_httponly=True,
-        cookie_samesite="lax",
-    )
-    return AuthenticationBackend(
-        name="session",
-        transport=transport,
-        get_strategy=create_database_strategy_dependency(options),
-    )
-
-
-def create_fastapi_users(
-    options: IdentityOptions,
-) -> FastAPIUsers[LocalUser, uuid.UUID]:
-    return FastAPIUsers(
-        create_user_manager_dependency(options),
-        [create_authentication_backend(options)],
-    )
 
 
 def set_session_cookie(
@@ -341,21 +285,24 @@ async def resolve_current_user(request: Request) -> User | None:
     if token is None:
         return _cache_current_user(request, token, None)
 
-    async with _session_from_request(request) as session:
-        manager = create_user_manager(
-            session,
+    async with _persistence_scope_from_request(request) as scope:
+        manager = create_user_manager_from_store(
+            scope.users,
             options,
             _delivery_from_request(request),
-            _profile_lookup_from_request(request, session),
+            _profile_lookup_from_request(request),
         )
-        strategy = create_database_strategy(session, options)
+        strategy = PersistentSessionTokenStrategy(
+            scope.session_tokens,
+            lifetime_seconds=options.session_lifetime_seconds,
+        )
         now = current_timestamp()
         user = await strategy.read_token(token, manager)
         if user is not None and not is_user_effectively_active(user, now=now):
-            await delete_session_token_by_value(session, token)
+            await scope.session_tokens.delete(token)
             return _cache_current_user(request, token, None)
 
-        return _cache_current_user(request, token, user)
+        return _cache_current_user(request, token, cast(User | None, user))
 
 
 async def optional_current_user(request: Request) -> User | None:
@@ -388,21 +335,21 @@ async def authenticate_user(
     password: str,
 ) -> User | None:
     options = _identity_options_from_request(request)
-    credentials = OAuth2PasswordRequestForm(username=email, password=password)
+    credentials = PasswordCredentials(username=email, password=password)
 
-    async with _session_from_request(request) as session:
-        manager = create_user_manager(
-            session,
+    async with _persistence_scope_from_request(request) as scope:
+        manager = create_user_manager_from_store(
+            scope.users,
             options,
             _delivery_from_request(request),
-            _profile_lookup_from_request(request, session),
+            _profile_lookup_from_request(request),
         )
         now = current_timestamp()
         user = await manager.authenticate(credentials)
         if user is None or not is_user_effectively_active(user, now=now):
             return None
 
-        return user
+        return cast(User, user)
 
 
 async def create_local_user_from_signup(
@@ -414,12 +361,12 @@ async def create_local_user_from_signup(
     if options.account_creation_policy != "public-signup":
         return Result.failure(ERROR_POLICY_DISABLED)
 
-    async with _session_from_request(request) as session:
-        manager = create_user_manager(
-            session,
+    async with _persistence_scope_from_request(request) as scope:
+        manager = create_user_manager_from_store(
+            scope.users,
             options,
             _delivery_from_request(request),
-            _profile_lookup_from_request(request, session),
+            _profile_lookup_from_request(request),
         )
         try:
             user_create = UserCreate(
@@ -452,8 +399,8 @@ async def complete_authentication_ceremony(
     assertions: tuple[AuthenticationAssertion, ...] = (),
 ) -> Result[str]:
     options = _identity_options_from_request(request)
-    async with _session_from_request(request) as session:
-        current_user = await session.get(User, user.id)
+    async with _persistence_scope_from_request(request) as scope:
+        current_user = cast(User | None, await scope.get_user(user.id))
         now = current_timestamp()
         if current_user is None or not is_user_effectively_active(
             current_user,
@@ -477,8 +424,11 @@ async def complete_authentication_ceremony(
             return Result.failure(ERROR_AUTHENTICATION_METHOD_REQUIRED)
 
         current_user.last_login_at = now
-        strategy = create_database_strategy(session, options)
-        return Result.ok(await strategy.write_token(cast(LocalUser, current_user)))
+        strategy = PersistentSessionTokenStrategy(
+            scope.session_tokens,
+            lifetime_seconds=options.session_lifetime_seconds,
+        )
+        return Result.ok(await strategy.write_token(current_user))
 
 
 async def destroy_session_token(request: Request) -> None:
@@ -487,20 +437,20 @@ async def destroy_session_token(request: Request) -> None:
     if token is None:
         return
 
-    async with _session_from_request(request) as session:
-        await delete_session_token_by_value(session, token)
+    async with _persistence_scope_from_request(request) as scope:
+        await scope.session_tokens.delete(token)
 
     _cache_current_user(request, token, None)
 
 
 async def request_password_reset(request: Request, email: str) -> None:
     options = _identity_options_from_request(request)
-    async with _session_from_request(request) as session:
-        manager = create_user_manager(
-            session,
+    async with _persistence_scope_from_request(request) as scope:
+        manager = create_user_manager_from_store(
+            scope.users,
             options,
             _delivery_from_request(request),
-            _profile_lookup_from_request(request, session),
+            _profile_lookup_from_request(request),
         )
         try:
             user = await manager.get_by_email(email)
@@ -515,7 +465,7 @@ async def request_password_reset(request: Request, email: str) -> None:
 
         try:
             await manager.forgot_password(user, request)
-        except FastAPIUsersException:
+        except (InvalidResetPasswordToken, UserInactive, InvalidPasswordException):
             logger.warning(
                 "Password reset request was rejected by the identity backend.",
                 exc_info=True,
@@ -525,29 +475,30 @@ async def request_password_reset(request: Request, email: str) -> None:
 
 async def reset_password(request: Request, token: str, password: str) -> bool:
     options = _identity_options_from_request(request)
-    async with _session_from_request(request) as session:
-        manager = create_user_manager(
-            session,
+    async with _persistence_scope_from_request(request) as scope:
+        manager = create_user_manager_from_store(
+            scope.users,
             options,
             _delivery_from_request(request),
-            _profile_lookup_from_request(request, session),
+            _profile_lookup_from_request(request),
         )
         if not await _reset_token_user_is_effectively_active(manager, token):
             return False
 
         try:
-            await manager.reset_password(token, password, request)
-        except FastAPIUsersException:
+            user = await manager.reset_password(token, password, request)
+        except (InvalidResetPasswordToken, UserInactive, InvalidPasswordException):
             return False
 
+        await scope.session_tokens.delete_for_user(user)
         return True
 
 
 async def request_verification(request: Request, email: str) -> None:
     options = _identity_options_from_request(request)
-    async with _session_from_request(request) as session:
-        manager = create_user_manager(
-            session,
+    async with _persistence_scope_from_request(request) as scope:
+        manager = create_user_manager_from_store(
+            scope.users,
             options,
             _delivery_from_request(request),
         )
@@ -568,17 +519,17 @@ async def request_verification(request: Request, email: str) -> None:
             if elapsed_seconds < EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS:
                 return
 
-        user.email_verification_sent_at = now
-        await session.commit()
-
         try:
             await manager.request_verify(user, request)
-        except FastAPIUsersException:
+        except (UserInactive, UserAlreadyVerified):
             logger.warning(
                 "Verification request was rejected by the identity backend.",
                 exc_info=True,
             )
             return
+
+        user.email_verification_sent_at = now
+        await scope.commit()
 
 
 async def _active_user_from_verification_token(
@@ -586,7 +537,7 @@ async def _active_user_from_verification_token(
     token: str,
 ) -> Result[str]:
     try:
-        data = decode_jwt(
+        data = decode_identity_jwt(
             token,
             manager.verification_token_secret,
             [manager.verification_token_audience],
@@ -619,7 +570,7 @@ async def _reset_token_user_is_effectively_active(
     token: str,
 ) -> bool:
     try:
-        data = decode_jwt(
+        data = decode_identity_jwt(
             token,
             manager.reset_password_token_secret,
             [manager.reset_password_token_audience],
@@ -642,9 +593,9 @@ async def _reset_token_user_is_effectively_active(
 
 async def verify_user(request: Request, token: str) -> Result[str]:
     options = _identity_options_from_request(request)
-    async with _session_from_request(request) as session:
-        manager = create_user_manager(
-            session,
+    async with _persistence_scope_from_request(request) as scope:
+        manager = create_user_manager_from_store(
+            scope.users,
             options,
             _delivery_from_request(request),
         )
@@ -658,7 +609,7 @@ async def verify_user(request: Request, token: str) -> Result[str]:
             return Result.failure(ERROR_INVALID_TOKEN)
         except UserAlreadyVerified:
             return Result.failure(ERROR_ALREADY_VERIFIED)
-        except FastAPIUsersException as exc:
+        except (UserInactive, InvalidPasswordException) as exc:
             logger.warning(
                 "Verification token was rejected by the identity backend: %s",
                 type(exc).__name__,

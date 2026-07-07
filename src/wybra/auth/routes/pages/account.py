@@ -4,7 +4,6 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
 from wybra.auth.capabilities import login_required
-from wybra.auth.mfa.storage import SqlAlchemyWebAuthnCredentialStore
 from wybra.auth.mfa.webauthn import (
     passkeys_effectively_enabled as _passkeys_effectively_enabled,
 )
@@ -205,35 +204,35 @@ async def _unlink_provider_response(
     provider_id = _form_value(form_data, "provider_id")
     session_factory = _session_factory_from_request(request)
     error: str | None = None
-    async with session_factory() as session:
-        async with session.begin():
-            db_user = await _load_user_by_id(session, user.id)
-            if db_user is None:
-                raise HTTPException(status_code=401, detail="Authentication required.")
+    async with session_factory() as scope:
+        db_user = await _load_user_by_id(scope, user.id)
+        if db_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required.")
 
-            store = _provider_credential_store(request, session)
-            provider = await store.get_user_provider_by_id(
-                user_id=db_user.id,
-                provider_id=provider_id,
+        store = _provider_credential_store(request, scope)
+        provider = await store.get_user_provider_by_id(
+            user_id=db_user.id,
+            provider_id=provider_id,
+        )
+        if provider is None or provider.provider_name != provider_name:
+            return RedirectResponse(
+                url=_route_path(request, "auth:security"),
+                status_code=303,
             )
-            if provider is None or provider.provider_name != provider_name:
-                return RedirectResponse(
-                    url=_route_path(request, "auth:security"),
-                    status_code=303,
-                )
 
-            if not await _user_has_usable_account_sign_in(
-                request,
-                session,
-                db_user,
-                exclude_provider_id=provider.id,
-            ):
-                error = f"Add another sign-in method before unlinking {provider_label}."
-            else:
-                await store.unlink_user_provider(
-                    user_id=db_user.id,
-                    provider_id=provider.id,
-                )
+        if not await _user_has_usable_account_sign_in(
+            request,
+            scope,
+            db_user,
+            exclude_provider_id=provider.id,
+        ):
+            error = f"Add another sign-in method before unlinking {provider_label}."
+        else:
+            await store.unlink_user_provider(
+                user_id=db_user.id,
+                provider_id=provider.id,
+            )
+            await scope.commit()
 
     if error is not None:
         return await _security_page_response(
@@ -256,8 +255,8 @@ async def disable_password_login(
 ) -> Response:
     session_factory = _session_factory_from_request(request)
     error: str | None = None
-    async with session_factory() as session:
-        db_user = await _load_user_by_id(session, user.id)
+    async with session_factory() as scope:
+        db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
 
@@ -269,14 +268,14 @@ async def disable_password_login(
 
         if not await _user_has_usable_account_sign_in(
             request,
-            session,
+            scope,
             db_user,
             exclude_password=True,
         ):
             error = "Add another sign-in method before disabling password sign-in."
         else:
             db_user.password_login_enabled = False
-            await session.commit()
+            await scope.commit()
 
     if error is not None:
         return await _security_page_response(
@@ -321,8 +320,8 @@ async def _security_totp_section(request: Request, user: User) -> dict[str, obje
         return {"available": False}
 
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        active_credential_id = await _load_active_totp_credential_id(session, user.id)
+    async with session_factory() as scope:
+        active_credential_id = await _load_active_totp_credential_id(scope, user.id)
 
     return {
         "available": True,
@@ -363,13 +362,17 @@ async def _security_passkey_section(
 
     credentials: list[dict[str, object]] = []
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        db_user = await _load_user_by_id(session, user.id)
+    async with session_factory() as scope:
+        db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             return {"available": False}
 
-        store = SqlAlchemyWebAuthnCredentialStore(session)
-        for credential in await store.list_active_webauthn_credentials(str(db_user.id)):
+        active_credentials = (
+            await scope.webauthn_credentials.list_active_webauthn_credentials(
+                str(db_user.id)
+            )
+        )
+        for credential in active_credentials:
             credentials.append(
                 {
                     "id": credential.id,
@@ -415,13 +418,13 @@ async def _security_password_disable_available(
     user: User,
 ) -> bool:
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        db_user = await _load_user_by_id(session, user.id)
+    async with session_factory() as scope:
+        db_user = await _load_user_by_id(scope, user.id)
         return bool(
             db_user is not None
             and await _user_has_usable_account_sign_in(
                 request,
-                session,
+                scope,
                 db_user,
                 exclude_password=True,
             )
@@ -468,8 +471,8 @@ async def _security_named_provider_section(
 
     linked_accounts: list[dict[str, str]] = []
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        store = _provider_credential_store(request, session)
+    async with session_factory() as scope:
+        store = _provider_credential_store(request, scope)
         providers = await store.get_user_providers(
             user_id=user.id,
             provider_name=provider_name,
@@ -581,11 +584,9 @@ async def verify_confirm(request: Request) -> Response:
     totp_setup_required = False
     if did_verify and options.totp_mode == TOTP_REQUIRED and verification_result.value:
         session_factory = _session_factory_from_request(request)
-        async with session_factory() as session:
+        async with session_factory() as scope:
             totp_setup_required = (
-                await _load_active_totp_credential_id(
-                    session, verification_result.value
-                )
+                await _load_active_totp_credential_id(scope, verification_result.value)
             ) is None
 
     context = _identity_context(

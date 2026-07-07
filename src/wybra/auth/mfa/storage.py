@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
-from dataclasses import dataclass
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from sqlalchemy import delete, desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wybra.auth.ids import parse_uuid
@@ -14,164 +15,37 @@ from wybra.auth.mfa.recovery import (
     create_recovery_code_verifier,
     verify_recovery_code,
 )
+from wybra.auth.mfa.totp import is_valid_totp_code, verify_totp
 from wybra.auth.models import (
     IdentityAuthenticationChallenge,
     IdentityTotpCredential,
     IdentityTotpRecoveryCode,
     IdentityWebAuthnCredential,
 )
+from wybra.auth.persistence.contracts import (
+    AuthPersistenceError,
+    ChallengeKind,
+    ChallengeRecord,
+    ChallengeStore,
+    RecoveryCodeStore,
+    TOTPCredentialStore,
+    WebAuthnCredentialRecord,
+    WebAuthnCredentialStore,
+)
 from wybra.auth.timestamps import current_timestamp
-from wybra.services.crypto import SecretEnvelopeService
+from wybra.services.crypto import (
+    SecretDataError,
+    SecretEnvelopeService,
+    SecretMaterialMissingError,
+)
 
-ChallengeKind = Literal["totp", "webauthn", "recovery-code"]
 TOTP_ACTIVE_STATUS: Literal["active"] = "active"
 TOTP_DISABLED_STATUS: Literal["disabled"] = "disabled"
 TOTP_PENDING_STATUS: Literal["pending"] = "pending"
 WEBAUTHN_ACTIVE_STATUS: Literal["active"] = "active"
 WEBAUTHN_REVOKED_STATUS: Literal["revoked"] = "revoked"
-
-
-@dataclass(frozen=True, slots=True)
-class ChallengeRecord:
-    id: str
-    user_id: str
-    kind: ChallengeKind
-    expires_at: float
-    metadata: dict[str, Any]
-
-    @property
-    def metadata_payload(self) -> dict[str, Any]:
-        return self.metadata
-
-
-@dataclass(frozen=True, slots=True)
-class WebAuthnCredentialRecord:
-    id: str
-    user_id: str
-    credential_id: str
-    public_key: bytes
-    sign_count: int
-    status: str
-    label: str | None
-    created_at: float
-    last_used_at: float | None
-    revoked_at: float | None
-    user_verified: bool
-    credential_device_type: str | None
-    credential_backed_up: bool
-    transports: tuple[str, ...]
-    aaguid: str | None
-    attestation_format: str | None
-
-
-@runtime_checkable
-class ChallengeStore(Protocol):
-    async def create_challenge(
-        self,
-        user_id: str,
-        kind: ChallengeKind,
-        expires_at: float,
-        metadata: dict[str, Any] | None = None,
-    ) -> ChallengeRecord: ...
-
-    async def get_challenge(self, challenge_id: str) -> ChallengeRecord | None: ...
-
-    async def consume_challenge(self, challenge_id: str) -> None: ...
-
-
-@runtime_checkable
-class TOTPCredentialStore(Protocol):
-    async def create_pending_totp_credential(
-        self,
-        user_id: str,
-        secret: str,
-    ) -> str: ...
-
-    async def activate_totp_credential(self, credential_id: str) -> None: ...
-
-    async def disable_totp_credential(self, credential_id: str) -> None: ...
-
-    async def get_active_totp_credential(self, user_id: str) -> str | None: ...
-
-    async def get_pending_totp_credential(self, user_id: str) -> str | None: ...
-
-    async def clear_totp_credentials(self, user_id: str) -> None: ...
-
-
-@runtime_checkable
-class WebAuthnCredentialStore(Protocol):
-    async def store_webauthn_credential(
-        self,
-        user_id: str,
-        credential_id: str,
-        public_key: bytes,
-        sign_count: int,
-        *,
-        label: str | None = None,
-        user_verified: bool = False,
-        credential_device_type: str | None = None,
-        credential_backed_up: bool = False,
-        transports: tuple[str, ...] = (),
-        aaguid: str | None = None,
-        attestation_format: str | None = None,
-    ) -> str: ...
-
-    async def get_webauthn_credential(
-        self,
-        credential_id: str,
-    ) -> WebAuthnCredentialRecord | None: ...
-
-    async def get_user_webauthn_credential(
-        self,
-        user_id: str,
-        row_id: str,
-    ) -> WebAuthnCredentialRecord | None: ...
-
-    async def list_active_webauthn_credentials(
-        self,
-        user_id: str,
-    ) -> tuple[WebAuthnCredentialRecord, ...]: ...
-
-    async def count_active_webauthn_credentials(
-        self,
-        user_id: str,
-        *,
-        exclude_row_id: str | UUID | None = None,
-    ) -> int: ...
-
-    async def update_webauthn_sign_count(
-        self,
-        credential_id: str,
-        sign_count: int,
-    ) -> None: ...
-
-    async def update_webauthn_authentication(
-        self,
-        credential_id: str,
-        *,
-        sign_count: int,
-        user_verified: bool,
-        credential_device_type: str | None,
-        credential_backed_up: bool,
-    ) -> None: ...
-
-    async def revoke_webauthn_credential(
-        self,
-        user_id: str,
-        row_id: str,
-    ) -> bool: ...
-
-
-@runtime_checkable
-class RecoveryCodeStore(Protocol):
-    async def replace_recovery_codes(
-        self,
-        user_id: str,
-        credential_id: str,
-        recovery_codes: tuple[str, ...],
-    ) -> None: ...
-
-    async def consume_recovery_code(self, user_id: str, code: str) -> bool: ...
+TOTP_CODE_REPLAY_MESSAGE = "Authenticator code has already been used."
+logger = logging.getLogger(__name__)
 
 
 class SqlAlchemyChallengeStore:
@@ -287,7 +161,10 @@ class SqlAlchemyTOTPCredentialStore:
             created_at=now,
         )
         self._session.add(credential)
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            raise AuthPersistenceError("TOTP credential could not be stored.") from exc
         return str(credential.id)
 
     async def get_totp_credential(
@@ -421,6 +298,68 @@ class SqlAlchemyTOTPCredentialStore:
                 IdentityTotpCredential.user_id == user_uuid,
             )
         )
+
+    async def verify_totp_credential(
+        self,
+        *,
+        credential_id: str,
+        user_id: str,
+        code: str,
+        period_seconds: int,
+        allowed_drift: int,
+        expected_status: str = TOTP_ACTIVE_STATUS,
+        timestamp: float | None = None,
+    ) -> tuple[bool, int | None, str | None]:
+        parsed_credential_id = parse_uuid(credential_id)
+        if parsed_credential_id is None:
+            return False, None, None
+
+        if not is_valid_totp_code(code):
+            return False, None, None
+
+        credential = (
+            await self._session.execute(
+                select(IdentityTotpCredential)
+                .where(IdentityTotpCredential.id == parsed_credential_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if (
+            credential is None
+            or str(credential.user_id) != user_id
+            or credential.status != expected_status
+        ):
+            return False, None, None
+
+        verification_time = current_timestamp() if timestamp is None else timestamp
+        try:
+            secret = self.decrypt_totp_secret(credential)
+        except (SecretDataError, SecretMaterialMissingError) as exc:
+            logger.error(
+                "Unable to verify TOTP credential because secret material "
+                "is unavailable or invalid: credential_id=%s user_id=%s",
+                credential_id,
+                user_id,
+                exc_info=exc,
+            )
+            return False, None, None
+
+        accepted, counter = verify_totp(
+            secret,
+            code,
+            timestamp=verification_time,
+            period=period_seconds,
+            allowed_drift=allowed_drift,
+        )
+        if not accepted or counter is None:
+            return False, None, None
+
+        last_used_counter = getattr(credential, "last_used_counter", None)
+        if last_used_counter is not None and counter <= last_used_counter:
+            return False, None, TOTP_CODE_REPLAY_MESSAGE
+
+        credential.last_used_counter = counter
+        return True, counter, None
 
 
 class SqlAlchemyRecoveryCodeStore:
@@ -749,3 +688,24 @@ def _webauthn_record(
         aaguid=credential.aaguid,
         attestation_format=credential.attestation_format,
     )
+
+
+__all__ = (
+    "ChallengeKind",
+    "ChallengeRecord",
+    "ChallengeStore",
+    "RecoveryCodeStore",
+    "SqlAlchemyChallengeStore",
+    "SqlAlchemyRecoveryCodeStore",
+    "SqlAlchemyTOTPCredentialStore",
+    "SqlAlchemyWebAuthnCredentialStore",
+    "TOTP_ACTIVE_STATUS",
+    "TOTP_CODE_REPLAY_MESSAGE",
+    "TOTP_DISABLED_STATUS",
+    "TOTP_PENDING_STATUS",
+    "TOTPCredentialStore",
+    "WEBAUTHN_ACTIVE_STATUS",
+    "WEBAUTHN_REVOKED_STATUS",
+    "WebAuthnCredentialRecord",
+    "WebAuthnCredentialStore",
+)

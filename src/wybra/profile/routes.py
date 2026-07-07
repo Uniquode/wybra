@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse, Response
 
 from wybra.auth import login_required
-from wybra.db import DatabaseCapability
 from wybra.forms import (
     FormsCapability,
     register_phone_contact_field_handlers,
@@ -44,7 +43,6 @@ async def edit_profile(
     forms = site.require_capability(FormsCapability)
     templates = site.require_capability(TemplateCapability)
     profile_capability = site.require_capability(ProfileCapability)
-    database = site.require_capability(DatabaseCapability)
     default_return_to = str(request.url_for(PROFILE_EDIT_ROUTE_NAME))
     return_to = _normalise_return_to(
         request.query_params.get("return_to"),
@@ -54,66 +52,16 @@ async def edit_profile(
     form_error: str | None = None
     profile_form: ProfileEditForm | None = None
     current_phone_contact: UserPhoneContact | None = None
-    async with database.session() as session:
-        profile = await profile_capability.get_profile(session, user.id)
-        phone_contacts = await profile_capability.list_phone_contacts(session, user.id)
-        current_phone_contact = _current_phone_contact(phone_contacts)
-        if request.method == "POST":
-            try:
-                form_data = await request_form_data(request)
-                return_to = _normalise_return_to(
-                    _form_value(form_data, "return_to"),
-                    default=return_to,
-                )
-                profile_form = ProfileEditForm(
-                    settings=settings,
-                    values=_profile_form_values(
-                        profile,
-                        return_to=return_to,
-                        phone_contact=current_phone_contact,
-                    ),
-                )
-                profile_form.parse(form_data)
-                if profile_form.is_valid():
-                    profile_data = profile_form.profile_field_data()
-                    if profile_data and (
-                        profile is not None or _has_non_empty_profile_data(profile_data)
-                    ):
-                        await profile_capability.save_profile_fields(
-                            session,
-                            user.id,
-                            profile_data,
-                            settings=settings,
-                        )
-                    if profile_form.has_phone_contact_data():
-                        phone_contact = profile_form.phone_contact_data()
-                        await profile_capability.save_phone_contact(
-                            session,
-                            user.id,
-                            number=phone_contact["number"] or "",
-                            country_code=phone_contact["country_code"],
-                            subdivision_code=phone_contact["subdivision_code"],
-                        )
-                    await session.commit()
-                    return RedirectResponse(
-                        url=return_to,
-                        status_code=303,
-                    )
-            except ProfileInputError as exc:
-                await session.rollback()
-                if profile_form is None:
-                    profile_form = ProfileEditForm(
-                        settings=settings,
-                        values=_profile_form_values(
-                            profile,
-                            return_to=return_to,
-                            phone_contact=current_phone_contact,
-                        ),
-                    )
-                profile_form.add_error(None, str(exc))
-                form_error = str(exc)
-
-        if profile_form is None:
+    profile = await profile_capability.get_profile(user.id)
+    phone_contacts = await profile_capability.list_phone_contacts(user.id)
+    current_phone_contact = _current_phone_contact(phone_contacts)
+    if request.method == "POST":
+        try:
+            form_data = await request_form_data(request)
+            return_to = _normalise_return_to(
+                _form_value(form_data, "return_to"),
+                default=return_to,
+            )
             profile_form = ProfileEditForm(
                 settings=settings,
                 values=_profile_form_values(
@@ -122,6 +70,51 @@ async def edit_profile(
                     phone_contact=current_phone_contact,
                 ),
             )
+            profile_form.parse(form_data)
+            if profile_form.is_valid():
+                profile_data = profile_form.profile_field_data()
+                phone_contact = (
+                    profile_form.phone_contact_data()
+                    if profile_form.has_phone_contact_data()
+                    else None
+                )
+                if (
+                    phone_contact is not None
+                    or profile is not None
+                    or _has_non_empty_profile_data(profile_data)
+                ):
+                    await profile_capability.save_profile_edit(
+                        user.id,
+                        profile_data,
+                        settings=settings,
+                        phone_contact=phone_contact,
+                    )
+                return RedirectResponse(
+                    url=return_to,
+                    status_code=303,
+                )
+        except ProfileInputError as exc:
+            if profile_form is None:
+                profile_form = ProfileEditForm(
+                    settings=settings,
+                    values=_profile_form_values(
+                        profile,
+                        return_to=return_to,
+                        phone_contact=current_phone_contact,
+                    ),
+                )
+            profile_form.add_error(None, str(exc))
+            form_error = str(exc)
+
+    if profile_form is None:
+        profile_form = ProfileEditForm(
+            settings=settings,
+            values=_profile_form_values(
+                profile,
+                return_to=return_to,
+                phone_contact=current_phone_contact,
+            ),
+        )
 
     context = {
         **forms.token_context(request),

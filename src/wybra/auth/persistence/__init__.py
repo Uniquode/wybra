@@ -1,19 +1,32 @@
-"""Authentication persistence helpers and database strategy factories.
+"""Authentication persistence helpers and session-token strategy factories.
 
-Hosts may import these factories when wiring FastAPI Users persistence against
-an already configured SQLAlchemy session factory.
+Hosts may import these factories when wiring Wybra auth persistence against an
+already configured SQLAlchemy session factory.
 """
 
-from wybra.auth.persistence.strategies import (
-    create_access_token_database,
-    create_database_strategy,
-    create_user_database,
-    delete_session_token_by_value,
-)
+from importlib import import_module
+from typing import Any
 
-__all__ = [
-    "create_access_token_database",
-    "create_database_strategy",
-    "create_user_database",
-    "delete_session_token_by_value",
-]
+_EXPORTS = {
+    "SqlAlchemyAuthPersistenceCapability": "wybra.auth.persistence.strategies",
+    "SqlAlchemyAuthPersistenceScope": "wybra.auth.persistence.strategies",
+    "PersistentSessionTokenStrategy": "wybra.auth.persistence.strategies",
+    "auth_persistence_session": "wybra.auth.persistence.strategies",
+    "create_access_token_database": "wybra.auth.persistence.strategies",
+    "create_database_strategy": "wybra.auth.persistence.strategies",
+    "create_user_database": "wybra.auth.persistence.strategies",
+    "delete_session_token_by_value": "wybra.auth.persistence.strategies",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    try:
+        module_name = _EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(name) from exc
+
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value

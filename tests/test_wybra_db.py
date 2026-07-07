@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import MetaData, text
 
+import wybra.db.migrate as migrate_module
 from support_database import sqlite_file_url
 from wybra import SiteCapabilityError
 from wybra.config import MappingConfigSource
@@ -54,6 +55,18 @@ class _PersistenceSettings:
     @property
     def modules(self) -> tuple[str, ...]:
         return self.configured_modules
+
+
+@dataclass(frozen=True, slots=True)
+class _MigrationCommandSettings:
+    database_url: str
+    project_root: Path
+    migrations_root: Path | None = None
+    app_config: None = None
+
+    @property
+    def modules(self) -> tuple[str, ...]:
+        return ()
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -589,6 +602,35 @@ def test_migration_version_locations_are_discovered_from_configured_modules(
     )
     assert version_locations[1].as_posix().endswith("wybra/auth/migrations/versions")
     assert discover_migration_version_locations("host_app") == ()
+
+
+def test_run_migration_dispatches_through_backend_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _MigrationCommandSettings(
+        database_url=sqlite_file_url(tmp_path / "dispatch.sqlite3"),
+        project_root=tmp_path,
+    )
+    calls: list[migrate_module.MigrationContext] = []
+
+    class RecordingMigrationBackend:
+        def current(self, context: migrate_module.MigrationContext) -> None:
+            calls.append(context)
+
+    backend = RecordingMigrationBackend()
+    monkeypatch.setattr(migrate_module, "AlembicMigrationBackend", lambda: backend)
+
+    result = migrate_module._run_migration(
+        lambda _database_url: settings,
+        None,
+        None,
+        lambda migration_backend, context: migration_backend.current(context),
+    )
+
+    assert result == 0
+    assert len(calls) == 1
+    assert calls[0].settings is settings
 
 
 def test_core_sessions_revision_location_requires_module_config() -> None:

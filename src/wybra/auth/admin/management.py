@@ -2,19 +2,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi_users.exceptions import (
-    InvalidPasswordException,
-    UserAlreadyExists,
-)
 from pydantic import ValidationError
 from sqlalchemy import Select, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wybra.auth.accounts.manager import (
+    InvalidPasswordException,
+    UserAlreadyExists,
     create_user_manager,
     public_password_failure_message,
 )
@@ -56,6 +55,7 @@ from wybra.auth.result import (
     ResultErrorType,
 )
 from wybra.auth.timestamps import current_timestamp
+from wybra.services.crypto import SecretEnvelopeService
 
 ERROR_INVALID_TIMEZONE = "invalid_timezone"
 ERROR_NO_CHANGES = "no_changes"
@@ -115,6 +115,393 @@ PASSKEY_RECORD_FIELDS: tuple[str, ...] = (
     "attestation_format",
 )
 DEFAULT_MANAGEMENT_TOTP_ISSUER = "Wybra"
+
+
+@dataclass(frozen=True, slots=True)
+class SqlAlchemyAuthManagementStore:
+    """SQLAlchemy-backed implementation of auth management workflows."""
+
+    session: AsyncSession
+    secret_service: SecretEnvelopeService | None = None
+
+    async def resolve_user_record(self, target: str) -> Result[dict[str, Any]]:
+        user, target_error = await resolve_user_target(self.session, target)
+        if target_error is not None:
+            return Result.failure(target_error, target_error_message(target_error))
+        if user is None:
+            return Result.failure(ERROR_NOT_FOUND)
+        return Result.ok(user_record(user))
+
+    async def validate_group_targets(
+        self,
+        group_targets: tuple[str, ...],
+    ) -> Result[dict[str, Any]]:
+        return await _resolve_group_targets_for_set(self.session, group_targets)
+
+    async def update_user_groups(
+        self,
+        *,
+        target: str,
+        add_group_targets: tuple[str, ...] = (),
+        remove_group_targets: tuple[str, ...] = (),
+        set_group_targets: tuple[str, ...] = (),
+    ) -> Result[dict[str, Any]]:
+        user, target_error = await resolve_user_target(self.session, target)
+        if target_error is not None:
+            return Result.failure(target_error, target_error_message(target_error))
+        if user is None:
+            return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+
+        if set_group_targets:
+            replacement_group_result = await _resolve_group_targets_for_set(
+                self.session,
+                set_group_targets,
+            )
+            if replacement_group_result.is_failure():
+                return replacement_group_result
+            replacement_group_ids = cast(
+                list[UUID],
+                (replacement_group_result.value or {}).get("group_ids", []),
+            )
+
+            await self.session.execute(
+                delete(GroupUser).where(GroupUser.user_id == user.id)
+            )
+            for group_id in dict.fromkeys(replacement_group_ids):
+                self.session.add(GroupUser(group_id=group_id, user_id=user.id))
+            await self.session.commit()
+
+        for group_target in add_group_targets:
+            result = await add_user_to_group_for_management(
+                self.session,
+                group_target=group_target,
+                user_target=target,
+            )
+            if result.is_failure():
+                return result
+
+        for group_target in remove_group_targets:
+            result = await remove_user_from_group_for_management(
+                self.session,
+                group_target=group_target,
+                user_target=target,
+            )
+            if result.is_failure():
+                return result
+
+        return Result.ok(user_record(user))
+
+    async def create_local_user(
+        self,
+        options: object,
+        *,
+        email: str,
+        password: str,
+        is_admin: bool = False,
+        is_superuser: bool = False,
+        is_verified: bool = True,
+        preferred_timezone: str | None = None,
+        expires_at: float | None = None,
+    ) -> Result[dict[str, Any]]:
+        return await create_local_user_for_management(
+            self.session,
+            cast(IdentityOptions, options),
+            email=email,
+            password=password,
+            is_admin=is_admin,
+            is_superuser=is_superuser,
+            is_verified=is_verified,
+            preferred_timezone=preferred_timezone,
+            expires_at=expires_at,
+        )
+
+    async def update_local_user(
+        self,
+        options: object,
+        *,
+        target: str,
+        is_admin: bool | None = None,
+        is_superuser: bool | None = None,
+        is_verified: bool | None = None,
+        password: str | None = None,
+        revoke_sessions: bool = True,
+        preferred_timezone: str | None = None,
+        clear_preferred_timezone: bool = False,
+        expires_at: float | None = None,
+        clear_expires_at: bool = False,
+    ) -> Result[dict[str, Any]]:
+        return await update_local_user_for_management(
+            self.session,
+            cast(IdentityOptions, options),
+            target=target,
+            is_admin=is_admin,
+            is_superuser=is_superuser,
+            is_verified=is_verified,
+            password=password,
+            revoke_sessions=revoke_sessions,
+            preferred_timezone=preferred_timezone,
+            clear_preferred_timezone=clear_preferred_timezone,
+            expires_at=expires_at,
+            clear_expires_at=clear_expires_at,
+        )
+
+    async def delete_local_user(self, *, target: str) -> Result[dict[str, Any]]:
+        return await delete_local_user_for_management(self.session, target=target)
+
+    async def deactivate_local_user(self, *, target: str) -> Result[dict[str, Any]]:
+        return await deactivate_local_user_for_management(self.session, target=target)
+
+    async def list_local_users(
+        self,
+        *,
+        email_pattern: str | None = None,
+        domain_pattern: str | None = None,
+        is_admin: bool | None = None,
+        is_superuser: bool | None = None,
+        effective_active: bool | None = None,
+        is_verified: bool | None = None,
+        since_created_at: float | None = None,
+        before_created_at: float | None = None,
+        since_modified_at: float | None = None,
+        before_modified_at: float | None = None,
+        since_last_login_at: float | None = None,
+        before_last_login_at: float | None = None,
+        never_logged_in: bool | None = None,
+        order: str = "email",
+        direction: str | None = None,
+        include_passkeys: bool = False,
+    ) -> Result[dict[str, Any]]:
+        return await list_local_users_for_management(
+            self.session,
+            email_pattern=email_pattern,
+            domain_pattern=domain_pattern,
+            is_admin=is_admin,
+            is_superuser=is_superuser,
+            effective_active=effective_active,
+            is_verified=is_verified,
+            since_created_at=since_created_at,
+            before_created_at=before_created_at,
+            since_modified_at=since_modified_at,
+            before_modified_at=before_modified_at,
+            since_last_login_at=since_last_login_at,
+            before_last_login_at=before_last_login_at,
+            never_logged_in=never_logged_in,
+            order=order,
+            direction=direction,
+            include_passkeys=include_passkeys,
+        )
+
+    async def provision_totp(
+        self,
+        options: object,
+        *,
+        target: str,
+    ) -> Result[dict[str, Any]]:
+        user_result = await _resolve_user_for_management_operation(
+            self.session,
+            target,
+        )
+        if user_result.is_failure():
+            return user_result
+        return await provision_totp_for_management(
+            self.session,
+            cast(IdentityOptions, options),
+            user=cast(User, user_result.value),
+            secret_service=self.secret_service,
+        )
+
+    async def disable_totp(self, *, target: str) -> Result[dict[str, Any]]:
+        user_result = await _resolve_user_for_management_operation(
+            self.session,
+            target,
+        )
+        if user_result.is_failure():
+            return user_result
+        return await disable_totp_for_management(
+            self.session,
+            user=cast(User, user_result.value),
+            secret_service=self.secret_service,
+        )
+
+    async def rotate_totp_recovery_codes(
+        self,
+        *,
+        target: str,
+    ) -> Result[dict[str, Any]]:
+        user_result = await _resolve_user_for_management_operation(
+            self.session,
+            target,
+        )
+        if user_result.is_failure():
+            return user_result
+        return await rotate_totp_recovery_codes_for_management(
+            self.session,
+            user=cast(User, user_result.value),
+            secret_service=self.secret_service,
+        )
+
+    async def revoke_passkeys(
+        self,
+        *,
+        target: str,
+        credential: str | None = None,
+    ) -> Result[dict[str, Any]]:
+        user_result = await _resolve_user_for_management_operation(
+            self.session,
+            target,
+        )
+        if user_result.is_failure():
+            return user_result
+        return await revoke_passkeys_for_management(
+            self.session,
+            user=cast(User, user_result.value),
+            credential=credential,
+        )
+
+    async def create_scope(
+        self,
+        *,
+        scope: str,
+        description: str | None = None,
+    ) -> Result[dict[str, Any]]:
+        return await create_scope_for_management(
+            self.session,
+            scope=scope,
+            description=description,
+        )
+
+    async def update_scope(
+        self,
+        *,
+        scope: str,
+        description: str | None = None,
+    ) -> Result[dict[str, Any]]:
+        return await update_scope_for_management(
+            self.session,
+            scope=scope,
+            description=description,
+        )
+
+    async def delete_scope(self, *, scope: str) -> Result[dict[str, Any]]:
+        return await delete_scope_for_management(self.session, scope=scope)
+
+    async def list_scopes(self) -> Result[dict[str, Any]]:
+        return await list_scopes_for_management(self.session)
+
+    async def create_group(
+        self,
+        *,
+        abbrev: str,
+        description: str,
+    ) -> Result[dict[str, Any]]:
+        return await create_group_for_management(
+            self.session,
+            abbrev=abbrev,
+            description=description,
+        )
+
+    async def update_group(
+        self,
+        *,
+        target: str,
+        description: str,
+    ) -> Result[dict[str, Any]]:
+        return await update_group_for_management(
+            self.session,
+            target=target,
+            description=description,
+        )
+
+    async def delete_group(self, *, target: str) -> Result[dict[str, Any]]:
+        return await delete_group_for_management(self.session, target=target)
+
+    async def get_group(self, *, target: str) -> Result[dict[str, Any]]:
+        return await get_group_for_management(self.session, target=target)
+
+    async def list_groups(self) -> Result[dict[str, Any]]:
+        return await list_groups_for_management(self.session)
+
+    async def add_scope_to_group(
+        self,
+        *,
+        group_target: str,
+        scope: str,
+    ) -> Result[dict[str, Any]]:
+        return await add_scope_to_group_for_management(
+            self.session,
+            group_target=group_target,
+            scope=scope,
+        )
+
+    async def remove_scope_from_group(
+        self,
+        *,
+        group_target: str,
+        scope: str,
+    ) -> Result[dict[str, Any]]:
+        return await remove_scope_from_group_for_management(
+            self.session,
+            group_target=group_target,
+            scope=scope,
+        )
+
+    async def add_user_to_group(
+        self,
+        *,
+        group_target: str,
+        user_target: str,
+    ) -> Result[dict[str, Any]]:
+        return await add_user_to_group_for_management(
+            self.session,
+            group_target=group_target,
+            user_target=user_target,
+        )
+
+    async def remove_user_from_group(
+        self,
+        *,
+        group_target: str,
+        user_target: str,
+    ) -> Result[dict[str, Any]]:
+        return await remove_user_from_group_for_management(
+            self.session,
+            group_target=group_target,
+            user_target=user_target,
+        )
+
+    async def add_child_group_to_group(
+        self,
+        *,
+        parent_target: str,
+        child_target: str,
+    ) -> Result[dict[str, Any]]:
+        return await add_child_group_to_group_for_management(
+            self.session,
+            parent_target=parent_target,
+            child_target=child_target,
+        )
+
+    async def remove_child_group_from_group(
+        self,
+        *,
+        parent_target: str,
+        child_target: str,
+    ) -> Result[dict[str, Any]]:
+        return await remove_child_group_from_group_for_management(
+            self.session,
+            parent_target=parent_target,
+            child_target=child_target,
+        )
+
+    async def effective_scopes_for_user(
+        self,
+        *,
+        user_target: str,
+    ) -> Result[dict[str, Any]]:
+        return await effective_scopes_for_user_for_management(
+            self.session,
+            user_target=user_target,
+        )
 
 
 def user_record(user: User, *, now: float | None = None) -> dict[str, Any]:
@@ -369,9 +756,10 @@ async def provision_totp_for_management(
     *,
     user: User,
     issuer: str = DEFAULT_MANAGEMENT_TOTP_ISSUER,
+    secret_service: SecretEnvelopeService | None = None,
 ) -> Result[dict[str, Any]]:
     secret = generate_totp_secret()
-    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    credential_store = SqlAlchemyTOTPCredentialStore(session, secret_service)
     credential_id = await credential_store.create_pending_totp_credential(
         str(user.id),
         secret,
@@ -381,7 +769,7 @@ async def provision_totp_for_management(
     await credential_store.activate_totp_credential(credential_id)
 
     recovery_codes = generate_recovery_codes()
-    recovery_store = SqlAlchemyRecoveryCodeStore(session)
+    recovery_store = SqlAlchemyRecoveryCodeStore(session, secret_service)
     await recovery_store.replace_recovery_codes(
         str(user.id),
         credential_id,
@@ -410,8 +798,9 @@ async def disable_totp_for_management(
     session: AsyncSession,
     *,
     user: User,
+    secret_service: SecretEnvelopeService | None = None,
 ) -> Result[dict[str, Any]]:
-    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    credential_store = SqlAlchemyTOTPCredentialStore(session, secret_service)
     active_credential_id = await credential_store.get_active_totp_credential(
         str(user.id)
     )
@@ -427,8 +816,9 @@ async def rotate_totp_recovery_codes_for_management(
     session: AsyncSession,
     *,
     user: User,
+    secret_service: SecretEnvelopeService | None = None,
 ) -> Result[dict[str, Any]]:
-    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    credential_store = SqlAlchemyTOTPCredentialStore(session, secret_service)
     active_credential_id = await credential_store.get_active_totp_credential(
         str(user.id)
     )
@@ -436,7 +826,7 @@ async def rotate_totp_recovery_codes_for_management(
         return Result.failure(ERROR_NO_ACTIVE_TOTP, "User does not have active TOTP.")
 
     recovery_codes = generate_recovery_codes()
-    recovery_store = SqlAlchemyRecoveryCodeStore(session)
+    recovery_store = SqlAlchemyRecoveryCodeStore(session, secret_service)
     await recovery_store.replace_recovery_codes(
         str(user.id),
         active_credential_id,
@@ -928,7 +1318,7 @@ async def create_local_user_for_management(
     user.modified_at = current_timestamp()
     await session.commit()
     await session.refresh(user)
-    return Result.ok(user_record(user))
+    return Result.ok(user_record(cast(User, user)))
 
 
 async def list_local_users_for_management(
@@ -1037,6 +1427,75 @@ async def resolve_user_target(
         return None, ERROR_INVALID_USER_ID
 
     return await session.get(User, user_id), None
+
+
+async def _resolve_user_for_management_operation(
+    session: AsyncSession,
+    target: str,
+) -> Result[Any]:
+    user, target_error = await resolve_user_target(session, target)
+    if target_error is not None:
+        return Result.failure(target_error, target_error_message(target_error))
+    if user is None:
+        return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
+    return Result.ok(user)
+
+
+async def _resolve_group_targets_for_set(
+    session: AsyncSession,
+    group_targets: tuple[str, ...],
+) -> Result[dict[str, Any]]:
+    unique_targets = tuple(dict.fromkeys(group_targets))
+    groups_by_abbrev = {
+        group.abbrev: group
+        for group in (
+            await session.execute(select(Group).where(Group.abbrev.in_(unique_targets)))
+        )
+        .scalars()
+        .all()
+    }
+    parsed_ids: dict[str, UUID] = {}
+    invalid_targets: set[str] = set()
+    for target in unique_targets:
+        if target in groups_by_abbrev:
+            continue
+        try:
+            parsed_ids[target] = UUID(target)
+        except ValueError:
+            invalid_targets.add(target)
+
+    groups_by_id: dict[UUID, Group] = {}
+    if parsed_ids:
+        groups_by_id = {
+            group.id: group
+            for group in (
+                await session.execute(
+                    select(Group).where(Group.id.in_(parsed_ids.values()))
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    group_ids = []
+    for target in group_targets:
+        if target in groups_by_abbrev:
+            group_ids.append(groups_by_abbrev[target].id)
+            continue
+
+        if target in invalid_targets:
+            return Result.failure(
+                ERROR_INVALID_GROUP_ID,
+                group_target_error_message(ERROR_INVALID_GROUP_ID),
+            )
+
+        group_id = parsed_ids[target]
+        group = groups_by_id.get(group_id)
+        if group is None:
+            return Result.failure(ERROR_NOT_FOUND, "No matching group was found.")
+        group_ids.append(group.id)
+
+    return Result.ok({"group_ids": group_ids})
 
 
 def target_error_message(error_type: ResultErrorType) -> str:
@@ -1534,7 +1993,7 @@ def _reverse_order(order: str, direction: str | None) -> bool:
 def _valid_timezone(value: str) -> bool:
     try:
         ZoneInfo(value)
-    except ZoneInfoNotFoundError:
+    except (ValueError, ZoneInfoNotFoundError):
         return False
 
     return True

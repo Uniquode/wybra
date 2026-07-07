@@ -46,9 +46,9 @@ Repository: <https://github.com/Uniquode/wybra>
 - `wybra.tools`: generic project command adapters and validation target
   discovery. Host applications provide concrete runtime settings through their
   app config.
-- `wybra.auth`: local identity models, FastAPI Users integration, browser auth
-  routes, auth templates, password policy, group/scope administration, and the
-  `wybra-authmgr` operator CLI.
+- `wybra.auth`: local identity models, browser auth routes, auth templates,
+  password policy, group/scope administration, and the `wybra-authmgr`
+  operator CLI.
 
 ## Local Development
 
@@ -122,6 +122,12 @@ configured module has completed `setup_site(...)`. Use it for final composition
 checks: hard dependencies bind to real capabilities or fail startup, while soft
 dependencies can be finalised with `finalise_optional()` and handled by the
 consuming module's fallback behaviour.
+
+Runtime modules should expose behaviour through Wybra-owned capabilities and
+repository or unit-of-work interfaces. SQLAlchemy sessions, statements, and
+adapter errors belong inside the current SQLAlchemy adapter layer rather than
+in host-facing capability contracts. This keeps the runtime surface ready for
+alternate persistence adapters without changing application code.
 
 Current hard dependencies include auth, media, and profile data access, auth on
 forms for protected browser form routes, widgets on templates, widgets on forms
@@ -372,7 +378,8 @@ Wybra publishes prefixed console scripts to avoid collisions with host
 application or environment-specific tooling:
 
 - `wybra-runserver`: start the configured ASGI application with Uvicorn.
-- `wybra-migrate`: run Alembic migrations for the configured application.
+- `wybra-migrate`: run migrations for the configured application through the
+  current Alembic backend.
 - `wybra-collect`: collect configured module static assets for deployment.
 - `wybra-routes`: inspect the configured application's installed route tree.
 - `wybra-validate`: run configured project validation targets.
@@ -492,7 +499,12 @@ are `asset_url`, `request`, `route_name`, `csrf_field_name`,
 
 ## Migration Workflow
 
-Provision a first-time managed database and initialise Alembic state
+`wybra-migrate` resolves app configuration once, builds a Wybra migration
+context, and dispatches lifecycle operations through the configured migration
+backend. The default backend is Alembic and preserves the existing command
+arguments and module-owned revision locations.
+
+Provision a first-time managed database and initialise migration state
 explicitly:
 
 ```sh

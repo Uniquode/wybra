@@ -32,6 +32,7 @@ from wybra.media import (
     MediaStorageReadinessError,
 )
 from wybra.media.models import MediaItem
+from wybra.media.persistence import SqlAlchemyMediaCatalogueRepository
 from wybra.media.validation import validate_media
 from wybra.site import Site, SiteCapabilityError, start
 
@@ -100,7 +101,9 @@ def _capability(
     site = _site_with_media_database(tmp_path)
     return FilesystemMediaCapability(
         MediaSettings(root=tmp_path, url_mode=url_mode),
-        database=site.capability_proxy(DatabaseCapability),
+        catalogue=SqlAlchemyMediaCatalogueRepository(
+            site.capability_proxy(DatabaseCapability)
+        ),
     )
 
 
@@ -242,7 +245,9 @@ def test_media_capability_rejects_missing_writable_root(tmp_path: Path) -> None:
     site = _site_with_media_database(tmp_path)
     capability = FilesystemMediaCapability(
         MediaSettings(root=tmp_path / "missing"),
-        database=site.capability_proxy(DatabaseCapability),
+        catalogue=SqlAlchemyMediaCatalogueRepository(
+            site.capability_proxy(DatabaseCapability)
+        ),
     )
 
     with pytest.raises(MediaStorageReadinessError, match="does not exist") as excinfo:
@@ -330,7 +335,7 @@ async def test_media_capability_store_accepts_resource_key(
 
 
 @pytest.mark.anyio
-async def test_media_capability_reassigns_resource_key(
+async def test_media_capability_rejects_resource_key_reassignment(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
 ) -> None:
@@ -351,11 +356,49 @@ async def test_media_capability_reassigns_resource_key(
         "default-avatar",
     )
     await capability.assign_resource_key(
-        second.id,
+        first.id,
         "default-avatar",
     )
 
-    assert (await capability.get_by_resource_key("default-avatar")).id == second.id
+    with pytest.raises(MediaInputError, match="Media resource key is already assigned"):
+        await capability.assign_resource_key(
+            second.id,
+            "default-avatar",
+        )
+
+    assert (await capability.get_by_resource_key("default-avatar")).id == first.id
+
+
+@pytest.mark.anyio
+async def test_media_capability_rejects_duplicate_resource_key_on_register(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+) -> None:
+    capability = _capability(tmp_path)
+    await create_database_schema(capability)
+
+    first = await capability.register(
+        category="profile",
+        storage_key="profile/ab/cd/first.png",
+        resource_key="default-avatar",
+    )
+
+    with pytest.raises(MediaInputError, match="Media resource key is already assigned"):
+        await capability.register(
+            category="profile",
+            storage_key="profile/ab/cd/second.png",
+            resource_key="default-avatar",
+        )
+
+    assert (await capability.get_by_resource_key("default-avatar")).id == first.id
+
+
+@pytest.mark.anyio
+async def test_create_database_schema_reports_missing_database(
+    create_database_schema: Callable[[object], Awaitable[None]],
+) -> None:
+    with pytest.raises(RuntimeError, match="does not expose a database"):
+        await create_database_schema(object())
 
 
 @pytest.mark.anyio

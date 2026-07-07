@@ -17,7 +17,6 @@ _.migration_script_root
 _.discover_model_metadata
 _.redact_database_url
 _.register_error_handlers
-_.create_fastapi_users
 _.optional_current_user
 _.require_current_user
 _.require_anonymous_user
@@ -99,9 +98,12 @@ _.scope_delete_command
 _.scope_list_command
 _.group_command
 
-# FastAPI Users, schemas, and authentication extension hooks.
+# Auth schemas and authentication extension hooks.
 _.UserRead
 _.UserUpdate
+_.model_config
+_._normalise_email
+_._normalise_optional_email
 _.validate_password
 _.on_after_forgot_password
 _.on_after_request_verify
@@ -120,7 +122,17 @@ _.additive_route_names
 _.replaces
 _.hashed_password
 _.kind
+_.generate
 _.create_challenge
+_.ExternalIdentityLinkRecord
+_.IdentityEmailStore
+_.list_user_emails
+_.verify_matching_email
+_.ExternalIdentityStore
+_.list_user_providers
+_.InitialAdminBootstrapStore
+_.claim_initial_admin_bootstrap
+_.AuthorisationStore
 _.TOTPCredentialStore
 _.create_pending_totp_credential
 _.activate_totp_credential
@@ -137,6 +149,9 @@ _.replace_recovery_codes
 _.code_hashes
 _.consume_recovery_code
 _.code
+_.destroy_token
+_.create_database_strategy
+_.delete_session_token_by_value
 _.SqlAlchemyProviderCredentialStore
 _.create_provider_credential
 _.get_provider_credential
@@ -239,6 +254,13 @@ _.website
 _.model
 _.settings_path
 _.dispatch
+
+# SQLAlchemy TypeDecorator hooks and fields.
+_.impl
+_.cache_ok
+_.load_dialect_impl
+_.process_bind_param
+_.process_result_value
 _.filename
 _.exception_message
 _.traceback

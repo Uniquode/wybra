@@ -8,16 +8,10 @@ from urllib.parse import urlencode
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
 from wybra.auth.capabilities import login_required
-from wybra.auth.email_normalisation import normalise_email
 from wybra.auth.mfa.storage import (
     WEBAUTHN_ACTIVE_STATUS,
-    SqlAlchemyChallengeStore,
-    SqlAlchemyTOTPCredentialStore,
-    SqlAlchemyWebAuthnCredentialStore,
 )
 from wybra.auth.mfa.webauthn import (
     WEBAUTHN_LOGIN_PURPOSE,
@@ -35,6 +29,7 @@ from wybra.auth.mfa.webauthn import (
 )
 from wybra.auth.models import User
 from wybra.auth.options import TOTP_DISABLED
+from wybra.auth.persistence.contracts import AuthPersistenceError
 from wybra.auth.provider_support import user_has_usable_account_sign_in
 from wybra.auth.result import (
     ERROR_AUTHENTICATION_METHOD_REQUIRED,
@@ -77,8 +72,8 @@ async def passkey_register_options(
 ) -> JSONResponse:
     _ensure_passkeys_supported(request)
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        db_user = await _load_user_by_id(session, user.id)
+    async with session_factory() as scope:
+        db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
         db_user_id = str(db_user.id)
@@ -88,9 +83,10 @@ async def passkey_register_options(
                 status_code=403,
             )
 
-        store = SqlAlchemyWebAuthnCredentialStore(session)
-        existing_credentials = await store.list_active_webauthn_credentials(
-            db_user_id,
+        existing_credentials = (
+            await scope.webauthn_credentials.list_active_webauthn_credentials(
+                db_user_id,
+            )
         )
         options = passkey_registration_options(
             _identity_options(request),
@@ -99,8 +95,7 @@ async def passkey_register_options(
             user_display_name=db_user.email,
             exclude_credentials=existing_credentials,
         )
-        challenge_store = SqlAlchemyChallengeStore(session)
-        challenge = await challenge_store.create_challenge(
+        challenge = await scope.challenges.create_challenge(
             user_id=db_user_id,
             kind="webauthn",
             expires_at=current_timestamp()
@@ -111,7 +106,7 @@ async def passkey_register_options(
                 user_handle=db_user.id.bytes,
             ),
         )
-        await session.commit()
+        await scope.commit()
 
     return JSONResponse(
         {
@@ -139,8 +134,8 @@ async def passkey_register_complete(
         return _json_error(PASSKEY_GENERIC_ERROR)
 
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        db_user = await _load_user_by_id(session, user.id)
+    async with session_factory() as scope:
+        db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
         db_user_id = str(db_user.id)
@@ -150,8 +145,7 @@ async def passkey_register_complete(
                 status_code=403,
             )
 
-        challenge_store = SqlAlchemyChallengeStore(session)
-        challenge = await challenge_store.get_challenge(challenge_id)
+        challenge = await scope.challenges.get_challenge(challenge_id)
         if (
             challenge is None
             or challenge.kind != "webauthn"
@@ -173,8 +167,7 @@ async def passkey_register_complete(
                 credential=credential,
                 expected_challenge=expected_challenge,
             )
-            store = SqlAlchemyWebAuthnCredentialStore(session)
-            await store.store_webauthn_credential(
+            await scope.webauthn_credentials.store_webauthn_credential(
                 db_user_id,
                 verified.credential_id,
                 verified.public_key,
@@ -187,10 +180,10 @@ async def passkey_register_complete(
                 aaguid=verified.aaguid,
                 attestation_format=verified.attestation_format,
             )
-        except (IntegrityError, WebAuthnCeremonyError) as exc:
-            await session.rollback()
-            await challenge_store.consume_challenge(challenge_id)
-            await session.commit()
+        except (AuthPersistenceError, WebAuthnCeremonyError) as exc:
+            await scope.rollback()
+            await scope.challenges.consume_challenge(challenge_id)
+            await scope.commit()
             logger.warning(
                 "Passkey registration rejected: user_id=%s reason=%s",
                 db_user_id,
@@ -198,8 +191,8 @@ async def passkey_register_complete(
             )
             return _json_error(PASSKEY_GENERIC_ERROR)
 
-        await challenge_store.consume_challenge(challenge_id)
-        await session.commit()
+        await scope.challenges.consume_challenge(challenge_id)
+        await scope.commit()
 
     return JSONResponse(
         {
@@ -223,17 +216,14 @@ async def passkey_login_options(request: Request) -> JSONResponse:
         return _json_error(PASSKEY_UNAVAILABLE_ERROR, status_code=400)
 
     session_factory = _session_factory_from_request(request)
-    async with session_factory() as session:
-        user = (
-            await session.execute(
-                select(User).where(User.__table__.c.email == normalise_email(email))
-            )
-        ).scalar_one_or_none()
+    async with session_factory() as scope:
+        user = cast(User | None, await scope.get_user_by_email(email))
         if user is None or not _is_effectively_active_user(user):
             return _json_error(PASSKEY_UNAVAILABLE_ERROR, status_code=400)
 
-        store = SqlAlchemyWebAuthnCredentialStore(session)
-        credentials = await store.list_active_webauthn_credentials(str(user.id))
+        credentials = await scope.webauthn_credentials.list_active_webauthn_credentials(
+            str(user.id)
+        )
         if not credentials:
             return _json_error(PASSKEY_UNAVAILABLE_ERROR, status_code=400)
 
@@ -241,8 +231,7 @@ async def passkey_login_options(request: Request) -> JSONResponse:
             _identity_options(request),
             allow_credentials=credentials,
         )
-        challenge_store = SqlAlchemyChallengeStore(session)
-        challenge = await challenge_store.create_challenge(
+        challenge = await scope.challenges.create_challenge(
             user_id=str(user.id),
             kind="webauthn",
             expires_at=current_timestamp()
@@ -253,7 +242,7 @@ async def passkey_login_options(request: Request) -> JSONResponse:
                 return_to=return_to,
             ),
         )
-        await session.commit()
+        await scope.commit()
 
     return JSONResponse(
         {
@@ -282,9 +271,8 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
     user: User | None = None
     user_verified = False
 
-    async with session_factory() as session:
-        challenge_store = SqlAlchemyChallengeStore(session)
-        challenge = await challenge_store.get_challenge(challenge_id)
+    async with session_factory() as scope:
+        challenge = await scope.challenges.get_challenge(challenge_id)
         if (
             challenge is None
             or challenge.kind != "webauthn"
@@ -295,7 +283,7 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
         ):
             return _json_error(PASSKEY_GENERIC_ERROR)
 
-        user = await _load_user_by_id(session, challenge.user_id)
+        user = await _load_user_by_id(scope, challenge.user_id)
         if user is None or not _is_effectively_active_user(user):
             return _json_error(PASSKEY_GENERIC_ERROR, status_code=401)
 
@@ -308,8 +296,9 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
         if expected_challenge is None or credential_id is None:
             return _json_error(PASSKEY_GENERIC_ERROR)
 
-        store = SqlAlchemyWebAuthnCredentialStore(session)
-        stored_credential = await store.get_webauthn_credential(credential_id)
+        stored_credential = await scope.webauthn_credentials.get_webauthn_credential(
+            credential_id
+        )
         if (
             stored_credential is None
             or stored_credential.user_id != str(user.id)
@@ -325,8 +314,8 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
                 stored_credential=stored_credential,
             )
         except WebAuthnCeremonyError as exc:
-            await challenge_store.consume_challenge(challenge_id)
-            await session.commit()
+            await scope.challenges.consume_challenge(challenge_id)
+            await scope.commit()
             logger.warning(
                 "Passkey login rejected: user_id=%s reason=%s",
                 user.id,
@@ -337,18 +326,18 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
         if verified.credential_id != stored_credential.credential_id:
             return _json_error(PASSKEY_GENERIC_ERROR)
 
-        await store.update_webauthn_authentication(
+        await scope.webauthn_credentials.update_webauthn_authentication(
             verified.credential_id,
             sign_count=verified.sign_count,
             user_verified=verified.user_verified,
             credential_device_type=verified.credential_device_type,
             credential_backed_up=verified.credential_backed_up,
         )
-        active_totp_credential_id = await SqlAlchemyTOTPCredentialStore(
-            session
-        ).get_active_totp_credential(str(user.id))
-        await challenge_store.consume_challenge(challenge_id)
-        await session.commit()
+        active_totp_credential_id = (
+            await scope.totp_credentials.get_active_totp_credential(str(user.id))
+        )
+        await scope.challenges.consume_challenge(challenge_id)
+        await scope.commit()
         user_verified = verified.user_verified
 
     if user is None:
@@ -441,13 +430,12 @@ async def revoke_passkey(
 
     session_factory = _session_factory_from_request(request)
     error: str | None = None
-    async with session_factory() as session:
-        db_user = await _load_user_by_id(session, user.id)
+    async with session_factory() as scope:
+        db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
 
-        store = SqlAlchemyWebAuthnCredentialStore(session)
-        credential = await store.get_user_webauthn_credential(
+        credential = await scope.webauthn_credentials.get_user_webauthn_credential(
             str(db_user.id),
             credential_row_id,
         )
@@ -459,14 +447,17 @@ async def revoke_passkey(
 
         if not await user_has_usable_account_sign_in(
             request,
-            session,
+            scope,
             db_user,
             exclude_passkey_id=credential.id,
         ):
             error = "Add another sign-in method before removing this passkey."
         else:
-            await store.revoke_webauthn_credential(str(db_user.id), credential.id)
-            await session.commit()
+            await scope.webauthn_credentials.revoke_webauthn_credential(
+                str(db_user.id),
+                credential.id,
+            )
+            await scope.commit()
 
     if error is not None:
         return await _security_page_response(

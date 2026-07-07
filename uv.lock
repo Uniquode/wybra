@@ -536,41 +536,6 @@ wheels = [
 ]
 
 [[package]]
-name = "fastapi-users"
-version = "15.0.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "email-validator" },
-    { name = "fastapi" },
-    { name = "makefun" },
-    { name = "pwdlib", extra = ["argon2", "bcrypt"] },
-    { name = "pyjwt", extra = ["crypto"] },
-    { name = "python-multipart" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8d/79/98b9d733274cfe0c776fde637dc53b421a0142f51a9e3e9fecd72741f7c1/fastapi_users-15.0.5.tar.gz", hash = "sha256:097f69701894e650c346df89b1cdb0a09cf139234f4cb9a8ece275af4e98e202", size = 121394, upload-time = "2026-03-27T09:01:17.161Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/8e/1ed6bbe36c486b98217c4be6769d61fcb98c38b334fb39706de661a905b6/fastapi_users-15.0.5-py3-none-any.whl", hash = "sha256:10fd4f3e85ed66f694a6ca2ecac609af4e59d1f9ec64d1557f5912dccfd87c7f", size = 39038, upload-time = "2026-03-27T09:01:16.158Z" },
-]
-
-[package.optional-dependencies]
-sqlalchemy = [
-    { name = "fastapi-users-db-sqlalchemy" },
-]
-
-[[package]]
-name = "fastapi-users-db-sqlalchemy"
-version = "7.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fastapi-users" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/87/12/bc9e6146ae31564741cefc87ee6e37fa5b566933f0afe8aa030779d60e60/fastapi_users_db_sqlalchemy-7.0.0.tar.gz", hash = "sha256:6823eeedf8a92f819276a2b2210ef1dcfd71fe8b6e37f7b4da8d1c60e3dfd595", size = 10877, upload-time = "2025-01-04T13:09:05.086Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a6/08/9968963c1fb8c34627b7f1fbcdfe9438540f87dc7c9bfb59bb4fd19a4ecf/fastapi_users_db_sqlalchemy-7.0.0-py3-none-any.whl", hash = "sha256:5fceac018e7cfa69efc70834dd3035b3de7988eb4274154a0dbe8b14f5aa001e", size = 6891, upload-time = "2025-01-04T13:09:02.869Z" },
-]
-
-[[package]]
 name = "filelock"
 version = "3.29.4"
 source = { registry = "https://pypi.org/simple" }
@@ -790,15 +755,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0ab5153bf0bfa28ccb6c3ed4d1babf4305449668807b/keyring-25.7.0.tar.gz", hash = "sha256:fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b", size = 63516, upload-time = "2025-11-16T16:26:09.482Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/db/e655086b7f3a705df045bf0933bdd9c2f79bb3c97bfef1384598bb79a217/keyring-25.7.0-py3-none-any.whl", hash = "sha256:be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f", size = 39160, upload-time = "2025-11-16T16:26:08.402Z" },
-]
-
-[[package]]
-name = "makefun"
-version = "1.16.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/7b/cf/6780ab8bc3b84a1cce3e4400aed3d64b6db7d5e227a2f75b6ded5674701a/makefun-1.16.0.tar.gz", hash = "sha256:e14601831570bff1f6d7e68828bcd30d2f5856f24bad5de0ccb22921ceebc947", size = 73565, upload-time = "2025-05-09T15:00:42.313Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/c0/4bc973defd1270b89ccaae04cef0d5fa3ea85b59b108ad2c08aeea9afb76/makefun-1.16.0-py2.py3-none-any.whl", hash = "sha256:43baa4c3e7ae2b17de9ceac20b669e9a67ceeadff31581007cca20a07bbe42c4", size = 22923, upload-time = "2025-05-09T15:00:41.042Z" },
 ]
 
 [[package]]
@@ -1314,11 +1270,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
 ]
 
-[package.optional-dependencies]
-crypto = [
-    { name = "cryptography" },
-]
-
 [[package]]
 name = "pyopenssl"
 version = "26.3.0"
@@ -1795,14 +1746,16 @@ dependencies = [
     { name = "cryptography" },
     { name = "dateparser" },
     { name = "dbscripts" },
+    { name = "email-validator" },
     { name = "envex" },
     { name = "fastapi" },
-    { name = "fastapi-users", extra = ["sqlalchemy"] },
     { name = "jinja2" },
     { name = "phonenumbers" },
+    { name = "pwdlib", extra = ["argon2", "bcrypt"] },
     { name = "pycountry" },
     { name = "pydantic" },
     { name = "pyjwt" },
+    { name = "python-multipart" },
     { name = "qrcode" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "starlette" },
@@ -1844,16 +1797,18 @@ requires-dist = [
     { name = "cryptography", specifier = ">=49.0.0" },
     { name = "dateparser", specifier = ">=1.4.1" },
     { name = "dbscripts", git = "https://github.com/deeprave/dbscripts" },
+    { name = "email-validator", specifier = ">=2.3.0" },
     { name = "envex", specifier = ">=5.0.0" },
     { name = "fastapi", specifier = ">=0.139.0" },
-    { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=15.0.5" },
     { name = "hvac", marker = "extra == 'vault'", specifier = ">=2.4.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "keyring", marker = "extra == 'keychain'", specifier = ">=25.7.0" },
     { name = "phonenumbers", specifier = ">=9.0.33" },
+    { name = "pwdlib", extras = ["argon2", "bcrypt"], specifier = "==0.3.0" },
     { name = "pycountry", specifier = ">=26.2.16" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pyjwt", specifier = ">=2.13.0" },
+    { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "qrcode", specifier = ">=8.0" },
     { name = "redis", marker = "extra == 'cache'", specifier = ">=8.0.1" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.51" },

@@ -6,18 +6,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import FormData
 
 from wybra.auth.ids import parse_uuid
 from wybra.auth.mfa.recovery import RECOVERY_CODE_LENGTH
-from wybra.auth.mfa.storage import (
-    SqlAlchemyChallengeStore,
-    SqlAlchemyTOTPCredentialStore,
-)
 from wybra.auth.mfa.webauthn import passkeys_effectively_enabled
 from wybra.auth.models import User
 from wybra.auth.options import IdentityOptions
+from wybra.auth.persistence.contracts import (
+    AuthPersistenceCapability,
+    AuthPersistenceScope,
+)
 from wybra.auth.provider_support import provider_login_options
 from wybra.auth.result import (
     ERROR_EMAIL_VERIFICATION_REQUIRED,
@@ -48,7 +47,6 @@ from wybra.auth.sessions import (
 from wybra.auth.settings import identity_options_from_state
 from wybra.auth.timestamps import current_timestamp
 from wybra.core.routes.contracts import API_PATH_PREFIX
-from wybra.db import DatabaseCapability
 from wybra.forms import request_form_data, validate_csrf
 from wybra.site import get_site
 from wybra.template import render_page
@@ -114,34 +112,34 @@ def _passkey_login_context(
 
 def _session_factory_from_request(
     request: Request,
-) -> Callable[[], AbstractAsyncContextManager[AsyncSession]]:
-    return get_site(request.app).require_capability(DatabaseCapability).session
+) -> Callable[[], AbstractAsyncContextManager[AuthPersistenceScope]]:
+    return get_site(request.app).require_capability(AuthPersistenceCapability).session
 
 
 async def _load_user_by_id(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     user_id: str | UUID,
 ) -> User | None:
     parsed_user_id = parse_uuid(user_id)
     if parsed_user_id is None:
         return None
 
-    return await session.get(User, parsed_user_id)
+    return cast(User | None, await scope.get_user(parsed_user_id))
 
 
 async def _load_active_totp_credential_id(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     user_id: str | UUID,
 ) -> str | None:
     active_credential_id, _pending_credential_id = await _load_totp_credential_ids(
-        session,
+        scope,
         user_id,
     )
     return active_credential_id
 
 
 async def _load_totp_credential_ids(
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     user_id: str | UUID,
 ) -> tuple[str | None, str | None]:
     parsed_user_id = parse_uuid(user_id)
@@ -149,10 +147,9 @@ async def _load_totp_credential_ids(
         return None, None
 
     parsed_user_id_text = str(parsed_user_id)
-    store = SqlAlchemyTOTPCredentialStore(session)
     return (
-        await store.get_active_totp_credential(parsed_user_id_text),
-        await store.get_pending_totp_credential(parsed_user_id_text),
+        await scope.totp_credentials.get_active_totp_credential(parsed_user_id_text),
+        await scope.totp_credentials.get_pending_totp_credential(parsed_user_id_text),
     )
 
 
@@ -180,7 +177,7 @@ async def _fresh_primary_assertion_satisfied(
 async def _fresh_security_assertion_satisfied(
     request: Request,
     user: User,
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     *,
     active_credential_id: str | None,
 ) -> bool:
@@ -193,9 +190,8 @@ async def _fresh_security_assertion_satisfied(
 
     totp_code = _form_value(form_data, "totp_code").strip()
     if totp_code and active_credential_id is not None:
-        store = totp_credential_store(request, session)
+        store = totp_credential_store(request, scope)
         accepted, _counter, _error = await verify_totp_code_for_credential(
-            session=session,
             store=store,
             credential_id=active_credential_id,
             user_id=str(user.id),
@@ -207,7 +203,7 @@ async def _fresh_security_assertion_satisfied(
 
     recovery_code = _form_value(form_data, "recovery_code").strip().upper()
     if recovery_code and len(recovery_code) == RECOVERY_CODE_LENGTH:
-        store = recovery_code_store(request, session)
+        store = recovery_code_store(request, scope)
         return await store.consume_recovery_code(str(user.id), recovery_code)
 
     return False
@@ -216,7 +212,7 @@ async def _fresh_security_assertion_satisfied(
 async def _fresh_single_security_assertion_satisfied(
     request: Request,
     user: User,
-    session: AsyncSession,
+    scope: AuthPersistenceScope,
     *,
     active_credential_id: str | None,
 ) -> bool:
@@ -229,9 +225,8 @@ async def _fresh_single_security_assertion_satisfied(
         if active_credential_id is None:
             return False
 
-        store = totp_credential_store(request, session)
+        store = totp_credential_store(request, scope)
         accepted, _counter, _error = await verify_totp_code_for_credential(
-            session=session,
             store=store,
             credential_id=active_credential_id,
             user_id=str(user.id),
@@ -246,7 +241,7 @@ async def _fresh_single_security_assertion_satisfied(
 
     recovery_code = credential.upper()
     if len(recovery_code) == RECOVERY_CODE_LENGTH:
-        store = recovery_code_store(request, session)
+        store = recovery_code_store(request, scope)
         return await store.consume_recovery_code(str(user.id), recovery_code)
 
     return False
@@ -262,9 +257,8 @@ async def _create_totp_login_challenge(
     now = current_timestamp()
     challenge_expires_at = now + options.totp_challenge_expiry_seconds
     login_nonce = generate_totp_login_nonce()
-    async with session_factory() as session:
-        challenge_store = SqlAlchemyChallengeStore(session)
-        challenge = await challenge_store.create_challenge(
+    async with session_factory() as scope:
+        challenge = await scope.challenges.create_challenge(
             user_id=user_id,
             kind="totp",
             expires_at=challenge_expires_at,
@@ -273,7 +267,7 @@ async def _create_totp_login_challenge(
                 "totp_credential_id": credential_id,
             },
         )
-        await session.commit()
+        await scope.commit()
         return challenge.id, login_nonce
 
 
@@ -287,9 +281,8 @@ async def _create_totp_setup_challenge(
     now = current_timestamp()
     challenge_expires_at = now + options.totp_challenge_expiry_seconds
     setup_nonce = generate_totp_setup_nonce()
-    async with session_factory() as session:
-        challenge_store = SqlAlchemyChallengeStore(session)
-        challenge = await challenge_store.create_challenge(
+    async with session_factory() as scope:
+        challenge = await scope.challenges.create_challenge(
             user_id=user_id,
             kind="totp",
             expires_at=challenge_expires_at,
@@ -299,7 +292,7 @@ async def _create_totp_setup_challenge(
                 "return_to": return_to,
             },
         )
-        await session.commit()
+        await scope.commit()
         return challenge.id, setup_nonce
 
 

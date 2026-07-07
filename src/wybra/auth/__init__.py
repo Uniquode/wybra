@@ -1,4 +1,4 @@
-"""Reusable identity and authentication infrastructure for FastAPI Users."""
+"""Reusable identity and authentication infrastructure."""
 
 from importlib import import_module
 from typing import Any
@@ -10,6 +10,8 @@ _EXPORTS = {
     "AuthenticationMethod": "wybra.auth.mfa.challenges",
     "AUTH_SETTINGS_OWNER": "wybra.auth.settings",
     "AuthCapability": "wybra.auth.capabilities",
+    "AuthPersistenceCapability": "wybra.auth.persistence.contracts",
+    "AuthPersistenceScope": "wybra.auth.persistence.contracts",
     "AuthSettings": "wybra.auth.settings",
     "ChallengeDecision": "wybra.auth.mfa.challenges",
     "ChallengeKind": "wybra.auth.mfa.challenges",
@@ -65,7 +67,6 @@ _EXPORTS = {
     "anonymous_required": "wybra.auth.capabilities",
     "identity_options_from_state": "wybra.auth.settings",
     "login_required": "wybra.auth.capabilities",
-    "load_auth_settings": "wybra.auth.settings",
     "load_runtime_auth_settings": "wybra.auth.settings",
     "module_config": "wybra.auth.settings",
     "required_authentication_methods_for_totp_policy": "wybra.auth.mfa.challenges",

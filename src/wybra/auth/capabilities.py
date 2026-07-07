@@ -2,21 +2,20 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from fastapi import Request
 from fastapi.responses import Response
-from fastapi_users import FastAPIUsers
 from sqlalchemy.exc import SQLAlchemyError
 
 from wybra.auth.delivery import NullIdentityDelivery
-from wybra.auth.models import LocalUser, User
+from wybra.auth.models import User
+from wybra.auth.persistence.contracts import AuthPersistenceCapability
+from wybra.auth.persistence.strategies import SqlAlchemyAuthPersistenceCapability
 from wybra.auth.sessions import (
     clear_marked_session_cookie,
-    create_fastapi_users,
     mark_session_cookie_for_clearing,
 )
 from wybra.auth.sessions import (
@@ -53,9 +52,6 @@ class AuthCapability(Protocol):
     def settings(self) -> AuthSettings: ...
 
     @property
-    def fastapi_users(self) -> FastAPIUsers[LocalUser, uuid.UUID]: ...
-
-    @property
     def optional_current_user(self) -> OptionalCurrentUserDependency: ...
 
     @property
@@ -68,14 +64,10 @@ class AuthCapability(Protocol):
 @dataclass(frozen=True, slots=True)
 class SiteAuthCapability:
     settings: AuthSettings
-    fastapi_users: FastAPIUsers[LocalUser, uuid.UUID]
 
     @classmethod
     def from_settings(cls, settings: AuthSettings) -> SiteAuthCapability:
-        return cls(
-            settings=settings,
-            fastapi_users=create_fastapi_users(settings.identity_options),
-        )
+        return cls(settings=settings)
 
     @property
     def optional_current_user(self) -> OptionalCurrentUserDependency:
@@ -111,15 +103,19 @@ async def setup_site(site: Site) -> None:
     )
     secrets_settings = _cached_secrets_settings(site)
     capability = SiteAuthCapability.from_settings(settings)
+    secret_envelope_service = _secret_envelope_service(site, secrets_settings)
 
     site.app.state.auth_settings = settings
     site.app.state.identity_delivery = NullIdentityDelivery()
-    site.app.state.fastapi_users = capability.fastapi_users
-    site.app.state.secret_envelope_service = _secret_envelope_service(
-        site,
-        secrets_settings,
-    )
+    site.app.state.secret_envelope_service = secret_envelope_service
     site.provide_capability(AuthCapability, capability)
+    site.provide_capability(
+        AuthPersistenceCapability,
+        SqlAlchemyAuthPersistenceCapability(
+            site.capability_proxy(DatabaseCapability),
+            secret_service_resolver=lambda: _current_secret_envelope_service(site),
+        ),
+    )
     _register_session_cookie_cleanup_middleware(site, settings)
 
 
@@ -127,6 +123,9 @@ async def post_setup_site(site: Site) -> None:
     site.require_capability(DatabaseCapability)
     site.require_capability(FormsCapability)
     site.require_capability(AuthCapability)
+    persistence = site.require_capability(AuthPersistenceCapability)
+    if isinstance(persistence, SqlAlchemyAuthPersistenceCapability):
+        persistence.database.finalise_required()
     site.app.state.secret_envelope_service = _secret_envelope_service(
         site,
         _cached_secrets_settings(site),
@@ -174,6 +173,11 @@ def _secret_envelope_service(
         "no crypto secrets source is configured"
     )
     return SecretEnvelopeService.from_env(_resolved_environ(site))
+
+
+def _current_secret_envelope_service(site: Site) -> SecretEnvelopeService | None:
+    value = getattr(site.app.state, "secret_envelope_service", None)
+    return value if isinstance(value, SecretEnvelopeService) else None
 
 
 def _resolved_environ(site: Site) -> Mapping[str, str]:

@@ -14,7 +14,12 @@ from sqlalchemy import select
 
 from provider_test_keys import apple_private_key_pem as _apple_private_key_pem
 from support_database import sqlite_file_url
-from wybra.auth import AuthCapability, anonymous_required, login_required
+from wybra.auth import (
+    AuthCapability,
+    AuthPersistenceCapability,
+    anonymous_required,
+    login_required,
+)
 from wybra.auth.accounts.manager import create_user_manager
 from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.delivery import NullIdentityDelivery
@@ -1051,15 +1056,23 @@ async def test_wybra_auth_setup_site_registers_auth_capability(
     site = await start(app, config_source=_site_config_source(tmp_path))
 
     auth = site.require_capability(AuthCapability)
+    auth_persistence = site.require_capability(AuthPersistenceCapability)
 
     assert site.has_capability(AuthCapability) is True
+    assert site.has_capability(AuthPersistenceCapability) is True
     assert isinstance(auth, AuthCapability)
+    assert isinstance(auth_persistence, AuthPersistenceCapability)
     assert auth.settings is app.state.auth_settings
-    assert auth.fastapi_users is app.state.fastapi_users
+    assert not hasattr(auth, "fastapi_users")
+    assert not hasattr(app.state, "fastapi_users")
     assert isinstance(app.state.identity_delivery, NullIdentityDelivery)
     assert callable(auth.optional_current_user)
     assert callable(auth.login_required)
     assert callable(auth.anonymous_required)
+    assert callable(auth_persistence.session)
+    assert callable(auth_persistence.transaction)
+    async with auth_persistence.session() as persistence_scope:
+        assert callable(persistence_scope.management.resolve_user_record)
     assert callable(login_required)
     assert callable(anonymous_required)
 
