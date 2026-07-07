@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 
 from fastapi import Request
-from sqlalchemy.exc import SQLAlchemyError
+from tortoise.exceptions import BaseORMException
 
 from wybra.auth.sessions import mark_session_cookie_for_clearing, resolve_current_user
 from wybra.template.context import TemplateContext, add_to_context
@@ -25,7 +25,7 @@ async def identity_template_context(
 ) -> TemplateContext:
     try:
         user = await resolve_current_user(request)
-    except SQLAlchemyError as exc:
+    except BaseORMException as exc:
         logger.warning(
             "Auth session lookup failed while building template context; "
             "treating request as anonymous and clearing the session cookie.",

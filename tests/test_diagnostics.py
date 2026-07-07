@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from tortoise.transactions import in_transaction
 
 from wybra import start_site
 from wybra.config import MappingConfigSource
@@ -20,12 +20,13 @@ from wybra.diagnostics import (
     trace,
 )
 from wybra.diagnostics.context import (
+    record_sql_query,
     reset_current_diagnostics,
     set_current_diagnostics,
 )
 from wybra.diagnostics.events import RequestDiagnostics
 from wybra.diagnostics.logging import emit_request_diagnostics
-from wybra.diagnostics.sqlalchemy import instrument_sqlalchemy_engine
+from wybra.diagnostics.tortoise import instrument_tortoise_context
 from wybra.site import start
 from wybra.template.capabilities import DefaultTemplateCapability
 
@@ -222,14 +223,12 @@ async def test_backend_operation_diagnostics_records_error_result() -> None:
 
 def test_sql_template_and_backend_diagnostics_are_collected(tmp_path: Path) -> None:
     (tmp_path / "page.html").write_text("Hello {{ name }}", encoding="utf-8")
-    database = create_database("sqlite+aiosqlite:///:memory:")
     templates = DefaultTemplateCapability(template_root=tmp_path)
     app = FastAPI(lifespan=start_site(config_source=_diagnostic_app_config()))
 
     @app.get("/work", name="work")
     async def work(request: Request) -> dict[str, object]:
-        async with database.session_factory() as session:
-            await session.execute(text("select 1"))
+        record_sql_query("select 1", duration_seconds=0.001)
         templates.render_template("page.html", {"name": "diagnostics"})
         diagnostics = request_diagnostics(request)
         assert diagnostics is not None
@@ -239,40 +238,54 @@ def test_sql_template_and_backend_diagnostics_are_collected(tmp_path: Path) -> N
             "backend": diagnostics.backend_operation_count,
         }
 
-    try:
-        with TestClient(app) as client:
-            response = client.get("/work")
-    finally:
-        import anyio
-
-        anyio.run(close_database, database)
+    with TestClient(app) as client:
+        response = client.get("/work")
 
     assert response.json()["sql"] == 1
     assert response.json()["templates"] == 1
     assert response.json()["backend"] >= 1
 
 
-def test_sqlalchemy_instrumentation_is_idempotent() -> None:
-    database = create_database("sqlite+aiosqlite:///:memory:")
-    instrument_sqlalchemy_engine(database.engine)
+@pytest.mark.anyio
+async def test_tortoise_instrumentation_is_idempotent() -> None:
+    database = await create_database(
+        "sqlite+aiosqlite:///:memory:",
+        modules=("wybra.sessions",),
+    )
+    instrument_tortoise_context(database.context)
     diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
     token = set_current_diagnostics(diagnostics)
 
-    async def query_once() -> None:
-        async with database.session_factory() as session:
-            await session.execute(text("select 1"))
-
     try:
-        import anyio
-
-        anyio.run(query_once)
+        with database.context:
+            await database.connection().execute_query("select 1")
     finally:
         reset_current_diagnostics(token)
-        import anyio
-
-        anyio.run(close_database, database)
+        await close_database(database)
 
     assert diagnostics.sql_query_count == 1
+
+
+@pytest.mark.anyio
+async def test_tortoise_instrumentation_records_transaction_queries() -> None:
+    database = await create_database(
+        "sqlite+aiosqlite:///:memory:",
+        modules=("wybra.sessions",),
+    )
+    diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
+    token = set_current_diagnostics(diagnostics)
+
+    try:
+        with database.context:
+            async with in_transaction("default") as connection:
+                await connection.execute_query("select 1")
+                async with in_transaction(connection.connection_name) as savepoint:
+                    await savepoint.execute_query("select 2")
+    finally:
+        reset_current_diagnostics(token)
+        await close_database(database)
+
+    assert diagnostics.sql_query_count == 2
 
 
 @pytest.mark.anyio

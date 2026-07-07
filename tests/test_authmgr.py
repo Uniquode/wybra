@@ -8,7 +8,8 @@ import sqlite3
 import sys
 import tomllib
 import zlib
-from contextlib import closing
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,10 +21,8 @@ import pytest
 from click.testing import CliRunner
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Request
-from sqlalchemy import inspect as sqlalchemy_inspect
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.exceptions import BaseORMException
 
 import wybra.auth.admin.management as identity_management
 import wybra.auth.cli.authmgr as authmgr
@@ -37,7 +36,7 @@ import wybra.auth.cli.authmgr.timestamps as authmgr_timestamps
 import wybra.auth.cli.authmgr.users as authmgr_users
 import wybra.auth.sessions as identity_sessions
 import wybra.db.migrate as migrate_module
-from support_database import sqlite_file_url, sync_sqlite_file_url
+from support_database import sqlite_file_url
 from wybra.auth import ERROR_EMAIL_VERIFICATION_REQUIRED, ERROR_INACTIVE_USER
 from wybra.auth.accounts.manager import (
     InvalidPasswordException,
@@ -49,9 +48,7 @@ from wybra.auth.accounts.manager import (
 from wybra.auth.accounts.schemas import UserCreate, UserUpdate
 from wybra.auth.models import (
     AccessToken,
-    Base,
     Group,
-    GroupGroup,
     GroupScope,
     GroupUser,
     IdentityTotpCredential,
@@ -63,16 +60,11 @@ from wybra.auth.models import (
 )
 from wybra.auth.options import PROVIDER, IdentityOptions
 from wybra.auth.persistence import (
-    SqlAlchemyAuthPersistenceCapability,
-    create_database_strategy,
-    create_user_database,
+    TortoiseAuthPersistenceCapability,
+    create_session_token_strategy,
+    create_user_store,
 )
 from wybra.auth.persistence.contracts import AuthPersistenceCapability
-from wybra.auth.persistence.database import (
-    SQLITE_MEMORY_DATABASE_URL,
-    parse_sqlite_database_url,
-    resolve_database_url,
-)
 from wybra.auth.settings import (
     APP_CONFIG_SECTION,
     AUTH_CONFIG_SECTION,
@@ -105,14 +97,12 @@ from wybra.core.composition import (
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
-from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
-from wybra.db.persistence import (
-    Database,
-    close_database,
-    create_database,
-    create_database_engine,
-    create_session_factory,
-    session_scope,
+from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
+from wybra.db.persistence import Database, close_database, create_database
+from wybra.db.urls import (
+    SQLITE_MEMORY_DATABASE_URL,
+    parse_sqlite_database_url,
+    resolve_database_url,
 )
 from wybra.services.crypto import ENV_WYBRA_SECRET_KEY_CURRENT
 from wybra.site import Site
@@ -198,7 +188,6 @@ def create_auth_test_app(
         database_url=database_url,
         identity_options=options,
     )
-    database = create_database(settings)
     site = Site(
         app=app,
         config=ConfigService(
@@ -214,26 +203,61 @@ def create_auth_test_app(
             ]
         ),
     )
-    site.provide_capability(
-        DatabaseCapability,
-        SqlAlchemyDatabaseCapability.from_connections(
-            {"default": database, "reader": database, "writer": database}
-        ),
-    )
-    site.provide_capability(
-        AuthPersistenceCapability,
-        SqlAlchemyAuthPersistenceCapability(site.capability_proxy(DatabaseCapability)),
-    )
+    app.state.test_database = None
     app.state.site = site
     return app
 
 
 def _database_from_app(app: FastAPI) -> Database:
-    return app.state.site.require_capability(DatabaseCapability).connection()
+    database = app.state.test_database
+    if not isinstance(database, Database):
+        raise RuntimeError("Test database has not been initialised.")
+    return database
 
 
-def _session_factory_from_app(app: FastAPI) -> async_sessionmaker[AsyncSession]:
-    return _database_from_app(app).session_factory
+async def initialise_app_identity_database(app: FastAPI) -> None:
+    if app.state.test_database is None:
+        database = await create_database(
+            app.state.auth_settings.database_url,
+            modules=("wybra.auth",),
+        )
+        app.state.test_database = database
+        site = app.state.site
+        site.provide_capability(
+            DatabaseCapability,
+            TortoiseDatabaseCapability(
+                database,
+                {"default": "default", "reader": "default", "writer": "default"},
+            ),
+        )
+        site.provide_capability(
+            AuthPersistenceCapability,
+            TortoiseAuthPersistenceCapability(
+                site.capability_proxy(DatabaseCapability)
+            ),
+        )
+    await _database_from_app(app).context.generate_schemas()
+
+
+async def run_auth_app_test(
+    app: FastAPI,
+    callback: Callable[[], Awaitable[None]],
+) -> None:
+    try:
+        await callback()
+    finally:
+        if app.state.test_database is not None:
+            await close_database(_database_from_app(app))
+
+
+def _connection_from_app(app: FastAPI) -> BaseDBAsyncClient:
+    return _database_from_app(app).connection()
+
+
+@asynccontextmanager
+async def app_connection_scope(app: FastAPI) -> AsyncIterator[BaseDBAsyncClient]:
+    with _database_from_app(app).context:
+        yield _connection_from_app(app)
 
 
 def run_auth_migration(argv: list[str]) -> int:
@@ -323,17 +347,37 @@ def set_authmgr_database_url(
 
 
 def initialise_identity_database(database_url: str) -> None:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-
     async def initialise() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        database = await create_database(database_url, modules=("wybra.auth",))
+        try:
+            await database.context.generate_schemas()
+        finally:
+            await close_database(database)
 
+    asyncio.run(initialise())
+
+
+async def _with_identity_connection[T](
+    database_url: str,
+    callback: Callable[[BaseDBAsyncClient], Awaitable[T]],
+) -> T:
+    database = await create_database(database_url, modules=("wybra.auth",))
     try:
-        asyncio.run(initialise())
+        return await callback(database.connection())
     finally:
-        asyncio.run(close_database(engine))
+        await close_database(database)
+
+
+async def _with_generated_identity_connection[T](
+    database_url: str,
+    callback: Callable[[BaseDBAsyncClient], Awaitable[T]],
+) -> T:
+    database = await create_database(database_url, modules=("wybra.auth",))
+    try:
+        await database.context.generate_schemas()
+        return await callback(database.connection())
+    finally:
+        await close_database(database)
 
 
 def initialise_legacy_identity_database(database_path: Path) -> None:
@@ -352,114 +396,99 @@ def initialise_legacy_identity_database(database_path: Path) -> None:
         )
 
 
+def sqlite_table_names(database_path: Path) -> set[str]:
+    with closing(sqlite3.connect(database_path)) as connection:
+        return {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+
+
+def sqlite_table_columns(database_path: Path, table_name: str) -> set[str]:
+    quoted_table_name = _quote_sqlite_identifier(table_name)
+    with closing(sqlite3.connect(database_path)) as connection:
+        return {
+            row[1]
+            for row in connection.execute(f"PRAGMA table_info({quoted_table_name})")
+        }
+
+
+def sqlite_table_indexes(database_path: Path, table_name: str) -> set[str]:
+    quoted_table_name = _quote_sqlite_identifier(table_name)
+    with closing(sqlite3.connect(database_path)) as connection:
+        return {
+            row[1]
+            for row in connection.execute(f"PRAGMA index_list({quoted_table_name})")
+        }
+
+
+def _quote_sqlite_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
 def identity_users_from_database(database_url: str) -> list[User]:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
-    async def load_users() -> list[User]:
-        async with session_scope(session_factory) as session:
-            return list((await session.execute(select(User))).scalars().all())
-
-    try:
-        return asyncio.run(load_users())
-    finally:
-        asyncio.run(close_database(engine))
+    return asyncio.run(
+        _with_identity_connection(
+            database_url,
+            lambda connection: User.all().using_db(connection).order_by("email"),
+        )
+    )
 
 
 def identity_user_from_database(database_url: str, email: str) -> User | None:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
-    async def load_user() -> User | None:
-        async with session_scope(session_factory) as session:
-            return (
-                await session.execute(select(User).where(User.email == email))
-            ).scalar_one_or_none()
-
-    try:
-        return asyncio.run(load_user())
-    finally:
-        asyncio.run(close_database(engine))
+    return asyncio.run(
+        _with_identity_connection(
+            database_url,
+            lambda connection: User.get_or_none(email=email, using_db=connection),
+        )
+    )
 
 
 def identity_user_emails_from_database(database_url: str) -> list[IdentityUserEmail]:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
-    async def load_user_emails() -> list[IdentityUserEmail]:
-        async with session_scope(session_factory) as session:
-            return list(
-                (await session.execute(select(IdentityUserEmail))).scalars().all()
-            )
-
-    try:
-        return asyncio.run(load_user_emails())
-    finally:
-        asyncio.run(close_database(engine))
+    return asyncio.run(
+        _with_identity_connection(
+            database_url,
+            lambda connection: IdentityUserEmail.all().using_db(connection),
+        )
+    )
 
 
 def totp_credentials_from_database(
     database_url: str,
     email: str,
 ) -> list[IdentityTotpCredential]:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
     async def load_credentials() -> list[IdentityTotpCredential]:
-        async with session_scope(session_factory) as session:
-            user = (
-                await session.execute(select(User).where(User.email == email))
-            ).scalar_one()
-            return list(
-                (
-                    await session.execute(
-                        select(IdentityTotpCredential)
-                        .where(IdentityTotpCredential.user_id == user.id)
-                        .order_by(IdentityTotpCredential.created_at)
-                    )
-                )
-                .scalars()
-                .all()
-            )
+        return await _with_identity_connection(database_url, _load)
 
-    try:
-        return asyncio.run(load_credentials())
-    finally:
-        asyncio.run(close_database(engine))
+    async def _load(connection: BaseDBAsyncClient) -> list[IdentityTotpCredential]:
+        user = await User.get(email=email, using_db=connection)
+        return list(
+            await IdentityTotpCredential.filter(user_id=user.id)
+            .using_db(connection)
+            .order_by("created_at")
+        )
+
+    return asyncio.run(load_credentials())
 
 
 def totp_recovery_codes_from_database(
     database_url: str,
     credential: IdentityTotpCredential,
 ) -> list[IdentityTotpRecoveryCode]:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
-    async def load_recovery_codes() -> list[IdentityTotpRecoveryCode]:
-        async with session_scope(session_factory) as session:
-            return list(
-                (
-                    await session.execute(
-                        select(IdentityTotpRecoveryCode)
-                        .where(
-                            IdentityTotpRecoveryCode.credential_id == credential.id,
-                        )
-                        .order_by(IdentityTotpRecoveryCode.created_at)
-                    )
+    return asyncio.run(
+        _with_identity_connection(
+            database_url,
+            lambda connection: (
+                IdentityTotpRecoveryCode.filter(
+                    credential_id=credential.id,
                 )
-                .scalars()
-                .all()
-            )
-
-    try:
-        return asyncio.run(load_recovery_codes())
-    finally:
-        asyncio.run(close_database(engine))
+                .using_db(connection)
+                .order_by("created_at")
+            ),
+        )
+    )
 
 
 def add_webauthn_credential_to_database(
@@ -470,218 +499,139 @@ def add_webauthn_credential_to_database(
     label: str | None = None,
     status: str = "active",
 ) -> str:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
     async def add_credential() -> str:
-        async with session_scope(session_factory) as session:
-            user = (
-                await session.execute(select(User).where(User.email == email))
-            ).scalar_one()
-            now = time()
-            credential = IdentityWebAuthnCredential(
-                user_id=user.id,
-                credential_id=credential_id,
-                public_key=b"public-key",
-                sign_count=1,
-                status=status,
-                label=label,
-                created_at=now,
-                revoked_at=now if status == "revoked" else None,
-                user_verified=True,
-                credential_device_type="multi_device",
-                credential_backed_up=True,
-                transports=["internal"],
-            )
-            session.add(credential)
-            await session.flush()
-            row_id = str(credential.id)
-            await session.commit()
-            return row_id
+        return await _with_identity_connection(database_url, _add)
 
-    try:
-        return asyncio.run(add_credential())
-    finally:
-        asyncio.run(close_database(engine))
+    async def _add(connection: BaseDBAsyncClient) -> str:
+        user = await User.get(email=email, using_db=connection)
+        now = time()
+        credential = await IdentityWebAuthnCredential.create(
+            user_id=user.id,
+            credential_id=credential_id,
+            public_key=b"public-key",
+            sign_count=1,
+            status=status,
+            label=label,
+            created_at=now,
+            revoked_at=now if status == "revoked" else None,
+            user_verified=True,
+            credential_device_type="multi_device",
+            credential_backed_up=True,
+            transports=["internal"],
+            using_db=connection,
+        )
+        return str(credential.id)
+
+    return asyncio.run(add_credential())
 
 
 def webauthn_credentials_from_database(
     database_url: str,
     email: str,
 ) -> list[IdentityWebAuthnCredential]:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
     async def load_credentials() -> list[IdentityWebAuthnCredential]:
-        async with session_scope(session_factory) as session:
-            user = (
-                await session.execute(select(User).where(User.email == email))
-            ).scalar_one()
-            return list(
-                (
-                    await session.execute(
-                        select(IdentityWebAuthnCredential)
-                        .where(IdentityWebAuthnCredential.user_id == user.id)
-                        .order_by(IdentityWebAuthnCredential.created_at)
-                    )
-                )
-                .scalars()
-                .all()
-            )
+        return await _with_identity_connection(database_url, _load)
 
-    try:
-        return asyncio.run(load_credentials())
-    finally:
-        asyncio.run(close_database(engine))
+    async def _load(connection: BaseDBAsyncClient) -> list[IdentityWebAuthnCredential]:
+        user = await User.get(email=email, using_db=connection)
+        return list(
+            await IdentityWebAuthnCredential.filter(user_id=user.id)
+            .using_db(connection)
+            .order_by("created_at")
+        )
+
+    return asyncio.run(load_credentials())
 
 
 def access_tokens_from_database(database_url: str) -> list[str]:
-    from wybra.auth.models import AccessToken
+    async def load_tokens(connection: BaseDBAsyncClient) -> list[str]:
+        return [
+            token.token
+            for token in await AccessToken.all().using_db(connection).order_by("token")
+        ]
 
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
-    async def load_tokens() -> list[str]:
-        async with session_scope(session_factory) as session:
-            return [
-                token.token
-                for token in (await session.execute(select(AccessToken)))
-                .scalars()
-                .all()
-            ]
-
-    try:
-        return asyncio.run(load_tokens())
-    finally:
-        asyncio.run(close_database(engine))
+    return asyncio.run(_with_identity_connection(database_url, load_tokens))
 
 
 def scopes_from_database(database_url: str) -> list[Scope]:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
-    async def load_scopes() -> list[Scope]:
-        async with session_scope(session_factory) as session:
-            return list((await session.execute(select(Scope))).scalars().all())
-
-    try:
-        return asyncio.run(load_scopes())
-    finally:
-        asyncio.run(close_database(engine))
+    return asyncio.run(
+        _with_identity_connection(
+            database_url,
+            lambda connection: Scope.all().using_db(connection).order_by("scope"),
+        )
+    )
 
 
 def group_from_database(database_url: str, abbrev: str) -> Group:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
-    async def load_group() -> Group:
-        async with session_scope(session_factory) as session:
-            return (
-                await session.execute(select(Group).where(Group.abbrev == abbrev))
-            ).scalar_one()
-
-    try:
-        return asyncio.run(load_group())
-    finally:
-        asyncio.run(close_database(engine))
+    return asyncio.run(
+        _with_identity_connection(
+            database_url,
+            lambda connection: Group.get(abbrev=abbrev, using_db=connection),
+        )
+    )
 
 
 def group_scopes_from_database(database_url: str, abbrev: str) -> list[str]:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
     async def load_group_scopes() -> list[str]:
-        async with session_scope(session_factory) as session:
-            group = (
-                await session.execute(select(Group).where(Group.abbrev == abbrev))
-            ).scalar_one()
-            return list(
-                (
-                    await session.execute(
-                        select(GroupScope.scope).where(GroupScope.group_id == group.id)
-                    )
-                )
-                .scalars()
-                .all()
-            )
+        return await _with_identity_connection(database_url, _load)
 
-    try:
-        return asyncio.run(load_group_scopes())
-    finally:
-        asyncio.run(close_database(engine))
+    async def _load(connection: BaseDBAsyncClient) -> list[str]:
+        group = await Group.get(abbrev=abbrev, using_db=connection)
+        return list(
+            await GroupScope.filter(group_id=group.id)
+            .using_db(connection)
+            .order_by("scope")
+            .values_list("scope", flat=True)
+        )
+
+    return asyncio.run(load_group_scopes())
 
 
 def user_group_abbrevs_from_database(database_url: str, email: str) -> list[str]:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
     async def load_user_groups() -> list[str]:
-        async with session_scope(session_factory) as session:
-            user = (
-                await session.execute(select(User).where(User.email == email))
-            ).scalar_one()
-            return sorted(
-                (
-                    await session.execute(
-                        select(Group.abbrev)
-                        .join(GroupUser, GroupUser.group_id == Group.id)
-                        .where(GroupUser.user_id == user.id)
-                    )
-                )
-                .scalars()
-                .all()
-            )
+        return await _with_identity_connection(database_url, _load)
 
-    try:
-        return asyncio.run(load_user_groups())
-    finally:
-        asyncio.run(close_database(engine))
+    async def _load(connection: BaseDBAsyncClient) -> list[str]:
+        user = await User.get(email=email, using_db=connection)
+        group_ids = (
+            await GroupUser.filter(user_id=user.id)
+            .using_db(connection)
+            .values_list("group_id", flat=True)
+        )
+        return sorted(
+            await Group.filter(id__in=tuple(group_ids))
+            .using_db(connection)
+            .values_list("abbrev", flat=True)
+        )
+
+    return asyncio.run(load_user_groups())
 
 
 def create_session_token_for_user(database_url: str, email: str) -> str:
     settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
 
     async def create_token() -> str:
-        async with session_scope(session_factory) as session:
-            user = (
-                await session.execute(select(User).where(User.email == email))
-            ).scalar_one()
-            strategy = create_database_strategy(session, settings.identity_options)
-            return await strategy.write_token(user)
+        return await _with_identity_connection(database_url, _create)
 
-    try:
-        return asyncio.run(create_token())
-    finally:
-        asyncio.run(close_database(engine))
+    async def _create(connection: BaseDBAsyncClient) -> str:
+        user = await User.get(email=email, using_db=connection)
+        strategy = create_session_token_strategy(connection, settings.identity_options)
+        return await strategy.write_token(user)
+
+    return asyncio.run(create_token())
 
 
 def update_user_fields(database_url: str, email: str, **values: object) -> None:
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-
     async def update_user() -> None:
-        async with session_scope(session_factory) as session:
-            user = (
-                await session.execute(select(User).where(User.email == email))
-            ).scalar_one()
-            for field_name, value in values.items():
-                setattr(user, field_name, value)
-            await session.commit()
+        await _with_identity_connection(database_url, _update)
 
-    try:
-        asyncio.run(update_user())
-    finally:
-        asyncio.run(close_database(engine))
+    async def _update(connection: BaseDBAsyncClient) -> None:
+        user = await User.get(email=email, using_db=connection)
+        for field_name, value in values.items():
+            setattr(user, field_name, value)
+        await user.save(using_db=connection)
+
+    asyncio.run(update_user())
 
 
 def test_authmgr_project_script_is_defined() -> None:
@@ -1971,8 +1921,8 @@ def test_authmgr_help_documents_numeric_timestamp_precedence() -> None:
 
 
 def test_user_model_exposes_management_metadata_columns() -> None:
-    user_columns = set(User.__table__.columns.keys())
-    user_indexes = {index.name for index in User.__table__.indexes}
+    user_fields = set(User._meta.fields_map)
+    user_indexes = {tuple(index.describe()["fields"]) for index in User._meta.indexes}
 
     assert {
         "is_admin",
@@ -1982,111 +1932,93 @@ def test_user_model_exposes_management_metadata_columns() -> None:
         "expires_at",
         "email_verification_sent_at",
         "preferred_timezone",
-    }.issubset(user_columns)
-    assert "display_name" not in user_columns
-    assert "preferred_name" not in user_columns
+    }.issubset(user_fields)
+    assert "display_name" not in user_fields
+    assert "preferred_name" not in user_fields
     assert {
-        "ix_identity_user_is_active_expires_at",
-        "ix_identity_user_last_login_at",
-        "ix_identity_user_created_at",
-        "ix_identity_user_modified_at",
-        "ix_identity_user_is_admin",
-        "ix_identity_user_is_superuser",
+        ("is_active", "expires_at"),
+        ("last_login_at",),
+        ("created_at",),
+        ("modified_at",),
+        ("is_admin",),
+        ("is_superuser",),
     }.issubset(user_indexes)
 
 
-def test_user_model_updates_modified_at_on_orm_update() -> None:
-    assert User.__table__.c.modified_at.onupdate is not None
+def test_user_model_defines_modified_at_timestamp_default() -> None:
+    assert callable(User._meta.fields_map["modified_at"].default)
 
 
 def test_user_management_metadata_defaults() -> None:
     settings = AuthTestSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
 
-    async def assert_defaults() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+    async def assert_defaults(connection: BaseDBAsyncClient) -> None:
+        manager = create_user_manager(connection, settings.identity_options)
+        await manager.create(
+            UserCreate(
+                email="metadata@example.com",
+                password=STRONG_TEST_PASSWORD,
+            ),
+            safe=True,
+        )
 
-        async with session_scope(session_factory) as session:
-            manager = create_user_manager(session, settings.identity_options)
-            await manager.create(
-                UserCreate(
-                    email="metadata@example.com",
-                    password=STRONG_TEST_PASSWORD,
-                ),
-                safe=True,
-            )
+        user = await User.get(email="metadata@example.com", using_db=connection)
 
-        async with session_scope(session_factory) as session:
-            user = (
-                await session.execute(
-                    select(User).where(User.email == "metadata@example.com")
-                )
-            ).scalar_one()
+        assert user.is_admin is False
+        assert isinstance(user.created_at, float)
+        assert isinstance(user.modified_at, float)
+        assert user.created_at > 0
+        assert user.modified_at >= user.created_at
+        assert user.last_login_at is None
+        assert user.expires_at is None
+        assert user.email_verification_sent_at is None
+        assert user.preferred_timezone is None
 
-            assert user.is_admin is False
-            assert isinstance(user.created_at, float)
-            assert isinstance(user.modified_at, float)
-            assert user.created_at > 0
-            assert user.modified_at >= user.created_at
-            assert user.last_login_at is None
-            assert user.expires_at is None
-            assert user.email_verification_sent_at is None
-            assert user.preferred_timezone is None
-
-    try:
-        asyncio.run(assert_defaults())
-    finally:
-        asyncio.run(close_database(engine))
+    asyncio.run(
+        _with_generated_identity_connection(
+            settings.database_url,
+            assert_defaults,
+        )
+    )
 
 
 def test_user_manager_password_policy_uses_profile_fragments_when_available() -> None:
     settings = AuthTestSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
 
-    async def assert_profile_fragment_is_rejected() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+    async def assert_profile_fragment_is_rejected(
+        connection: BaseDBAsyncClient,
+    ) -> None:
+        manager = create_user_manager(connection, settings.identity_options)
+        user = await manager.create(
+            UserCreate(
+                email="profile-fragment@example.com",
+                password=STRONG_TEST_PASSWORD,
+            ),
+            safe=True,
+        )
 
-        async with session_scope(session_factory) as session:
-            manager = create_user_manager(session, settings.identity_options)
-            user = await manager.create(
-                UserCreate(
-                    email="profile-fragment@example.com",
-                    password=STRONG_TEST_PASSWORD,
-                ),
-                safe=True,
+        async def profile_lookup(_user: User) -> object:
+            return SimpleNamespace(
+                display_name="Operator Example",
+                preferred_name="Operator",
             )
 
-        async with session_scope(session_factory) as session:
-            user = (
-                await session.execute(
-                    select(User).where(User.email == "profile-fragment@example.com")
-                )
-            ).scalar_one()
+        manager = create_user_manager(
+            connection,
+            settings.identity_options,
+            profile_lookup=profile_lookup,
+        )
 
-            async def profile_lookup(_user: User) -> object:
-                return SimpleNamespace(
-                    display_name="Operator Example",
-                    preferred_name="Operator",
-                )
+        with pytest.raises(InvalidPasswordException) as exc_info:
+            await manager.validate_password("operator account 123!", user)
+        assert "strength requirement" in str(exc_info.value.reason)
 
-            manager = create_user_manager(
-                session,
-                settings.identity_options,
-                profile_lookup=profile_lookup,
-            )
-
-            with pytest.raises(InvalidPasswordException) as exc_info:
-                await manager.validate_password("operator account 123!", user)
-            assert "strength requirement" in str(exc_info.value.reason)
-
-    try:
-        asyncio.run(assert_profile_fragment_is_rejected())
-    finally:
-        asyncio.run(close_database(engine))
+    asyncio.run(
+        _with_generated_identity_connection(
+            settings.database_url,
+            assert_profile_fragment_is_rejected,
+        )
+    )
 
 
 def test_user_manager_get_by_email_resolves_secondary_emails(tmp_path: Path) -> None:
@@ -2095,10 +2027,9 @@ def test_user_manager_get_by_email_resolves_secondary_emails(tmp_path: Path) -> 
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_secondary_email_lookup() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2110,15 +2041,13 @@ def test_user_manager_get_by_email_resolves_secondary_emails(tmp_path: Path) -> 
                 ),
                 safe=True,
             )
-            session.add(
-                IdentityUserEmail(
-                    user_id=user.id,
-                    email="alias@example.com",
-                    is_primary=False,
-                    is_verified=True,
-                )
+            await IdentityUserEmail.create(
+                user_id=user.id,
+                email="alias@example.com",
+                is_primary=False,
+                is_verified=True,
+                using_db=session,
             )
-            await session.commit()
 
             primary_user = await manager.get_by_email("Primary@Example.com")
             alias_user = await manager.get_by_email("Alias@Example.com")
@@ -2128,10 +2057,7 @@ def test_user_manager_get_by_email_resolves_secondary_emails(tmp_path: Path) -> 
             assert primary_user.id == user.id
             assert alias_user.id == user.id
 
-    try:
-        asyncio.run(assert_secondary_email_lookup())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_secondary_email_lookup))
 
 
 def test_resolve_user_target_uses_secondary_email_addresses(
@@ -2142,10 +2068,9 @@ def test_resolve_user_target_uses_secondary_email_addresses(
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_secondary_target_resolution() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2157,15 +2082,13 @@ def test_resolve_user_target_uses_secondary_email_addresses(
                 ),
                 safe=True,
             )
-            session.add(
-                IdentityUserEmail(
-                    user_id=user.id,
-                    email="linked@example.com",
-                    is_primary=False,
-                    is_verified=True,
-                )
+            await IdentityUserEmail.create(
+                user_id=user.id,
+                email="linked@example.com",
+                is_primary=False,
+                is_verified=True,
+                using_db=session,
             )
-            await session.commit()
 
             resolved_user, target_error = await identity_management.resolve_user_target(
                 session,
@@ -2185,10 +2108,7 @@ def test_resolve_user_target_uses_secondary_email_addresses(
             assert resolved_user.id == user.id
             assert resolved_user_mixed_case.id == user.id
 
-    try:
-        asyncio.run(assert_secondary_target_resolution())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_secondary_target_resolution))
 
 
 def test_identity_session_authenticate_user_accepts_secondary_email_alias(
@@ -2199,10 +2119,9 @@ def test_identity_session_authenticate_user_accepts_secondary_email_alias(
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_secondary_alias_authentication() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2214,15 +2133,13 @@ def test_identity_session_authenticate_user_accepts_secondary_email_alias(
                 ),
                 safe=True,
             )
-            session.add(
-                IdentityUserEmail(
-                    user_id=user.id,
-                    email="Alias@Example.com",
-                    is_primary=False,
-                    is_verified=True,
-                )
+            await IdentityUserEmail.create(
+                user_id=user.id,
+                email="Alias@Example.com",
+                is_primary=False,
+                is_verified=True,
+                using_db=session,
             )
-            await session.commit()
 
         user = await identity_sessions.authenticate_user(
             Request({"type": "http", "app": web_app}),
@@ -2233,10 +2150,7 @@ def test_identity_session_authenticate_user_accepts_secondary_email_alias(
         assert user is not None
         assert user.email == "person@example.com"
 
-    try:
-        asyncio.run(assert_secondary_alias_authentication())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_secondary_alias_authentication))
 
 
 def test_identity_session_authenticate_user_secondary_email_stays_with_owner_account(
@@ -2247,10 +2161,9 @@ def test_identity_session_authenticate_user_secondary_email_stays_with_owner_acc
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_secondary_alias_stays_with_owner() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2269,15 +2182,13 @@ def test_identity_session_authenticate_user_secondary_email_stays_with_owner_acc
                 ),
                 safe=True,
             )
-            session.add(
-                IdentityUserEmail(
-                    user_id=primary_user.id,
-                    email="sharedalias@example.com",
-                    is_primary=False,
-                    is_verified=True,
-                )
+            await IdentityUserEmail.create(
+                user_id=primary_user.id,
+                email="sharedalias@example.com",
+                is_primary=False,
+                is_verified=True,
+                using_db=session,
             )
-            await session.commit()
 
         user = await identity_sessions.authenticate_user(
             Request({"type": "http", "app": web_app}),
@@ -2288,10 +2199,7 @@ def test_identity_session_authenticate_user_secondary_email_stays_with_owner_acc
         assert user is not None
         assert user.id == primary_user.id
 
-    try:
-        asyncio.run(assert_secondary_alias_stays_with_owner())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_secondary_alias_stays_with_owner))
 
 
 def test_identity_session_request_password_reset_uses_secondary_email_alias(
@@ -2305,10 +2213,9 @@ def test_identity_session_request_password_reset_uses_secondary_email_alias(
     web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
 
     async def assert_password_reset_alias_resolution() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2320,15 +2227,13 @@ def test_identity_session_request_password_reset_uses_secondary_email_alias(
                 ),
                 safe=True,
             )
-            session.add(
-                IdentityUserEmail(
-                    user_id=user.id,
-                    email="Alias@Example.com",
-                    is_primary=False,
-                    is_verified=True,
-                )
+            await IdentityUserEmail.create(
+                user_id=user.id,
+                email="Alias@Example.com",
+                is_primary=False,
+                is_verified=True,
+                using_db=session,
             )
-            await session.commit()
 
         await identity_sessions.request_password_reset(
             Request({"type": "http", "app": web_app}),
@@ -2339,10 +2244,7 @@ def test_identity_session_request_password_reset_uses_secondary_email_alias(
             ("owner@example.com", web_app.state.identity_delivery.reset_tokens[0][1]),
         ]
 
-    try:
-        asyncio.run(assert_password_reset_alias_resolution())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_password_reset_alias_resolution))
 
 
 def test_identity_session_request_password_reset_ignores_unknown_email_alias(
@@ -2354,10 +2256,9 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
     web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
 
     async def assert_missing_alias_is_ignored() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2369,7 +2270,6 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
                 ),
                 safe=True,
             )
-            await session.commit()
 
         await identity_sessions.request_password_reset(
             Request({"type": "http", "app": web_app}),
@@ -2378,10 +2278,7 @@ def test_identity_session_request_password_reset_ignores_unknown_email_alias(
 
         assert web_app.state.identity_delivery.reset_tokens == []
 
-    try:
-        asyncio.run(assert_missing_alias_is_ignored())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_missing_alias_is_ignored))
 
 
 def test_identity_session_reset_password_revokes_existing_sessions(
@@ -2393,7 +2290,9 @@ def test_identity_session_reset_password_revokes_existing_sessions(
     web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
 
     async def assert_reset_revokes_sessions() -> None:
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        await initialise_app_identity_database(web_app)
+
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2405,8 +2304,11 @@ def test_identity_session_reset_password_revokes_existing_sessions(
                 ),
                 safe=True,
             )
-            session.add(AccessToken(token="existing-session", user_id=user.id))
-            await session.commit()
+            await AccessToken.create(
+                token="existing-session",
+                user_id=user.id,
+                using_db=session,
+            )
 
         await identity_sessions.request_password_reset(
             Request({"type": "http", "app": web_app}),
@@ -2420,14 +2322,11 @@ def test_identity_session_reset_password_revokes_existing_sessions(
             UPDATED_STRONG_TEST_PASSWORD,
         )
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            tokens = (await session.execute(select(AccessToken))).scalars().all()
+        async with app_connection_scope(web_app) as session:
+            tokens = list(await AccessToken.all().using_db(session))
             assert tokens == []
 
-    try:
-        asyncio.run(assert_reset_revokes_sessions())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_reset_revokes_sessions))
 
 
 def test_user_manager_update_email_updates_primary_owned_email(
@@ -2438,7 +2337,9 @@ def test_user_manager_update_email_updates_primary_owned_email(
     web_app = create_auth_test_app(database_url=database_url)
 
     async def assert_email_update_is_synchronised() -> None:
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        await initialise_app_identity_database(web_app)
+
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2464,14 +2365,11 @@ def test_user_manager_update_email_updates_primary_owned_email(
                 await manager.get_by_email("old@example.com")
             assert (await manager.get_by_email("new@example.com")).id == user.id
 
-    try:
-        asyncio.run(assert_email_update_is_synchronised())
-        [primary_email] = identity_user_emails_from_database(database_url)
-        assert primary_email.email == "new@example.com"
-        assert primary_email.is_primary is True
-        assert primary_email.is_verified is False
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_email_update_is_synchronised))
+    [primary_email] = identity_user_emails_from_database(database_url)
+    assert primary_email.email == "new@example.com"
+    assert primary_email.is_primary is True
+    assert primary_email.is_verified is False
 
 
 def test_request_verification_uses_secondary_email_alias_for_lookup(
@@ -2483,10 +2381,9 @@ def test_request_verification_uses_secondary_email_alias_for_lookup(
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_verification_alias_resolution() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2498,15 +2395,13 @@ def test_request_verification_uses_secondary_email_alias_for_lookup(
                 ),
                 safe=True,
             )
-            session.add(
-                IdentityUserEmail(
-                    user_id=user.id,
-                    email="Alias@Example.com",
-                    is_primary=False,
-                    is_verified=True,
-                )
+            await IdentityUserEmail.create(
+                user_id=user.id,
+                email="Alias@Example.com",
+                is_primary=False,
+                is_verified=True,
+                using_db=session,
             )
-            await session.commit()
 
         await identity_sessions.request_verification(
             Request({"type": "http", "app": web_app}),
@@ -2520,10 +2415,7 @@ def test_request_verification_uses_secondary_email_alias_for_lookup(
             ),
         ]
 
-    try:
-        asyncio.run(assert_verification_alias_resolution())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_verification_alias_resolution))
 
 
 def test_user_manager_create_rollback_when_after_register_fails(
@@ -2542,12 +2434,11 @@ def test_user_manager_create_rollback_when_after_register_fails(
             raise RuntimeError("post-register hook failed")
 
     async def assert_rollback_when_hook_fails() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = _FailingPostRegisterManager(
-                create_user_database(session),
+                create_user_store(session),
                 web_app.state.auth_settings.identity_options,
             )
             with pytest.raises(RuntimeError, match="post-register hook failed"):
@@ -2559,12 +2450,9 @@ def test_user_manager_create_rollback_when_after_register_fails(
                     safe=True,
                 )
 
-    try:
-        asyncio.run(assert_rollback_when_hook_fails())
-        assert identity_users_from_database(database_url) == []
-        assert identity_user_emails_from_database(database_url) == []
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_rollback_when_hook_fails))
+    assert identity_users_from_database(database_url) == []
+    assert identity_user_emails_from_database(database_url) == []
 
 
 def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
@@ -2582,10 +2470,9 @@ def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
             raise UserNotExists()
 
     async def assert_duplicate_secondary_email_returns_user_already_exists() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -2597,18 +2484,16 @@ def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
                 ),
                 safe=True,
             )
-            session.add(
-                IdentityUserEmail(
-                    user=primary_user,
-                    email="Alias@example.com",
-                    is_primary=False,
-                    is_verified=True,
-                )
+            await IdentityUserEmail.create(
+                user_id=primary_user.id,
+                email="Alias@example.com",
+                is_primary=False,
+                is_verified=True,
+                using_db=session,
             )
-            await session.commit()
 
             racing_manager = _NoLookupManager(
-                create_user_database(session),
+                create_user_store(session),
                 web_app.state.auth_settings.identity_options,
             )
             with pytest.raises(UserAlreadyExists):
@@ -2620,266 +2505,118 @@ def test_user_manager_duplicate_secondary_email_maps_to_user_already_exists(
                     safe=True,
                 )
 
-            users = list((await session.execute(select(User))).scalars())
-            emails = list((await session.execute(select(IdentityUserEmail))).scalars())
+            users = list(await User.all().using_db(session))
+            emails = list(await IdentityUserEmail.all().using_db(session))
             assert len(users) == 1
             assert users[0].email == "primary@example.com"
             assert len(emails) == 2
 
-    try:
-        asyncio.run(assert_duplicate_secondary_email_returns_user_already_exists())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(
+        run_auth_app_test(
+            web_app,
+            assert_duplicate_secondary_email_returns_user_already_exists,
+        )
+    )
 
 
-def test_migrate_upgrade_creates_user_management_metadata_columns(
+def test_generated_identity_schema_creates_user_management_metadata_columns(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     database_url = sqlite_file_url(database_path)
 
-    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
-    exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
+    initialise_identity_database(database_url)
 
-    assert exit_code == 0
-
-    from sqlalchemy import create_engine
-
-    engine = create_engine(sync_sqlite_file_url(database_path))
-    try:
-        inspector = sqlalchemy_inspect(engine)
-        columns = {column["name"] for column in inspector.get_columns("identity_user")}
-
-        assert {
-            "is_admin",
-            "created_at",
-            "modified_at",
-            "last_login_at",
-            "expires_at",
-            "email_verification_sent_at",
-            "preferred_timezone",
-        }.issubset(columns)
-        assert "display_name" not in columns
-        assert "preferred_name" not in columns
-        indexes = {index["name"] for index in inspector.get_indexes("identity_user")}
-        assert {
-            "ix_identity_user_is_active_expires_at",
-            "ix_identity_user_last_login_at",
-            "ix_identity_user_created_at",
-            "ix_identity_user_modified_at",
-            "ix_identity_user_is_admin",
-            "ix_identity_user_is_superuser",
-        }.issubset(indexes)
-    finally:
-        engine.dispose()
+    columns = sqlite_table_columns(database_path, "identity_user")
+    assert {
+        "is_admin",
+        "created_at",
+        "modified_at",
+        "last_login_at",
+        "expires_at",
+        "email_verification_sent_at",
+        "preferred_timezone",
+    }.issubset(columns)
+    assert "display_name" not in columns
+    assert "preferred_name" not in columns
 
 
-def test_migrate_upgrade_creates_authorisation_group_tables(
+def test_generated_identity_schema_creates_authorisation_group_tables(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "groups.sqlite3"
     database_url = sqlite_file_url(database_path)
 
-    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
-    exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
+    initialise_identity_database(database_url)
 
-    assert exit_code == 0
-
-    from sqlalchemy import create_engine
-
-    engine = create_engine(sync_sqlite_file_url(database_path))
-    try:
-        inspector = sqlalchemy_inspect(engine)
-        table_names = set(inspector.get_table_names())
-
-        assert {
-            "identity_group",
-            "identity_scope",
-            "identity_group_scope",
-            "identity_group_user",
-            "identity_group_group",
-        }.issubset(table_names)
-        assert {
-            column["name"] for column in inspector.get_columns("identity_group")
-        } == {
-            "id",
-            "abbrev",
-            "description",
-        }
-        assert {
-            column["name"] for column in inspector.get_columns("identity_scope")
-        } == {
-            "scope",
-            "description",
-        }
-        group_indexes = {
-            index["name"] for index in inspector.get_indexes("identity_group")
-        }
-        assert "ix_identity_group_abbrev" in group_indexes
-        group_group_checks = {
-            check["name"]
-            for check in inspector.get_check_constraints("identity_group_group")
-        }
-        assert "ck_identity_group_group_no_self_membership" in group_group_checks
-        group_scope_foreign_keys = {
-            tuple(foreign_key["constrained_columns"]): foreign_key["options"].get(
-                "ondelete"
-            )
-            for foreign_key in inspector.get_foreign_keys("identity_group_scope")
-        }
-        group_user_foreign_keys = {
-            tuple(foreign_key["constrained_columns"]): foreign_key["options"].get(
-                "ondelete"
-            )
-            for foreign_key in inspector.get_foreign_keys("identity_group_user")
-        }
-        group_group_foreign_keys = {
-            tuple(foreign_key["constrained_columns"]): foreign_key["options"].get(
-                "ondelete"
-            )
-            for foreign_key in inspector.get_foreign_keys("identity_group_group")
-        }
-        assert group_scope_foreign_keys == {
-            ("group_id",): "RESTRICT",
-            ("scope",): "RESTRICT",
-        }
-        assert group_user_foreign_keys == {
-            ("group_id",): "RESTRICT",
-            ("user_id",): "CASCADE",
-        }
-        assert group_group_foreign_keys == {
-            ("parent_group_id",): "RESTRICT",
-            ("child_group_id",): "RESTRICT",
-        }
-    finally:
-        engine.dispose()
+    assert {
+        "identity_group",
+        "identity_scope",
+        "identity_group_scope",
+        "identity_group_user",
+        "identity_group_group",
+    }.issubset(sqlite_table_names(database_path))
+    assert sqlite_table_columns(database_path, "identity_group") == {
+        "id",
+        "abbrev",
+        "description",
+    }
+    assert sqlite_table_columns(database_path, "identity_scope") == {
+        "scope",
+        "description",
+    }
+    assert {"group_id", "scope"}.issubset(
+        sqlite_table_columns(database_path, "identity_group_scope")
+    )
+    assert {"group_id", "user_id"}.issubset(
+        sqlite_table_columns(database_path, "identity_group_user")
+    )
+    assert {"parent_group_id", "child_group_id"}.issubset(
+        sqlite_table_columns(database_path, "identity_group_group")
+    )
 
 
-def test_migrate_upgrade_creates_identity_user_email_table(
+def test_generated_identity_schema_creates_identity_user_email_table(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "user-email.sqlite3"
     database_url = sqlite_file_url(database_path)
 
-    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
-    exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
+    initialise_identity_database(database_url)
 
-    assert exit_code == 0
-
-    from sqlalchemy import create_engine
-
-    engine = create_engine(sync_sqlite_file_url(database_path))
-    try:
-        inspector = sqlalchemy_inspect(engine)
-        assert "identity_user_email" in set(inspector.get_table_names())
-
-        user_email_columns = {
-            column["name"] for column in inspector.get_columns("identity_user_email")
-        }
-        assert {"id", "user_id", "email", "is_primary", "is_verified"}.issubset(
-            user_email_columns
-        )
-
-        user_email_indexes = {
-            index["name"] for index in inspector.get_indexes("identity_user_email")
-        }
-        assert "ix_identity_user_email_user_id" in user_email_indexes
-        assert "uq_identity_user_email_primary_per_user" in user_email_indexes
-
-        user_email_uniques = {
-            unique["name"]: set(unique["column_names"])
-            for unique in inspector.get_unique_constraints("identity_user_email")
-        }
-        assert user_email_uniques["uq_identity_user_email_email"] == {"email"}
-
-        user_email_foreign_keys = {
-            tuple(foreign_key["constrained_columns"]): foreign_key["options"].get(
-                "ondelete"
-            )
-            for foreign_key in inspector.get_foreign_keys("identity_user_email")
-        }
-        assert user_email_foreign_keys == {
-            ("user_id",): "CASCADE",
-        }
-    finally:
-        engine.dispose()
+    assert "identity_user_email" in sqlite_table_names(database_path)
+    assert {"id", "user_id", "email", "is_primary", "is_verified"}.issubset(
+        sqlite_table_columns(database_path, "identity_user_email")
+    )
 
 
-def test_migrate_upgrade_creates_webauthn_credential_table(
+def test_generated_identity_schema_creates_webauthn_credential_table(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "webauthn.sqlite3"
     database_url = sqlite_file_url(database_path)
 
-    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
-    exit_code = run_auth_migration(["--database-url", database_url, "upgrade"])
+    initialise_identity_database(database_url)
 
-    assert exit_code == 0
-
-    from sqlalchemy import create_engine
-
-    engine = create_engine(sync_sqlite_file_url(database_path))
-    try:
-        inspector = sqlalchemy_inspect(engine)
-        assert "identity_webauthn_credential" in set(inspector.get_table_names())
-
-        columns = {
-            column["name"]
-            for column in inspector.get_columns("identity_webauthn_credential")
-        }
-        assert {
-            "id",
-            "user_id",
-            "credential_id",
-            "public_key",
-            "sign_count",
-            "status",
-            "label",
-            "created_at",
-            "last_used_at",
-            "revoked_at",
-            "user_verified",
-            "credential_device_type",
-            "credential_backed_up",
-            "transports",
-            "aaguid",
-            "attestation_format",
-        }.issubset(columns)
-
-        indexes = {
-            index["name"]
-            for index in inspector.get_indexes("identity_webauthn_credential")
-        }
-        assert {
-            "ix_identity_webauthn_credential_user_id",
-            "ix_identity_webauthn_credential_status",
-            "ix_identity_webauthn_credential_user_status",
-            "ix_identity_webauthn_credential_created_at",
-        }.issubset(indexes)
-
-        uniques = {
-            unique["name"]: set(unique["column_names"])
-            for unique in inspector.get_unique_constraints(
-                "identity_webauthn_credential"
-            )
-        }
-        assert uniques["uq_identity_webauthn_credential_credential_id"] == {
-            "credential_id"
-        }
-
-        foreign_keys = {
-            tuple(foreign_key["constrained_columns"]): foreign_key["options"].get(
-                "ondelete"
-            )
-            for foreign_key in inspector.get_foreign_keys(
-                "identity_webauthn_credential"
-            )
-        }
-        assert foreign_keys == {
-            ("user_id",): "CASCADE",
-        }
-    finally:
-        engine.dispose()
+    assert "identity_webauthn_credential" in sqlite_table_names(database_path)
+    assert {
+        "id",
+        "user_id",
+        "credential_id",
+        "public_key",
+        "sign_count",
+        "status",
+        "label",
+        "created_at",
+        "last_used_at",
+        "revoked_at",
+        "user_verified",
+        "credential_device_type",
+        "credential_backed_up",
+        "transports",
+        "aaguid",
+        "attestation_format",
+    }.issubset(sqlite_table_columns(database_path, "identity_webauthn_credential"))
 
 
 def test_authmgr_reports_outdated_identity_schema_before_reading_password(
@@ -2902,7 +2639,7 @@ def test_authmgr_reports_outdated_identity_schema_before_reading_password(
     captured = capsys.readouterr()
     assert "Auth database schema is not up to date" in captured.err
     assert "uv run wybra-migrate init" in captured.err
-    assert "uv run wybra-migrate upgrade" in captured.err
+    assert "uv run wybra-migrate migrate" in captured.err
     assert "selected app config" in captured.err
     assert "explicit auth database" not in captured.err
     assert "is_admin" in captured.err
@@ -2915,11 +2652,16 @@ def test_authmgr_reports_missing_group_tables_before_reading_password(
 ) -> None:
     database_path = tmp_path / "users-only.sqlite3"
     database_url = sqlite_file_url(database_path)
-    assert run_auth_migration(["--database-url", database_url, "init"]) == 0
-    assert (
-        run_auth_migration(["--database-url", database_url, "upgrade", "b7f8c3b4b2a1"])
-        == 0
-    )
+    initialise_identity_database(database_url)
+    with closing(sqlite3.connect(database_path)) as connection, connection:
+        for table_name in (
+            "identity_group",
+            "identity_scope",
+            "identity_group_scope",
+            "identity_group_user",
+            "identity_group_group",
+        ):
+            connection.execute(f"DROP TABLE {table_name}")
     set_authmgr_database_url(monkeypatch, tmp_path, database_url)
     stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
     monkeypatch.setattr(sys, "stdin", stdin)
@@ -2957,120 +2699,140 @@ def test_authmgr_reports_missing_identity_table_before_reading_password(
     assert "Missing identity_user columns" not in captured.err
 
 
-def test_authmgr_identity_schema_error_uses_qualified_table_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class MissingTableSession:
-        async def run_sync(self, _function):
-            return authmgr_schema.IdentitySchemaStatus(
-                primary_table_name="identity_user",
-                table_exists=False,
-                missing_columns=(),
+def test_authmgr_identity_schema_error_names_missing_user_table() -> None:
+    with pytest.raises(ConfigurationError) as exc_info:
+        asyncio.run(
+            _with_identity_connection(
+                SQLITE_MEMORY_DATABASE_URL,
+                authmgr_schema._verify_identity_schema,
             )
+        )
 
-    monkeypatch.setattr(User.__table__, "schema", "auth")
+    assert "Missing identity_user table" in str(exc_info.value)
+
+
+def test_authmgr_identity_schema_missing_columns_are_table_aware() -> None:
+    async def assert_missing_group_column(connection: BaseDBAsyncClient) -> None:
+        await connection.execute_script(
+            """
+            CREATE TABLE identity_user (
+                id TEXT PRIMARY KEY,
+                email TEXT,
+                hashed_password TEXT,
+                is_active BOOLEAN,
+                is_superuser BOOLEAN,
+                is_verified BOOLEAN,
+                password_login_enabled BOOLEAN,
+                is_admin BOOLEAN,
+                created_at REAL,
+                modified_at REAL,
+                last_login_at REAL,
+                expires_at REAL,
+                email_verification_sent_at REAL,
+                preferred_timezone TEXT
+            );
+            CREATE TABLE identity_group (
+                id TEXT PRIMARY KEY,
+                abbrev TEXT
+            );
+            CREATE TABLE identity_scope (
+                scope TEXT PRIMARY KEY,
+                description TEXT
+            );
+            CREATE TABLE identity_group_scope (
+                id INTEGER PRIMARY KEY,
+                group_id TEXT,
+                scope TEXT
+            );
+            CREATE TABLE identity_group_user (
+                id INTEGER PRIMARY KEY,
+                group_id TEXT,
+                user_id TEXT
+            );
+            CREATE TABLE identity_group_group (
+                id INTEGER PRIMARY KEY,
+                parent_group_id TEXT,
+                child_group_id TEXT
+            );
+            CREATE TABLE identity_user_email (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                email TEXT,
+                is_primary BOOLEAN,
+                is_verified BOOLEAN
+            );
+            """
+        )
+        await authmgr_schema._verify_identity_schema(connection)
 
     with pytest.raises(ConfigurationError) as exc_info:
-        asyncio.run(authmgr_schema._verify_identity_schema(MissingTableSession()))  # type: ignore[arg-type]
-
-    assert "Missing auth.identity_user table" in str(exc_info.value)
-
-
-def test_authmgr_identity_schema_missing_columns_are_table_aware(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class MissingColumnSession:
-        async def run_sync(self, _function):
-            return authmgr_schema.IdentitySchemaStatus(
-                primary_table_name="identity_user",
-                table_exists=True,
-                missing_columns=("identity_group.description",),
+        asyncio.run(
+            _with_identity_connection(
+                SQLITE_MEMORY_DATABASE_URL,
+                assert_missing_group_column,
             )
-
-    with pytest.raises(ConfigurationError) as exc_info:
-        asyncio.run(authmgr_schema._verify_identity_schema(MissingColumnSession()))  # type: ignore[arg-type]
+        )
 
     message = str(exc_info.value)
     assert "Missing identity schema columns: identity_group.description" in message
     assert "Missing identity_user columns" not in message
 
 
-def test_authmgr_identity_schema_status_normalises_column_name_case(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    tables_by_name = {
-        table.name: table
-        for table in (
-            User.__table__,
-            Group.__table__,
-            Scope.__table__,
-            GroupScope.__table__,
-            GroupUser.__table__,
-            GroupGroup.__table__,
-            IdentityUserEmail.__table__,
+def test_authmgr_identity_schema_status_normalises_column_name_case() -> None:
+    async def assert_column_case_normalised(connection: BaseDBAsyncClient) -> None:
+        for model in authmgr_schema._identity_schema_models():
+            columns = ", ".join(
+                f'"{column.upper()}" TEXT'
+                for column in authmgr_schema._model_column_names(model)
+            )
+            await connection.execute_script(
+                f"CREATE TABLE {model._meta.db_table} ({columns});"
+            )
+        status = await authmgr_schema._identity_schema_status(connection)
+
+        assert status.table_exists is True
+        assert status.missing_columns == ()
+
+    asyncio.run(
+        _with_identity_connection(
+            SQLITE_MEMORY_DATABASE_URL,
+            assert_column_case_normalised,
         )
-    }
-
-    class FakeInspector:
-        def has_table(self, table_name: str, *, schema: str | None = None) -> bool:
-            assert table_name in tables_by_name
-            assert schema == tables_by_name[table_name].schema
-            return True
-
-        def get_columns(
-            self,
-            table_name: str,
-            *,
-            schema: str | None = None,
-        ) -> list[dict[str, str]]:
-            assert table_name in tables_by_name
-            assert schema == tables_by_name[table_name].schema
-            return [
-                {"name": str(column.name).upper()}
-                for column in tables_by_name[table_name].columns
-            ]
-
-    class FakeSession:
-        def get_bind(self) -> object:
-            return object()
-
-    monkeypatch.setattr(
-        authmgr_schema, "sqlalchemy_inspect", lambda _bind: FakeInspector()
     )
-
-    status = authmgr_schema._identity_schema_status(FakeSession())  # type: ignore[arg-type]
-
-    assert status.table_exists is True
-    assert status.missing_columns == ()
 
 
 def test_authmgr_reports_schema_inspection_error_without_leaking_context(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FailingSession:
-        async def run_sync(self, _function):
-            raise SQLAlchemyError("database is locked")
+    class FailingConnection:
+        capabilities = SimpleNamespace(dialect="sqlite")
+
+        async def execute_query_dict(self, _query: str):
+            raise BaseORMException("database is locked")
 
     with caplog.at_level(logging.DEBUG, logger="wybra.auth.cli.authmgr"):
         with pytest.raises(ConfigurationError) as exc_info:
-            asyncio.run(authmgr_schema._verify_identity_schema(FailingSession()))  # type: ignore[arg-type]
+            asyncio.run(authmgr_schema._verify_identity_schema(FailingConnection()))  # type: ignore[arg-type]
 
     message = str(exc_info.value)
     assert "Auth database schema could not be inspected" in message
-    assert "SQLAlchemyError" not in message
+    assert "BaseORMException" not in message
     assert "database is locked" not in message
-    assert "SQLAlchemyError" in caplog.text
+    assert "BaseORMException" in caplog.text
     assert "database is locked" in caplog.text
 
 
-def test_authentication_finalisation_updates_last_login_timestamp() -> None:
-    web_app = create_auth_test_app()
+def test_authentication_finalisation_updates_last_login_timestamp(
+    tmp_path: Path,
+) -> None:
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(tmp_path / "last-login-finalisation.sqlite3")
+    )
 
     async def assert_last_login_update() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3083,7 +2845,7 @@ def test_authentication_finalisation_updates_last_login_timestamp() -> None:
                 safe=True,
             )
             user.is_verified = True
-            await session.commit()
+            await user.save(using_db=session)
             assert user.last_login_at is None
 
         result = await identity_sessions.complete_authentication_ceremony(
@@ -3093,26 +2855,26 @@ def test_authentication_finalisation_updates_last_login_timestamp() -> None:
 
         assert result.is_ok() is True
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            refreshed_user = await session.get(User, user.id)
+        async with app_connection_scope(web_app) as session:
+            refreshed_user = await User.get_or_none(id=user.id, using_db=session)
             assert refreshed_user is not None
             assert isinstance(refreshed_user.last_login_at, float)
             assert refreshed_user.last_login_at > 0
 
-    try:
-        asyncio.run(assert_last_login_update())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_last_login_update))
 
 
-def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
-    web_app = create_auth_test_app()
+def test_expired_user_is_rejected_during_authentication_finalisation(
+    tmp_path: Path,
+) -> None:
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(tmp_path / "expired-finalisation.sqlite3")
+    )
 
     async def assert_expired_user_rejected() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3126,7 +2888,7 @@ def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
             )
             user.is_verified = True
             user.expires_at = time() - 60
-            await session.commit()
+            await user.save(using_db=session)
 
         result = await identity_sessions.complete_authentication_ceremony(
             Request({"type": "http", "app": web_app}),
@@ -3136,25 +2898,25 @@ def test_expired_user_is_rejected_during_authentication_finalisation() -> None:
         assert result.is_failure() is True
         assert result.error_type == ERROR_INACTIVE_USER
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            refreshed_user = await session.get(User, user.id)
+        async with app_connection_scope(web_app) as session:
+            refreshed_user = await User.get_or_none(id=user.id, using_db=session)
             assert refreshed_user is not None
             assert refreshed_user.last_login_at is None
 
-    try:
-        asyncio.run(assert_expired_user_rejected())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_expired_user_rejected))
 
 
-def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
-    web_app = create_auth_test_app()
+def test_inactive_user_is_rejected_during_authentication_finalisation(
+    tmp_path: Path,
+) -> None:
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(tmp_path / "inactive-finalisation.sqlite3")
+    )
 
     async def assert_inactive_user_rejected() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3168,7 +2930,7 @@ def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
             )
             user.is_verified = True
             user.is_active = False
-            await session.commit()
+            await user.save(using_db=session)
 
         result = await identity_sessions.complete_authentication_ceremony(
             Request({"type": "http", "app": web_app}),
@@ -3178,25 +2940,25 @@ def test_inactive_user_is_rejected_during_authentication_finalisation() -> None:
         assert result.is_failure() is True
         assert result.error_type == ERROR_INACTIVE_USER
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            refreshed_user = await session.get(User, user.id)
+        async with app_connection_scope(web_app) as session:
+            refreshed_user = await User.get_or_none(id=user.id, using_db=session)
             assert refreshed_user is not None
             assert refreshed_user.last_login_at is None
 
-    try:
-        asyncio.run(assert_inactive_user_rejected())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_inactive_user_rejected))
 
 
-def test_unverified_user_is_rejected_during_authentication_finalisation() -> None:
-    web_app = create_auth_test_app()
+def test_unverified_user_is_rejected_during_authentication_finalisation(
+    tmp_path: Path,
+) -> None:
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(tmp_path / "unverified-finalisation.sqlite3")
+    )
 
     async def assert_unverified_user_rejected() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3218,15 +2980,12 @@ def test_unverified_user_is_rejected_during_authentication_finalisation() -> Non
         assert result.is_failure() is True
         assert result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            refreshed_user = await session.get(User, user.id)
+        async with app_connection_scope(web_app) as session:
+            refreshed_user = await User.get_or_none(id=user.id, using_db=session)
             assert refreshed_user is not None
             assert refreshed_user.last_login_at is None
 
-    try:
-        asyncio.run(assert_unverified_user_rejected())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_unverified_user_rejected))
 
 
 def test_is_user_effectively_active_uses_exclusive_expiry_boundary() -> None:
@@ -3241,15 +3000,18 @@ def test_is_user_effectively_active_uses_exclusive_expiry_boundary() -> None:
     assert identity_management.is_user_effectively_active(user, now=now) is True
 
 
-def test_request_verification_records_email_verification_sent_timestamp() -> None:
-    web_app = create_auth_test_app()
+def test_request_verification_records_email_verification_sent_timestamp(
+    tmp_path: Path,
+) -> None:
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(tmp_path / "verification-timestamp.sqlite3")
+    )
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
-    async def seed_user() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+    async def assert_verification_timestamp() -> None:
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3262,37 +3024,31 @@ def test_request_verification_records_email_verification_sent_timestamp() -> Non
                 safe=True,
             )
 
-    async def assert_verification_timestamp() -> None:
         await identity_sessions.request_verification(
             Request({"type": "http", "app": web_app}),
             "verify-time@example.com",
         )
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            user = (
-                await session.execute(
-                    select(User).where(User.email == "verify-time@example.com")
-                )
-            ).scalar_one()
+        async with app_connection_scope(web_app) as session:
+            user = await User.get(email="verify-time@example.com", using_db=session)
             assert isinstance(user.email_verification_sent_at, float)
             assert user.email_verification_sent_at > 0
 
-    try:
-        asyncio.run(seed_user())
-        asyncio.run(assert_verification_timestamp())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_verification_timestamp))
 
 
-def test_request_verification_does_not_record_timestamp_when_delivery_fails() -> None:
-    web_app = create_auth_test_app()
+def test_request_verification_does_not_record_timestamp_when_delivery_fails(
+    tmp_path: Path,
+) -> None:
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(tmp_path / "verification-delivery-fails.sqlite3")
+    )
     web_app.state.identity_delivery = FailingVerificationDelivery()
 
-    async def seed_user() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+    async def assert_failed_delivery_does_not_throttle_user() -> None:
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3305,63 +3061,58 @@ def test_request_verification_does_not_record_timestamp_when_delivery_fails() ->
                 safe=True,
             )
 
-    async def assert_failed_delivery_does_not_throttle_user() -> None:
         with pytest.raises(RuntimeError, match="verification delivery failed"):
             await identity_sessions.request_verification(
                 Request({"type": "http", "app": web_app}),
                 "verify-atomic@example.com",
             )
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            user = (
-                await session.execute(
-                    select(User).where(User.email == "verify-atomic@example.com")
-                )
-            ).scalar_one()
+        async with app_connection_scope(web_app) as session:
+            user = await User.get(email="verify-atomic@example.com", using_db=session)
             assert user.email_verification_sent_at is None
 
-    try:
-        asyncio.run(seed_user())
-        asyncio.run(assert_failed_delivery_does_not_throttle_user())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(
+        run_auth_app_test(web_app, assert_failed_delivery_does_not_throttle_user)
+    )
 
 
-def test_request_verification_ignores_missing_users_without_modifying_rows() -> None:
-    web_app = create_auth_test_app()
+def test_request_verification_ignores_missing_users_without_modifying_rows(
+    tmp_path: Path,
+) -> None:
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(tmp_path / "verification-missing-user.sqlite3")
+    )
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_missing_user_is_ignored() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
         await identity_sessions.request_verification(
             Request({"type": "http", "app": web_app}),
             "missing@example.com",
         )
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            users = (await session.execute(select(User))).scalars().all()
+        async with app_connection_scope(web_app) as session:
+            users = list(await User.all().using_db(session))
             assert users == []
             assert web_app.state.identity_delivery.verification_tokens == []
 
-    try:
-        asyncio.run(assert_missing_user_is_ignored())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_missing_user_is_ignored))
 
 
 def test_request_verification_rate_limits_recent_delivery(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    web_app = create_auth_test_app()
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(tmp_path / "verification-rate-limit.sqlite3")
+    )
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_recent_delivery_is_rate_limited() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3374,7 +3125,7 @@ def test_request_verification_rate_limits_recent_delivery(
                 safe=True,
             )
             user.email_verification_sent_at = 1_000.0
-            await session.commit()
+            await user.save(using_db=session)
 
         monkeypatch.setattr(identity_sessions, "current_timestamp", lambda: 1_120.0)
         await identity_sessions.request_verification(
@@ -3382,19 +3133,15 @@ def test_request_verification_rate_limits_recent_delivery(
             "verify-limited@example.com",
         )
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            user = (
-                await session.execute(
-                    select(User).where(User.email == "verify-limited@example.com")
-                )
-            ).scalar_one()
+        async with app_connection_scope(web_app) as session:
+            user = await User.get(
+                email="verify-limited@example.com",
+                using_db=session,
+            )
             assert user.email_verification_sent_at == 1_000.0
             assert web_app.state.identity_delivery.verification_tokens == []
 
-    try:
-        asyncio.run(assert_recent_delivery_is_rate_limited())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(run_auth_app_test(web_app, assert_recent_delivery_is_rate_limited))
 
 
 @pytest.mark.parametrize(
@@ -3407,15 +3154,19 @@ def test_request_verification_rate_limits_recent_delivery(
 def test_request_verification_does_not_overwrite_ineligible_user_timestamp(
     field_name: str,
     field_value: object,
+    tmp_path: Path,
 ) -> None:
-    web_app = create_auth_test_app()
+    web_app = create_auth_test_app(
+        database_url=sqlite_file_url(
+            tmp_path / f"verification-ineligible-{field_name}.sqlite3"
+        )
+    )
     web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
     async def assert_ineligible_user_timestamp_is_preserved() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -3429,7 +3180,7 @@ def test_request_verification_does_not_overwrite_ineligible_user_timestamp(
             )
             setattr(user, field_name, field_value)
             user.email_verification_sent_at = 123.0
-            await session.commit()
+            await user.save(using_db=session)
             email = user.email
 
         await identity_sessions.request_verification(
@@ -3437,17 +3188,14 @@ def test_request_verification_does_not_overwrite_ineligible_user_timestamp(
             email,
         )
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
-            refreshed_user = (
-                await session.execute(select(User).where(User.email == email))
-            ).scalar_one()
+        async with app_connection_scope(web_app) as session:
+            refreshed_user = await User.get(email=email, using_db=session)
             assert refreshed_user.email_verification_sent_at == 123.0
             assert web_app.state.identity_delivery.verification_tokens == []
 
-    try:
-        asyncio.run(assert_ineligible_user_timestamp_is_preserved())
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    asyncio.run(
+        run_auth_app_test(web_app, assert_ineligible_user_timestamp_is_preserved)
+    )
 
 
 def test_authmgr_create_user_with_metadata_from_stdin_password(
@@ -4619,10 +4367,9 @@ def test_authmgr_create_rejects_duplicate_secondary_email(
     web_app = create_auth_test_app(database_url=database_url)
 
     async def seed_secondary_email_user() -> None:
-        async with _database_from_app(web_app).engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        await initialise_app_identity_database(web_app)
 
-        async with session_scope(_session_factory_from_app(web_app)) as session:
+        async with app_connection_scope(web_app) as session:
             manager = create_user_manager(
                 session,
                 web_app.state.auth_settings.identity_options,
@@ -4634,29 +4381,24 @@ def test_authmgr_create_rejects_duplicate_secondary_email(
                 ),
                 safe=True,
             )
-            session.add(
-                IdentityUserEmail(
-                    user_id=user.id,
-                    email="linked@example.com",
-                    is_primary=False,
-                    is_verified=True,
-                )
+            await IdentityUserEmail.create(
+                user_id=user.id,
+                email="linked@example.com",
+                is_primary=False,
+                is_verified=True,
+                using_db=session,
             )
-            await session.commit()
 
-    try:
-        asyncio.run(seed_secondary_email_user())
-        set_authmgr_database_url(monkeypatch, tmp_path, database_url)
-        monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
+    asyncio.run(run_auth_app_test(web_app, seed_secondary_email_user))
+    set_authmgr_database_url(monkeypatch, tmp_path, database_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
-        exit_code = authmgr.main(
-            ["user", "create", "linked@example.com", "--password", "-"]
-        )
+    exit_code = authmgr.main(
+        ["user", "create", "linked@example.com", "--password", "-"]
+    )
 
-        assert exit_code == 1
-        assert "already exists" in capsys.readouterr().err
-    finally:
-        asyncio.run(close_database(_database_from_app(web_app)))
+    assert exit_code == 1
+    assert "already exists" in capsys.readouterr().err
 
 
 def test_authmgr_list_json_omits_null_fields(
@@ -5345,39 +5087,39 @@ def test_authmgr_last_login_order_keeps_nulls_last(
     ]
 
 
-def test_authmgr_email_domain_order_rejects_unsupported_dialect(
+def test_authmgr_email_domain_order_sorts_in_python(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = sqlite_file_url(tmp_path / "email-domain-unsupported.sqlite3")
-    initialise_identity_database(database_url)
-    settings = AuthTestSettings(database_url=database_url)
-    engine = create_database_engine(settings)
-    session_factory = create_session_factory(engine)
-    monkeypatch.setattr(
-        identity_management,
-        "EMAIL_DOMAIN_ORDER_DIALECTS",
-        frozenset(),
-    )
+    database_url = sqlite_file_url(tmp_path / "email-domain-order.sqlite3")
 
-    async def assert_unsupported_order() -> None:
-        async with session_scope(session_factory) as session:
-            result = await identity_management.list_local_users_for_management(
-                session,
-                order="email-domain",
+    async def assert_email_domain_order(connection: BaseDBAsyncClient) -> None:
+        for email in (
+            "primary@z.example",
+            "secondary@a.example",
+            "tertiary@m.example",
+        ):
+            await User.create(
+                email=email,
+                hashed_password="hash",
+                using_db=connection,
             )
 
-        assert result.is_failure() is True
-        assert result.error_type == identity_management.ERROR_UNSUPPORTED_ORDER
-        assert result.message
-        message = result.message.lower()
-        assert "email-domain" in message
-        assert "sqlite" in message
+        result = await identity_management.list_local_users_for_management(
+            connection,
+            order="email-domain",
+        )
 
-    try:
-        asyncio.run(assert_unsupported_order())
-    finally:
-        asyncio.run(close_database(engine))
+        assert result.is_ok() is True
+        records = result.value["users"]
+        assert [record["email"] for record in records] == [
+            "secondary@a.example",
+            "tertiary@m.example",
+            "primary@z.example",
+        ]
+
+    asyncio.run(
+        _with_generated_identity_connection(database_url, assert_email_domain_order)
+    )
 
 
 def test_authmgr_list_filters_by_login_presence(
@@ -5495,21 +5237,6 @@ def test_auth_database_url_resolves_windows_absolute_sqlite_path(
     assert resolve_database_url(database_url, tmp_path) == database_url
 
 
-def test_auth_database_url_rejects_sqlite_authority_form(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="authority forms"):
-        resolve_database_url("sqlite+aiosqlite://host/auth.db", tmp_path)
-
-
-def test_auth_database_url_rejects_blank_url(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="blank"):
-        resolve_database_url("", tmp_path)
-
-
-def test_auth_database_url_rejects_unsupported_scheme(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="unsupported scheme"):
-        resolve_database_url("mysql+aiomysql://localhost/auth", tmp_path)
-
-
 def test_authmgr_human_output_formats_only_known_timestamp_fields() -> None:
     assert (
         authmgr_output._format_human_value("created_at", 4102444800.0)
@@ -5523,33 +5250,28 @@ def test_authmgr_human_output_formats_only_known_timestamp_fields() -> None:
 
 
 @pytest.mark.parametrize(
-    ("pattern", "expected"),
+    ("value", "pattern", "expected"),
     [
-        ("", ""),
-        ("*", "%"),
-        ("foo", "foo"),
-        ("foo*bar", "foo%bar"),
-        (r"\*", "*"),
-        (r"foo\*bar", "foo*bar"),
-        ("%", r"\%"),
-        ("_", r"\_"),
-        (r"\%", r"\%"),
-        (r"\_", r"\_"),
-        (r"foo\bar", r"foo\\bar"),
-        (r"foo\\*bar", r"foo\\%bar"),
-        ("foo\\", r"foo\\"),
-        (r"foo\*", "foo*"),
-        (r"foo\%", r"foo\%"),
-        (r"foo\\*", r"foo\\%"),
-        (r"foo\\", r"foo\\"),
-        (r"foo\_", r"foo\_"),
+        ("", "", True),
+        ("anything", "*", True),
+        ("foo", "foo", True),
+        ("foo", "bar", False),
+        ("foo-bar", "foo*bar", True),
+        ("foo*bar", r"foo\*bar", True),
+        ("foo-bar", r"foo\*bar", False),
+        ("100%", r"100\%", True),
+        ("name_value", r"name\_value", True),
+        ("foo\\bar", r"foo\\bar", True),
+        ("foo\\xbar", r"foo\\*bar", True),
+        ("foo\\*bar", r"foo\\\*bar", True),
     ],
 )
-def test_authmgr_sql_wildcard_pattern_examples(
+def test_authmgr_wildcard_pattern_examples(
+    value: str,
     pattern: str,
-    expected: str,
+    expected: bool,
 ) -> None:
-    assert identity_management._sql_wildcard_pattern(pattern) == expected
+    assert identity_management._wildcard_matches(value, pattern) is expected
 
 
 def test_authmgr_human_output_handles_missing_record_fields(

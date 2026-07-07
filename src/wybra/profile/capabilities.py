@@ -4,7 +4,7 @@ import logging
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, TypeGuard, runtime_checkable
+from typing import Any, Protocol, TypeGuard, cast, runtime_checkable
 
 from wybra.media import MediaCapability, MediaError
 from wybra.profile.editing import profile_field_values
@@ -258,7 +258,7 @@ def _set_profile_links(profile: UserProfile, value: ProfileFieldValue) -> None:
 
 
 def _set_bio(profile: UserProfile, value: ProfileFieldValue) -> None:
-    profile.bio = value if isinstance(value, str) else None
+    cast(Any, profile).bio = value if isinstance(value, str) else None
 
 
 def _is_pronouns(value: ProfileFieldValue) -> TypeGuard[Pronouns]:

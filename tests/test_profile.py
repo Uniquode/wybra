@@ -8,20 +8,22 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlencode, urlsplit
 
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from fastapi.testclient import TestClient
 
 from support_database import sqlite_file_url
 from wybra.auth import AuthCapability, login_required  # noqa: F401
+from wybra.auth.admin.management import delete_local_user_for_management
+from wybra.auth.models import User
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core import InputValidationError
 from wybra.core.resources import PackageResourceSource
-from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
-from wybra.db.models import metadata
+from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
 from wybra.db.persistence import create_database
+from wybra.db.surfaces import discover_model_package
 from wybra.forms import (
     CsrfProtector,
     DefaultFormsCapability,
@@ -35,7 +37,7 @@ from wybra.media import (
     MediaNotFoundError,
     MediaSettings,
 )
-from wybra.media.persistence import SqlAlchemyMediaCatalogueRepository
+from wybra.media.persistence import TortoiseMediaCatalogueRepository
 from wybra.profile import (
     DEFAULT_EDITABLE_PROFILE_FIELDS,
     PROFILE_FIELD_METADATA,
@@ -52,7 +54,7 @@ from wybra.profile import (
 )
 from wybra.profile.forms import ProfileEditForm
 from wybra.profile.models import UserPhoneContact, UserProfile
-from wybra.profile.persistence import SqlAlchemyProfileRepository
+from wybra.profile.persistence import TortoiseProfileRepository
 from wybra.profile.routes import profile_router
 from wybra.profile.validation import validate_profile
 from wybra.site import Site, SiteCapabilityError, start
@@ -69,10 +71,135 @@ from wybra.widgets.navigation import (
 _CREATED_SITES: list[Site] = []
 
 
+@dataclass(frozen=True, slots=True)
+class AsgiTestResponse:
+    status_code: int
+    headers: dict[str, str]
+    text: str
+
+
+class CookieJar(dict[str, str]):
+    def set(self, key: str, value: str) -> None:
+        self[key] = value
+
+
+class DirectAsgiTestClient:
+    def __init__(self, app: FastAPI) -> None:
+        self.app = app
+        self.cookies = CookieJar()
+
+    async def __aenter__(self) -> DirectAsgiTestClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> AsgiTestResponse:
+        return await self._request("GET", url, headers=headers)
+
+    async def post(
+        self,
+        url: str,
+        *,
+        data: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> AsgiTestResponse:
+        del follow_redirects
+        body = urlencode(data or {}).encode("utf-8")
+        request_headers = {
+            "content-type": "application/x-www-form-urlencoded",
+            "content-length": str(len(body)),
+            **(headers or {}),
+        }
+        return await self._request("POST", url, body=body, headers=request_headers)
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: bytes = b"",
+        headers: dict[str, str] | None = None,
+    ) -> AsgiTestResponse:
+        parsed = urlsplit(url)
+        raw_headers = [
+            (b"host", b"testserver"),
+            *(
+                (key.lower().encode("latin-1"), value.encode("latin-1"))
+                for key, value in (headers or {}).items()
+            ),
+        ]
+        if self.cookies:
+            raw_headers.append(
+                (
+                    b"cookie",
+                    "; ".join(
+                        f"{key}={value}" for key, value in self.cookies.items()
+                    ).encode("latin-1"),
+                )
+            )
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": method,
+            "scheme": "http",
+            "path": parsed.path or "/",
+            "raw_path": (parsed.path or "/").encode("ascii"),
+            "query_string": parsed.query.encode("ascii"),
+            "headers": raw_headers,
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "root_path": "",
+        }
+        response_status = 500
+        response_headers: dict[str, str] = {}
+        response_body = bytearray()
+        request_sent = False
+
+        async def receive() -> dict[str, object]:
+            nonlocal request_sent
+            if request_sent:
+                return {"type": "http.disconnect"}
+            request_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message: dict[str, object]) -> None:
+            nonlocal response_status
+            if message["type"] == "http.response.start":
+                response_status = int(message["status"])
+                response_headers.update(
+                    {
+                        key.decode("latin-1"): value.decode("latin-1")
+                        for key, value in message.get("headers", ())
+                    }
+                )
+            elif message["type"] == "http.response.body":
+                response_body.extend(message.get("body", b""))
+
+        await self.app(scope, receive, send)
+        return AsgiTestResponse(
+            status_code=response_status,
+            headers=response_headers,
+            text=response_body.decode("utf-8"),
+        )
+
+
+def _test_client(app: FastAPI) -> DirectAsgiTestClient:
+    return DirectAsgiTestClient(app)
+
+
 def _profile_capability(site: Site) -> SiteProfileCapability:
     return SiteProfileCapability(
         site.capability_proxy(MediaCapability),
-        SqlAlchemyProfileRepository(site.capability_proxy(DatabaseCapability)),
+        TortoiseProfileRepository(site.capability_proxy(DatabaseCapability)),
     )
 
 
@@ -197,7 +324,7 @@ class AuthCapabilityStub:
         return anonymous
 
 
-def _site_with_database(tmp_path: Path) -> Site:
+async def _site_with_database(tmp_path: Path) -> Site:
     site = Site(
         app=FastAPI(),
         config=ConfigService(
@@ -205,16 +332,22 @@ def _site_with_database(tmp_path: Path) -> Site:
             discover_module_config=False,
         ),
     )
-    database = create_database(sqlite_file_url(tmp_path / "profile.sqlite3"))
+    database = await create_database(
+        sqlite_file_url(tmp_path / "profile.sqlite3"),
+        modules=("wybra.profile", "wybra.media"),
+    )
     site.provide_capability(
         DatabaseCapability,
-        SqlAlchemyDatabaseCapability.from_connections({"default": database}),
+        TortoiseDatabaseCapability(
+            database,
+            {"default": "default", "reader": "default", "writer": "default"},
+        ),
     )
     _CREATED_SITES.append(site)
     return site
 
 
-def _profile_route_site(
+async def _profile_route_site(
     tmp_path: Path,
     user: ProfileUser,
     *,
@@ -237,10 +370,16 @@ def _profile_route_site(
         app=app,
         config=ConfigService([MappingConfigSource(config_data)]),
     )
-    database = create_database(sqlite_file_url(tmp_path / "profile-route.sqlite3"))
+    database = await create_database(
+        sqlite_file_url(tmp_path / "profile-route.sqlite3"),
+        modules=("wybra.profile", "wybra.media"),
+    )
     site.provide_capability(
         DatabaseCapability,
-        SqlAlchemyDatabaseCapability.from_connections({"default": database}),
+        TortoiseDatabaseCapability(
+            database,
+            {"default": "default", "reader": "default", "writer": "default"},
+        ),
     )
     site.provide_capability(
         ProfileCapability,
@@ -250,6 +389,7 @@ def _profile_route_site(
     site.provide_capability(FormsCapability, DefaultFormsCapability(app.state.csrf))
     site.provide_capability(TemplateCapability, ProfileTemplateStub())
     app.state.site = site
+    app.state.profile_test_user = user
     _CREATED_SITES.append(site)
     return site
 
@@ -290,12 +430,29 @@ def _widget_site(
 
 
 async def _create_site_schema(site: Site) -> None:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    capability = site.require_capability(DatabaseCapability)
+    assert isinstance(capability, TortoiseDatabaseCapability)
+    await capability._database.context.generate_schemas()
+    user = getattr(site.app.state, "profile_test_user", None)
+    if isinstance(user, ProfileUser):
+        await _ensure_auth_user(site, user.id, email=user.email)
 
-        def _create_all(sync_session) -> None:
-            metadata.create_all(sync_session.get_bind())
 
-        await db_session.run_sync(_create_all)
+async def _ensure_auth_user(
+    site: Site,
+    user_id: uuid.UUID,
+    *,
+    email: str | None = None,
+) -> None:
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        await User.get_or_create(
+            id=user_id,
+            defaults={
+                "email": email or f"{user_id.hex}@example.test",
+                "is_verified": True,
+            },
+            using_db=connection,
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -305,45 +462,92 @@ def close_created_sites():
         asyncio.run(_CREATED_SITES.pop().close())
 
 
-def test_profile_metadata_exposes_profile_table() -> None:
-    table = metadata.tables["profile_user_profile"]
-
-    assert table.c.user_id.foreign_keys
-    assert table.c.profile_picture_media_id.nullable is True
-    assert table.c.preferred_name.nullable is True
-    assert table.c.display_name.nullable is True
-    assert table.c.bio.nullable is True
-    assert table.c.first_name.nullable is True
-    assert table.c.last_name.nullable is True
-    assert table.c.pronouns.nullable is True
-    assert table.c.phone_number.nullable is True
-    assert table.c.website_links.nullable is True
-    assert table.c.country_region.nullable is True
-    assert table.c.city.nullable is True
-    assert table.c.postal_code.nullable is True
-    assert table.c.job_title.nullable is True
-    assert table.c.company.nullable is True
-    assert table.c.company_industry.nullable is True
-    assert table.c.department.nullable is True
-    assert table.c.date_time_format.nullable is True
-    assert table.c.theme.nullable is True
-    assert table.c.notification_preferences.nullable is True
-    assert table.c.profile_visibility.nullable is False
-    assert table.c.marketing_consent.nullable is False
-    assert table.c.terms_accepted_at.nullable is True
-    assert table.c.data_deletion_requested.nullable is False
+def test_profile_model_surface_exposes_tortoise_models() -> None:
+    assert discover_model_package("wybra.profile") == "wybra.profile.models"
 
 
-def test_profile_metadata_exposes_phone_contact_table() -> None:
-    table = metadata.tables["profile_phone_contact"]
+def test_profile_model_exposes_expected_fields() -> None:
+    fields = UserProfile._meta.fields_map
 
-    assert table.c.user_id.foreign_keys
-    assert table.c.country_code.nullable is False
-    assert table.c.subdivision_code.nullable is True
-    assert table.c.normalised_number.nullable is False
-    assert table.c.number_type.nullable is False
-    assert table.c.sms_capable.nullable is False
-    assert table.c.verified_at.nullable is True
+    assert fields["user"].null is False
+    assert fields["profile_picture_media"].null is True
+    assert fields["preferred_name"].null is True
+    assert fields["display_name"].null is True
+    assert fields["bio"].null is True
+    assert fields["first_name"].null is True
+    assert fields["last_name"].null is True
+    assert fields["pronouns"].null is True
+    assert fields["phone_number"].null is True
+    assert fields["website_links"].null is True
+    assert fields["country_region"].null is True
+    assert fields["city"].null is True
+    assert fields["postal_code"].null is True
+    assert fields["job_title"].null is True
+    assert fields["company"].null is True
+    assert fields["company_industry"].null is True
+    assert fields["department"].null is True
+    assert fields["date_time_format"].null is True
+    assert fields["theme"].null is True
+    assert fields["notification_preferences"].null is True
+    assert fields["profile_visibility"].null is False
+    assert fields["marketing_consent"].null is False
+    assert fields["terms_accepted_at"].null is True
+    assert fields["data_deletion_requested"].null is False
+
+
+def test_profile_phone_contact_model_exposes_expected_fields() -> None:
+    fields = UserPhoneContact._meta.fields_map
+
+    assert fields["user"].null is False
+    assert fields["country_code"].null is False
+    assert fields["subdivision_code"].null is True
+    assert fields["normalised_number"].null is False
+    assert fields["number_type"].null is False
+    assert fields["sms_capable"].null is False
+    assert fields["verified_at"].null is True
+
+
+@pytest.mark.anyio
+async def test_auth_user_deletion_cascades_to_profile_records(tmp_path: Path) -> None:
+    user_id = uuid.uuid4()
+    site = await _site_with_database(tmp_path)
+    await _create_site_schema(site)
+
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        await User.create(
+            id=user_id,
+            email="deleted-profile@example.test",
+            using_db=connection,
+        )
+        await UserProfile.create(
+            user_id=user_id,
+            preferred_name="Deleted",
+            using_db=connection,
+        )
+        await UserPhoneContact.create(
+            user_id=user_id,
+            country_code="AU",
+            normalised_number="+61412345678",
+            number_type="mobile",
+            sms_capable=True,
+            using_db=connection,
+        )
+
+        result = await delete_local_user_for_management(
+            connection,
+            target=str(user_id),
+        )
+
+        assert result.is_ok() is True
+        assert (
+            await UserProfile.filter(user_id=user_id).using_db(connection).count() == 0
+        )
+        assert (
+            await UserPhoneContact.filter(user_id=user_id).using_db(connection).count()
+            == 0
+        )
+
+    await site.close()
 
 
 def test_validate_profile_accepts_configured_profile_module() -> None:
@@ -489,10 +693,13 @@ async def test_profile_setup_registers_profile_capability_before_media_exists() 
         ),
     )
 
-    assert site.has_capability(ProfileCapability) is True
-    assert site.has_capability(MediaCapability) is True
-    assert site.has_capability(AuthCapability) is True
-    assert site.has_capability(DatabaseCapability) is True
+    try:
+        assert site.has_capability(ProfileCapability) is True
+        assert site.has_capability(MediaCapability) is True
+        assert site.has_capability(AuthCapability) is True
+        assert site.has_capability(DatabaseCapability) is True
+    finally:
+        await site.close()
 
 
 @pytest.mark.anyio
@@ -500,15 +707,17 @@ async def test_profile_edit_route_renders_without_creating_profile(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(tmp_path, user)
+    site = await _profile_route_site(tmp_path, user)
     await _create_site_schema(site)
 
-    response = TestClient(site.app).get("/profile")
+    async with _test_client(site.app) as client:
+        response = await client.get("/profile")
 
     assert response.status_code == 200
     assert "profile/pages/edit.html" in response.text
     assert "preferred_name=" in response.text
     assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
+    await site.close()
 
 
 @pytest.mark.anyio
@@ -516,15 +725,21 @@ async def test_profile_edit_route_renders_existing_profile(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(tmp_path, user)
+    site = await _profile_route_site(tmp_path, user)
     await _create_site_schema(site)
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        session.add(UserProfile(user_id=user.id, preferred_name="David"))
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        await UserProfile.create(
+            user_id=user.id,
+            preferred_name="David",
+            using_db=connection,
+        )
 
-    response = TestClient(site.app).get("/profile")
+    async with _test_client(site.app) as client:
+        response = await client.get("/profile")
 
     assert response.status_code == 200
     assert "preferred_name=David" in response.text
+    await site.close()
 
 
 @pytest.mark.anyio
@@ -532,28 +747,27 @@ async def test_profile_edit_route_populates_phone_contact_and_status(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(tmp_path, user)
+    site = await _profile_route_site(tmp_path, user)
     await _create_site_schema(site)
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        session.add_all(
-            [
-                UserPhoneContact(
-                    user_id=user.id,
-                    country_code="AU",
-                    normalised_number="+61412345678",
-                    number_type="mobile",
-                    sms_capable=True,
-                    verified_at=1234.0,
-                ),
-            ]
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        await UserPhoneContact.create(
+            user_id=user.id,
+            country_code="AU",
+            normalised_number="+61412345678",
+            number_type="mobile",
+            sms_capable=True,
+            verified_at=1234.0,
+            using_db=connection,
         )
 
-    response = TestClient(site.app).get("/profile")
+    async with _test_client(site.app) as client:
+        response = await client.get("/profile")
 
     assert response.status_code == 200
     assert "country=AU" in response.text
     assert "phone_number=+61412345678" in response.text
     assert "status=Verified" in response.text
+    await site.close()
 
 
 @pytest.mark.anyio
@@ -561,24 +775,23 @@ async def test_profile_edit_route_post_creates_profile(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(tmp_path, user)
+    site = await _profile_route_site(tmp_path, user)
     await _create_site_schema(site)
     nonce = "a" * 32
     token = site.app.state.csrf.create_token(nonce)
-    client = TestClient(site.app)
-    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
-
-    response = client.post(
-        "/profile",
-        data={
-            "csrf_token": token,
-            "preferred_name": "David",
-            "display_name": "David Nugent",
-            "pronoun_pair": "they|their",
-            "bio": "Profile text",
-        },
-        follow_redirects=False,
-    )
+    async with _test_client(site.app) as client:
+        client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+        response = await client.post(
+            "/profile",
+            data={
+                "csrf_token": token,
+                "preferred_name": "David",
+                "display_name": "David Nugent",
+                "pronoun_pair": "they|their",
+                "bio": "Profile text",
+            },
+            follow_redirects=False,
+        )
 
     assert response.status_code == 303
     assert response.headers["location"] == "http://testserver/profile"
@@ -588,6 +801,7 @@ async def test_profile_edit_route_post_creates_profile(
     assert profile.display_name == "David Nugent"
     assert profile.pronouns == {"direct": "they", "possessive": "their"}
     assert profile.bio == "Profile text"
+    await site.close()
 
 
 @pytest.mark.anyio
@@ -595,30 +809,30 @@ async def test_profile_edit_route_valid_noop_returns_to_invoking_page(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(tmp_path, user)
+    site = await _profile_route_site(tmp_path, user)
     await _create_site_schema(site)
     nonce = "a" * 32
     token = site.app.state.csrf.create_token(nonce)
-    client = TestClient(site.app)
-    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
-
-    response = client.post(
-        "/profile",
-        data={
-            "csrf_token": token,
-            "return_to": "/account",
-            "preferred_name": "",
-            "display_name": "",
-            "pronoun_pair": "",
-            "profile_link_website": "",
-            "bio": "",
-        },
-        follow_redirects=False,
-    )
+    async with _test_client(site.app) as client:
+        client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+        response = await client.post(
+            "/profile",
+            data={
+                "csrf_token": token,
+                "return_to": "/account",
+                "preferred_name": "",
+                "display_name": "",
+                "pronoun_pair": "",
+                "profile_link_website": "",
+                "bio": "",
+            },
+            follow_redirects=False,
+        )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/account"
     assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
+    await site.close()
 
 
 @pytest.mark.anyio
@@ -626,36 +840,34 @@ async def test_profile_edit_route_clears_existing_profile_fields(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(tmp_path, user)
+    site = await _profile_route_site(tmp_path, user)
     await _create_site_schema(site)
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        session.add(
-            UserProfile(
-                user_id=user.id,
-                preferred_name="David",
-                display_name="David Nugent",
-                bio="Existing bio",
-                pronouns={"direct": "they", "possessive": "their"},
-                website_links={"website": "https://example.test"},
-            )
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        await UserProfile.create(
+            user_id=user.id,
+            preferred_name="David",
+            display_name="David Nugent",
+            bio="Existing bio",
+            pronouns={"direct": "they", "possessive": "their"},
+            website_links={"website": "https://example.test"},
+            using_db=connection,
         )
     nonce = "a" * 32
     token = site.app.state.csrf.create_token(nonce)
-    client = TestClient(site.app)
-    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
-
-    response = client.post(
-        "/profile",
-        data={
-            "csrf_token": token,
-            "preferred_name": "",
-            "display_name": "",
-            "pronoun_pair": "",
-            "profile_link_website": "",
-            "bio": "",
-        },
-        follow_redirects=False,
-    )
+    async with _test_client(site.app) as client:
+        client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+        response = await client.post(
+            "/profile",
+            data={
+                "csrf_token": token,
+                "preferred_name": "",
+                "display_name": "",
+                "pronoun_pair": "",
+                "profile_link_website": "",
+                "bio": "",
+            },
+            follow_redirects=False,
+        )
 
     assert response.status_code == 303
     profile = await site.require_capability(ProfileCapability).get_profile(user.id)
@@ -665,6 +877,7 @@ async def test_profile_edit_route_clears_existing_profile_fields(
     assert profile.bio is None
     assert profile.pronouns is None
     assert profile.website_links is None
+    await site.close()
 
 
 @pytest.mark.anyio
@@ -672,26 +885,26 @@ async def test_profile_edit_route_re_renders_invalid_form(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(tmp_path, user)
+    site = await _profile_route_site(tmp_path, user)
     await _create_site_schema(site)
     nonce = "a" * 32
     token = site.app.state.csrf.create_token(nonce)
-    client = TestClient(site.app)
-    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
-
-    response = client.post(
-        "/profile",
-        data={
-            "csrf_token": token,
-            "preferred_name": "David",
-            "profile_link_website": "javascript:alert(1)",
-        },
-    )
+    async with _test_client(site.app) as client:
+        client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+        response = await client.post(
+            "/profile",
+            data={
+                "csrf_token": token,
+                "preferred_name": "David",
+                "profile_link_website": "javascript:alert(1)",
+            },
+        )
 
     assert response.status_code == 400
     assert "preferred_name=David" in response.text
     assert "profile_link_website:Profile link URL scheme" in response.text
     assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
+    await site.close()
 
 
 @pytest.mark.anyio
@@ -699,40 +912,39 @@ async def test_profile_edit_route_ignores_disabled_submitted_fields(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(
+    site = await _profile_route_site(
         tmp_path,
         user,
         profile_config={"editable_fields": ("preferred_name",)},
     )
     await _create_site_schema(site)
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        session.add(
-            UserProfile(
-                user_id=user.id,
-                preferred_name="Previous",
-                bio="Existing bio",
-            )
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        await UserProfile.create(
+            user_id=user.id,
+            preferred_name="Previous",
+            bio="Existing bio",
+            using_db=connection,
         )
     nonce = "a" * 32
     token = site.app.state.csrf.create_token(nonce)
-    client = TestClient(site.app)
-    client.cookies.set(site.app.state.csrf.cookie_name, nonce)
-
-    response = client.post(
-        "/profile",
-        data={
-            "csrf_token": token,
-            "preferred_name": "David",
-            "bio": "Submitted bio",
-        },
-        follow_redirects=False,
-    )
+    async with _test_client(site.app) as client:
+        client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+        response = await client.post(
+            "/profile",
+            data={
+                "csrf_token": token,
+                "preferred_name": "David",
+                "bio": "Submitted bio",
+            },
+            follow_redirects=False,
+        )
 
     assert response.status_code == 303
     profile = await site.require_capability(ProfileCapability).get_profile(user.id)
     assert profile is not None
     assert profile.preferred_name == "David"
     assert profile.bio == "Existing bio"
+    await site.close()
 
 
 def test_profile_edit_template_renders_declarative_form_fields() -> None:
@@ -877,20 +1089,20 @@ async def test_profile_phone_fields_fragment_uses_selected_country(
     tmp_path: Path,
 ) -> None:
     user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
-    site = _profile_route_site(tmp_path, user)
+    site = await _profile_route_site(tmp_path, user)
     await _create_site_schema(site)
-    client = TestClient(site.app)
-
-    response = client.get(
-        "/profile/phone-contact/fields?"
-        "phone_country_code=AU&"
-        "phone_subdivision_code=AU-VIC&"
-        "phone_number=%2B61412345678",
-        headers={"HX-Request": "true"},
-    )
+    async with _test_client(site.app) as client:
+        response = await client.get(
+            "/profile/phone-contact/fields?"
+            "phone_country_code=AU&"
+            "phone_subdivision_code=AU-VIC&"
+            "phone_number=%2B61412345678",
+            headers={"HX-Request": "true"},
+        )
 
     assert response.status_code == 200
     assert "forms/widgets/phone_contact_fields.html" in response.text
+    await site.close()
     assert "phone_prefix=🇦🇺 +61" in response.text
     assert "Victoria" in response.text
     assert "subdivision=AU-VIC" in response.text
@@ -1402,7 +1614,7 @@ async def test_profile_post_setup_requires_forms_when_editing_enabled() -> None:
 async def test_profile_image_descriptor_uses_email_initial_without_media(
     tmp_path: Path,
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
     capability = _profile_capability(site)
     capability.media.finalise_optional()
 
@@ -1413,17 +1625,19 @@ async def test_profile_image_descriptor_uses_email_initial_without_media(
     assert image.src is None
     assert image.alt == "Profile picture"
     assert image.fallback_text == "D"
+    await site.close()
 
 
 @pytest.mark.anyio
 async def test_profile_capability_saves_phone_contact(
     tmp_path: Path,
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
     capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
+    await _ensure_auth_user(site, user_id)
 
     contact = await capability.save_phone_contact(
         user_id,
@@ -1439,17 +1653,19 @@ async def test_profile_capability_saves_phone_contact(
     assert contact.number_type == "mobile"
     assert contact.sms_capable is True
     assert contact.verified_at is None
+    await site.close()
 
 
 @pytest.mark.anyio
 async def test_profile_capability_saves_enabled_profile_fields(
     tmp_path: Path,
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
     capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
+    await _ensure_auth_user(site, user_id)
 
     profile = await capability.save_profile_fields(
         user_id,
@@ -1472,13 +1688,14 @@ async def test_profile_capability_saves_enabled_profile_fields(
     assert (
         render_profile_bio(profile.bio) == "Hello &lt;script&gt;alert(1)&lt;/script&gt;"
     )
+    await site.close()
 
 
 @pytest.mark.anyio
 async def test_profile_capability_rejects_disabled_profile_fields(
     tmp_path: Path,
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
     capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
@@ -1489,13 +1706,14 @@ async def test_profile_capability_rejects_disabled_profile_fields(
             {"bio": "not allowed"},
             settings=ProfileSettings(editable_fields=("preferred_name",)),
         )
+    await site.close()
 
 
 @pytest.mark.anyio
 async def test_profile_capability_validates_profile_links_and_bio_length(
     tmp_path: Path,
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
     capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
@@ -1512,29 +1730,30 @@ async def test_profile_capability_validates_profile_links_and_bio_length(
             {"bio": "x" * 1025},
             settings=ProfileSettings(),
         )
+    await site.close()
 
 
 @pytest.mark.anyio
 async def test_profile_capability_resets_phone_verification_on_number_edit(
     tmp_path: Path,
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
     capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
+    await _ensure_auth_user(site, user_id)
 
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        contact = UserPhoneContact(
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        contact = await UserPhoneContact.create(
             user_id=user_id,
             country_code="AU",
             normalised_number="+61412345678",
             number_type="mobile",
             sms_capable=True,
             verified_at=1234.0,
+            using_db=connection,
         )
-        session.add(contact)
-        await session.flush()
     edited = await capability.save_phone_contact(
         user_id,
         contact_id=contact.id,
@@ -1545,65 +1764,72 @@ async def test_profile_capability_resets_phone_verification_on_number_edit(
     assert edited.id == contact.id
     assert edited.normalised_number == "+61412345679"
     assert edited.verified_at is None
+    await site.close()
 
 
 @pytest.mark.anyio
 async def test_profile_capability_recovery_eligibility_requires_verified_unique_sms(
     tmp_path: Path,
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
     capability = _profile_capability(site)
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
     other_user_id = uuid.uuid4()
+    await _ensure_auth_user(site, user_id)
+    await _ensure_auth_user(site, other_user_id)
 
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        eligible = UserPhoneContact(
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        eligible = await UserPhoneContact.create(
             user_id=user_id,
             country_code="AU",
             normalised_number="+61412345678",
             number_type="mobile",
             sms_capable=True,
             verified_at=1234.0,
+            using_db=connection,
         )
-        duplicate = UserPhoneContact(
+        await UserPhoneContact.create(
             user_id=user_id,
             country_code="AU",
             normalised_number="+61412345679",
             number_type="mobile",
             sms_capable=True,
             verified_at=1234.0,
+            using_db=connection,
         )
-        other_duplicate = UserPhoneContact(
+        await UserPhoneContact.create(
             user_id=other_user_id,
             country_code="AU",
             normalised_number="+61412345679",
             number_type="mobile",
             sms_capable=True,
             verified_at=1234.0,
+            using_db=connection,
         )
-        fixed_line = UserPhoneContact(
+        await UserPhoneContact.create(
             user_id=user_id,
             country_code="AU",
             normalised_number="+61370101234",
             number_type="fixed_line",
             sms_capable=False,
             verified_at=1234.0,
+            using_db=connection,
         )
-        unverified = UserPhoneContact(
+        await UserPhoneContact.create(
             user_id=user_id,
             country_code="AU",
             normalised_number="+61412345670",
             number_type="mobile",
             sms_capable=True,
+            using_db=connection,
         )
-        session.add_all([eligible, duplicate, other_duplicate, fixed_line, unverified])
-        await session.flush()
 
     contacts = await capability.recovery_eligible_phone_contacts(user_id)
 
     assert [contact.id for contact in contacts] == [eligible.id]
+    await site.close()
 
 
 @pytest.mark.anyio
@@ -1611,11 +1837,11 @@ async def test_profile_image_descriptor_resolves_media_reference(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
     capability = _profile_capability(site)
     media_capability = FilesystemMediaCapability(
         MediaSettings(root=tmp_path),
-        catalogue=SqlAlchemyMediaCatalogueRepository(
+        catalogue=TortoiseMediaCatalogueRepository(
             site.capability_proxy(DatabaseCapability)
         ),
     )
@@ -1637,13 +1863,14 @@ async def test_profile_image_descriptor_resolves_media_reference(
 
     assert image.src == "/media/profile/ab/cd/david.png"
     assert image.fallback_text is None
+    await site.close()
 
 
 @pytest.mark.anyio
 async def test_profile_image_descriptor_falls_back_when_media_is_unavailable(
     tmp_path: Path,
 ) -> None:
-    site = _site_with_database(tmp_path)
+    site = await _site_with_database(tmp_path)
 
     class MissingMedia:
         root = tmp_path

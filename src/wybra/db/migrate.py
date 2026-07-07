@@ -2,41 +2,31 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
-import os
+import tempfile
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from importlib import resources
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any, Protocol
 
 import click
-from alembic import command
-from alembic.config import Config
-from alembic.util.exc import CommandError as AlembicError
-from sqlalchemy import MetaData, Table, select
-from sqlalchemy import inspect as sqlalchemy_inspect
-from sqlalchemy.exc import SQLAlchemyError
+from tortoise.cli import cli as tortoise_cli
+from tortoise.cli import utils as tortoise_cli_utils
+from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
 
 from wybra.core.composition import AppConfig
-from wybra.core.logging import LoggingConfigurationError, logging_config_from_app_config
-from wybra.db.alembic_attributes import LOGGING_CONFIG_ATTRIBUTE
-from wybra.db.migration_metadata import MigrationConfigError
-from wybra.db.persistence import close_database, create_database_engine
+from wybra.core.logging import LoggingConfigurationError
 from wybra.db.provisioning import (
     DatabaseProvisioningConfigurationError,
     DatabaseProvisioningError,
     is_postgresql_database_url,
     provision_postgresql_database,
 )
-from wybra.db.surfaces import (
-    DataCompositionError,
-    migration_version_location_for_configured_module,
-    migration_version_locations_from_modules,
-)
-from wybra.db.urls import safe_database_error_message, sqlite_database_path
+from wybra.db.surfaces import DataCompositionError
+from wybra.db.tortoise import build_tortoise_config as build_config
+from wybra.db.urls import safe_database_error_message
 from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
@@ -45,30 +35,17 @@ from wybra.tools.app_startup import (
 )
 from wybra.tools.cli_logging import configure_cli_logging
 
-DEFAULT_MIGRATIONS_SCRIPT_LOCATION = "wybra.db:migrations"
-ALEMBIC_VERSION_TABLE = "alembic_version"
-
-DATABASE_URL_HELP = (
-    "Override the configured SQLAlchemy async database URL for this migration command."
-)
-
-REVISION_HELP = (
-    "Create an Alembic revision in a configured module.\n\n"
-    "Roll-forward order: Upgrade to the current head before autogenerate; "
-    "update the owning module models; generate the owning module revision; "
-    "Review generated operations plus down_revision and depends_on; run "
-    "wybra-migrate upgrade; then run validation."
-)
+DATABASE_URL_HELP = "Override the configured database URL for this migration command."
 
 logger = logging.getLogger(__name__)
 
 
 class MigrationSettings(Protocol):
-    """Settings shape required by generic Alembic command construction.
+    """Settings shape required by Tortoise migration command construction.
 
-    Host adapters provide this shape from their concrete settings object. It is
-    wider than `DatabaseUrlSettings` because migrations also need script paths,
-    configured modules, and optional composition metadata.
+    Host adapters provide this shape from their concrete settings object.
+    Migration commands need the effective database URL, configured modules,
+    and optional composition metadata.
     """
 
     database_url: str
@@ -106,37 +83,12 @@ class MigrationStateError(RuntimeError):
     """Raised when a migration operation is invalid for the database state."""
 
 
-class UnsupportedMigrationOperationError(RuntimeError):
-    """Raised when a migration backend cannot support a command operation."""
-
-
-@dataclass(frozen=True, slots=True)
-class MigrationState:
-    initialised: bool
-    current_revisions: tuple[str, ...] = ()
-    detail: str | None = None
-
-
 @dataclass(frozen=True, slots=True)
 class MigrationContext:
     """Resolved migration command context passed to migration backends."""
 
     settings: MigrationSettings
-    config: Config
-
-
-@dataclass(frozen=True, slots=True)
-class RevisionRequest:
-    """Backend-neutral revision-generation request."""
-
-    message: str
-    autogenerate: bool
-    head: str
-    splice: bool
-    branch_label: str | None
-    version_path: Path
-    rev_id: str | None
-    depends_on: str | None
+    config: dict[str, Any]
 
 
 class MigrationBackend(Protocol):
@@ -147,62 +99,139 @@ class MigrationBackend(Protocol):
         context: MigrationContext,
         *,
         admin_database_url: str | None,
+        app_labels: tuple[str, ...],
     ) -> None: ...
 
-    def upgrade(self, context: MigrationContext, revision: str) -> None: ...
-
-    def downgrade(self, context: MigrationContext, revision: str) -> None: ...
-
-    def current(self, context: MigrationContext) -> None: ...
-
-    def history(self, context: MigrationContext) -> None: ...
-
-    def revision(
+    def makemigrations(
         self,
         context: MigrationContext,
-        request: RevisionRequest,
+        request: MakeMigrationsRequest,
+    ) -> None: ...
+
+    def migrate(
+        self,
+        context: MigrationContext,
+        request: MigrationTargetRequest,
+    ) -> None: ...
+
+    def downgrade(
+        self,
+        context: MigrationContext,
+        request: MigrationTargetRequest,
+    ) -> None: ...
+
+    def history(
+        self,
+        context: MigrationContext,
+        app_labels: tuple[str, ...],
+    ) -> None: ...
+
+    def heads(self, context: MigrationContext, app_labels: tuple[str, ...]) -> None: ...
+
+    def sqlmigrate(
+        self,
+        context: MigrationContext,
+        request: SqlMigrateRequest,
     ) -> None: ...
 
 
-class AlembicMigrationBackend:
-    """Alembic-backed migration backend."""
+@dataclass(frozen=True, slots=True)
+class MakeMigrationsRequest:
+    app_labels: tuple[str, ...]
+    empty: bool
+    name: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationTargetRequest:
+    app_label: str | None
+    migration: str | None
+    fake: bool
+    dry_run: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SqlMigrateRequest:
+    app_label: str | None
+    migration_name: str | None
+    backward: bool
+
+
+class TortoiseMigrationBackend:
+    """Tortoise-backed migration backend."""
 
     def initialise(
         self,
         context: MigrationContext,
         *,
         admin_database_url: str | None,
+        app_labels: tuple[str, ...],
     ) -> None:
-        _initialise_database(context.config, admin_database_url)
+        if is_postgresql_database_url(context.settings.database_url):
+            provision_postgresql_database(
+                context.settings.database_url,
+                admin_database_url,
+            )
+        _run_tortoise_cli(context, ["init", *app_labels])
 
-    def upgrade(self, context: MigrationContext, revision: str) -> None:
-        _upgrade_initialised_database(context.config, revision)
-
-    def downgrade(self, context: MigrationContext, revision: str) -> None:
-        command.downgrade(context.config, revision)
-
-    def current(self, context: MigrationContext) -> None:
-        _show_current_revision(context.config)
-
-    def history(self, context: MigrationContext) -> None:
-        command.history(context.config)
-
-    def revision(
+    def makemigrations(
         self,
         context: MigrationContext,
-        request: RevisionRequest,
+        request: MakeMigrationsRequest,
     ) -> None:
-        command.revision(
-            context.config,
-            message=request.message,
-            autogenerate=request.autogenerate,
-            head=request.head,
-            splice=request.splice,
-            branch_label=request.branch_label,
-            version_path=request.version_path,
-            rev_id=request.rev_id,
-            depends_on=request.depends_on,
-        )
+        args = ["makemigrations", *request.app_labels]
+        if request.empty:
+            args.append("--empty")
+        if request.name is not None:
+            args.extend(("-n", request.name))
+        _run_tortoise_cli(context, args)
+
+    def migrate(
+        self,
+        context: MigrationContext,
+        request: MigrationTargetRequest,
+    ) -> None:
+        _run_tortoise_cli(context, _target_args("migrate", request))
+
+    def downgrade(
+        self,
+        context: MigrationContext,
+        request: MigrationTargetRequest,
+    ) -> None:
+        _run_tortoise_cli(context, _target_args("downgrade", request))
+
+    def history(self, context: MigrationContext, app_labels: tuple[str, ...]) -> None:
+        _run_tortoise_cli(context, ["history", *app_labels])
+
+    def heads(self, context: MigrationContext, app_labels: tuple[str, ...]) -> None:
+        _run_tortoise_cli(context, ["heads", *app_labels])
+
+    def sqlmigrate(
+        self,
+        context: MigrationContext,
+        request: SqlMigrateRequest,
+    ) -> None:
+        args = ["sqlmigrate"]
+        if request.app_label is not None:
+            args.append(request.app_label)
+        if request.migration_name is not None:
+            args.append(request.migration_name)
+        if request.backward:
+            args.append("--backward")
+        _run_tortoise_cli(context, args)
+
+
+def _target_args(command_name: str, request: MigrationTargetRequest) -> list[str]:
+    args = [command_name]
+    if request.app_label is not None:
+        args.append(request.app_label)
+    if request.migration is not None:
+        args.append(request.migration)
+    if request.fake:
+        args.append("--fake")
+    if request.dry_run:
+        args.append("--dry-run")
+    return args
 
 
 def _database_url_option[F: Callable[..., Any]](function: F) -> F:
@@ -220,7 +249,7 @@ def create_migrate_command(
             "help_option_names": ["-h", "--help"],
             "max_content_width": 120,
         },
-        help="Run application schema migrations through Alembic.",
+        help="Run application schema migrations through Tortoise.",
     )
     @_database_url_option
     @click.option(
@@ -238,7 +267,7 @@ def create_migrate_command(
 
     @migrate_command.command(
         "init",
-        help="Provision database infrastructure and initialise migration state.",
+        help="Provision database infrastructure and create migration packages.",
     )
     @_database_url_option
     @click.option(
@@ -248,11 +277,13 @@ def create_migrate_command(
             "and privilege provisioning."
         ),
     )
+    @click.argument("app_labels", nargs=-1)
     @click.pass_context
     def init_command(
         ctx: click.Context,
         database_url: str | None,
         admin_database_url: str | None,
+        app_labels: tuple[str, ...],
     ) -> int:
         return _run_migration(
             settings_loader,
@@ -261,99 +292,173 @@ def create_migrate_command(
             lambda backend, context: backend.initialise(
                 context,
                 admin_database_url=admin_database_url,
+                app_labels=app_labels,
             ),
         )
 
-    @migrate_command.command("upgrade", help="Upgrade schema revisions.")
+    @migrate_command.command(
+        "makemigrations",
+        help="Create migrations from model changes.",
+    )
     @_database_url_option
-    @click.argument("revision", default="heads", required=False)
+    @click.argument("app_labels", nargs=-1)
+    @click.option("--empty", is_flag=True, help="Create an empty migration.")
+    @click.option("-n", "--name", help="Use this name for the migration file.")
     @click.pass_context
-    def upgrade_command(
-        ctx: click.Context, revision: str, database_url: str | None
+    def makemigrations_command(
+        ctx: click.Context,
+        database_url: str | None,
+        app_labels: tuple[str, ...],
+        empty: bool,
+        name: str | None,
     ) -> int:
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            lambda backend, context: backend.upgrade(context, revision),
+            lambda backend, context: backend.makemigrations(
+                context,
+                MakeMigrationsRequest(app_labels=app_labels, empty=empty, name=name),
+            ),
         )
 
-    @migrate_command.command("downgrade", help="Downgrade schema revisions.")
+    @migrate_command.command("migrate", help="Apply migrations.")
     @_database_url_option
-    @click.argument("revision")
+    @click.argument("app_label", required=False)
+    @click.argument("migration", required=False)
+    @click.option(
+        "--fake",
+        is_flag=True,
+        help="Record migrations without executing SQL.",
+    )
+    @click.option(
+        "--dry-run",
+        is_flag=True,
+        help="Show what would run without changing database state.",
+    )
+    @click.pass_context
+    def migrate_command_command(
+        ctx: click.Context,
+        database_url: str | None,
+        app_label: str | None,
+        migration: str | None,
+        fake: bool,
+        dry_run: bool,
+    ) -> int:
+        return _run_migration(
+            settings_loader,
+            _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
+            lambda backend, context: backend.migrate(
+                context,
+                MigrationTargetRequest(
+                    app_label=app_label,
+                    migration=migration,
+                    fake=fake,
+                    dry_run=dry_run,
+                ),
+            ),
+        )
+
+    @migrate_command.command("downgrade", help="Unapply migrations.")
+    @_database_url_option
+    @click.argument("app_label", required=False)
+    @click.argument("migration", required=False)
+    @click.option(
+        "--fake",
+        is_flag=True,
+        help="Record migrations without executing SQL.",
+    )
+    @click.option(
+        "--dry-run",
+        is_flag=True,
+        help="Show what would run without changing database state.",
+    )
     @click.pass_context
     def downgrade_command(
-        ctx: click.Context, revision: str, database_url: str | None
+        ctx: click.Context,
+        database_url: str | None,
+        app_label: str | None,
+        migration: str | None,
+        fake: bool,
+        dry_run: bool,
     ) -> int:
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            lambda backend, context: backend.downgrade(context, revision),
-        )
-
-    @migrate_command.command("current", help="Show the current database revision.")
-    @_database_url_option
-    @click.pass_context
-    def current_command(ctx: click.Context, database_url: str | None) -> int:
-        return _run_migration(
-            settings_loader,
-            _database_url_for_command(ctx, database_url),
-            _config_source_for_command(ctx),
-            lambda backend, context: backend.current(context),
+            lambda backend, context: backend.downgrade(
+                context,
+                MigrationTargetRequest(
+                    app_label=app_label,
+                    migration=migration,
+                    fake=fake,
+                    dry_run=dry_run,
+                ),
+            ),
         )
 
     @migrate_command.command("history", help="Show migration history.")
     @_database_url_option
+    @click.argument("app_labels", nargs=-1)
     @click.pass_context
-    def history_command(ctx: click.Context, database_url: str | None) -> int:
+    def history_command(
+        ctx: click.Context,
+        database_url: str | None,
+        app_labels: tuple[str, ...],
+    ) -> int:
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            lambda backend, context: backend.history(context),
+            lambda backend, context: backend.history(context, app_labels),
         )
 
-    @migrate_command.command("revision", help=REVISION_HELP)
+    @migrate_command.command("heads", help="Show migration heads on disk.")
     @_database_url_option
-    @click.option(
-        "--module",
-        "module_name",
-        required=True,
-        help="Configured owning module for the generated revision file.",
-    )
-    @click.option("-m", "--message", required=True, help="Revision message.")
-    @click.option("--autogenerate", is_flag=True, help="Populate from model diff.")
-    @click.option("--head", default="head", show_default=True, help="Head revision.")
-    @click.option("--splice", is_flag=True, help="Allow a non-head parent revision.")
-    @click.option("--branch-label", help="Branch label for the new revision.")
-    @click.option("--depends-on", help="Revision dependency for cross-module graphs.")
-    @click.option("--rev-id", help="Explicit revision identifier.")
+    @click.argument("app_labels", nargs=-1)
     @click.pass_context
-    def revision_command(
+    def heads_command(
         ctx: click.Context,
         database_url: str | None,
-        module_name: str,
-        message: str,
-        autogenerate: bool,
-        head: str,
-        splice: bool,
-        branch_label: str | None,
-        depends_on: str | None,
-        rev_id: str | None,
+        app_labels: tuple[str, ...],
     ) -> int:
-        return _run_revision(
+        return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            module_name=module_name,
-            message=message,
-            autogenerate=autogenerate,
-            head=head,
-            splice=splice,
-            branch_label=branch_label,
-            depends_on=depends_on,
-            rev_id=rev_id,
+            lambda backend, context: backend.heads(context, app_labels),
+        )
+
+    @migrate_command.command("sqlmigrate", help="Print SQL for a migration.")
+    @_database_url_option
+    @click.argument("app_label", required=False)
+    @click.argument("migration_name", required=False)
+    @click.option(
+        "--backward",
+        is_flag=True,
+        help="Generate SQL to unapply the migration.",
+    )
+    @click.pass_context
+    def sqlmigrate_command(
+        ctx: click.Context,
+        database_url: str | None,
+        app_label: str | None,
+        migration_name: str | None,
+        backward: bool,
+    ) -> int:
+        return _run_migration(
+            settings_loader,
+            _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
+            lambda backend, context: backend.sqlmigrate(
+                context,
+                SqlMigrateRequest(
+                    app_label=app_label,
+                    migration_name=migration_name,
+                    backward=backward,
+                ),
+            ),
         )
 
     return migrate_command
@@ -412,7 +517,7 @@ def _run_migration(
         )
         configure_cli_logging(settings.app_config)
         context = build_migration_context(settings)
-        backend: MigrationBackend = AlembicMigrationBackend()
+        backend: MigrationBackend = TortoiseMigrationBackend()
     except (
         LoggingConfigurationError,
         MigrationConfigurationError,
@@ -425,7 +530,6 @@ def _run_migration(
         operation(backend, context)
     except (
         MigrationConfigurationError,
-        MigrationConfigError,
         DatabaseProvisioningConfigurationError,
     ) as exc:
         logger.error("configuration: failed: %s", exc)
@@ -433,76 +537,10 @@ def _run_migration(
     except MigrationStateError as exc:
         logger.error("migration: failed: %s", exc)
         return 1
-    except UnsupportedMigrationOperationError as exc:
-        logger.error("migration backend: unsupported: %s", exc)
-        return 1
     except DatabaseProvisioningError as exc:
         logger.error("provisioning: failed: %s", exc)
         return 1
-    except (AlembicError, SQLAlchemyError) as exc:
-        logger.error("migration: failed: %s", safe_database_error_message(exc))
-        return 1
-    return 0
-
-
-def _run_revision(
-    settings_loader: MigrationSettingsLoader,
-    database_url: str | None,
-    config_source: str | None,
-    *,
-    module_name: str,
-    message: str,
-    autogenerate: bool,
-    head: str,
-    splice: bool,
-    branch_label: str | None,
-    depends_on: str | None,
-    rev_id: str | None,
-) -> int:
-    try:
-        configure_cli_logging()
-        settings = _load_migration_settings(
-            settings_loader,
-            database_url,
-            config_source,
-        )
-        configure_cli_logging(settings.app_config)
-        version_path = migration_version_location_for_configured_module(
-            module_name,
-            settings.modules,
-        )
-        version_path.mkdir(parents=True, exist_ok=True)
-        context = build_migration_context(
-            settings,
-            additional_version_locations=(version_path,),
-        )
-        backend: MigrationBackend = AlembicMigrationBackend()
-    except (
-        LoggingConfigurationError,
-        MigrationConfigurationError,
-        DataCompositionError,
-    ) as exc:
-        logger.error("configuration: failed: %s", exc)
-        return 1
-
-    try:
-        backend.revision(
-            context,
-            RevisionRequest(
-                message=message,
-                autogenerate=autogenerate,
-                head=head,
-                splice=splice,
-                branch_label=branch_label,
-                version_path=version_path,
-                rev_id=rev_id,
-                depends_on=depends_on,
-            ),
-        )
-    except MigrationConfigError as exc:
-        logger.error("configuration: failed: %s", exc)
-        return 1
-    except (AlembicError, SQLAlchemyError) as exc:
+    except (TortoiseConfigurationError, tortoise_cli_utils.CLIError) as exc:
         logger.error("migration: failed: %s", safe_database_error_message(exc))
         return 1
     return 0
@@ -579,237 +617,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     return run_migrate_command(migrate_command, argv)
 
 
-def build_alembic_config(
-    settings: MigrationSettings,
-    *,
-    additional_version_locations: Sequence[Path] = (),
-) -> Config:
-    config = Config()
-    config.set_main_option(
-        "script_location",
-        migration_script_location(settings.migrations_root),
-    )
-    project_root = (
-        settings.project_root
-        if settings.project_root.is_absolute()
-        else settings.project_root.resolve()
-    )
-    config.set_main_option("project_root", project_root.as_posix())
-    version_locations = _deduplicated_paths(
-        (
-            *migration_version_locations_from_modules(settings.modules),
-            *additional_version_locations,
-        )
-    )
-    if version_locations:
-        config.set_main_option("path_separator", "os")
-        config.set_main_option(
-            "version_locations",
-            os.pathsep.join(path.as_posix() for path in version_locations),
-        )
-    config.set_main_option(
-        "sqlalchemy.url", _alembic_config_value(settings.database_url)
-    )
-    if settings.app_config is not None:
-        config.set_main_option("app_config", settings.app_config.config_path.as_posix())
-    config.attributes[LOGGING_CONFIG_ATTRIBUTE] = _logging_config_for_settings(settings)
-    return config
-
-
-def build_migration_context(
-    settings: MigrationSettings,
-    *,
-    additional_version_locations: Sequence[Path] = (),
-) -> MigrationContext:
+def build_migration_context(settings: MigrationSettings) -> MigrationContext:
     return MigrationContext(
         settings=settings,
-        config=build_alembic_config(
-            settings,
-            additional_version_locations=additional_version_locations,
-        ),
+        config=build_tortoise_config(settings),
     )
 
 
-def _logging_config_for_settings(settings: MigrationSettings) -> dict[str, Any]:
+def build_tortoise_config(settings: MigrationSettings) -> dict[str, Any]:
+    return build_config(database_url=settings.database_url, modules=settings.modules)
+
+
+def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
+    config_file = _write_tortoise_config_file(context.config)
     try:
-        logging_config: dict[str, Any] | None = logging_config_from_app_config(
-            settings.app_config
+        exit_code = asyncio.run(
+            tortoise_cli.run_cli_async(["--config-file", config_file.as_posix(), *args])
         )
-    except ValueError as exc:
-        raise MigrationConfigurationError(str(exc)) from exc
-
-    if logging_config is None:
-        raise MigrationConfigurationError("Migration logging config must not be None.")
-    return logging_config
-
-
-def _deduplicated_paths(paths: Sequence[Path]) -> tuple[Path, ...]:
-    return tuple(dict.fromkeys(path.resolve() for path in paths))
-
-
-def _initialise_database(config: Config, admin_database_url: str | None) -> None:
-    database_url = _database_url_from_config(config)
-
-    if is_postgresql_database_url(database_url):
-        provision_postgresql_database(database_url, admin_database_url)
-
-    _initialise_database_state(config, database_url)
-
-
-def _initialise_database_state(config: Config, database_url: str) -> None:
-    def initialise(connection: Any) -> None:
-        state = _migration_state_from_connection(connection)
-        if state.initialised and state.current_revisions:
-            click.echo("database: already initialised")
-            return
-
-        _run_alembic_with_connection(
-            config,
-            connection,
-            lambda: command.stamp(config, "base"),
-        )
-        click.echo("database: initialised")
-
-    _run_with_database_connection(database_url, initialise)
-
-
-def _upgrade_initialised_database(config: Config, revision: str) -> None:
-    database_url = _database_url_from_config(config)
-    database_path = sqlite_database_path(database_url)
-    if database_path is not None and not database_path.exists():
-        raise MigrationStateError(
-            "Database is not initialised; run `uv run wybra-migrate init` "
-            "for first-time schema setup before using `wybra-migrate upgrade`."
-        )
-
-    def upgrade(connection: Any) -> None:
-        state = _migration_state_from_connection(connection)
-        if not state.initialised:
-            raise MigrationStateError(
-                "Database is not initialised; run `uv run wybra-migrate init` "
-                "for first-time schema setup before using `wybra-migrate upgrade`."
-            )
-
-        _run_alembic_with_connection(
-            config,
-            connection,
-            lambda: command.upgrade(config, revision),
-        )
-
-    _run_with_database_connection(database_url, upgrade)
-
-
-def _run_alembic_with_connection(
-    config: Config,
-    connection: Any,
-    operation: Callable[[], None],
-) -> None:
-    previous_connection = config.attributes.get("connection")
-    config.attributes["connection"] = connection
-    try:
-        operation()
     finally:
-        if previous_connection is None:
-            config.attributes.pop("connection", None)
-        else:
-            config.attributes["connection"] = previous_connection
+        with suppress(OSError):
+            config_file.unlink()
 
-
-def _run_with_database_connection[T](
-    database_url: str,
-    operation: Callable[[Any], T],
-) -> T:
-    engine = create_database_engine(database_url)
-
-    async def run_operation() -> T:
-        operation_failed = False
-        try:
-            async with engine.begin() as connection:
-                return await connection.run_sync(operation)
-        except BaseException:
-            operation_failed = True
-            raise
-        finally:
-            if operation_failed:
-                with suppress(Exception):
-                    await close_database(engine)
-            else:
-                await close_database(engine)
-
-    return asyncio.run(run_operation())
-
-
-def _show_current_revision(config: Config) -> None:
-    state = inspect_migration_state(_database_url_from_config(config))
-    if not state.initialised:
-        click.echo("database: not initialised")
-        if state.detail:
-            click.echo(f"detail: {state.detail}")
-        click.echo("current revision: none")
-        click.echo("hint: run `uv run wybra-migrate init` for first-time setup")
-        return
-
-    if not state.current_revisions:
-        click.echo("database: initialised")
-        click.echo("current revision: base")
-        return
-
-    command.current(config)
-
-
-def inspect_migration_state(database_url: str) -> MigrationState:
-    """Inspect migration state using a database URL and managed connection."""
-
-    database_path = sqlite_database_path(database_url)
-    if database_path is not None and not database_path.exists():
-        return MigrationState(
-            initialised=False,
-            detail="SQLite database file does not exist.",
+    if exit_code:
+        command_name = args[0] if args else "<unknown>"
+        raise MigrationStateError(
+            "Tortoise migration command failed: "
+            f"command={command_name}, exit_code={exit_code}."
         )
 
-    return _run_with_database_connection(database_url, _migration_state_from_connection)
 
-
-def _migration_state_from_connection(connection: Any) -> MigrationState:
-    inspector = sqlalchemy_inspect(connection)
-    if not inspector.has_table(ALEMBIC_VERSION_TABLE):
-        return MigrationState(initialised=False)
-
-    version_table = Table(
-        ALEMBIC_VERSION_TABLE,
-        MetaData(),
-        autoload_with=connection,
+def _write_tortoise_config_file(config: dict[str, Any]) -> Path:
+    handle = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        suffix=".json",
+        delete=False,
     )
-
-    revisions = tuple(
-        str(row[0]) for row in connection.execute(select(version_table.c.version_num))
-    )
-    return MigrationState(initialised=True, current_revisions=revisions)
-
-
-def _database_url_from_config(config: Config) -> str:
-    database_url = config.get_main_option("sqlalchemy.url")
-    if database_url is None or not database_url.strip():
-        raise MigrationConfigurationError("Migration database URL is not configured.")
-    return database_url
-
-
-def migration_script_location(migrations_root: Path | None = None) -> str:
-    if migrations_root is None:
-        return DEFAULT_MIGRATIONS_SCRIPT_LOCATION
-
-    return migrations_root.as_posix()
-
-
-def migration_script_root(migrations_root: Path | None = None) -> Path | Traversable:
-    if migrations_root is None:
-        return resources.files("wybra.db") / "migrations"
-
-    return migrations_root
-
-
-def _alembic_config_value(value: str) -> str:
-    return value.replace("%", "%%")
+    with handle:
+        json.dump(config, handle, sort_keys=True)
+    return Path(handle.name)
 
 
 def _missing_settings_loader(

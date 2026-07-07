@@ -10,7 +10,7 @@ from wybra.auth.result import Result
 
 
 class AuthPersistenceError(RuntimeError):
-    """Base error raised by auth persistence adapters."""
+    """Base error raised by auth persistence workflows."""
 
 
 class DuplicateIdentityError(AuthPersistenceError):
@@ -21,7 +21,7 @@ type ChallengeKind = Literal["totp", "webauthn", "recovery-code"]
 
 
 class LocalUserRecord(Protocol):
-    """Storage-neutral shape consumed by local account services."""
+    """Local account shape consumed by local account services."""
 
     id: uuid.UUID
     email: str
@@ -39,7 +39,7 @@ class LocalUserRecord(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class IdentityEmailRecord:
-    """Storage-neutral owned email address."""
+    """Owned email address."""
 
     id: str
     user_id: str
@@ -50,7 +50,7 @@ class IdentityEmailRecord:
 
 @dataclass(frozen=True, slots=True)
 class ExternalIdentityRecord:
-    """Storage-neutral external provider identity."""
+    """External provider identity."""
 
     id: str
     provider_name: str
@@ -63,7 +63,7 @@ class ExternalIdentityRecord:
 
 @dataclass(frozen=True, slots=True)
 class ExternalIdentityLinkRecord:
-    """Storage-neutral link between a user and provider identity."""
+    """Link between a user and provider identity."""
 
     provider_id: str
     user_id: str
@@ -122,7 +122,7 @@ class WebAuthnCredentialRecord:
 
 
 class UserStore(Protocol):
-    """Storage-neutral local user store."""
+    """Local user persistence operations."""
 
     async def get(self, user_id: uuid.UUID) -> LocalUserRecord | None: ...
 
@@ -146,7 +146,7 @@ class UserStore(Protocol):
 
 
 class SessionTokenStore(Protocol):
-    """Storage-neutral browser session-token store."""
+    """Browser session-token persistence operations."""
 
     async def create(self, user: LocalUserRecord) -> str: ...
 
@@ -163,7 +163,7 @@ class SessionTokenStore(Protocol):
 
 
 class IdentityEmailStore(Protocol):
-    """Storage-neutral owned email operations."""
+    """Owned email persistence operations."""
 
     async def get_user_by_email(self, email: str) -> LocalUserRecord | None: ...
 
@@ -182,7 +182,7 @@ class IdentityEmailStore(Protocol):
 
 
 class ExternalIdentityStore(Protocol):
-    """Storage-neutral external provider identity operations."""
+    """External provider identity operations."""
 
     async def get_provider_by_identity(
         self,
@@ -215,7 +215,7 @@ class ExternalIdentityStore(Protocol):
 
 
 class InitialAdminBootstrapStore(Protocol):
-    """Storage-neutral initial-administrator bootstrap operations."""
+    """Initial-administrator bootstrap persistence operations."""
 
     async def find_administrative_user(self) -> LocalUserRecord | None: ...
 
@@ -223,7 +223,7 @@ class InitialAdminBootstrapStore(Protocol):
 
 
 class AuthorisationStore(Protocol):
-    """Storage-neutral group, scope, membership, and effective-scope operations."""
+    """Group, scope, membership, and effective-scope persistence operations."""
 
     async def list_groups(self) -> tuple[GroupRecord, ...]: ...
 
@@ -236,7 +236,7 @@ class AuthorisationStore(Protocol):
 
 
 class AuthManagementStore(Protocol):
-    """Storage-neutral auth management workflow store."""
+    """Auth management workflow persistence operations."""
 
     async def resolve_user_record(self, target: str) -> Result[dict[str, Any]]: ...
 
@@ -418,7 +418,7 @@ class AuthManagementStore(Protocol):
 
 
 class ChallengeStore(Protocol):
-    """Storage-neutral authentication challenge store."""
+    """Authentication challenge persistence operations."""
 
     async def create_challenge(
         self,
@@ -434,7 +434,7 @@ class ChallengeStore(Protocol):
 
 
 class TOTPCredentialStore(Protocol):
-    """Storage-neutral TOTP credential store."""
+    """TOTP credential persistence operations."""
 
     async def create_pending_totp_credential(
         self,
@@ -470,7 +470,7 @@ class TOTPCredentialStore(Protocol):
 
 
 class RecoveryCodeStore(Protocol):
-    """Storage-neutral single-use recovery code store."""
+    """Single-use recovery code persistence operations."""
 
     async def replace_recovery_codes(
         self,
@@ -483,7 +483,7 @@ class RecoveryCodeStore(Protocol):
 
 
 class WebAuthnCredentialStore(Protocol):
-    """Storage-neutral WebAuthn credential store."""
+    """WebAuthn credential persistence operations."""
 
     async def store_webauthn_credential(
         self,
@@ -578,17 +578,11 @@ class AuthPersistenceScope(Protocol):
 
     async def get_user_by_email(self, email: str) -> LocalUserRecord | None: ...
 
-    async def commit(self) -> None: ...
-
-    async def rollback(self) -> None: ...
-
-    async def flush(self) -> None: ...
-
 
 @runtime_checkable
 class AuthPersistenceCapability(Protocol):
     """Public auth persistence capability exposed through ``Site``."""
 
-    def session(self) -> AbstractAsyncContextManager[AuthPersistenceScope]: ...
+    def scope(self) -> AbstractAsyncContextManager[AuthPersistenceScope]: ...
 
     def transaction(self) -> AbstractAsyncContextManager[AuthPersistenceScope]: ...

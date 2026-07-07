@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import re
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import anyio
@@ -13,13 +12,14 @@ from fastapi.testclient import TestClient
 
 import wybra.media as media_module
 import wybra.media.capabilities as media_capabilities
+import wybra.media.models as media_models
 from support_database import sqlite_file_url
 from wybra.auth import models as auth_models  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core import InputValidationError
-from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
-from wybra.db.models import metadata
+from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
 from wybra.db.persistence import create_database
+from wybra.db.surfaces import discover_model_package
 from wybra.media import (
     FilesystemMediaCapability,
     MediaCapability,
@@ -32,11 +32,12 @@ from wybra.media import (
     MediaStorageReadinessError,
 )
 from wybra.media.models import MediaItem
-from wybra.media.persistence import SqlAlchemyMediaCatalogueRepository
+from wybra.media.persistence import (
+    MediaCatalogueRepository,
+    TortoiseMediaCatalogueRepository,
+)
 from wybra.media.validation import validate_media
 from wybra.site import Site, SiteCapabilityError, start
-
-_CREATED_SITES: list[Site] = []
 
 
 class FakeUpload:
@@ -69,7 +70,25 @@ def _config(
     )
 
 
-def _site_with_media_database(tmp_path: Path) -> Site:
+class UnusedMediaCatalogueRepository:
+    async def create_item(self, **_kwargs: object) -> MediaItem:
+        raise AssertionError("Media catalogue should not be used.")
+
+    async def get_item(self, _media_id: uuid.UUID) -> MediaItem | None:
+        raise AssertionError("Media catalogue should not be used.")
+
+    async def get_item_by_resource_key(self, _resource_key: str) -> MediaItem | None:
+        raise AssertionError("Media catalogue should not be used.")
+
+    async def assign_resource_key(
+        self,
+        _media_id: uuid.UUID,
+        _resource_key: str,
+    ) -> None:
+        raise AssertionError("Media catalogue should not be used.")
+
+
+async def _site_with_media_database(tmp_path: Path) -> Site:
     site = Site(
         app=FastAPI(),
         config=ConfigService(
@@ -77,34 +96,102 @@ def _site_with_media_database(tmp_path: Path) -> Site:
             discover_module_config=False,
         ),
     )
-    database = create_database(sqlite_file_url(tmp_path / "media.sqlite3"))
+    database = await create_database(
+        sqlite_file_url(tmp_path / "media.sqlite3"),
+        modules=("wybra.media",),
+    )
     site.provide_capability(
         DatabaseCapability,
-        SqlAlchemyDatabaseCapability.from_connections({"default": database}),
+        TortoiseDatabaseCapability(
+            database,
+            {"default": "default", "reader": "default", "writer": "default"},
+        ),
     )
-    _CREATED_SITES.append(site)
     return site
-
-
-@pytest.fixture(autouse=True)
-def close_created_sites():
-    yield
-    while _CREATED_SITES:
-        asyncio.run(_CREATED_SITES.pop().close())
 
 
 def _capability(
     tmp_path: Path,
     *,
     url_mode: str = "storage-key",
+    catalogue: MediaCatalogueRepository | None = None,
 ) -> FilesystemMediaCapability:
-    site = _site_with_media_database(tmp_path)
     return FilesystemMediaCapability(
         MediaSettings(root=tmp_path, url_mode=url_mode),
-        catalogue=SqlAlchemyMediaCatalogueRepository(
-            site.capability_proxy(DatabaseCapability)
-        ),
+        catalogue=catalogue or UnusedMediaCatalogueRepository(),
     )
+
+
+@pytest.fixture
+async def database_capability_factory() -> AsyncIterator[
+    Callable[..., Awaitable[FilesystemMediaCapability]]
+]:
+    sites: list[Site] = []
+
+    async def factory(
+        tmp_path: Path,
+        *,
+        url_mode: str = "storage-key",
+    ) -> FilesystemMediaCapability:
+        site = await _site_with_media_database(tmp_path)
+        sites.append(site)
+        return _capability(
+            tmp_path,
+            url_mode=url_mode,
+            catalogue=TortoiseMediaCatalogueRepository(
+                site.capability_proxy(DatabaseCapability)
+            ),
+        )
+
+    try:
+        yield factory
+    finally:
+        while sites:
+            await sites.pop().close()
+
+
+async def _asgi_get_status(
+    app: FastAPI,
+    path: str,
+    *,
+    raise_server_exceptions: bool = True,
+) -> int:
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [(b"host", b"testserver")],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+        "root_path": "",
+    }
+    response_status = 500
+    request_sent = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal request_sent
+        if request_sent:
+            return {"type": "http.disconnect"}
+        request_sent = True
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        nonlocal response_status
+        if message["type"] == "http.response.start":
+            response_status = int(message["status"])
+
+    try:
+        await app(scope, receive, send)
+    except Exception:
+        if raise_server_exceptions:
+            raise
+        return 500
+    return response_status
 
 
 def test_media_settings_resolve_defaults_from_project_root(tmp_path: Path) -> None:
@@ -135,18 +222,8 @@ def test_media_settings_resolve_configured_values(tmp_path: Path) -> None:
     assert settings.url_mode == "id"
 
 
-def test_media_metadata_exposes_media_item_table() -> None:
-    table = metadata.tables["media_item"]
-
-    assert table.c.category.nullable is False
-    assert table.c.storage_key.nullable is False
-
-
-def test_media_metadata_exposes_media_resource_key_table() -> None:
-    table = metadata.tables["media_resource_key"]
-
-    assert table.c.media_id.nullable is False
-    assert table.c.resource_key.nullable is False
+def test_media_model_surface_exposes_tortoise_models() -> None:
+    assert discover_model_package("wybra.media") == "wybra.media.models"
 
 
 def test_media_exceptions_inherit_from_media_error() -> None:
@@ -192,8 +269,9 @@ async def test_media_capability_rejects_invalid_categories(
     tmp_path: Path,
     category: str,
     message: str,
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
 
     with pytest.raises(InputValidationError, match=re.escape(message)) as excinfo:
         await capability.register(category=category, storage_key="profiles/avatar.png")
@@ -202,8 +280,11 @@ async def test_media_capability_rejects_invalid_categories(
 
 
 @pytest.mark.anyio
-async def test_media_capability_rejects_negative_media_size(tmp_path: Path) -> None:
-    capability = _capability(tmp_path)
+async def test_media_capability_rejects_negative_media_size(
+    tmp_path: Path,
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
+) -> None:
+    capability = await database_capability_factory(tmp_path)
 
     with pytest.raises(
         InputValidationError, match="Media size must not be negative"
@@ -221,8 +302,9 @@ async def test_media_capability_rejects_negative_media_size(tmp_path: Path) -> N
 async def test_media_capability_rejects_invalid_resource_keys(
     tmp_path: Path,
     resource_key: object,
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
 
     with pytest.raises(InputValidationError) as excinfo:
         await capability.register(
@@ -242,12 +324,9 @@ def test_media_capability_validates_writable_root(tmp_path: Path) -> None:
 
 
 def test_media_capability_rejects_missing_writable_root(tmp_path: Path) -> None:
-    site = _site_with_media_database(tmp_path)
     capability = FilesystemMediaCapability(
         MediaSettings(root=tmp_path / "missing"),
-        catalogue=SqlAlchemyMediaCatalogueRepository(
-            site.capability_proxy(DatabaseCapability)
-        ),
+        catalogue=UnusedMediaCatalogueRepository(),
     )
 
     with pytest.raises(MediaStorageReadinessError, match="does not exist") as excinfo:
@@ -275,8 +354,9 @@ def test_media_capability_reports_writable_root_probe_failures(
 async def test_media_capability_registers_catalogue_item_and_resolves_by_id(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
 
     item = await capability.register(
@@ -296,11 +376,41 @@ async def test_media_capability_registers_catalogue_item_and_resolves_by_id(
 
 
 @pytest.mark.anyio
+async def test_media_item_save_refreshes_modified_timestamp_for_partial_updates(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = await database_capability_factory(tmp_path)
+    await create_database_schema(capability)
+
+    item = await capability.register(
+        category="profile",
+        storage_key="profile/ab/cd/user.png",
+        content_type="image/png",
+        size=123,
+    )
+    updated_timestamp = item.modified_at + 10.0
+    monkeypatch.setattr(media_models.time, "time", lambda: updated_timestamp)
+
+    item.content_type = "image/jpeg"
+    database = capability.catalogue.database.require()
+    async with database.transaction() as connection:
+        await item.save(using_db=connection, update_fields=("content_type",))
+        stored = await MediaItem.get(id=item.id, using_db=connection)
+
+    assert stored.content_type == "image/jpeg"
+    assert stored.modified_at == updated_timestamp
+
+
+@pytest.mark.anyio
 async def test_media_capability_registers_and_resolves_resource_key(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
 
     item = await capability.register(
@@ -318,8 +428,9 @@ async def test_media_capability_registers_and_resolves_resource_key(
 async def test_media_capability_store_accepts_resource_key(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
 
     item = await capability.store(
@@ -338,8 +449,9 @@ async def test_media_capability_store_accepts_resource_key(
 async def test_media_capability_rejects_resource_key_reassignment(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
 
     first = await capability.register(
@@ -373,8 +485,9 @@ async def test_media_capability_rejects_resource_key_reassignment(
 async def test_media_capability_rejects_duplicate_resource_key_on_register(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
 
     first = await capability.register(
@@ -405,8 +518,9 @@ async def test_create_database_schema_reports_missing_database(
 async def test_media_capability_stores_upload_and_registers_catalogue_item(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
 
     item = await capability.store(
@@ -432,8 +546,9 @@ async def test_media_capability_reports_upload_write_failures_as_storage_operati
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
     media_uuid = uuid.UUID("12345678-1234-5678-1234-567812345678")
     temp_destination = tmp_path / ".tmp" / f"{media_uuid.hex}.user.png.tmp"
@@ -478,8 +593,9 @@ async def test_media_capability_cleans_temp_file_for_upload_read_failures(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
     media_uuid = uuid.UUID("87654321-4321-8765-4321-876543218765")
     temp_destination = tmp_path / ".tmp" / f"{media_uuid.hex}.user.png.tmp"
@@ -562,8 +678,9 @@ async def test_media_capability_rejects_invalid_upload_chunk_size(
 async def test_media_capability_resolves_id_url_mode(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path, url_mode="id")
+    capability = await database_capability_factory(tmp_path, url_mode="id")
     await create_database_schema(capability)
 
     item = await capability.register(
@@ -579,8 +696,9 @@ async def test_media_capability_resolves_id_url_mode(
 async def test_media_capability_rejects_unknown_resource_key(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
-    capability = _capability(tmp_path)
+    capability = await database_capability_factory(tmp_path)
     await create_database_schema(capability)
 
     with pytest.raises(MediaNotFoundError) as excinfo:
@@ -592,17 +710,16 @@ async def test_media_capability_rejects_unknown_resource_key(
 async def test_media_item_route_returns_not_found_for_missing_media(
     tmp_path: Path,
     create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
 ) -> None:
     app = FastAPI()
-    capability = _capability(tmp_path, url_mode="id")
+    capability = await database_capability_factory(tmp_path, url_mode="id")
     await create_database_schema(capability)
     site = Site(app=app, config=_config(tmp_path))
 
     media_module._register_media_item_route(site, capability)
 
-    response = TestClient(app).get(f"/media/items/{uuid.uuid4()}")
-
-    assert response.status_code == 404
+    assert await _asgi_get_status(app, f"/media/items/{uuid.uuid4()}") == 404
 
 
 @pytest.mark.anyio
@@ -711,12 +828,14 @@ async def test_media_setup_registers_capability_and_serves_files(
             }
         ),
     )
-
-    assert (
-        site.require_capability(MediaCapability).path_for_key("avatar.txt")
-        == (media_root / "avatar.txt").resolve()
-    )
-    assert TestClient(app).get("/media/avatar.txt").text == "avatar"
+    try:
+        assert (
+            site.require_capability(MediaCapability).path_for_key("avatar.txt")
+            == (media_root / "avatar.txt").resolve()
+        )
+        assert TestClient(app).get("/media/avatar.txt").text == "avatar"
+    finally:
+        await site.close()
 
 
 @pytest.mark.anyio
@@ -736,9 +855,11 @@ async def test_media_setup_registers_capability_before_database_exists(
             }
         ),
     )
-
-    assert site.has_capability(MediaCapability) is True
-    assert site.has_capability(DatabaseCapability) is True
+    try:
+        assert site.has_capability(MediaCapability) is True
+        assert site.has_capability(DatabaseCapability) is True
+    finally:
+        await site.close()
 
 
 @pytest.mark.anyio
@@ -762,7 +883,7 @@ async def test_media_post_setup_requires_database_capability(tmp_path: Path) -> 
 async def test_media_setup_skips_serving_when_disabled(tmp_path: Path) -> None:
     app = FastAPI()
 
-    await start(
+    site = await start(
         app,
         config_source=MappingConfigSource(
             {
@@ -775,5 +896,7 @@ async def test_media_setup_skips_serving_when_disabled(tmp_path: Path) -> None:
             }
         ),
     )
-
-    assert TestClient(app).get("/media/avatar.txt").status_code == 404
+    try:
+        assert TestClient(app).get("/media/avatar.txt").status_code == 404
+    finally:
+        await site.close()

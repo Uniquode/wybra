@@ -7,7 +7,8 @@ from typing import cast
 
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import MetaData, text
+from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.models import Model
 
 import wybra.db.migrate as migrate_module
 from support_database import sqlite_file_url
@@ -16,19 +17,14 @@ from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability
 from wybra.db.capabilities import (
     DatabaseCapabilityError,
-    SqlAlchemyDatabaseCapability,
+    TortoiseDatabaseCapability,
 )
-from wybra.db.migrate import (
-    DEFAULT_MIGRATIONS_SCRIPT_LOCATION,
-    migration_script_location,
-    migration_script_root,
-)
-from wybra.db.models import Base, metadata
+from wybra.db.models import Model as WybraModel
 from wybra.db.persistence import Database
 from wybra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
-    discover_model_metadata,
+    discover_model_package,
     migration_version_location_for_configured_module,
     migration_version_locations_from_modules,
     model_package_name,
@@ -85,15 +81,6 @@ def _imported_modules(path: Path) -> set[str]:
     return imported_modules
 
 
-def _create_migration_root(root: Path) -> Path:
-    versions_root = root / "versions"
-    versions_root.mkdir(parents=True)
-    (root / "env.py").write_text("", encoding="utf-8")
-    (root / "script.py.mako").write_text("", encoding="utf-8")
-
-    return root
-
-
 def _persistence_settings(
     tmp_path: Path,
     *,
@@ -103,9 +90,7 @@ def _persistence_settings(
 ) -> _PersistenceSettings:
     return _PersistenceSettings(
         database_url=database_url,
-        migrations_root=migrations_root
-        if migrations_root is not None
-        else _create_migration_root(tmp_path / "migrations"),
+        migrations_root=migrations_root,
         configured_modules=modules,
     )
 
@@ -137,10 +122,13 @@ async def test_wybra_db_setup_site_registers_database_capability(
 ) -> None:
     site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
 
-    database = site.require_capability(DatabaseCapability)
+    try:
+        database = site.require_capability(DatabaseCapability)
 
-    assert site.has_capability(DatabaseCapability) is True
-    assert isinstance(database, DatabaseCapability)
+        assert site.has_capability(DatabaseCapability) is True
+        assert isinstance(database, DatabaseCapability)
+    finally:
+        await site.close()
 
 
 @pytest.mark.anyio
@@ -150,7 +138,7 @@ async def test_database_capability_exposes_public_connection_helper(
     site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
     database = site.require_capability(DatabaseCapability)
     try:
-        assert isinstance(database.connection(), Database)
+        assert isinstance(database.connection(), BaseDBAsyncClient)
     finally:
         await database.close()
 
@@ -173,9 +161,8 @@ async def test_wybra_db_setup_site_resolves_relative_database_url(
     )
     database = site.require_capability(DatabaseCapability)
     try:
-        async with database.session() as session:
-            await session.execute(text("CREATE TABLE runtime_probe (id INTEGER)"))
-            await session.commit()
+        async with database.transaction() as connection:
+            await connection.execute_script("CREATE TABLE runtime_probe (id INTEGER)")
 
         assert (tmp_path / "relative.sqlite3").exists()
     finally:
@@ -198,9 +185,10 @@ async def test_database_capability_provides_clean_sessions(
     site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
     database = site.require_capability(DatabaseCapability)
     try:
-        async with database.session() as first_session:
-            async with database.session() as second_session:
-                assert first_session is not second_session
+        first_connection = database.connection()
+        second_connection = database.connection()
+
+        assert first_connection is second_connection
     finally:
         await database.close()
 
@@ -212,23 +200,28 @@ async def test_database_capability_transaction_commits_and_rolls_back(
     site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
     database = site.require_capability(DatabaseCapability)
     try:
-        async with database.transaction() as session:
-            await session.execute(text("create table records (value text not null)"))
-            await session.execute(text("insert into records values ('committed')"))
+        async with database.transaction() as connection:
+            await connection.execute_script(
+                "create table records (value text not null)"
+            )
+            await connection.execute_query(
+                "insert into records values (?)",
+                ["committed"],
+            )
 
         with pytest.raises(RuntimeError, match="rollback"):
-            async with database.transaction() as session:
-                await session.execute(
-                    text("insert into records values ('rolled-back')")
+            async with database.transaction() as connection:
+                await connection.execute_query(
+                    "insert into records values (?)",
+                    ["rolled-back"],
                 )
                 raise RuntimeError("rollback")
 
-        async with database.session() as session:
-            rows = (
-                await session.execute(text("select value from records order by value"))
-            ).all()
+        _row_count, rows = await database.connection().execute_query(
+            "select value from records order by value"
+        )
 
-        assert rows == [("committed",)]
+        assert [row["value"] for row in rows] == ["committed"]
     finally:
         await database.close()
 
@@ -240,9 +233,10 @@ async def test_database_capability_supports_named_connection_aliases(
     site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
     database = site.require_capability(DatabaseCapability)
     try:
-        async with database.session("reader") as reader_session:
-            async with database.transaction("writer") as writer_session:
-                assert reader_session is not writer_session
+        reader_connection = database.connection("reader")
+        assert reader_connection is database.connection("default")
+        async with database.transaction("writer") as writer_connection:
+            assert callable(writer_connection.execute_query)
     finally:
         await database.close()
 
@@ -257,7 +251,7 @@ async def test_database_capability_rejects_unknown_connection_name(
         with pytest.raises(
             DatabaseCapabilityError, match="Unknown database connection"
         ):
-            database.session("analytics")
+            database.connection("analytics")
     finally:
         await database.close()
 
@@ -272,7 +266,7 @@ async def test_database_capability_rejects_use_after_close(
     await database.close()
 
     with pytest.raises(DatabaseCapabilityError, match="Database capability is closed"):
-        database.session()
+        database.connection()
 
 
 @pytest.mark.anyio
@@ -280,30 +274,25 @@ async def test_database_capability_attempts_all_distinct_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first_database = cast(Database, object())
-    second_database = cast(Database, object())
     closed_databases: list[Database] = []
 
     async def close_or_fail(database: Database) -> None:
         closed_databases.append(database)
-        if database is first_database:
-            raise RuntimeError("close failed")
+        raise RuntimeError("close failed")
 
     monkeypatch.setattr(
         "wybra.db.capabilities.close_database",
         close_or_fail,
     )
-    database = SqlAlchemyDatabaseCapability.from_connections(
-        {
-            "default": first_database,
-            "reader": second_database,
-            "writer": first_database,
-        }
+    database = TortoiseDatabaseCapability(
+        first_database,
+        {"default": "default", "reader": "default", "writer": "default"},
     )
 
     with pytest.raises(DatabaseCapabilityError, match="error_count=1"):
         await database.close()
 
-    assert closed_databases == [first_database, second_database]
+    assert closed_databases == [first_database]
 
 
 def test_wybra_db_modules_do_not_import_application_or_auth_packages() -> None:
@@ -329,8 +318,8 @@ def test_wybra_db_package_is_included_in_build_modules() -> None:
     assert "wybra" in pyproject["tool"]["uv"]["build-backend"]["module-name"]
 
 
-def test_wybra_db_models_expose_shared_metadata() -> None:
-    assert metadata is Base.metadata
+def test_wybra_db_models_exposes_tortoise_model_base() -> None:
+    assert WybraModel is Model
 
 
 def test_wybra_db_owns_database_url_helpers(tmp_path: Path) -> None:
@@ -388,15 +377,6 @@ def test_resolve_database_url_preserves_relative_suffix(
     )
 
 
-def test_wybra_db_owns_default_migration_script_location() -> None:
-    script_root = migration_script_root()
-
-    assert migration_script_location() == DEFAULT_MIGRATIONS_SCRIPT_LOCATION
-    assert script_root.is_dir()
-    assert script_root.joinpath("env.py").is_file()
-    assert script_root.joinpath("script.py.mako").is_file()
-
-
 @pytest.mark.parametrize(
     ("database_url", "expected_error"),
     (
@@ -424,36 +404,31 @@ def test_validate_persistence_reports_database_url_failures(
     assert not result.is_ok
 
 
-def test_validate_persistence_fails_initialisation_when_migration_files_missing(
+def test_validate_persistence_requires_tortoise_migration_files(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    migrations_root = tmp_path / "migrations"
-    migrations_root.mkdir()
+    package_root = tmp_path / "models_with_empty_migrations"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "models.py").write_text(
+        (
+            "from tortoise import fields\n"
+            "from tortoise.models import Model\n\n"
+            "class Example(Model):\n"
+            "    id = fields.IntField(primary_key=True)\n"
+        ),
+        encoding="utf-8",
+    )
+    (package_root / "migrations").mkdir(parents=True)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
 
     result = validate_persistence(
-        _persistence_settings(tmp_path, migrations_root=migrations_root)
+        _persistence_settings(tmp_path, modules=("models_with_empty_migrations",))
     )
 
-    assert "Missing Alembic migration file:" in _failed_check_descriptions(
-        result.errors
-    )
-    assert "Development database initialisation requires migrations." in result.errors
-    assert not _check_passed(
-        result,
-        "development database initialisation command is available",
-    )
-
-
-def test_validate_persistence_checks_programmatic_migration_root(
-    tmp_path: Path,
-) -> None:
-    migrations_root = tmp_path / "missing-migrations"
-
-    result = validate_persistence(
-        _persistence_settings(tmp_path, migrations_root=migrations_root)
-    )
-
-    assert f"Missing Alembic migrations root: {migrations_root}" in result.errors
+    assert "At least one Tortoise migration file is required." in result.errors
     assert "Development database initialisation requires migrations." in result.errors
     assert not _check_passed(
         result,
@@ -486,7 +461,12 @@ def test_validate_persistence_requires_migrations_for_configured_model_surface(
     package_root.mkdir()
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (package_root / "models.py").write_text(
-        "from sqlalchemy import MetaData\nmetadata = MetaData()\n",
+        (
+            "from tortoise import fields\n"
+            "from tortoise.models import Model\n\n"
+            "class Example(Model):\n"
+            "    id = fields.IntField(primary_key=True)\n"
+        ),
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -515,12 +495,17 @@ def test_validate_persistence_accepts_configured_model_surface_with_migration(
     package_root.mkdir()
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (package_root / "models.py").write_text(
-        "from sqlalchemy import MetaData\nmetadata = MetaData()\n",
+        (
+            "from tortoise import fields\n"
+            "from tortoise.models import Model\n\n"
+            "class Example(Model):\n"
+            "    id = fields.IntField(primary_key=True)\n"
+        ),
         encoding="utf-8",
     )
-    versions_root = package_root / "migrations" / "versions"
-    versions_root.mkdir(parents=True)
-    (versions_root / "0001_initial.py").write_text(
+    migrations_root = package_root / "migrations"
+    migrations_root.mkdir(parents=True)
+    (migrations_root / "0001_initial.py").write_text(
         "revision = '0001'\ndown_revision = None\n",
         encoding="utf-8",
     )
@@ -535,7 +520,7 @@ def test_validate_persistence_accepts_configured_model_surface_with_migration(
         "At least one configured module migration version location is required."
         not in result.errors
     )
-    assert "At least one Alembic migration revision is required." not in result.errors
+    assert "At least one Tortoise migration file is required." not in result.errors
     assert _check_passed(
         result,
         "development database initialisation command is available",
@@ -597,14 +582,12 @@ def test_migration_version_locations_are_discovered_from_configured_modules(
     )
 
     assert len(version_locations) == 2
-    assert (
-        version_locations[0].as_posix().endswith("wybra/sessions/migrations/versions")
-    )
-    assert version_locations[1].as_posix().endswith("wybra/auth/migrations/versions")
+    assert version_locations[0].as_posix().endswith("wybra/sessions/migrations")
+    assert version_locations[1].as_posix().endswith("wybra/auth/migrations")
     assert discover_migration_version_locations("host_app") == ()
 
 
-def test_run_migration_dispatches_through_backend_boundary(
+def test_run_migration_dispatches_through_tortoise_backend_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -615,17 +598,21 @@ def test_run_migration_dispatches_through_backend_boundary(
     calls: list[migrate_module.MigrationContext] = []
 
     class RecordingMigrationBackend:
-        def current(self, context: migrate_module.MigrationContext) -> None:
+        def heads(
+            self,
+            context: migrate_module.MigrationContext,
+            _app_labels: tuple[str, ...],
+        ) -> None:
             calls.append(context)
 
     backend = RecordingMigrationBackend()
-    monkeypatch.setattr(migrate_module, "AlembicMigrationBackend", lambda: backend)
+    monkeypatch.setattr(migrate_module, "TortoiseMigrationBackend", lambda: backend)
 
     result = migrate_module._run_migration(
         lambda _database_url: settings,
         None,
         None,
-        lambda migration_backend, context: migration_backend.current(context),
+        lambda migration_backend, context: migration_backend.heads(context, ()),
     )
 
     assert result == 0
@@ -649,7 +636,12 @@ def test_model_packages_from_modules_uses_conventional_models_surface(
     package_root.mkdir()
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     (package_root / "models.py").write_text(
-        "from sqlalchemy import MetaData\nmetadata = MetaData()\n",
+        (
+            "from tortoise import fields\n"
+            "from tortoise.models import Model\n\n"
+            "class Example(Model):\n"
+            "    id = fields.IntField(primary_key=True)\n"
+        ),
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -660,10 +652,10 @@ def test_model_packages_from_modules_uses_conventional_models_surface(
         "wybra.sessions.models",
         "models_surface_app.models",
     )
-    assert isinstance(discover_model_metadata("models_surface_app"), MetaData)
+    assert discover_model_package("models_surface_app") == "models_surface_app.models"
 
 
-def test_discover_model_metadata_rejects_malformed_present_surface(
+def test_discover_model_package_ignores_modules_without_tortoise_models(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -674,8 +666,4 @@ def test_discover_model_metadata_rejects_malformed_present_surface(
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
 
-    with pytest.raises(
-        DataCompositionError,
-        match="bad_models_surface_app.models.*must expose SQLAlchemy metadata",
-    ):
-        discover_model_metadata("bad_models_surface_app")
+    assert discover_model_package("bad_models_surface_app") is None

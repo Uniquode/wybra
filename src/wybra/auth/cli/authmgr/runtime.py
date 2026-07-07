@@ -15,7 +15,7 @@ import click
 from wybra.auth.admin.management import (
     ERROR_NO_CHANGES,
 )
-from wybra.auth.persistence import auth_persistence_session
+from wybra.auth.persistence import auth_persistence_scope
 from wybra.auth.persistence.contracts import AuthManagementStore, AuthPersistenceScope
 from wybra.auth.result import Result
 from wybra.auth.settings import AuthSettings
@@ -77,10 +77,13 @@ def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
 
 async def _main_async(args: AuthmgrArgs, *, config_source: str | None = None) -> int:
     settings = _load_command_settings_for_command(config_source=config_source)
-    database = create_database(settings.auth.database_url)
+    database = await create_database(
+        settings.auth.database_url,
+        modules=("wybra.auth",),
+    )
     try:
         await verify_identity_schema_for_database(database)
-        async with auth_persistence_session(
+        async with auth_persistence_scope(
             database,
             secret_service=settings.secret_service,
         ) as scope:

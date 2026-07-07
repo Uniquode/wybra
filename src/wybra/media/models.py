@@ -2,58 +2,67 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Float, ForeignKey, Index, Integer, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from tortoise import fields
+from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.indexes import Index
+from tortoise.models import Model
 
-from wybra.db.models import Base, metadata
-from wybra.db.types import GUID
 
-
-class MediaItem(Base):
+class MediaItem(Model):
     """Catalogued media item stored under the configured media root."""
 
-    __tablename__ = "media_item"
-    __table_args__ = (
-        UniqueConstraint("storage_key", name="uq_media_item_storage_key"),
-        Index("ix_media_item_category", "category"),
-        Index("ix_media_item_created_at", "created_at"),
-    )
+    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    category = fields.CharField(max_length=120)
+    storage_key = fields.CharField(max_length=1024, unique=True)
+    content_type = fields.CharField(max_length=255, null=True)
+    size = fields.IntField()
+    created_at = fields.FloatField(default=time.time)
+    modified_at = fields.FloatField(default=time.time)
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID,
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    category: Mapped[str] = mapped_column(String(length=120), nullable=False)
-    storage_key: Mapped[str] = mapped_column(String(length=1024), nullable=False)
-    content_type: Mapped[str | None] = mapped_column(String(length=255), nullable=True)
-    size: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[float] = mapped_column(
-        Float,
-        default=time.time,
-        nullable=False,
-    )
-    modified_at: Mapped[float] = mapped_column(
-        Float,
-        default=time.time,
-        onupdate=time.time,
-        nullable=False,
-    )
+    class Meta:
+        table = "media_item"
+        indexes = (
+            Index(fields=("category",)),
+            Index(fields=("created_at",)),
+        )
+
+    async def save(
+        self,
+        using_db: BaseDBAsyncClient | None = None,
+        update_fields: Iterable[str] | None = None,
+        force_create: bool = False,
+        force_update: bool = False,
+    ) -> None:
+        self.modified_at = time.time()
+        if update_fields is not None and "modified_at" not in update_fields:
+            update_fields = (*update_fields, "modified_at")
+        await super().save(
+            using_db=using_db,
+            update_fields=update_fields,
+            force_create=force_create,
+            force_update=force_update,
+        )
 
 
-class MediaResourceKey(Base):
+class MediaResourceKey(Model):
     """Lookup key assigned to a media item for stable resource references."""
 
-    __tablename__ = "media_resource_key"
-    __table_args__ = (Index("ix_media_resource_key_media_id", "media_id"),)
+    if TYPE_CHECKING:
+        media_id: uuid.UUID
 
-    resource_key: Mapped[str] = mapped_column(String(length=255), primary_key=True)
-    media_id: Mapped[uuid.UUID] = mapped_column(
-        GUID,
-        ForeignKey("media_item.id", ondelete="CASCADE"),
-        nullable=False,
+    resource_key = fields.CharField(max_length=255, primary_key=True)
+    media = fields.ForeignKeyField(
+        "wybra_media.MediaItem",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
     )
 
+    class Meta:
+        table = "media_resource_key"
 
-__all__ = ("MediaItem", "MediaResourceKey", "metadata")
+
+__all__ = ("MediaItem", "MediaResourceKey")

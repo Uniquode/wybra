@@ -71,7 +71,7 @@ def test_merge_logging_config_adds_to_defaults_when_not_authoritative() -> None:
     assert config["formatters"]["simple"]["format"] == (
         "%(levelname)s %(name)s: %(message)s"
     )
-    assert config["loggers"]["alembic"]["level"] == "INFO"
+    assert config["loggers"]["tortoise"]["level"] == "INFO"
     assert config["loggers"]["urllib3"]["propagate"] is False
     assert config["root"]["handlers"] == ["console", "file"]
 
@@ -93,7 +93,7 @@ def test_merge_logging_config_authoritative_with_disable_existing_loggers() -> N
         "root": {"level": "ERROR", "handlers": []},
     }
     assert "formatters" not in config
-    assert "alembic" not in config
+    assert "tortoise" not in config
 
 
 def test_merge_logging_config_authoritative_injects_required_version() -> None:
@@ -108,7 +108,7 @@ def test_merge_logging_config_authoritative_injects_required_version() -> None:
     assert config["version"] == 1
     assert config["disable_existing_loggers"] is True
     assert "formatters" not in config
-    assert "alembic" not in config
+    assert "tortoise" not in config
 
 
 def test_merge_logging_config_rejects_non_table() -> None:

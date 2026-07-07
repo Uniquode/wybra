@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-from sqlalchemy import Float, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
-
-from wybra.db.models import Base, metadata
+from tortoise import fields
+from tortoise.models import Model
 
 
-class SessionRecordModel(Base):
+class SessionRecordModel(Model):
     """Server-side request session persisted by the database backend."""
 
-    __tablename__ = "sessions_session"
+    id = fields.CharField(max_length=128, primary_key=True)
+    data = fields.TextField()
+    created_at = fields.FloatField()
+    updated_at = fields.FloatField()
+    expires_at = fields.FloatField(db_index=True)
 
-    id: Mapped[str] = mapped_column(String(length=128), primary_key=True)
-    data: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
-    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    class Meta:
+        table = "sessions_session"
 
 
-__all__ = ("SessionRecordModel", "metadata")
+__all__ = ("SessionRecordModel",)

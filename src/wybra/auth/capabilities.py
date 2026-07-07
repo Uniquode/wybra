@@ -8,12 +8,12 @@ from typing import Protocol, runtime_checkable
 
 from fastapi import Request
 from fastapi.responses import Response
-from sqlalchemy.exc import SQLAlchemyError
+from tortoise.exceptions import BaseORMException
 
 from wybra.auth.delivery import NullIdentityDelivery
 from wybra.auth.models import User
 from wybra.auth.persistence.contracts import AuthPersistenceCapability
-from wybra.auth.persistence.strategies import SqlAlchemyAuthPersistenceCapability
+from wybra.auth.persistence.strategies import TortoiseAuthPersistenceCapability
 from wybra.auth.sessions import (
     clear_marked_session_cookie,
     mark_session_cookie_for_clearing,
@@ -111,7 +111,7 @@ async def setup_site(site: Site) -> None:
     site.provide_capability(AuthCapability, capability)
     site.provide_capability(
         AuthPersistenceCapability,
-        SqlAlchemyAuthPersistenceCapability(
+        TortoiseAuthPersistenceCapability(
             site.capability_proxy(DatabaseCapability),
             secret_service_resolver=lambda: _current_secret_envelope_service(site),
         ),
@@ -124,7 +124,7 @@ async def post_setup_site(site: Site) -> None:
     site.require_capability(FormsCapability)
     site.require_capability(AuthCapability)
     persistence = site.require_capability(AuthPersistenceCapability)
-    if isinstance(persistence, SqlAlchemyAuthPersistenceCapability):
+    if isinstance(persistence, TortoiseAuthPersistenceCapability):
         persistence.database.finalise_required()
     site.app.state.secret_envelope_service = _secret_envelope_service(
         site,
@@ -210,7 +210,7 @@ def _auth_capability_from_request(request: Request) -> AuthCapability:
 async def _safe_optional_current_user(request: Request) -> User | None:
     try:
         return await _optional_current_user(request)
-    except SQLAlchemyError as exc:
+    except BaseORMException as exc:
         logger.warning(
             "Auth optional current user lookup failed.",
             extra={

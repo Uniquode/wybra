@@ -39,8 +39,8 @@ Repository: <https://github.com/Uniquode/wybra>
   safe fallback responses, renderer coordination, and error validation.
 - `wybra.api`: API request classification, response formatting, error payloads,
   HATEOAS-style paging metadata, streaming responses, and API validation.
-- `wybra.db`: SQLAlchemy metadata conventions, async database helpers, database
-  URL handling, and Alembic command/configuration support.
+- `wybra.db`: Tortoise ORM configuration, async database helpers, database URL
+  handling, and native migration command support.
 - `wybra.secrets`: runtime secret lookup from consumer-selected sources,
   including environment variables, AWS Secrets Manager, OS keychains, and Vault.
 - `wybra.tools`: generic project command adapters and validation target
@@ -124,10 +124,9 @@ dependencies can be finalised with `finalise_optional()` and handled by the
 consuming module's fallback behaviour.
 
 Runtime modules should expose behaviour through Wybra-owned capabilities and
-repository or unit-of-work interfaces. SQLAlchemy sessions, statements, and
-adapter errors belong inside the current SQLAlchemy adapter layer rather than
-in host-facing capability contracts. This keeps the runtime surface ready for
-alternate persistence adapters without changing application code.
+domain-focused persistence interfaces where that keeps call sites clear.
+Tortoise models, queries, and transactions belong inside the modules that own
+the affected data rather than in host-facing capability contracts.
 
 Current hard dependencies include auth, media, and profile data access, auth on
 forms for protected browser form routes, widgets on templates, widgets on forms
@@ -378,8 +377,8 @@ Wybra publishes prefixed console scripts to avoid collisions with host
 application or environment-specific tooling:
 
 - `wybra-runserver`: start the configured ASGI application with Uvicorn.
-- `wybra-migrate`: run migrations for the configured application through the
-  current Alembic backend.
+- `wybra-migrate`: run native Tortoise migrations for the configured
+  application.
 - `wybra-collect`: collect configured module static assets for deployment.
 - `wybra-routes`: inspect the configured application's installed route tree.
 - `wybra-validate`: run configured project validation targets.
@@ -499,10 +498,9 @@ are `asset_url`, `request`, `route_name`, `csrf_field_name`,
 
 ## Migration Workflow
 
-`wybra-migrate` resolves app configuration once, builds a Wybra migration
-context, and dispatches lifecycle operations through the configured migration
-backend. The default backend is Alembic and preserves the existing command
-arguments and module-owned revision locations.
+`wybra-migrate` resolves app configuration once, builds a Tortoise
+configuration for the configured Wybra modules, and dispatches lifecycle
+operations through Tortoise's native migration tooling.
 
 Provision a first-time managed database and initialise migration state
 explicitly:
@@ -513,10 +511,10 @@ uv run wybra-migrate --config config/app.toml init
 ```
 
 `init` stops after infrastructure and migration-state setup. After migration
-state exists, apply schema revisions with:
+state exists, apply schema migrations with:
 
 ```sh
-uv run wybra-migrate upgrade
+uv run wybra-migrate migrate
 ```
 
 For PostgreSQL, `init` provisions the database, user, role, and privileges.
@@ -526,21 +524,24 @@ dbscripts-compatible `SA_DATABASE_URL` environment variable.
 Inspect migration state without mutating the database:
 
 ```sh
-uv run wybra-migrate current
-uv run wybra-migrate --config config/app.toml current
+uv run wybra-migrate heads
+uv run wybra-migrate history
+uv run wybra-migrate --config config/app.toml heads
+uv run wybra-migrate --config config/app.toml history
 ```
 
-Create module-owned Alembic revisions through the project command:
+Create module-owned Tortoise migrations through the project command:
 
 ```sh
-uv run wybra-migrate revision --module wybra.auth --autogenerate -m "add identity field"
+uv run wybra-migrate makemigrations wybra_auth -n add_identity_field
 ```
 
-Revision files are placed in the selected configured module's conventional
-`migrations/versions/` directory. The normal roll-forward order is to upgrade
-the working database to the current head, update the owning module's models,
-generate the revision, review generated operations plus `down_revision` and
-`depends_on`, run `wybra-migrate upgrade`, then validate.
+Migration files are placed in the selected module's `migrations/` package. The
+normal roll-forward order is to migrate the working database to the current
+head, update the owning module's Tortoise models, generate the migration,
+review the generated operations, run `wybra-migrate migrate`, then validate.
+Use `wybra-migrate sqlmigrate <app_label> <migration>` to inspect the SQL for a
+specific migration before applying it.
 
 ## Route Inspection
 

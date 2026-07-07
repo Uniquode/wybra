@@ -110,10 +110,10 @@ def _passkey_login_context(
     }
 
 
-def _session_factory_from_request(
+def _persistence_scope_from_request(
     request: Request,
 ) -> Callable[[], AbstractAsyncContextManager[AuthPersistenceScope]]:
-    return get_site(request.app).require_capability(AuthPersistenceCapability).session
+    return get_site(request.app).require_capability(AuthPersistenceCapability).scope
 
 
 async def _load_user_by_id(
@@ -253,11 +253,11 @@ async def _create_totp_login_challenge(
     credential_id: str,
 ) -> tuple[str, str]:
     options = _identity_options(request)
-    session_factory = _session_factory_from_request(request)
+    scope_factory = _persistence_scope_from_request(request)
     now = current_timestamp()
     challenge_expires_at = now + options.totp_challenge_expiry_seconds
     login_nonce = generate_totp_login_nonce()
-    async with session_factory() as scope:
+    async with scope_factory() as scope:
         challenge = await scope.challenges.create_challenge(
             user_id=user_id,
             kind="totp",
@@ -267,7 +267,6 @@ async def _create_totp_login_challenge(
                 "totp_credential_id": credential_id,
             },
         )
-        await scope.commit()
         return challenge.id, login_nonce
 
 
@@ -277,11 +276,11 @@ async def _create_totp_setup_challenge(
     return_to: str,
 ) -> tuple[str, str]:
     options = _identity_options(request)
-    session_factory = _session_factory_from_request(request)
+    scope_factory = _persistence_scope_from_request(request)
     now = current_timestamp()
     challenge_expires_at = now + options.totp_challenge_expiry_seconds
     setup_nonce = generate_totp_setup_nonce()
-    async with session_factory() as scope:
+    async with scope_factory() as scope:
         challenge = await scope.challenges.create_challenge(
             user_id=user_id,
             kind="totp",
@@ -292,7 +291,6 @@ async def _create_totp_setup_challenge(
                 "return_to": return_to,
             },
         )
-        await scope.commit()
         return challenge.id, setup_nonce
 
 

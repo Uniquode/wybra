@@ -47,8 +47,8 @@ from .shared import (
     _is_effectively_active_user,
     _load_user_by_id,
     _login_error_response,
+    _persistence_scope_from_request,
     _require_authenticated_user,
-    _session_factory_from_request,
     _totp_setup_return_to,
     account_router,
     logger,
@@ -91,14 +91,12 @@ async def totp_setup(request: Request) -> Response:
         )
         setup_code = _form_value(form_data, "setup_totp_code").strip()
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         authenticated_user = await resolve_current_user(request)
         setup_challenge = None
         if setup_challenge_id:
             challenge = await scope.challenges.get_challenge(setup_challenge_id)
-            if challenge is None:
-                await scope.commit()
             if (
                 challenge is not None
                 and is_totp_setup_challenge(challenge)
@@ -148,7 +146,6 @@ async def totp_setup(request: Request) -> Response:
                 str(user.id),
                 generate_totp_secret(),
             )
-            await scope.commit()
 
         credential = await store.get_totp_credential(pending_credential_id)
         if credential is None:
@@ -221,8 +218,6 @@ async def totp_setup(request: Request) -> Response:
         if setup_challenge is not None:
             await scope.challenges.consume_challenge(setup_challenge.id)
 
-        await scope.commit()
-
         response = render_totp_setup_page(
             request,
             return_to=return_to,
@@ -280,8 +275,8 @@ async def disable_totp(request: Request) -> Response:
     ensure_totp_setup_supported(request)
     user = await _require_authenticated_user(request)
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         store = totp_credential_store(request, scope)
         active_credential_id = await store.get_active_totp_credential(str(user.id))
         if active_credential_id is None:
@@ -324,7 +319,6 @@ async def disable_totp(request: Request) -> Response:
             )
 
         await store.disable_totp_credential(active_credential_id)
-        await scope.commit()
 
     return RedirectResponse(url=_route_path(request, "auth:security"), status_code=303)
 
@@ -339,8 +333,8 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
     ensure_totp_setup_supported(request)
     user = await _require_authenticated_user(request)
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         store = totp_credential_store(request, scope)
         active_credential_id = await store.get_active_totp_credential(str(user.id))
         if active_credential_id is None:
@@ -381,7 +375,6 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
             active_credential_id,
             recovery_codes,
         )
-        await scope.commit()
 
     return _totp_action_confirmation_page(
         request,
@@ -434,11 +427,10 @@ async def reset_totp(request: Request) -> Response:
     if not await _fresh_primary_assertion_satisfied(request, user):
         return RedirectResponse(url="/account", status_code=303)
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         store = totp_credential_store(request, scope)
         await store.clear_totp_credentials(str(user.id))
-        await scope.commit()
 
     options = _identity_options(request)
     redirect_to = (

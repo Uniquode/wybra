@@ -2,31 +2,24 @@ from __future__ import annotations
 
 import time
 
-from sqlalchemy import Float, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from tortoise import fields
+from tortoise.indexes import Index
+from tortoise.models import Model
 
-from wybra.db.models import Base, metadata
 
-
-class MessageAlert(Base):
+class MessageAlert(Model):
     """Queued user-facing alert stored by the database messages backend."""
 
-    __tablename__ = "messages_alert"
-    __table_args__ = (
-        Index("ix_messages_alert_queue_key_id", "queue_key", "id"),
-        Index("ix_messages_alert_expires_at", "expires_at"),
-    )
+    id = fields.IntField(primary_key=True)
+    queue_key = fields.CharField(max_length=255)
+    severity = fields.CharField(max_length=16)
+    message = fields.TextField()
+    created_at = fields.FloatField(default=time.time)
+    expires_at = fields.FloatField(null=True, db_index=True)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    queue_key: Mapped[str] = mapped_column(String(length=255), nullable=False)
-    severity: Mapped[str] = mapped_column(String(length=16), nullable=False)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[float] = mapped_column(
-        Float,
-        default=time.time,
-        nullable=False,
-    )
-    expires_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    class Meta:
+        table = "messages_alert"
+        indexes = (Index(fields=("queue_key", "id")),)
 
 
-__all__ = ("MessageAlert", "metadata")
+__all__ = ("MessageAlert",)

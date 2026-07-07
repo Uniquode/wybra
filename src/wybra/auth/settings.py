@@ -18,7 +18,6 @@ from wybra.auth.options import (
     identity_env_setting_name,
     is_generate_local_identity_secret,
 )
-from wybra.auth.persistence.database import resolve_database_url
 from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup, to_bool
 from wybra.config.service import ConfigService
 from wybra.config.sources import AppConfigSource
@@ -35,6 +34,7 @@ from wybra.core.settings import (
     env_setting_is_set,
     values_from_env_settings,
 )
+from wybra.db.urls import resolve_database_url
 
 DATABASE_URL_ENV = "DATABASE_URL"
 AUTH_SETTINGS_OWNER: Final = "wybra.auth"

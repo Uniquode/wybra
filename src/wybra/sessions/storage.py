@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, cast, runtime_checkable
 
 from anyio import Path as AsyncPath
-from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
 
 from wybra.core.runtime import LOCAL_ENVIRONMENT
 from wybra.db import DatabaseCapability
@@ -402,17 +400,22 @@ class DatabaseSessionStorage:
 
     async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
         cleanup_data: dict[str, Any] | None = None
-        async with self.database.require().transaction(self.connection_name) as session:
-            row = await session.get(SessionRecordModel, session_id)
+        async with self.database.require().transaction(
+            self.connection_name
+        ) as connection:
+            row = await SessionRecordModel.get_or_none(
+                id=session_id,
+                using_db=connection,
+            )
             if row is None:
                 return None
             record = _record_from_database_row(row)
             if record is None:
-                await session.delete(row)
+                await row.delete(using_db=connection)
                 return None
             if row.expires_at <= now:
                 cleanup_data = dict(record.data)
-                await session.delete(row)
+                await row.delete(using_db=connection)
                 loaded = None
             else:
                 loaded = record
@@ -422,58 +425,32 @@ class DatabaseSessionStorage:
 
     async def save(self, session_id: str, record: SessionRecord) -> None:
         data = _session_data_json(record.data, max_bytes=self.payload_max_bytes)
-        async with self.database.require().transaction(self.connection_name) as session:
-            if await self._update_existing(session, session_id, record, data):
-                return
-            try:
-                async with session.begin_nested():
-                    session.add(
-                        SessionRecordModel(
-                            id=session_id,
-                            data=data,
-                            created_at=record.created_at,
-                            updated_at=record.updated_at,
-                            expires_at=record.expires_at,
-                        )
-                    )
-                    await session.flush()
-            except IntegrityError as exc:
-                updated_after_conflict = await self._update_existing(
-                    session,
-                    session_id,
-                    record,
-                    data,
-                )
-                if not updated_after_conflict:
-                    raise SessionStorageError(
-                        "Session record could not be saved after insert conflict."
-                    ) from exc
-
-    async def _update_existing(
-        self,
-        session: Any,
-        session_id: str,
-        record: SessionRecord,
-        data: str,
-    ) -> bool:
-        result = await session.execute(
-            update(SessionRecordModel)
-            .where(SessionRecordModel.id == session_id)
-            .values(
-                data=data,
-                updated_at=record.updated_at,
-                expires_at=record.expires_at,
+        async with self.database.require().transaction(
+            self.connection_name
+        ) as connection:
+            await SessionRecordModel.update_or_create(
+                id=session_id,
+                using_db=connection,
+                defaults={
+                    "data": data,
+                    "created_at": record.created_at,
+                    "updated_at": record.updated_at,
+                    "expires_at": record.expires_at,
+                },
             )
-        )
-        return bool(getattr(result, "rowcount", 0))
 
     async def delete(self, session_id: str) -> None:
         cleanup_data: dict[str, Any] | None = None
-        async with self.database.require().transaction(self.connection_name) as session:
-            row = await session.get(SessionRecordModel, session_id)
+        async with self.database.require().transaction(
+            self.connection_name
+        ) as connection:
+            row = await SessionRecordModel.get_or_none(
+                id=session_id,
+                using_db=connection,
+            )
             if row is not None:
                 cleanup_data = _session_data_from_json(row.data)
-                await session.delete(row)
+                await row.delete(using_db=connection)
         if cleanup_data is not None:
             await _cleanup_session_data(self.cleanup_registry, cleanup_data)
 
@@ -482,16 +459,19 @@ class DatabaseSessionStorage:
 
     async def cleanup(self, *, now: float) -> None:
         cleanup_records: list[dict[str, Any]] = []
-        async with self.database.require().transaction(self.connection_name) as session:
-            result = await session.execute(
-                select(SessionRecordModel).where(SessionRecordModel.expires_at <= now)
+        async with self.database.require().transaction(
+            self.connection_name
+        ) as connection:
+            rows = tuple(
+                await SessionRecordModel.filter(expires_at__lte=now)
+                .using_db(connection)
+                .all()
             )
-            rows = tuple(result.scalars())
             for row in rows:
                 cleanup_data = _session_data_from_json(row.data)
                 if cleanup_data is not None:
                     cleanup_records.append(cleanup_data)
-                await session.delete(row)
+                await row.delete(using_db=connection)
         for cleanup_data in cleanup_records:
             await _cleanup_session_data(self.cleanup_registry, cleanup_data)
 

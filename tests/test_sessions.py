@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,11 +12,11 @@ from fastapi.testclient import TestClient
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
-from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
+from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
 from wybra.db.persistence import close_database, create_database
 from wybra.db.surfaces import (
     discover_migration_version_locations,
-    metadata_from_model_package,
+    discover_model_package,
     migration_version_locations_from_modules,
     model_packages_from_modules,
 )
@@ -97,6 +96,26 @@ def _record(
         updated_at=updated_at,
         expires_at=expires_at,
     )
+
+
+async def _database_capability(
+    *,
+    modules: tuple[str, ...] = ("wybra.sessions",),
+) -> tuple[object, TortoiseDatabaseCapability]:
+    database = await create_database(
+        "sqlite+aiosqlite:///:memory:",
+        modules=modules,
+    )
+    capability = TortoiseDatabaseCapability(
+        database,
+        {"default": "default", "reader": "default", "writer": "default"},
+    )
+    try:
+        await database.context.generate_schemas()
+    except Exception:
+        await close_database(database)
+        raise
+    return database, capability
 
 
 def test_sessions_settings_defaults_to_cookie_for_local_deployments() -> None:
@@ -261,8 +280,7 @@ async def test_cache_storage_supports_memory_url() -> None:
 
 @pytest.mark.anyio
 async def test_database_storage_persists_session_records() -> None:
-    database = create_database("sqlite+aiosqlite:///:memory:")
-    capability = SqlAlchemyDatabaseCapability.from_connections({"default": database})
+    database, capability = await _database_capability()
     app = FastAPI()
     site = Site(app=app, config=ConfigService([], discover_module_config=False))
     site.provide_capability(DatabaseCapability, capability)
@@ -273,17 +291,17 @@ async def test_database_storage_persists_session_records() -> None:
     )
 
     try:
-        async with database.engine.begin() as connection:
-            await connection.run_sync(SessionRecordModel.__table__.create)
-
         await storage.save("session", _record(data={"value": "database"}))
         assert await storage.load("session", now=2.0) == _record(
             data={"value": "database"}
         )
-        async with capability.transaction("default") as session:
-            row = await session.get(SessionRecordModel, "session")
+        async with capability.transaction("default") as connection:
+            row = await SessionRecordModel.get_or_none(
+                id="session",
+                using_db=connection,
+            )
             assert row is not None
-            assert json.loads(row.data) == {"value": "database"}
+            assert row.data == '{"value":"database"}'
             assert row.created_at == 1.0
             assert row.updated_at == 1.0
             assert row.expires_at == 60.0
@@ -305,12 +323,11 @@ async def test_database_storage_persists_session_records() -> None:
 
 
 def test_core_model_and_migration_surfaces_include_sessions() -> None:
-    metadata = metadata_from_model_package("wybra.sessions.models")
     model_packages = model_packages_from_modules(())
     migration_locations = migration_version_locations_from_modules(())
     discovered_locations = discover_migration_version_locations("wybra.sessions")
 
-    assert "sessions_session" in metadata.tables
+    assert discover_model_package("wybra.sessions") == "wybra.sessions.models"
     assert "wybra.sessions.models" in model_packages
     assert discovered_locations
     assert discovered_locations[0] in migration_locations

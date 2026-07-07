@@ -180,14 +180,14 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
 @click.option(
     "--database-url",
     help=(
-        "Override the configured SQLAlchemy async database URL. Verbose output "
+        "Override the configured async database URL. Verbose output "
         "redacts embedded credentials."
     ),
 )
 @click.option(
     "--migrations-root",
     type=click.Path(path_type=Path),
-    help="Override the configured Alembic migrations root.",
+    help="Override the configured migration resource root.",
 )
 @click.argument("targets", nargs=-1)
 def validate_command(

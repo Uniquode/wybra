@@ -51,7 +51,7 @@ from .shared import (
     _identity_options,
     _is_effectively_active_user,
     _load_user_by_id,
-    _session_factory_from_request,
+    _persistence_scope_from_request,
     account_router,
 )
 
@@ -71,8 +71,8 @@ async def passkey_register_options(
     user: User = LOGIN_REQUIRED,
 ) -> JSONResponse:
     _ensure_passkeys_supported(request)
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
@@ -106,7 +106,6 @@ async def passkey_register_options(
                 user_handle=db_user.id.bytes,
             ),
         )
-        await scope.commit()
 
     return JSONResponse(
         {
@@ -133,35 +132,36 @@ async def passkey_register_complete(
     if challenge_id is None or credential is None:
         return _json_error(PASSKEY_GENERIC_ERROR)
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
-        db_user = await _load_user_by_id(scope, user.id)
-        if db_user is None:
-            raise HTTPException(status_code=401, detail="Authentication required.")
-        db_user_id = str(db_user.id)
-        if not db_user.is_verified:
-            return _json_error(
-                "Verify your email before adding a passkey.",
-                status_code=403,
-            )
+    scope_factory = _persistence_scope_from_request(request)
+    db_user_id: str | None = None
+    try:
+        async with scope_factory() as scope:
+            db_user = await _load_user_by_id(scope, user.id)
+            if db_user is None:
+                raise HTTPException(status_code=401, detail="Authentication required.")
+            db_user_id = str(db_user.id)
+            if not db_user.is_verified:
+                return _json_error(
+                    "Verify your email before adding a passkey.",
+                    status_code=403,
+                )
 
-        challenge = await scope.challenges.get_challenge(challenge_id)
-        if (
-            challenge is None
-            or challenge.kind != "webauthn"
-            or challenge.user_id != db_user_id
-            or not challenge_has_purpose(
-                challenge.metadata_payload,
-                WEBAUTHN_REGISTRATION_PURPOSE,
-            )
-        ):
-            return _json_error(PASSKEY_GENERIC_ERROR)
+            challenge = await scope.challenges.get_challenge(challenge_id)
+            if (
+                challenge is None
+                or challenge.kind != "webauthn"
+                or challenge.user_id != db_user_id
+                or not challenge_has_purpose(
+                    challenge.metadata_payload,
+                    WEBAUTHN_REGISTRATION_PURPOSE,
+                )
+            ):
+                return _json_error(PASSKEY_GENERIC_ERROR)
 
-        expected_challenge = challenge_from_metadata(challenge.metadata_payload)
-        if expected_challenge is None:
-            return _json_error(PASSKEY_GENERIC_ERROR)
+            expected_challenge = challenge_from_metadata(challenge.metadata_payload)
+            if expected_challenge is None:
+                return _json_error(PASSKEY_GENERIC_ERROR)
 
-        try:
             verified = verify_passkey_registration(
                 _identity_options(request),
                 credential=credential,
@@ -180,19 +180,16 @@ async def passkey_register_complete(
                 aaguid=verified.aaguid,
                 attestation_format=verified.attestation_format,
             )
-        except (AuthPersistenceError, WebAuthnCeremonyError) as exc:
-            await scope.rollback()
             await scope.challenges.consume_challenge(challenge_id)
-            await scope.commit()
-            logger.warning(
-                "Passkey registration rejected: user_id=%s reason=%s",
-                db_user_id,
-                getattr(exc, "reason", type(exc).__name__),
-            )
-            return _json_error(PASSKEY_GENERIC_ERROR)
-
-        await scope.challenges.consume_challenge(challenge_id)
-        await scope.commit()
+    except (AuthPersistenceError, WebAuthnCeremonyError) as exc:
+        async with scope_factory() as scope:
+            await scope.challenges.consume_challenge(challenge_id)
+        logger.warning(
+            "Passkey registration rejected: user_id=%s reason=%s",
+            db_user_id,
+            getattr(exc, "reason", type(exc).__name__),
+        )
+        return _json_error(PASSKEY_GENERIC_ERROR)
 
     return JSONResponse(
         {
@@ -215,8 +212,8 @@ async def passkey_login_options(request: Request) -> JSONResponse:
     if email is None:
         return _json_error(PASSKEY_UNAVAILABLE_ERROR, status_code=400)
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         user = cast(User | None, await scope.get_user_by_email(email))
         if user is None or not _is_effectively_active_user(user):
             return _json_error(PASSKEY_UNAVAILABLE_ERROR, status_code=400)
@@ -242,7 +239,6 @@ async def passkey_login_options(request: Request) -> JSONResponse:
                 return_to=return_to,
             ),
         )
-        await scope.commit()
 
     return JSONResponse(
         {
@@ -266,12 +262,12 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
         return _json_error(PASSKEY_GENERIC_ERROR)
 
     return_to = normalise_return_to(_payload_text(payload, "return_to"))
-    session_factory = _session_factory_from_request(request)
+    scope_factory = _persistence_scope_from_request(request)
     active_totp_credential_id: str | None = None
     user: User | None = None
     user_verified = False
 
-    async with session_factory() as scope:
+    async with scope_factory() as scope:
         challenge = await scope.challenges.get_challenge(challenge_id)
         if (
             challenge is None
@@ -315,7 +311,6 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
             )
         except WebAuthnCeremonyError as exc:
             await scope.challenges.consume_challenge(challenge_id)
-            await scope.commit()
             logger.warning(
                 "Passkey login rejected: user_id=%s reason=%s",
                 user.id,
@@ -337,7 +332,6 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
             await scope.totp_credentials.get_active_totp_credential(str(user.id))
         )
         await scope.challenges.consume_challenge(challenge_id)
-        await scope.commit()
         user_verified = verified.user_verified
 
     if user is None:
@@ -428,9 +422,9 @@ async def revoke_passkey(
             url=_route_path(request, "auth:security"), status_code=303
         )
 
-    session_factory = _session_factory_from_request(request)
+    scope_factory = _persistence_scope_from_request(request)
     error: str | None = None
-    async with session_factory() as scope:
+    async with scope_factory() as scope:
         db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
@@ -457,7 +451,6 @@ async def revoke_passkey(
                 str(db_user.id),
                 credential.id,
             )
-            await scope.commit()
 
     if error is not None:
         return await _security_page_response(

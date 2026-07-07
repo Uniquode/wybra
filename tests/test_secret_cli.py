@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from click.testing import CliRunner
-from sqlalchemy import select
 
 import wybra.secrets.cli as secret_cli
 import wybra.secrets.sources as secret_sources
@@ -17,8 +16,7 @@ from wybra.auth.models import (
     IdentityTotpRecoveryCode,
     User,
 )
-from wybra.db.models import Base
-from wybra.db.persistence import close_database, create_database, session_scope
+from wybra.db.persistence import close_database, create_database
 from wybra.forms import CSRF_TOKEN_SECRET_KEY_CURRENT, CSRF_TOKEN_SECRET_KEY_PREVIOUS
 from wybra.services.crypto import (
     SecretEnvelopeService,
@@ -41,10 +39,12 @@ class FakeKeyring:
 
 
 def _install_fake_keyring(monkeypatch, keyring: FakeKeyring) -> None:
+    original_import_module = importlib.import_module
+
     def import_module(name: str):
         if name == "keyring":
             return keyring
-        return importlib.import_module(name)
+        return original_import_module(name)
 
     monkeypatch.setattr(secret_sources.sys, "platform", "linux")
     monkeypatch.setattr(secret_sources.importlib, "import_module", import_module)
@@ -176,61 +176,57 @@ async def _create_reencrypt_database(
     totp_secret: str,
     recovery_code_verifier: str,
 ) -> None:
-    database = create_database(database_url)
+    database = await create_database(database_url, modules=("wybra.auth",))
     try:
-        async with database.engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-        async with session_scope(database.session_factory) as session:
-            user = User(
+        with database.context:
+            await database.context.generate_schemas()
+            connection = database.connection()
+            user = await User.create(
                 email="user@example.com",
                 hashed_password="hashed-password",
                 is_active=True,
                 is_superuser=False,
                 is_verified=True,
+                using_db=connection,
             )
-            session.add(user)
-            await session.flush()
-            session.add(
-                IdentityProvider(
-                    provider_name="google",
-                    provider_subject="provider-subject",
-                    crypt_access_token=provider_access_token,
-                    crypt_refresh_token=provider_refresh_token,
-                    account_email="user@example.com",
-                )
+            await IdentityProvider.create(
+                provider_name="google",
+                provider_subject="provider-subject",
+                crypt_access_token=provider_access_token,
+                crypt_refresh_token=provider_refresh_token,
+                account_email="user@example.com",
+                using_db=connection,
             )
-            credential = IdentityTotpCredential(
+            credential = await IdentityTotpCredential.create(
                 user_id=user.id,
                 crypt_secret=totp_secret,
                 status=TOTP_ACTIVE_STATUS,
                 created_at=1000.0,
                 activated_at=1001.0,
+                using_db=connection,
             )
-            session.add(credential)
-            await session.flush()
-            session.add(
-                IdentityTotpRecoveryCode(
-                    credential_id=credential.id,
-                    code_verifier=recovery_code_verifier,
-                    created_at=1002.0,
-                )
+            await IdentityTotpRecoveryCode.create(
+                credential_id=credential.id,
+                code_verifier=recovery_code_verifier,
+                created_at=1002.0,
+                using_db=connection,
             )
-            await session.commit()
     finally:
         await close_database(database)
 
 
 async def _reencrypt_database_values(database_url: str) -> dict[str, str | None]:
-    database = create_database(database_url)
+    database = await create_database(database_url, modules=("wybra.auth",))
     try:
-        async with session_scope(database.session_factory) as session:
-            provider = (await session.execute(select(IdentityProvider))).scalar_one()
-            credential = (
-                await session.execute(select(IdentityTotpCredential))
-            ).scalar_one()
+        with database.context:
+            connection = database.connection()
+            provider = await IdentityProvider.all().using_db(connection).first()
+            credential = await IdentityTotpCredential.all().using_db(connection).first()
             recovery_code = (
-                await session.execute(select(IdentityTotpRecoveryCode))
-            ).scalar_one()
+                await IdentityTotpRecoveryCode.all().using_db(connection).first()
+            )
+            if provider is None or credential is None or recovery_code is None:
+                raise AssertionError("Expected re-encryption test rows to exist.")
             return {
                 "access": provider.crypt_access_token,
                 "refresh": provider.crypt_refresh_token,

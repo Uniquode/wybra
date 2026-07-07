@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from wybra.db.migrate import migration_script_root
 from wybra.db.persistence import (
     is_memory_database_url,
     is_supported_database_url,
@@ -13,7 +12,7 @@ from wybra.db.persistence import (
 from wybra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
-    discover_model_metadata,
+    discover_model_package,
     model_package_name,
 )
 from wybra.db.urls import parse_sqlite_database_url, redact_database_url
@@ -49,19 +48,23 @@ def validate_persistence(settings: PersistenceValidationSettings) -> ValidationR
             checks,
             errors,
             passed=is_supported_database_url(settings.database_url),
-            description="database URL uses supported async SQLAlchemy driver",
+            description="database URL uses supported async database driver",
             error=(
                 "Database URL must use sqlite+aiosqlite:// or postgresql+asyncpg://."
             ),
         )
 
     _record_sqlite_persistence_check(settings, checks, errors)
-    has_migrations_root = _record_migration_root_checks(settings, checks, errors)
+    has_migration_resources = _record_migration_resource_checks(
+        settings,
+        checks,
+        errors,
+    )
 
     record_check(
         checks,
         errors,
-        passed=has_migrations_root,
+        passed=has_migration_resources,
         description=(
             "development database initialisation command is available: "
             "uv run wybra-migrate init"
@@ -104,36 +107,11 @@ def _record_sqlite_persistence_check(
     )
 
 
-def _record_migration_root_checks(
+def _record_migration_resource_checks(
     settings: PersistenceValidationSettings,
     checks: list[ValidationCheck],
     errors: list[str],
 ) -> bool:
-    migrations_root = migration_script_root(settings.migrations_root)
-    has_migrations_root = record_check(
-        checks,
-        errors,
-        passed=migrations_root.is_dir(),
-        description=f"Alembic migrations root exists: {migrations_root}",
-        error=f"Missing Alembic migrations root: {migrations_root}",
-    )
-    if not has_migrations_root:
-        return False
-
-    migration_root_valid = True
-    for required_file in ("env.py", "script.py.mako"):
-        required_path = migrations_root.joinpath(required_file)
-        migration_root_valid = (
-            record_check(
-                checks,
-                errors,
-                passed=required_path.is_file(),
-                description=f"Alembic migration file exists: {required_file}",
-                error=f"Missing Alembic migration file: {required_path}",
-            )
-            and migration_root_valid
-        )
-
     try:
         model_packages, version_locations = _configured_data_surfaces(settings.modules)
     except DataCompositionError as exc:
@@ -146,20 +124,17 @@ def _record_migration_root_checks(
         )
         return False
 
-    migration_root_valid = (
-        record_check(
-            checks,
-            errors,
-            passed=not model_packages or bool(version_locations),
-            description=(
-                "module migration version locations exist: "
-                + ", ".join(str(path) for path in version_locations)
-            ),
-            error=(
-                "At least one configured module migration version location is required."
-            ),
-        )
-        and migration_root_valid
+    migration_resources_valid = record_check(
+        checks,
+        errors,
+        passed=not model_packages or bool(version_locations),
+        description=(
+            "module Tortoise migration version locations exist: "
+            + ", ".join(str(path) for path in version_locations)
+        ),
+        error=(
+            "At least one configured module migration version location is required."
+        ),
     )
 
     if model_packages:
@@ -171,29 +146,29 @@ def _record_migration_root_checks(
                 if path.name != "__init__.py"
             )
         )
-        migration_root_valid = (
+        migration_resources_valid = (
             record_check(
                 checks,
                 errors,
                 passed=bool(revision_files),
-                description="Alembic migration revision exists",
-                error="At least one Alembic migration revision is required.",
+                description="Tortoise migration file exists",
+                error="At least one Tortoise migration file is required.",
             )
-            and migration_root_valid
+            and migration_resources_valid
         )
     else:
         record_check(
             checks,
             errors,
             passed=True,
-            description="Alembic migration revisions optional without model modules",
+            description="migration revisions optional without model modules",
             error=(
-                "Alembic migration revisions are only required when configured "
-                "modules expose model metadata."
+                "Migration revisions are only required when configured modules "
+                "expose Tortoise models."
             ),
         )
 
-    return migration_root_valid
+    return migration_resources_valid
 
 
 def _configured_data_surfaces(
@@ -202,7 +177,7 @@ def _configured_data_surfaces(
     model_packages: list[str] = []
     version_locations: list[Path] = []
     for module_name in module_names:
-        if discover_model_metadata(module_name) is not None:
+        if discover_model_package(module_name) is not None:
             model_packages.append(model_package_name(module_name))
         version_locations.extend(discover_migration_version_locations(module_name))
 

@@ -1,113 +1,83 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
-from sqlalchemy import (
-    JSON,
-    Boolean,
-    Float,
-    ForeignKey,
-    Index,
-    String,
-    Text,
-    UniqueConstraint,
-)
-from sqlalchemy.orm import Mapped, mapped_column
-
-from wybra.db.models import Base, metadata
-from wybra.db.types import GUID
-from wybra.profile.types import ProfileLinks, Pronouns
+from tortoise import fields
+from tortoise.indexes import Index
+from tortoise.models import Model
 
 
-class UserProfile(Base):
+class UserProfile(Model):
     """App-facing profile data linked one-to-one with an auth user."""
 
-    __tablename__ = "profile_user_profile"
-    __table_args__ = (
-        UniqueConstraint("user_id", name="uq_profile_user_profile_user_id"),
-        Index("ix_profile_user_profile_user_id", "user_id"),
-    )
+    if TYPE_CHECKING:
+        user_id: uuid.UUID
+        profile_picture_media_id: uuid.UUID | None
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID,
-        primary_key=True,
-        default=uuid.uuid4,
+    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    user = fields.OneToOneField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        GUID,
-        ForeignKey("identity_user.id", ondelete="CASCADE"),
-        nullable=False,
+    profile_picture_media = fields.ForeignKeyField(
+        "wybra_media.MediaItem",
+        related_name=False,
+        on_delete=fields.SET_NULL,
+        null=True,
     )
-    profile_picture_media_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID,
-        ForeignKey("media_item.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    preferred_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    bio: Mapped[str | None] = mapped_column(Text, nullable=True)
-    first_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    pronouns: Mapped[Pronouns | None] = mapped_column(JSON, nullable=True)
-    phone_number: Mapped[str | None] = mapped_column(String(48), nullable=True)
-    website_links: Mapped[ProfileLinks | None] = mapped_column(JSON, nullable=True)
-    country_region: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    postal_code: Mapped[str | None] = mapped_column(String(24), nullable=True)
-    job_title: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    company: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    company_industry: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    department: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    date_time_format: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    theme: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    notification_preferences: Mapped[dict[str, object] | None] = mapped_column(
-        JSON,
-        nullable=True,
-    )
-    profile_visibility: Mapped[str] = mapped_column(
-        String(16),
-        nullable=False,
-        default="public",
-    )
-    marketing_consent: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-    )
-    terms_accepted_at: Mapped[float | None] = mapped_column(Float, nullable=True)
-    data_deletion_requested: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-    )
+    preferred_name = fields.CharField(max_length=120, null=True)
+    display_name = fields.CharField(max_length=200, null=True)
+    bio = fields.TextField(null=True)
+    first_name = fields.CharField(max_length=120, null=True)
+    last_name = fields.CharField(max_length=120, null=True)
+    pronouns = fields.JSONField(null=True)
+    phone_number = fields.CharField(max_length=48, null=True)
+    website_links = fields.JSONField(null=True)
+    country_region = fields.CharField(max_length=120, null=True)
+    city = fields.CharField(max_length=120, null=True)
+    postal_code = fields.CharField(max_length=24, null=True)
+    job_title = fields.CharField(max_length=160, null=True)
+    company = fields.CharField(max_length=200, null=True)
+    company_industry = fields.CharField(max_length=160, null=True)
+    department = fields.CharField(max_length=160, null=True)
+    date_time_format = fields.CharField(max_length=64, null=True)
+    theme = fields.CharField(max_length=32, null=True)
+    notification_preferences = fields.JSONField(null=True)
+    profile_visibility = fields.CharField(max_length=16, default="public")
+    marketing_consent = fields.BooleanField(default=False)
+    terms_accepted_at = fields.FloatField(null=True)
+    data_deletion_requested = fields.BooleanField(default=False)
+
+    class Meta:
+        table = "profile_user_profile"
 
 
-class UserPhoneContact(Base):
+class UserPhoneContact(Model):
     """Per-user phone contact with per-number verification state."""
 
-    __tablename__ = "profile_phone_contact"
-    __table_args__ = (
-        Index("ix_profile_phone_contact_user_id", "user_id"),
-        Index("ix_profile_phone_contact_normalised_number", "normalised_number"),
-    )
+    if TYPE_CHECKING:
+        user_id: uuid.UUID
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID,
-        primary_key=True,
-        default=uuid.uuid4,
+    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    user = fields.ForeignKeyField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        GUID,
-        ForeignKey("identity_user.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
-    subdivision_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    normalised_number: Mapped[str] = mapped_column(String(32), nullable=False)
-    number_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    sms_capable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    country_code = fields.CharField(max_length=2)
+    subdivision_code = fields.CharField(max_length=16, null=True)
+    normalised_number = fields.CharField(max_length=32)
+    number_type = fields.CharField(max_length=32)
+    sms_capable = fields.BooleanField(default=False)
     # Unix timestamp seconds when this phone contact was verified.
-    verified_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verified_at = fields.FloatField(null=True)
+
+    class Meta:
+        table = "profile_phone_contact"
+        indexes = (Index(fields=("normalised_number",)),)
 
 
-__all__ = ("UserPhoneContact", "UserProfile", "metadata")
+__all__ = ("UserPhoneContact", "UserProfile")

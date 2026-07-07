@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    asynccontextmanager,
+    contextmanager,
+)
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.transactions import in_transaction
 
 from wybra.db.persistence import Database, close_database, create_database
 
@@ -32,121 +38,99 @@ class DatabaseCapability(Protocol):
     def connection(
         self,
         name: str = DEFAULT_CONNECTION_NAME,
-    ) -> Database: ...
-
-    def session(
-        self,
-        name: str = DEFAULT_CONNECTION_NAME,
-    ) -> AbstractAsyncContextManager[AsyncSession]: ...
+    ) -> BaseDBAsyncClient: ...
 
     def transaction(
         self,
         name: str = DEFAULT_CONNECTION_NAME,
-    ) -> AbstractAsyncContextManager[AsyncSession]: ...
+    ) -> AbstractAsyncContextManager[BaseDBAsyncClient]: ...
 
     async def close(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
-class SqlAlchemyDatabaseCapability:
-    _connections: Mapping[str, Database]
+class TortoiseDatabaseCapability:
+    _database: Database
+    _connection_aliases: Mapping[str, str]
     _closed: bool = field(default=False, init=False, repr=False)
 
     @classmethod
-    def from_database_url(cls, database_url: str) -> SqlAlchemyDatabaseCapability:
-        """Create default reader/writer aliases backed by one database.
-
-        This is the single-URL startup path. Use ``from_connections`` when a
-        site needs distinct named database connections.
-        """
-        database = create_database(database_url)
-        connection_aliases = {name: database for name in DEFAULT_CONNECTION_NAMES}
-        return cls.from_connections(connection_aliases)
-
-    @classmethod
-    def from_connections(
+    async def from_database_url(
         cls,
-        connections: Mapping[str, Database],
-    ) -> SqlAlchemyDatabaseCapability:
-        return cls(dict(connections))
-
-    def session(
-        self,
-        name: str = DEFAULT_CONNECTION_NAME,
-    ) -> AbstractAsyncContextManager[AsyncSession]:
-        self._require_open()
-        return self._session_scope(self.connection(name))
-
-    def transaction(
-        self,
-        name: str = DEFAULT_CONNECTION_NAME,
-    ) -> AbstractAsyncContextManager[AsyncSession]:
-        self._require_open()
-        return self._transaction_scope(self.connection(name))
+        database_url: str,
+        *,
+        modules: Sequence[str],
+    ) -> TortoiseDatabaseCapability:
+        database = await create_database(
+            database_url,
+            modules=modules,
+        )
+        connection_aliases = {
+            name: DEFAULT_CONNECTION_NAME for name in DEFAULT_CONNECTION_NAMES
+        }
+        return cls(database, connection_aliases)
 
     def connection(
         self,
         name: str = DEFAULT_CONNECTION_NAME,
-    ) -> Database:
+    ) -> BaseDBAsyncClient:
         self._require_open()
-        return self._connection(name)
+        return self._database.connection(self._connection_name(name))
+
+    def transaction(
+        self,
+        name: str = DEFAULT_CONNECTION_NAME,
+    ) -> AbstractAsyncContextManager[BaseDBAsyncClient]:
+        self._require_open()
+        return self._transaction_scope(self._connection_name(name))
+
+    def context(self) -> AbstractContextManager[None]:
+        self._require_open()
+        return self._context_scope()
+
+    async def generate_schemas(self) -> None:
+        self._require_open()
+        with self._database.context:
+            await self._database.context.generate_schemas()
 
     async def close(self) -> None:
-        """Close all underlying databases.
-
-        Databases are deduplicated by object identity. When multiple connection
-        names refer to the same ``Database`` instance, it is closed once.
-        """
         if self._closed:
             return
-        error_count = 0
-        closed: set[int] = set()
-        for database in self._connections.values():
-            identity = id(database)
-            if identity in closed:
-                continue
-            closed.add(identity)
-            try:
-                await close_database(database)
-            except Exception as exc:
-                error_count += 1
-                logger.exception(
-                    "Database close failed",
-                    extra={
-                        "database_identity": identity,
-                        "error_type": type(exc).__name__,
-                    },
-                )
-
-        if error_count:
-            raise DatabaseCapabilityError(
-                f"Database close failed: error_count={error_count}."
+        try:
+            await close_database(self._database)
+        except Exception as exc:
+            logger.exception(
+                "Database close failed",
+                extra={
+                    "database_identity": id(self._database),
+                    "error_type": type(exc).__name__,
+                },
             )
+            raise DatabaseCapabilityError(
+                "Database close failed: error_count=1."
+            ) from exc
 
         object.__setattr__(self, "_closed", True)
 
     @asynccontextmanager
-    async def _session_scope(
-        self,
-        database: Database,
-    ) -> AsyncIterator[AsyncSession]:
-        async with database.session_factory() as session:
-            yield session
-
-    @asynccontextmanager
     async def _transaction_scope(
         self,
-        database: Database,
-    ) -> AsyncIterator[AsyncSession]:
-        async with database.session_factory() as session:
-            async with session.begin():
-                yield session
+        connection_name: str,
+    ) -> AsyncIterator[BaseDBAsyncClient]:
+        with self._database.context:
+            async with in_transaction(connection_name) as connection:
+                yield connection
 
-    def _connection(self, name: str) -> Database:
+    @contextmanager
+    def _context_scope(self) -> Iterator[None]:
+        with self._database.context:
+            yield
+
+    def _connection_name(self, name: str) -> str:
         try:
-            return self._connections[name]
+            return self._connection_aliases[name]
         except KeyError as exc:
-            available = ", ".join(sorted(self._connections))
+            available = ", ".join(sorted(self._connection_aliases))
             raise DatabaseCapabilityError(
                 "Unknown database connection: "
                 f"connection_name={name}, available_connections={available}."
