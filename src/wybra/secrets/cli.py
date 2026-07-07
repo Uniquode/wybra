@@ -12,14 +12,15 @@ from typing import Any, TextIO
 
 import click
 
-from wybra.auth.settings import AuthSettings, load_auth_settings
-from wybra.config import ConfigService, MappingConfigSource
+from wybra.auth.settings import AuthSettings
+from wybra.config import AppConfigSource, ConfigService, MappingConfigSource
 from wybra.core.composition import (
     APP_CONFIG_ENV,
     CompositionError,
     load_app_config,
     raw_config_sections,
 )
+from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.logging import merge_logging_config
 from wybra.db.persistence import close_database, create_database, session_scope
@@ -454,7 +455,12 @@ def _auth_settings_from_context(ctx: click.Context) -> AuthSettings:
             f"{str(exc).rstrip('.')}. Pass --config or set {APP_CONFIG_ENV}."
         ) from exc
     try:
-        return load_auth_settings(app_config=app_config)
+        config = ConfigService(
+            [AppConfigSource(app_config)],
+            config_defs=(RUNTIME_CONFIG_DEF, AuthSettings.module_config),
+            discover_module_config=False,
+        )
+        return AuthSettings.load_settings(config, app_config=app_config)
     except ConfigurationError as exc:
         raise click.ClickException(str(exc)) from exc
 

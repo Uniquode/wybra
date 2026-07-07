@@ -88,10 +88,14 @@ from wybra.auth.settings import (
     PASSWORD_POLICY_SECTION_FIELD,
     PASSWORD_SECTION_FIELD,
     AuthSettings,
-    load_auth_settings,
     validate_auth_settings,
 )
-from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
+from wybra.config import (
+    AppConfigSource,
+    ConfigService,
+    ConfigSourceError,
+    MappingConfigSource,
+)
 from wybra.core.composition import (
     AppConfig,
     AssetOptions,
@@ -99,6 +103,7 @@ from wybra.core.composition import (
     TemplateOptions,
     load_app_config,
 )
+from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
 from wybra.db.persistence import (
@@ -286,6 +291,14 @@ def load_auth_test_app_config(
             *auth_lines,
             database_url=database_url,
         ),
+    )
+
+
+def auth_settings_config(app_config: AppConfig) -> ConfigService:
+    return ConfigService(
+        [AppConfigSource(app_config)],
+        config_defs=(RUNTIME_CONFIG_DEF, AuthSettings.module_config),
+        discover_module_config=False,
     )
 
 
@@ -894,7 +907,8 @@ def test_app_database_url_precedence(
         for key, value in environ_template.items()
     }
 
-    settings = load_auth_settings(
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
         app_config=app_config,
         environ=environ,
     )
@@ -911,7 +925,11 @@ def test_app_database_url_resolves_relative_sqlite_path_from_config_directory(
         database_url="sqlite+aiosqlite:///relative-auth.sqlite3",
     )
 
-    settings = load_auth_settings(app_config=app_config, environ={})
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
+        app_config=app_config,
+        environ={},
+    )
 
     assert settings.database_url == sqlite_file_url(
         config_path.parent / "relative-auth.sqlite3"
@@ -929,7 +947,11 @@ def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None
     )
 
     with pytest.raises(ConfigurationError, match=r"\[app\]\.database_url"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_app_auth_config_rejects_unknown_auth_options(tmp_path: Path) -> None:
@@ -939,7 +961,11 @@ def test_app_auth_config_rejects_unknown_auth_options(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigurationError, match="session_lifetme_seconds"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_app_auth_config_rejects_stale_auth_database_url(tmp_path: Path) -> None:
@@ -949,7 +975,11 @@ def test_app_auth_config_rejects_stale_auth_database_url(tmp_path: Path) -> None
     )
 
     with pytest.raises(ConfigurationError, match="database_url"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
@@ -960,7 +990,8 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
         "passkey_enabled = true",
     )
 
-    settings = load_auth_settings(
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
         app_config=app_config,
         environ={
             "PROVIDER_ENABLED": "false",
@@ -999,7 +1030,11 @@ def test_app_auth_configures_passkey_options(tmp_path: Path) -> None:
         'counter_policy = "reject-regression"',
     )
 
-    settings = load_auth_settings(app_config=app_config, environ={})
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
+        app_config=app_config,
+        environ={},
+    )
 
     assert settings.identity_options.passkey_enabled is True
     assert settings.identity_options.passkey_rp_id == "app.example.com"
@@ -1113,7 +1148,11 @@ def test_app_auth_rejects_unknown_passkey_options(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigurationError, match="credential_policy"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 @pytest.mark.parametrize(
@@ -1136,7 +1175,11 @@ def test_app_auth_config_rejects_non_positive_duration_settings(
         ConfigSourceError,
         match=rf"auth\.{setting_name} is invalid: .*positive integer",
     ):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 @pytest.mark.parametrize(
@@ -1157,7 +1200,11 @@ def test_app_auth_env_rejects_non_positive_duration_settings(
     app_config = load_auth_test_app_config(tmp_path / "app.toml")
 
     with pytest.raises(ConfigurationError, match=message):
-        load_auth_settings(app_config=app_config, environ={env_name: env_value})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={env_name: env_value},
+        )
 
 
 def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None:
@@ -1340,7 +1387,11 @@ def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:
         'common_fragments = ["example"]',
     )
 
-    settings = load_auth_settings(app_config=app_config, environ={})
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
+        app_config=app_config,
+        environ={},
+    )
 
     assert settings.identity_options.session_cookie_force_secure is True
     policy = settings.identity_options.resolved_password_policy()
@@ -1541,7 +1592,11 @@ def test_app_auth_rejects_invalid_password_common_fragments(
     )
 
     with pytest.raises(ConfigurationError, match="common fragments"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 def test_app_auth_rejects_unknown_password_policy_options(tmp_path: Path) -> None:
@@ -1553,7 +1608,11 @@ def test_app_auth_rejects_unknown_password_policy_options(tmp_path: Path) -> Non
     )
 
     with pytest.raises(ConfigurationError, match="minimum_strenth"):
-        load_auth_settings(app_config=app_config, environ={})
+        AuthSettings.load_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+            environ={},
+        )
 
 
 @pytest.mark.parametrize("command", ["group", "scope", "user"])

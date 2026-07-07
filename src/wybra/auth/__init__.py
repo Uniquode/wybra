@@ -67,7 +67,6 @@ _EXPORTS = {
     "anonymous_required": "wybra.auth.capabilities",
     "identity_options_from_state": "wybra.auth.settings",
     "login_required": "wybra.auth.capabilities",
-    "load_auth_settings": "wybra.auth.settings",
     "load_runtime_auth_settings": "wybra.auth.settings",
     "module_config": "wybra.auth.settings",
     "required_authentication_methods_for_totp_policy": "wybra.auth.mfa.challenges",

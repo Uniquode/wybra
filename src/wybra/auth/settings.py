@@ -351,26 +351,6 @@ def validate_auth_settings(
         )
 
 
-def load_auth_settings(
-    *,
-    app_config: AppConfig,
-    environ: Mapping[str, str] | None = None,
-    deployment_environment: DeploymentEnvironment | str | None = LOCAL_ENVIRONMENT,
-) -> AuthSettings:
-    config_defs = (RUNTIME_CONFIG_DEF, module_config)
-    config = ConfigService(
-        [AppConfigSource(app_config)],
-        config_defs=config_defs,
-        discover_module_config=False,
-    )
-    return AuthSettings.load_settings(
-        config,
-        app_config=app_config,
-        environ=environ,
-        deployment_environment=deployment_environment,
-    )
-
-
 def load_runtime_auth_settings(
     *,
     app_config: AppConfig | None,
@@ -381,7 +361,13 @@ def load_runtime_auth_settings(
     """Load and validate auth settings for application runtime composition."""
 
     if app_config is not None:
-        settings = load_auth_settings(
+        config = ConfigService(
+            [AppConfigSource(app_config)],
+            config_defs=(RUNTIME_CONFIG_DEF, AuthSettings.module_config),
+            discover_module_config=False,
+        )
+        settings = AuthSettings.load_settings(
+            config,
             app_config=app_config,
             environ=environ,
             deployment_environment=deployment_environment,
