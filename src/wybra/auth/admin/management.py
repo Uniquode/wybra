@@ -1616,13 +1616,13 @@ async def deactivate_local_user_for_management(
 
 
 async def _sole_superuser(connection: BaseDBAsyncClient, user: User) -> bool:
-    superuser_ids = (
+    superusers = (
         await User.filter(is_superuser=True)
         .using_db(connection)
         .select_for_update()
-        .values_list("id", flat=True)
+        .only("id")
     )
-    return bool(user.is_superuser and len(superuser_ids) == 1)
+    return bool(user.is_superuser and len(superusers) == 1)
 
 
 async def _delete_user_sessions(connection: BaseDBAsyncClient, user: User) -> None:

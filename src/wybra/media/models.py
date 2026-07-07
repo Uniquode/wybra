@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from typing import TYPE_CHECKING
 
 from tortoise import fields
 from tortoise.indexes import Index
@@ -30,8 +31,16 @@ class MediaItem(Model):
 class MediaResourceKey(Model):
     """Lookup key assigned to a media item for stable resource references."""
 
+    if TYPE_CHECKING:
+        media_id: uuid.UUID
+
     resource_key = fields.CharField(max_length=255, primary_key=True)
-    media_id = fields.UUIDField(db_index=True)
+    media = fields.ForeignKeyField(
+        "wybra_media.MediaItem",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
 
     class Meta:
         table = "media_resource_key"

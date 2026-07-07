@@ -259,12 +259,12 @@ def test_wybra_auth_models_expose_authorisation_group_tables() -> None:
     assert GroupGroup._meta.db_table == "identity_group_group"
     assert IdentityUserEmail._meta.db_table == "identity_user_email"
 
-    assert {"group_id", "scope"}.issubset(GroupScope._meta.fields_map)
-    assert {"group_id", "user_id"}.issubset(GroupUser._meta.fields_map)
-    assert {"parent_group_id", "child_group_id"}.issubset(GroupGroup._meta.fields_map)
-    assert GroupScope._meta.unique_together == (("group_id", "scope"),)
-    assert GroupUser._meta.unique_together == (("group_id", "user_id"),)
-    assert GroupGroup._meta.unique_together == (("parent_group_id", "child_group_id"),)
+    assert {"group", "scope"}.issubset(GroupScope._meta.fields_map)
+    assert {"group", "user"}.issubset(GroupUser._meta.fields_map)
+    assert {"parent_group", "child_group"}.issubset(GroupGroup._meta.fields_map)
+    assert GroupScope._meta.unique_together == (("group", "scope"),)
+    assert GroupUser._meta.unique_together == (("group", "user"),)
+    assert GroupGroup._meta.unique_together == (("parent_group", "child_group"),)
 
 
 def test_wybra_auth_totp_seed_model_uses_encrypted_field() -> None:
@@ -1418,10 +1418,10 @@ def test_wybra_auth_identity_provider_and_link_models_are_well_formed() -> None:
         "crypt_refresh_token",
         "account_email",
     }.issubset(provider_fields)
-    assert {"user_id", "provider_id"}.issubset(external_identity_link_fields)
-    assert {"token", "created_at", "user_id"}.issubset(access_token_fields)
+    assert {"user", "provider"}.issubset(external_identity_link_fields)
+    assert {"token", "created_at", "user"}.issubset(access_token_fields)
     assert {
-        "user_id",
+        "user",
         "email",
         "is_primary",
         "is_verified",
@@ -1434,7 +1434,7 @@ def test_wybra_auth_identity_provider_and_link_models_are_well_formed() -> None:
     assert IdentityProvider._meta.unique_together == (
         ("provider_name", "provider_subject"),
     )
-    assert ExternalIdentityLink._meta.unique_together == (("user_id", "provider_id"),)
+    assert ExternalIdentityLink._meta.unique_together == (("user", "provider"),)
 
 
 def test_wybra_auth_generated_session_tokens_fit_configured_column() -> None:
@@ -2058,8 +2058,12 @@ def test_identity_user_email_stores_normalised_email(tmp_path: Path) -> None:
         )
         try:
             async with connection_scope(database) as session:
+                user = await User.create(
+                    email="owner@example.com",
+                    using_db=session,
+                )
                 identity_email = await IdentityUserEmail.create(
-                    user_id=uuid.uuid4(),
+                    user_id=user.id,
                     email="Alias@Example.COM",
                     is_primary=True,
                     is_verified=True,

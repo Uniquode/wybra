@@ -10,6 +10,10 @@ from tortoise.indexes import Index
 
 class Migration(migrations.Migration):
     initial = True
+    dependencies = [
+        ("wybra_auth", "0001_initial"),
+        ("wybra_media", "0001_initial"),
+    ]
 
     operations = [
         ops.CreateModel(
@@ -21,7 +25,15 @@ class Migration(migrations.Migration):
                         primary_key=True, default=uuid4, unique=True, db_index=True
                     ),
                 ),
-                ("user_id", fields.UUIDField(db_index=True)),
+                (
+                    "user",
+                    fields.ForeignKeyField(
+                        "wybra_auth.User",
+                        related_name=False,
+                        on_delete=fields.CASCADE,
+                        db_index=True,
+                    ),
+                ),
                 ("country_code", fields.CharField(max_length=2)),
                 ("subdivision_code", fields.CharField(null=True, max_length=16)),
                 ("normalised_number", fields.CharField(max_length=32)),
@@ -47,8 +59,23 @@ class Migration(migrations.Migration):
                         primary_key=True, default=uuid4, unique=True, db_index=True
                     ),
                 ),
-                ("user_id", fields.UUIDField(unique=True)),
-                ("profile_picture_media_id", fields.UUIDField(null=True)),
+                (
+                    "user",
+                    fields.OneToOneField(
+                        "wybra_auth.User",
+                        related_name=False,
+                        on_delete=fields.CASCADE,
+                    ),
+                ),
+                (
+                    "profile_picture_media",
+                    fields.ForeignKeyField(
+                        "wybra_media.MediaItem",
+                        related_name=False,
+                        on_delete=fields.SET_NULL,
+                        null=True,
+                    ),
+                ),
                 ("preferred_name", fields.CharField(null=True, max_length=120)),
                 ("display_name", fields.CharField(null=True, max_length=200)),
                 ("bio", fields.TextField(null=True, unique=False)),

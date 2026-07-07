@@ -16,6 +16,8 @@ from fastapi.responses import HTMLResponse
 
 from support_database import sqlite_file_url
 from wybra.auth import AuthCapability, login_required  # noqa: F401
+from wybra.auth.admin.management import delete_local_user_for_management
+from wybra.auth.models import User
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core import InputValidationError
 from wybra.core.resources import PackageResourceSource
@@ -387,6 +389,7 @@ async def _profile_route_site(
     site.provide_capability(FormsCapability, DefaultFormsCapability(app.state.csrf))
     site.provide_capability(TemplateCapability, ProfileTemplateStub())
     app.state.site = site
+    app.state.profile_test_user = user
     _CREATED_SITES.append(site)
     return site
 
@@ -430,6 +433,26 @@ async def _create_site_schema(site: Site) -> None:
     capability = site.require_capability(DatabaseCapability)
     assert isinstance(capability, TortoiseDatabaseCapability)
     await capability._database.context.generate_schemas()
+    user = getattr(site.app.state, "profile_test_user", None)
+    if isinstance(user, ProfileUser):
+        await _ensure_auth_user(site, user.id, email=user.email)
+
+
+async def _ensure_auth_user(
+    site: Site,
+    user_id: uuid.UUID,
+    *,
+    email: str | None = None,
+) -> None:
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        await User.get_or_create(
+            id=user_id,
+            defaults={
+                "email": email or f"{user_id.hex}@example.test",
+                "is_verified": True,
+            },
+            using_db=connection,
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -446,7 +469,8 @@ def test_profile_model_surface_exposes_tortoise_models() -> None:
 def test_profile_model_exposes_expected_fields() -> None:
     fields = UserProfile._meta.fields_map
 
-    assert fields["profile_picture_media_id"].null is True
+    assert fields["user"].null is False
+    assert fields["profile_picture_media"].null is True
     assert fields["preferred_name"].null is True
     assert fields["display_name"].null is True
     assert fields["bio"].null is True
@@ -474,12 +498,56 @@ def test_profile_model_exposes_expected_fields() -> None:
 def test_profile_phone_contact_model_exposes_expected_fields() -> None:
     fields = UserPhoneContact._meta.fields_map
 
+    assert fields["user"].null is False
     assert fields["country_code"].null is False
     assert fields["subdivision_code"].null is True
     assert fields["normalised_number"].null is False
     assert fields["number_type"].null is False
     assert fields["sms_capable"].null is False
     assert fields["verified_at"].null is True
+
+
+@pytest.mark.anyio
+async def test_auth_user_deletion_cascades_to_profile_records(tmp_path: Path) -> None:
+    user_id = uuid.uuid4()
+    site = await _site_with_database(tmp_path)
+    await _create_site_schema(site)
+
+    async with site.require_capability(DatabaseCapability).transaction() as connection:
+        await User.create(
+            id=user_id,
+            email="deleted-profile@example.test",
+            using_db=connection,
+        )
+        await UserProfile.create(
+            user_id=user_id,
+            preferred_name="Deleted",
+            using_db=connection,
+        )
+        await UserPhoneContact.create(
+            user_id=user_id,
+            country_code="AU",
+            normalised_number="+61412345678",
+            number_type="mobile",
+            sms_capable=True,
+            using_db=connection,
+        )
+
+        result = await delete_local_user_for_management(
+            connection,
+            target=str(user_id),
+        )
+
+        assert result.is_ok() is True
+        assert (
+            await UserProfile.filter(user_id=user_id).using_db(connection).count() == 0
+        )
+        assert (
+            await UserPhoneContact.filter(user_id=user_id).using_db(connection).count()
+            == 0
+        )
+
+    await site.close()
 
 
 def test_validate_profile_accepts_configured_profile_module() -> None:
@@ -1569,6 +1637,7 @@ async def test_profile_capability_saves_phone_contact(
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
+    await _ensure_auth_user(site, user_id)
 
     contact = await capability.save_phone_contact(
         user_id,
@@ -1596,6 +1665,7 @@ async def test_profile_capability_saves_enabled_profile_fields(
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
+    await _ensure_auth_user(site, user_id)
 
     profile = await capability.save_profile_fields(
         user_id,
@@ -1672,6 +1742,7 @@ async def test_profile_capability_resets_phone_verification_on_number_edit(
     capability.media.finalise_optional()
     await _create_site_schema(site)
     user_id = uuid.uuid4()
+    await _ensure_auth_user(site, user_id)
 
     async with site.require_capability(DatabaseCapability).transaction() as connection:
         contact = await UserPhoneContact.create(
@@ -1706,6 +1777,8 @@ async def test_profile_capability_recovery_eligibility_requires_verified_unique_
     await _create_site_schema(site)
     user_id = uuid.uuid4()
     other_user_id = uuid.uuid4()
+    await _ensure_auth_user(site, user_id)
+    await _ensure_auth_user(site, other_user_id)
 
     async with site.require_capability(DatabaseCapability).transaction() as connection:
         eligible = await UserPhoneContact.create(

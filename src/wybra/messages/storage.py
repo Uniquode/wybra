@@ -416,15 +416,20 @@ class DatabaseMessagesStorage:
         await MessageAlert.filter(queue_key=queue_key).using_db(connection).delete()
 
     async def _trim_queue(self, connection: Any, queue_key: str) -> None:
-        stale_ids = tuple(
+        keep_ids = tuple(
             await MessageAlert.filter(queue_key=queue_key)
             .using_db(connection)
             .order_by("-id")
-            .offset(self.settings.resolved_queue_depth)
+            .limit(self.settings.resolved_queue_depth)
             .values_list("id", flat=True)
         )
-        if stale_ids:
-            await MessageAlert.filter(id__in=stale_ids).using_db(connection).delete()
+        if keep_ids:
+            await (
+                MessageAlert.filter(queue_key=queue_key)
+                .exclude(id__in=keep_ids)
+                .using_db(connection)
+                .delete()
+            )
 
 
 def storage_from_settings(site: Site, settings: MessagesSettings) -> MessagesStorage:

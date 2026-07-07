@@ -301,6 +301,9 @@ _.indexes
 _.consumed_at
 _.parent_group_id
 _.child_group_id
+_.parent_group
+_.child_group
+_.profile_picture_media
 
 # HTMLParser callback invoked by the standard library.
 _.handle_starttag

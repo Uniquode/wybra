@@ -52,20 +52,40 @@ class IdentityProvider(Model):
 class ExternalIdentityLink(Model):
     """Link row between a local user and one provider identity."""
 
-    user_id = fields.UUIDField()
-    provider_id = fields.UUIDField(unique=True)
+    if TYPE_CHECKING:
+        user_id: uuid.UUID
+        provider_id: uuid.UUID
+
+    user = fields.ForeignKeyField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
+    )
+    provider = fields.OneToOneField(
+        "wybra_auth.IdentityProvider",
+        related_name=False,
+        on_delete=fields.CASCADE,
+    )
 
     class Meta:
         table = "identity_external_identity_link"
-        unique_together = (("user_id", "provider_id"),)
-        indexes = (Index(fields=("user_id",)),)
+        unique_together = (("user", "provider"),)
+        indexes = (Index(fields=("user",)),)
 
 
 class IdentityUserEmail(Model):
     """Additional email addresses for local user accounts."""
 
+    if TYPE_CHECKING:
+        user_id: uuid.UUID
+
     id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
-    user_id = fields.UUIDField(db_index=True)
+    user = fields.ForeignKeyField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
     email = fields.CharField(max_length=320, unique=True)
     is_primary = fields.BooleanField(default=True)
     is_verified = fields.BooleanField(default=False)
@@ -123,8 +143,16 @@ else:
 class IdentityTotpCredential(Model):
     """A TOTP secret and its current lifecycle state."""
 
+    if TYPE_CHECKING:
+        user_id: uuid.UUID
+
     id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
-    user_id = fields.UUIDField(db_index=True)
+    user = fields.ForeignKeyField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
     crypt_secret = fields.CharField(max_length=1024)
     status = fields.CharField(max_length=16, db_index=True)
     created_at = fields.FloatField(db_index=True)
@@ -139,8 +167,16 @@ class IdentityTotpCredential(Model):
 class IdentityAuthenticationChallenge(Model):
     """Transient authentication challenge metadata."""
 
+    if TYPE_CHECKING:
+        user_id: uuid.UUID
+
     id = fields.CharField(max_length=32, primary_key=True)
-    user_id = fields.UUIDField(db_index=True)
+    user = fields.ForeignKeyField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
     kind = fields.CharField(max_length=16)
     expires_at = fields.FloatField(db_index=True)
     metadata_payload = fields.JSONField(null=True, source_field="metadata")
@@ -152,8 +188,16 @@ class IdentityAuthenticationChallenge(Model):
 class IdentityWebAuthnCredential(Model):
     """A WebAuthn public-key credential linked to a local account."""
 
+    if TYPE_CHECKING:
+        user_id: uuid.UUID
+
     id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
-    user_id = fields.UUIDField(db_index=True)
+    user = fields.ForeignKeyField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
     credential_id = fields.CharField(max_length=1024, unique=True)
     public_key = fields.BinaryField()
     sign_count = fields.IntField(default=0)
@@ -177,8 +221,16 @@ class IdentityWebAuthnCredential(Model):
 class IdentityTotpRecoveryCode(Model):
     """Single-use TOTP recovery codes linked to a TOTP credential."""
 
+    if TYPE_CHECKING:
+        credential_id: uuid.UUID
+
     id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
-    credential_id = fields.UUIDField(db_index=True)
+    credential = fields.ForeignKeyField(
+        "wybra_auth.IdentityTotpCredential",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
     code_verifier = fields.CharField(max_length=256)
     consumed_at = fields.FloatField(null=True, db_index=True)
     created_at = fields.FloatField()
@@ -212,42 +264,86 @@ class Scope(Model):
 class GroupScope(Model):
     """Scope assignment on an authorisation group."""
 
-    group_id = fields.UUIDField(db_index=True)
+    if TYPE_CHECKING:
+        group_id: uuid.UUID
+
+    group = fields.ForeignKeyField(
+        "wybra_auth.Group",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
     scope = fields.CharField(max_length=255, db_index=True)
 
     class Meta:
         table = "identity_group_scope"
-        unique_together = (("group_id", "scope"),)
+        unique_together = (("group", "scope"),)
 
 
 class GroupUser(Model):
     """Direct user membership in an authorisation group."""
 
-    group_id = fields.UUIDField(db_index=True)
-    user_id = fields.UUIDField(db_index=True)
+    if TYPE_CHECKING:
+        group_id: uuid.UUID
+        user_id: uuid.UUID
+
+    group = fields.ForeignKeyField(
+        "wybra_auth.Group",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
+    user = fields.ForeignKeyField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
 
     class Meta:
         table = "identity_group_user"
-        unique_together = (("group_id", "user_id"),)
+        unique_together = (("group", "user"),)
 
 
 class GroupGroup(Model):
     """Nested group membership in an authorisation group tree."""
 
-    parent_group_id = fields.UUIDField(db_index=True)
-    child_group_id = fields.UUIDField(db_index=True)
+    if TYPE_CHECKING:
+        parent_group_id: uuid.UUID
+        child_group_id: uuid.UUID
+
+    parent_group = fields.ForeignKeyField(
+        "wybra_auth.Group",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
+    child_group = fields.ForeignKeyField(
+        "wybra_auth.Group",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
 
     class Meta:
         table = "identity_group_group"
-        unique_together = (("parent_group_id", "child_group_id"),)
+        unique_together = (("parent_group", "child_group"),)
 
 
 class AccessToken(Model):
     """Server-side browser session token."""
 
+    if TYPE_CHECKING:
+        user_id: uuid.UUID
+
     token = fields.CharField(max_length=SESSION_TOKEN_MAX_LENGTH, primary_key=True)
     created_at = fields.DatetimeField(default=current_datetime, db_index=True)
-    user_id = fields.UUIDField(db_index=True)
+    user = fields.ForeignKeyField(
+        "wybra_auth.User",
+        related_name=False,
+        on_delete=fields.CASCADE,
+        db_index=True,
+    )
 
     class Meta:
         table = "identity_access_token"

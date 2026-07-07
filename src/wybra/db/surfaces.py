@@ -27,6 +27,9 @@ from wybra.core.diagnostics import configured_module_message, surface_message
 from wybra.core.modules import CORE_MODULES
 
 _MODEL_PACKAGE_CACHE_SIZE: Final = 32
+DATA_MODULE_DEPENDENCIES: Final[dict[str, tuple[str, ...]]] = {
+    "wybra.profile": ("wybra.auth", "wybra.media"),
+}
 
 
 class DataCompositionError(ValueError):
@@ -153,7 +156,11 @@ def _require_configured_module(module_name: str) -> None:
 
 
 def _data_modules(module_names: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys((*CORE_MODULES, *module_names)))
+    expanded: list[str] = [*CORE_MODULES]
+    for module_name in module_names:
+        expanded.extend(DATA_MODULE_DEPENDENCIES.get(module_name, ()))
+        expanded.append(module_name)
+    return tuple(dict.fromkeys(expanded))
 
 
 def _find_module_spec(module_name: str) -> object | None:

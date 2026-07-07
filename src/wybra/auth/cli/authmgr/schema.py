@@ -190,9 +190,11 @@ def _missing_schema_columns(
 
 
 def _model_column_names(model: type[Model]) -> tuple[str, ...]:
+    relation_fields = {*model._meta.fk_fields, *model._meta.o2o_fields}
     return tuple(
         str(field.source_field or field_name)
         for field_name, field in model._meta.fields_map.items()
+        if field_name not in relation_fields
     )
 
 

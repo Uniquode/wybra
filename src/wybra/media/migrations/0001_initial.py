@@ -45,7 +45,15 @@ class Migration(migrations.Migration):
                         primary_key=True, unique=True, db_index=True, max_length=255
                     ),
                 ),
-                ("media_id", fields.UUIDField(db_index=True)),
+                (
+                    "media",
+                    fields.ForeignKeyField(
+                        "wybra_media.MediaItem",
+                        related_name=False,
+                        on_delete=fields.CASCADE,
+                        db_index=True,
+                    ),
+                ),
             ],
             options={
                 "table": "media_resource_key",

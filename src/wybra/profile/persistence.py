@@ -182,20 +182,25 @@ class TortoiseProfileRepository:
         if require_sms:
             query = query.filter(sms_capable=True)
 
-        contacts: list[UserPhoneContact] = []
-        for contact in await query.all():
-            duplicate_exists = await (
-                UserPhoneContact.filter(
-                    normalised_number=contact.normalised_number,
-                )
-                .filter(Q(verified_at__isnull=False))
-                .exclude(user_id=user_id)
-                .using_db(self.database.require().connection())
-                .exists()
+        contacts = tuple(await query.all())
+        if not contacts:
+            return ()
+
+        numbers = {contact.normalised_number for contact in contacts}
+        shared_numbers = set(
+            await UserPhoneContact.filter(
+                normalised_number__in=numbers,
             )
-            if not duplicate_exists:
-                contacts.append(contact)
-        return tuple(contacts)
+            .filter(Q(verified_at__isnull=False))
+            .exclude(user_id=user_id)
+            .using_db(self.database.require().connection())
+            .values_list("normalised_number", flat=True)
+        )
+        return tuple(
+            contact
+            for contact in contacts
+            if contact.normalised_number not in shared_numbers
+        )
 
 
 async def _ensure_profile(connection: Any, user_id: uuid.UUID) -> UserProfile:

@@ -239,6 +239,9 @@ async def _create_auth_schema(site) -> None:
     database = site.require_capability(DatabaseCapability)
     assert isinstance(database, TortoiseDatabaseCapability)
     await database.generate_schemas()
+    user_id = getattr(site.app.state, "security_test_user_id", None)
+    if isinstance(user_id, uuid.UUID):
+        await _ensure_identity_user(site, user_id)
 
 
 async def _create_active_totp_credential(
@@ -266,6 +269,25 @@ async def _create_active_totp_credential(
             recovery_codes,
         )
     return secret, recovery_codes
+
+
+async def _ensure_identity_user(
+    site,
+    user_id: uuid.UUID,
+    *,
+    email: str = "security@example.test",
+) -> None:
+    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+        await User.get_or_create(
+            id=user_id,
+            defaults={
+                "email": email,
+                "hashed_password": "hash",
+                "is_active": True,
+                "is_verified": True,
+            },
+            using_db=db_session,
+        )
 
 
 async def _active_totp_credential_id(site, user_id: uuid.UUID) -> str | None:
@@ -428,8 +450,10 @@ async def _start_security_site(
         auth_config=auth_config,
         account_prefix=account_prefix,
     )
+    resolved_user_id = user_id or uuid.uuid4()
     site = await start(app, config_source=config_source)
-    _override_current_user(site.app, user_id=user_id)
+    site.app.state.security_test_user_id = resolved_user_id
+    _override_current_user(site.app, user_id=resolved_user_id)
     return site
 
 

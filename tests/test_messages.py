@@ -366,6 +366,36 @@ async def test_database_storage_persists_and_pops_alerts() -> None:
 
 
 @pytest.mark.anyio
+async def test_database_storage_queue_depth_keeps_newest_alerts() -> None:
+    settings = _settings({"storage_backend": "database", "queue_depth": 2})
+    database, db_capability = await _database_capability()
+    app = FastAPI()
+    site = Site(
+        app=app,
+        config=ConfigService([], discover_module_config=False),
+    )
+    site.provide_capability(DatabaseCapability, db_capability)
+    capability = DefaultMessagesCapability(
+        settings,
+        DatabaseMessagesStorage(
+            settings,
+            site.capability_proxy(DatabaseCapability),
+        ),
+    )
+    session: dict[str, object] = {}
+
+    try:
+        await capability.success(_request(session), "One")
+        await capability.warning(_request(session), "Two")
+        await capability.error(_request(session), "Three")
+        alerts = await capability.consume_alerts(_request(session))
+    finally:
+        await close_database(database)
+
+    assert [alert.message for alert in alerts] == ["Two", "Three"]
+
+
+@pytest.mark.anyio
 async def test_database_storage_removes_alert_queue_when_session_is_deleted() -> None:
     settings = _settings({"storage_backend": "database"})
     database, db_capability = await _database_capability(
