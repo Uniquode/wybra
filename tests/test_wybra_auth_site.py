@@ -2,6 +2,7 @@ import re
 import sys
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,8 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import select
+from fastapi.testclient import TestClient as FastAPITestClient
 
 from provider_test_keys import apple_private_key_pem as _apple_private_key_pem
 from support_database import sqlite_file_url
@@ -25,21 +25,20 @@ from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.delivery import NullIdentityDelivery
 from wybra.auth.mfa.recovery import generate_recovery_codes
 from wybra.auth.mfa.storage import (
-    SqlAlchemyChallengeStore,
-    SqlAlchemyRecoveryCodeStore,
-    SqlAlchemyTOTPCredentialStore,
-    SqlAlchemyWebAuthnCredentialStore,
+    TortoiseChallengeStore,
+    TortoiseRecoveryCodeStore,
+    TortoiseTOTPCredentialStore,
+    TortoiseWebAuthnCredentialStore,
 )
 from wybra.auth.mfa.totp import generate_totp, generate_totp_secret
 from wybra.auth.mfa.webauthn import credential_id_to_text
 from wybra.auth.models import ExternalIdentityLink, IdentityProvider, User
-from wybra.auth.models import metadata as auth_metadata
-from wybra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
+from wybra.auth.provider_credentials import TortoiseProviderCredentialStore
 from wybra.auth.routes.pages import passkeys as passkey_pages
 from wybra.auth.routes.pages import totp_management as totp_management_pages
 from wybra.auth.routes.totp import TOTP_LOGIN_NONCE_COOKIE
 from wybra.config import MappingConfigSource
-from wybra.db import DatabaseCapability
+from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
 from wybra.providers.apple import (
     APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
     APPLE_OAUTH_STATE_COOKIE,
@@ -87,6 +86,45 @@ from wybra.providers.google import (
 from wybra.services.crypto import SecretEnvelopeService
 from wybra.services.secrets import MissingSecretError, SecretsCapability, SecretValue
 from wybra.site import Site, SiteCapabilityError, start
+
+
+class TestClient(FastAPITestClient):
+    """Test client that closes Tortoise connections before request-loop teardown."""
+
+    @contextmanager
+    def _portal_factory(self):
+        with super()._portal_factory() as portal:
+            try:
+                yield portal
+            finally:
+                portal.call(_close_testclient_tortoise_connections, self.app)
+
+
+async def _close_testclient_tortoise_connections(app) -> None:
+    site = getattr(getattr(app, "state", None), "site", None)
+    if site is None:
+        return
+    try:
+        database = site.require_capability(DatabaseCapability)
+    except SiteCapabilityError:
+        return
+    if not isinstance(database, TortoiseDatabaseCapability):
+        return
+
+    # TestClient runs requests on a private loop. Close any connections opened
+    # there before that loop is torn down; the next request or assertion can
+    # reconnect through the same Tortoise context.
+    with database._database.context:
+        await database._database.context.connections.close_all(discard=True)
+
+
+# These async tests intentionally exercise the ASGI app through Starlette's
+# synchronous TestClient. TestClient runs requests on its own event loop, while
+# setup/assertion helpers use pytest's anyio loop. Runtime ASGI servers do not
+# use this split, and Tortoise reconnects safely in this test-only pattern.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::tortoise.warnings.TortoiseLoopSwitchWarning"
+)
 
 PAGE_MODULES = (
     "wybra.forms",
@@ -198,12 +236,9 @@ def _site_config_source(
 
 
 async def _create_auth_schema(site) -> None:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
-
-        def create_all(sync_session) -> None:
-            auth_metadata.create_all(sync_session.get_bind())
-
-        await db_session.run_sync(create_all)
+    database = site.require_capability(DatabaseCapability)
+    assert isinstance(database, TortoiseDatabaseCapability)
+    await database.generate_schemas()
 
 
 async def _create_active_totp_credential(
@@ -215,7 +250,7 @@ async def _create_active_totp_credential(
     secret = generate_totp_secret()
     recovery_codes = generate_recovery_codes()
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        store = SqlAlchemyTOTPCredentialStore(
+        store = TortoiseTOTPCredentialStore(
             db_session,
             secret_service,
         )
@@ -224,7 +259,7 @@ async def _create_active_totp_credential(
             secret,
         )
         await store.activate_totp_credential(credential_id)
-        recovery_store = SqlAlchemyRecoveryCodeStore(db_session, secret_service)
+        recovery_store = TortoiseRecoveryCodeStore(db_session, secret_service)
         await recovery_store.replace_recovery_codes(
             str(user_id),
             credential_id,
@@ -235,7 +270,7 @@ async def _create_active_totp_credential(
 
 async def _active_totp_credential_id(site, user_id: uuid.UUID) -> str | None:
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        store = SqlAlchemyTOTPCredentialStore(
+        store = TortoiseTOTPCredentialStore(
             db_session,
             site.app.state.secret_envelope_service,
         )
@@ -251,7 +286,7 @@ async def _create_passkey_credential(
 ) -> str:
     stored_credential_id = credential_id or credential_id_to_text(b"test-passkey")
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        store = SqlAlchemyWebAuthnCredentialStore(db_session)
+        store = TortoiseWebAuthnCredentialStore(db_session)
         return await store.store_webauthn_credential(
             str(user_id),
             stored_credential_id,
@@ -269,13 +304,13 @@ async def _create_passkey_credential(
 
 async def _active_passkey_count(site, user_id: uuid.UUID) -> int:
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        store = SqlAlchemyWebAuthnCredentialStore(db_session)
+        store = TortoiseWebAuthnCredentialStore(db_session)
         return await store.count_active_webauthn_credentials(str(user_id))
 
 
 async def _authentication_challenge_exists(site, challenge_id: str) -> bool:
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        store = SqlAlchemyChallengeStore(db_session)
+        store = TortoiseChallengeStore(db_session)
         return await store.get_challenge(challenge_id) is not None
 
 
@@ -358,6 +393,7 @@ async def _create_local_user(
             safe=True,
         )
         user.is_verified = is_verified
+        await user.save(using_db=db_session)
         return user.id
 
 
@@ -367,14 +403,15 @@ async def _set_password_login_enabled(
     enabled: bool,
 ) -> None:
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        user = await db_session.get(User, user_id)
+        user = await User.get_or_none(id=user_id, using_db=db_session)
         assert user is not None
         user.password_login_enabled = enabled
+        await user.save(using_db=db_session)
 
 
 async def _password_login_enabled(site, user_id: uuid.UUID) -> bool:
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        user = await db_session.get(User, user_id)
+        user = await User.get_or_none(id=user_id, using_db=db_session)
         assert user is not None
         return user.password_login_enabled
 
@@ -608,7 +645,7 @@ async def _create_google_provider_link(
     account_email: str = "user@example.com",
 ) -> str:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        store = SqlAlchemyProviderCredentialStore(
+        store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
         )
@@ -633,7 +670,7 @@ async def _create_github_provider_link(
     account_email: str = "user@example.com",
 ) -> str:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        store = SqlAlchemyProviderCredentialStore(
+        store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
         )
@@ -658,7 +695,7 @@ async def _create_apple_provider_link(
     account_email: str = "user@example.com",
 ) -> str:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        store = SqlAlchemyProviderCredentialStore(
+        store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
         )
@@ -681,15 +718,18 @@ async def _google_provider_linked_user_id(
     provider_subject: str,
 ) -> uuid.UUID | None:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        result = await session.execute(
-            select(ExternalIdentityLink.user_id)
-            .join(IdentityProvider)
-            .where(
-                IdentityProvider.provider_name == GOOGLE_PROVIDER_NAME,
-                IdentityProvider.provider_subject == provider_subject,
-            )
+        provider = await IdentityProvider.get_or_none(
+            provider_name=GOOGLE_PROVIDER_NAME,
+            provider_subject=provider_subject,
+            using_db=session,
         )
-        return result.scalar_one_or_none()
+        if provider is None:
+            return None
+        link = await ExternalIdentityLink.get_or_none(
+            provider_id=provider.id,
+            using_db=session,
+        )
+        return None if link is None else link.user_id
 
 
 async def _github_provider_linked_user_id(
@@ -698,15 +738,18 @@ async def _github_provider_linked_user_id(
     provider_subject: str,
 ) -> uuid.UUID | None:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        result = await session.execute(
-            select(ExternalIdentityLink.user_id)
-            .join(IdentityProvider)
-            .where(
-                IdentityProvider.provider_name == GITHUB_PROVIDER_NAME,
-                IdentityProvider.provider_subject == provider_subject,
-            )
+        provider = await IdentityProvider.get_or_none(
+            provider_name=GITHUB_PROVIDER_NAME,
+            provider_subject=provider_subject,
+            using_db=session,
         )
-        return result.scalar_one_or_none()
+        if provider is None:
+            return None
+        link = await ExternalIdentityLink.get_or_none(
+            provider_id=provider.id,
+            using_db=session,
+        )
+        return None if link is None else link.user_id
 
 
 async def _apple_provider_linked_user_id(
@@ -715,15 +758,18 @@ async def _apple_provider_linked_user_id(
     provider_subject: str,
 ) -> uuid.UUID | None:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        result = await session.execute(
-            select(ExternalIdentityLink.user_id)
-            .join(IdentityProvider)
-            .where(
-                IdentityProvider.provider_name == APPLE_PROVIDER_NAME,
-                IdentityProvider.provider_subject == provider_subject,
-            )
+        provider = await IdentityProvider.get_or_none(
+            provider_name=APPLE_PROVIDER_NAME,
+            provider_subject=provider_subject,
+            using_db=session,
         )
-        return result.scalar_one_or_none()
+        if provider is None:
+            return None
+        link = await ExternalIdentityLink.get_or_none(
+            provider_id=provider.id,
+            using_db=session,
+        )
+        return None if link is None else link.user_id
 
 
 def _test_client_secret() -> str:
@@ -840,13 +886,12 @@ async def _google_provider_id(
     provider_subject: str,
 ) -> uuid.UUID | None:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        result = await session.execute(
-            select(IdentityProvider.id).where(
-                IdentityProvider.provider_name == GOOGLE_PROVIDER_NAME,
-                IdentityProvider.provider_subject == provider_subject,
-            )
+        provider = await IdentityProvider.get_or_none(
+            provider_name=GOOGLE_PROVIDER_NAME,
+            provider_subject=provider_subject,
+            using_db=session,
         )
-        return result.scalar_one_or_none()
+        return None if provider is None else provider.id
 
 
 async def _google_provider_subjects_for_user(
@@ -855,22 +900,27 @@ async def _google_provider_subjects_for_user(
     user_id: uuid.UUID,
 ) -> tuple[str, ...]:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        result = await session.execute(
-            select(IdentityProvider.provider_subject)
-            .join(ExternalIdentityLink)
-            .where(
-                ExternalIdentityLink.user_id == user_id,
-                IdentityProvider.provider_name == GOOGLE_PROVIDER_NAME,
+        provider_ids = (
+            await ExternalIdentityLink.filter(
+                user_id=user_id,
             )
-            .order_by(IdentityProvider.provider_subject)
+            .using_db(session)
+            .values_list("provider_id", flat=True)
         )
-        return tuple(result.scalars().all())
+        providers = (
+            await IdentityProvider.filter(
+                id__in=provider_ids,
+                provider_name=GOOGLE_PROVIDER_NAME,
+            )
+            .using_db(session)
+            .order_by("provider_subject")
+        )
+        return tuple(provider.provider_subject for provider in providers)
 
 
 async def _google_user_by_email(site, email: str) -> User | None:
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        result = await session.execute(select(User).where(User.email == email))
-        return result.unique().scalar_one_or_none()
+        return await User.get_or_none(email=email, using_db=session)
 
 
 def _authenticated_client(
@@ -1069,9 +1119,9 @@ async def test_wybra_auth_setup_site_registers_auth_capability(
     assert callable(auth.optional_current_user)
     assert callable(auth.login_required)
     assert callable(auth.anonymous_required)
-    assert callable(auth_persistence.session)
+    assert callable(auth_persistence.scope)
     assert callable(auth_persistence.transaction)
-    async with auth_persistence.session() as persistence_scope:
+    async with auth_persistence.scope() as persistence_scope:
         assert callable(persistence_scope.management.resolve_user_record)
     assert callable(login_required)
     assert callable(anonymous_required)
@@ -3439,7 +3489,7 @@ async def test_passkey_registration_stores_verified_credential(
         "redirect_to": "/account/security",
     }
     async with site.require_capability(DatabaseCapability).transaction() as session:
-        store = SqlAlchemyWebAuthnCredentialStore(session)
+        store = TortoiseWebAuthnCredentialStore(session)
         credential = await store.get_webauthn_credential(credential_id)
         assert credential is not None
         assert credential.label == "Laptop key"
@@ -4641,7 +4691,7 @@ async def test_totp_recovery_code_replacement_requires_confirmation(
     assert response.status_code == 400
     assert "Confirm this action" in response.text
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        recovery_store = SqlAlchemyRecoveryCodeStore(
+        recovery_store = TortoiseRecoveryCodeStore(
             db_session,
             site.app.state.secret_envelope_service,
         )
@@ -4696,7 +4746,7 @@ async def test_totp_recovery_code_replacement_rotates_codes_after_confirmation(
     assert "Store these recovery codes" in response.text
     _assert_recovery_codes_download(response.text)
     async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        recovery_store = SqlAlchemyRecoveryCodeStore(
+        recovery_store = TortoiseRecoveryCodeStore(
             db_session,
             site.app.state.secret_envelope_service,
         )

@@ -3,10 +3,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
-from sqlalchemy import exists, select
-from sqlalchemy.orm import aliased
+from tortoise.expressions import Q
 
 from wybra.db import DatabaseCapability
 from wybra.profile.exceptions import ProfileInputError
@@ -19,7 +18,7 @@ type ProfileFieldSetter = Callable[[UserProfile, ProfileFieldValue], None]
 
 
 class ProfileRepository(Protocol):
-    """Storage-neutral profile persistence operations."""
+    """Profile persistence operations."""
 
     async def get_profile(self, user_id: uuid.UUID) -> UserProfile | None: ...
 
@@ -72,30 +71,30 @@ class ProfileRepository(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class SqlAlchemyProfileRepository:
-    """SQLAlchemy-backed profile repository adapter."""
+class TortoiseProfileRepository:
+    """Tortoise-backed profile repository."""
 
     database: SiteCapabilityProxy[DatabaseCapability]
 
     async def get_profile(self, user_id: uuid.UUID) -> UserProfile | None:
-        async with self.database.session() as session:
-            return await session.scalar(
-                select(UserProfile).where(UserProfile.user_id == user_id)
-            )
+        return await UserProfile.get_or_none(
+            user_id=user_id,
+            using_db=self.database.require().connection(),
+        )
 
     async def ensure_profile(self, user_id: uuid.UUID) -> UserProfile:
-        async with self.database.transaction() as session:
-            return await _ensure_profile(session, user_id)
+        async with self.database.require().transaction() as connection:
+            return await _ensure_profile(connection, user_id)
 
     async def set_profile_picture(
         self,
         user_id: uuid.UUID,
         media_id: uuid.UUID | None,
     ) -> UserProfile:
-        async with self.database.transaction() as session:
-            profile = await _ensure_profile(session, user_id)
+        async with self.database.require().transaction() as connection:
+            profile = await _ensure_profile(connection, user_id)
             profile.profile_picture_media_id = media_id
-            await session.flush()
+            await profile.save(using_db=connection)
             return profile
 
     async def save_profile_fields(
@@ -105,9 +104,9 @@ class SqlAlchemyProfileRepository:
         *,
         field_setters: Mapping[str, ProfileFieldSetter],
     ) -> UserProfile:
-        async with self.database.transaction() as session:
+        async with self.database.require().transaction() as connection:
             return await _save_profile_fields(
-                session,
+                connection,
                 user_id,
                 values,
                 field_setters=field_setters,
@@ -122,9 +121,9 @@ class SqlAlchemyProfileRepository:
         subdivision_code: str | None = None,
         contact_id: uuid.UUID | None = None,
     ) -> UserPhoneContact:
-        async with self.database.transaction() as session:
+        async with self.database.require().transaction() as connection:
             return await _save_phone_contact(
-                session,
+                connection,
                 user_id,
                 number=number,
                 country_code=country_code,
@@ -140,17 +139,17 @@ class SqlAlchemyProfileRepository:
         field_setters: Mapping[str, ProfileFieldSetter],
         phone_contact: Mapping[str, str | None] | None = None,
     ) -> None:
-        async with self.database.transaction() as session:
+        async with self.database.require().transaction() as connection:
             if profile_values:
                 await _save_profile_fields(
-                    session,
+                    connection,
                     user_id,
                     profile_values,
                     field_setters=field_setters,
                 )
             if phone_contact is not None:
                 await _save_phone_contact(
-                    session,
+                    connection,
                     user_id,
                     number=phone_contact["number"] or "",
                     country_code=phone_contact["country_code"],
@@ -161,16 +160,12 @@ class SqlAlchemyProfileRepository:
         self,
         user_id: uuid.UUID,
     ) -> tuple[UserPhoneContact, ...]:
-        async with self.database.session() as session:
-            return tuple(
-                (
-                    await session.scalars(
-                        select(UserPhoneContact)
-                        .where(UserPhoneContact.user_id == user_id)
-                        .order_by(UserPhoneContact.id)
-                    )
-                ).all()
-            )
+        return tuple(
+            await UserPhoneContact.filter(user_id=user_id)
+            .using_db(self.database.require().connection())
+            .order_by("id")
+            .all()
+        )
 
     async def recovery_eligible_phone_contacts(
         self,
@@ -178,45 +173,49 @@ class SqlAlchemyProfileRepository:
         *,
         require_sms: bool = True,
     ) -> tuple[UserPhoneContact, ...]:
-        other_contact = aliased(UserPhoneContact)
-        duplicate_verified_number_exists = exists().where(
-            other_contact.user_id != UserPhoneContact.user_id,
-            other_contact.normalised_number == UserPhoneContact.normalised_number,
-            other_contact.verified_at.is_not(None),
-        )
         query = (
-            select(UserPhoneContact)
-            .where(UserPhoneContact.user_id == user_id)
-            .where(UserPhoneContact.verified_at.is_not(None))
-            .where(~duplicate_verified_number_exists)
-            .order_by(UserPhoneContact.id)
+            UserPhoneContact.filter(user_id=user_id)
+            .filter(Q(verified_at__isnull=False))
+            .using_db(self.database.require().connection())
+            .order_by("id")
         )
         if require_sms:
-            query = query.where(UserPhoneContact.sms_capable.is_(True))
-        async with self.database.session() as session:
-            return tuple((await session.scalars(query)).all())
+            query = query.filter(sms_capable=True)
+
+        contacts: list[UserPhoneContact] = []
+        for contact in await query.all():
+            duplicate_exists = await (
+                UserPhoneContact.filter(
+                    normalised_number=contact.normalised_number,
+                )
+                .filter(Q(verified_at__isnull=False))
+                .exclude(user_id=user_id)
+                .using_db(self.database.require().connection())
+                .exists()
+            )
+            if not duplicate_exists:
+                contacts.append(contact)
+        return tuple(contacts)
 
 
-async def _ensure_profile(session, user_id: uuid.UUID) -> UserProfile:
-    existing = await session.scalar(
-        select(UserProfile).where(UserProfile.user_id == user_id)
+async def _ensure_profile(connection: Any, user_id: uuid.UUID) -> UserProfile:
+    existing = await UserProfile.get_or_none(
+        user_id=user_id,
+        using_db=connection,
     )
     if existing is not None:
         return existing
-    profile = UserProfile(user_id=user_id)
-    session.add(profile)
-    await session.flush()
-    return profile
+    return await UserProfile.create(user_id=user_id, using_db=connection)
 
 
 async def _save_profile_fields(
-    session,
+    connection: Any,
     user_id: uuid.UUID,
     values: Mapping[str, ProfileFieldValue],
     *,
     field_setters: Mapping[str, ProfileFieldSetter],
 ) -> UserProfile:
-    profile = await _ensure_profile(session, user_id)
+    profile = await _ensure_profile(connection, user_id)
     for field_name, value in values.items():
         try:
             setter = field_setters[field_name]
@@ -225,12 +224,12 @@ async def _save_profile_fields(
                 f"Unknown profile field submitted: {field_name}."
             ) from exc
         setter(profile, value)
-    await session.flush()
+    await profile.save(using_db=connection)
     return profile
 
 
 async def _save_phone_contact(
-    session,
+    connection: Any,
     user_id: uuid.UUID,
     *,
     number: str,
@@ -244,14 +243,11 @@ async def _save_phone_contact(
         subdivision_code=subdivision_code,
     )
     contact = (
-        await _phone_contact(session, user_id, contact_id)
+        await _phone_contact(connection, user_id, contact_id)
         if contact_id is not None
         else UserPhoneContact(user_id=user_id)
     )
-    if contact_id is None:
-        session.add(contact)
-
-    previous_number = contact.normalised_number
+    previous_number = getattr(contact, "normalised_number", None)
     contact.country_code = normalised.country_code
     contact.subdivision_code = normalised.subdivision_code
     contact.normalised_number = normalised.normalised_number
@@ -259,19 +255,19 @@ async def _save_phone_contact(
     contact.sms_capable = normalised.sms_capable
     if previous_number != normalised.normalised_number:
         contact.verified_at = None
-    await session.flush()
+    await contact.save(using_db=connection)
     return contact
 
 
 async def _phone_contact(
-    session,
+    connection: Any,
     user_id: uuid.UUID,
     contact_id: uuid.UUID,
 ) -> UserPhoneContact:
-    contact = await session.scalar(
-        select(UserPhoneContact)
-        .where(UserPhoneContact.id == contact_id)
-        .where(UserPhoneContact.user_id == user_id)
+    contact = await UserPhoneContact.get_or_none(
+        id=contact_id,
+        user_id=user_id,
+        using_db=connection,
     )
     if contact is None:
         raise ProfileInputError("Phone contact was not found for this user.")

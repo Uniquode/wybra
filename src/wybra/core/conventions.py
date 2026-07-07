@@ -10,7 +10,6 @@ CONTEXT_SURFACE_MODULE: Final = "context"
 MODEL_METADATA_ATTRIBUTE: Final = "metadata"
 MODEL_SURFACE_MODULE: Final = "models"
 MIGRATION_RESOURCE_DIRECTORY: Final = "migrations"
-MIGRATION_VERSIONS_DIRECTORY: Final = "versions"
 ROUTE_EXPORT_ATTRIBUTE: Final = "module_routers"
 ROUTE_MODULE: Final = "routes"
 STATIC_RESOURCE_DIRECTORY: Final = "static"
@@ -26,7 +25,6 @@ def module_surface_name(module_name: str, surface_module: str) -> str:
 __all__ = (
     "CONTEXT_SURFACE_MODULE",
     "MIGRATION_RESOURCE_DIRECTORY",
-    "MIGRATION_VERSIONS_DIRECTORY",
     "MODEL_METADATA_ATTRIBUTE",
     "MODEL_SURFACE_MODULE",
     "ROUTE_EXPORT_ATTRIBUTE",

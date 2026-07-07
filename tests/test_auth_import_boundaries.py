@@ -5,20 +5,9 @@ from pathlib import Path
 FASTAPI_USERS_IMPORTS = ("fastapi_users", "fastapi_users_db_sqlalchemy")
 FASTAPI_USERS_DEPENDENCIES = ("fastapi-users", "fastapi-users-db-sqlalchemy")
 SQLALCHEMY_IMPORT = "sqlalchemy"
-AUTH_SQLALCHEMY_ALLOWED_PATHS = {
-    Path("src/wybra/auth/accounts/bootstrap.py"),
-    Path("src/wybra/auth/admin/management.py"),
-    Path("src/wybra/auth/authorisation/effective.py"),
-    Path("src/wybra/auth/capabilities.py"),
-    Path("src/wybra/auth/cli/authmgr/schema.py"),
-    Path("src/wybra/auth/context.py"),
-    Path("src/wybra/auth/emails.py"),
-    Path("src/wybra/auth/mfa/storage.py"),
-    Path("src/wybra/auth/models.py"),
-    Path("src/wybra/auth/persistence/database.py"),
-    Path("src/wybra/auth/persistence/strategies.py"),
-    Path("src/wybra/auth/provider_credentials.py"),
-}
+ALEMBIC_IMPORT = "alembic"
+PERSISTENCE_IMPORTS = (SQLALCHEMY_IMPORT, ALEMBIC_IMPORT)
+PERSISTENCE_DEPENDENCIES = ("sqlalchemy", "alembic")
 
 
 def test_project_dependencies_exclude_fastapi_users() -> None:
@@ -28,6 +17,15 @@ def test_project_dependencies_exclude_fastapi_users() -> None:
     for dependency in dependencies:
         normalised_dependency = dependency.lower()
         assert not normalised_dependency.startswith(FASTAPI_USERS_DEPENDENCIES)
+
+
+def test_project_dependencies_exclude_removed_persistence_packages() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = tuple(project["project"]["dependencies"])
+
+    for dependency in dependencies:
+        normalised_dependency = dependency.lower()
+        assert not normalised_dependency.startswith(PERSISTENCE_DEPENDENCIES)
 
 
 def test_source_and_tests_do_not_import_fastapi_users() -> None:
@@ -49,29 +47,20 @@ def test_source_and_tests_do_not_import_fastapi_users() -> None:
     assert imported_modules == {}
 
 
-def test_auth_runtime_sqlalchemy_imports_stay_in_adapter_boundaries() -> None:
+def test_source_does_not_import_removed_persistence_packages() -> None:
     blocked_imports: dict[Path, set[str]] = {}
-    for path in Path("src/wybra/auth").rglob("*.py"):
-        if _is_auth_sqlalchemy_boundary(path):
-            continue
-
+    for path in Path("src").rglob("*.py"):
         imports = _imported_modules(path)
-        sqlalchemy_imports = {
+        persistence_imports = {
             imported
             for imported in imports
-            if imported == SQLALCHEMY_IMPORT
-            or imported.startswith(f"{SQLALCHEMY_IMPORT}.")
+            if imported in PERSISTENCE_IMPORTS
+            or imported.startswith(tuple(f"{name}." for name in PERSISTENCE_IMPORTS))
         }
-        if sqlalchemy_imports:
-            blocked_imports[path] = sqlalchemy_imports
+        if persistence_imports:
+            blocked_imports[path] = persistence_imports
 
     assert blocked_imports == {}
-
-
-def _is_auth_sqlalchemy_boundary(path: Path) -> bool:
-    if path in AUTH_SQLALCHEMY_ALLOWED_PATHS:
-        return True
-    return "migrations" in path.parts
 
 
 def _imported_modules(path: Path) -> set[str]:

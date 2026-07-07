@@ -1,8 +1,5 @@
-from sqlalchemy.orm import DeclarativeBase
+from __future__ import annotations
 
+from tortoise.models import Model
 
-class Base(DeclarativeBase):
-    """Shared declarative base for reusable SQLAlchemy models."""
-
-
-metadata = Base.metadata
+__all__ = ("Model",)

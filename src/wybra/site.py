@@ -355,8 +355,12 @@ async def start(
         deployment_environment=deployment_environment,
     )
     app.state.site = site
-    await _compose_site(site, module_loader or import_module)
-    _setup_core_diagnostics(site)
+    try:
+        await _compose_site(site, module_loader or import_module)
+        _setup_core_diagnostics(site)
+    except Exception:
+        await site.close()
+        raise
     return site
 
 

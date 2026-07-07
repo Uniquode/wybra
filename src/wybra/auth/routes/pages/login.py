@@ -54,7 +54,7 @@ from .shared import (
     _load_user_by_id,
     _login_error_response,
     _login_page_context,
-    _session_factory_from_request,
+    _persistence_scope_from_request,
     _totp_login_error_response,
     _totp_setup_return_to,
     _verification_required_response,
@@ -162,8 +162,8 @@ async def _handle_totp_post_authentication_decision(
     if options.totp_mode == TOTP_DISABLED:
         return await _complete_login_ceremony(request, user, return_to=return_to)
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         credential_id = await _load_active_totp_credential_id(scope, user.id)
         if credential_id:
             challenge_id, login_nonce = await _create_totp_login_challenge(
@@ -215,13 +215,12 @@ async def _handle_login_totp_challenge(
 ) -> Response:
     del password
     options = _identity_options(request)
-    session_factory = _session_factory_from_request(request)
+    scope_factory = _persistence_scope_from_request(request)
     challenge_step = "totp"
 
-    async with session_factory() as scope:
+    async with scope_factory() as scope:
         challenge = await scope.challenges.get_challenge(challenge_id)
         if challenge is None:
-            await scope.commit()
             return _totp_login_error_response(
                 request,
                 email=email,
@@ -258,7 +257,6 @@ async def _handle_login_totp_challenge(
             )
             if setup_bypass:
                 await scope.challenges.consume_challenge(challenge_id)
-                await scope.commit()
 
                 ceremony_result = await complete_authentication_ceremony(
                     request,
@@ -384,7 +382,6 @@ async def _handle_login_totp_challenge(
                 credential_problem,
             )
             await scope.challenges.consume_challenge(challenge_id)
-            await scope.commit()
             return _totp_login_error_response(
                 request,
                 email=email,
@@ -459,7 +456,6 @@ async def _handle_login_totp_challenge(
             )
 
         await scope.challenges.consume_challenge(challenge_id)
-        await scope.commit()
 
     ceremony_result = await complete_authentication_ceremony(
         request,

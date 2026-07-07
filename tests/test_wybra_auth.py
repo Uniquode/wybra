@@ -2,16 +2,21 @@ import ast
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.exceptions import BaseORMException
+from tortoise.transactions import in_transaction
 from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 
+import wybra.auth.accounts.bootstrap as auth_bootstrap
+import wybra.auth.admin.management as auth_management
 import wybra.auth.context as auth_context
 import wybra.auth.mfa.webauthn as webauthn_mfa
 from support_database import sqlite_file_url
@@ -67,9 +72,9 @@ from wybra.auth.admin.management import (
 from wybra.auth.mfa.challenges import assertions_satisfy_required_methods
 from wybra.auth.mfa.storage import (
     TOTP_CODE_REPLAY_MESSAGE,
-    SqlAlchemyRecoveryCodeStore,
-    SqlAlchemyTOTPCredentialStore,
-    SqlAlchemyWebAuthnCredentialStore,
+    TortoiseRecoveryCodeStore,
+    TortoiseTOTPCredentialStore,
+    TortoiseWebAuthnCredentialStore,
     WebAuthnCredentialRecord,
 )
 from wybra.auth.mfa.totp import (
@@ -82,8 +87,8 @@ from wybra.auth.mfa.totp import (
 )
 from wybra.auth.models import (
     AccessToken,
-    Base,
     ExternalIdentityLink,
+    Group,
     GroupGroup,
     GroupScope,
     GroupUser,
@@ -92,19 +97,15 @@ from wybra.auth.models import (
     IdentityTotpRecoveryCode,
     IdentityUserEmail,
     IdentityWebAuthnCredential,
+    InitialAdminBootstrap,
+    Scope,
     User,
 )
-from wybra.auth.models import metadata as wybra_auth_metadata
 from wybra.auth.options import VALID_IDENTITY_INTEGRATIONS
-from wybra.auth.persistence import auth_persistence_session
-from wybra.auth.persistence.database import (
-    close_database,
-    create_database,
-    session_scope,
-)
+from wybra.auth.persistence import auth_persistence_scope
 from wybra.auth.provider_credentials import (
     ProviderCredentialStorageError,
-    SqlAlchemyProviderCredentialStore,
+    TortoiseProviderCredentialStore,
 )
 from wybra.auth.routes import normalise_return_to
 from wybra.auth.routes.totp import verify_totp_code_for_credential
@@ -113,6 +114,8 @@ from wybra.auth.session_tokens import (
     generate_session_token,
 )
 from wybra.core.exceptions import ConfigurationError
+from wybra.db.capabilities import DEFAULT_CONNECTION_NAME
+from wybra.db.persistence import Database, close_database, create_database
 from wybra.services.crypto import (
     ENVELOPE_PREFIX,
     PLAIN_TEXT_VERSION,
@@ -124,11 +127,46 @@ from wybra.services.crypto import (
 from wybra.template.context import TemplateContext
 
 
-async def initialise_auth_database(database_url: str):
-    database = create_database(database_url)
-    async with database.engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+async def initialise_auth_database(database_url: str) -> Database:
+    database = await create_database(database_url, modules=("wybra.auth",))
+    await database.context.generate_schemas()
     return database
+
+
+@asynccontextmanager
+async def connection_scope(
+    database: Database,
+) -> AsyncIterator[BaseDBAsyncClient]:
+    yield database.connection()
+
+
+async def create_test_user(
+    connection: BaseDBAsyncClient,
+    *,
+    email: str,
+    hashed_password: str | None = "hash",
+    is_active: bool = True,
+    is_superuser: bool = False,
+    is_verified: bool = True,
+    **values: object,
+) -> User:
+    user = await User.create(
+        email=email,
+        hashed_password=hashed_password,
+        is_active=is_active,
+        is_superuser=is_superuser,
+        is_verified=is_verified,
+        using_db=connection,
+        **values,
+    )
+    await IdentityUserEmail.create(
+        user_id=user.id,
+        email=email,
+        is_primary=True,
+        is_verified=is_verified,
+        using_db=connection,
+    )
+    return user
 
 
 def make_test_only_secret_service() -> SecretEnvelopeService:
@@ -192,7 +230,7 @@ def test_identity_template_context_treats_session_lookup_failure_as_anonymous(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def resolve_current_user(_request: object) -> None:
-        raise SQLAlchemyError("stale session token")
+        raise BaseORMException("stale session token")
 
     async def assert_context() -> None:
         request = SimpleNamespace(state=SimpleNamespace())
@@ -213,62 +251,125 @@ def test_identity_template_context_treats_session_lookup_failure_as_anonymous(
     asyncio.run(assert_context())
 
 
-def test_wybra_auth_metadata_exposes_authorisation_group_tables() -> None:
-    assert {
-        "identity_group",
-        "identity_scope",
-        "identity_group_scope",
-        "identity_group_user",
-        "identity_group_group",
-        "identity_user_email",
-        "identity_authentication_challenge",
-        "identity_totp_credential",
-        "identity_totp_recovery_code",
-        "identity_webauthn_credential",
-    }.issubset(wybra_auth_metadata.tables)
-    assert any(
-        constraint.name == "ck_identity_group_group_no_self_membership"
-        for constraint in GroupGroup.__table__.constraints
-    )
-    group_scope_foreign_keys = {
-        str(foreign_key.column): foreign_key.ondelete
-        for column in GroupScope.__table__.columns
-        for foreign_key in column.foreign_keys
-    }
-    group_user_foreign_keys = {
-        str(foreign_key.column): foreign_key.ondelete
-        for column in GroupUser.__table__.columns
-        for foreign_key in column.foreign_keys
-    }
-    group_group_foreign_keys = {
-        str(foreign_key.column): foreign_key.ondelete
-        for column in GroupGroup.__table__.columns
-        for foreign_key in column.foreign_keys
-    }
-    assert group_scope_foreign_keys == {
-        "identity_group.id": "RESTRICT",
-        "identity_scope.scope": "RESTRICT",
-    }
-    assert group_user_foreign_keys == {
-        "identity_group.id": "RESTRICT",
-        "identity_user.id": "CASCADE",
-    }
-    assert group_group_foreign_keys == {"identity_group.id": "RESTRICT"}
+def test_wybra_auth_models_expose_authorisation_group_tables() -> None:
+    assert Group._meta.db_table == "identity_group"
+    assert Scope._meta.db_table == "identity_scope"
+    assert GroupScope._meta.db_table == "identity_group_scope"
+    assert GroupUser._meta.db_table == "identity_group_user"
+    assert GroupGroup._meta.db_table == "identity_group_group"
+    assert IdentityUserEmail._meta.db_table == "identity_user_email"
+
+    assert {"group_id", "scope"}.issubset(GroupScope._meta.fields_map)
+    assert {"group_id", "user_id"}.issubset(GroupUser._meta.fields_map)
+    assert {"parent_group_id", "child_group_id"}.issubset(GroupGroup._meta.fields_map)
+    assert GroupScope._meta.unique_together == (("group_id", "scope"),)
+    assert GroupUser._meta.unique_together == (("group_id", "user_id"),)
+    assert GroupGroup._meta.unique_together == (("parent_group_id", "child_group_id"),)
 
 
 def test_wybra_auth_totp_seed_model_uses_encrypted_field() -> None:
-    assert IdentityTotpCredential.__table__.columns["crypt_secret"].nullable is False
+    field = IdentityTotpCredential._meta.fields_map["crypt_secret"]
+
+    assert field.null is False
+    assert field.max_length == 1024
 
 
 def test_wybra_auth_webauthn_credential_model_uses_public_key_field() -> None:
-    table = IdentityWebAuthnCredential.__table__
+    fields = IdentityWebAuthnCredential._meta.fields_map
 
-    assert table.columns["public_key"].nullable is False
-    assert table.columns["credential_id"].nullable is False
-    assert any(
-        constraint.name == "uq_identity_webauthn_credential_credential_id"
-        for constraint in table.constraints
-    )
+    assert fields["public_key"].null is False
+    assert fields["credential_id"].null is False
+    assert fields["credential_id"].unique is True
+
+
+def test_auth_persistence_scope_rolls_back_on_error(tmp_path: Path) -> None:
+    async def assert_scope_rolls_back() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "auth-scope-rollback.sqlite3")
+        )
+        try:
+            with pytest.raises(RuntimeError, match="abort create"):
+                async with auth_persistence_scope(database) as scope:
+                    await scope.users.create_local_user(
+                        {
+                            "email": "rollback@example.com",
+                            "hashed_password": "hash",
+                            "is_verified": True,
+                        },
+                        primary_email="rollback@example.com",
+                    )
+                    raise RuntimeError("abort create")
+
+            async with connection_scope(database) as session:
+                assert (
+                    await User.filter(email="rollback@example.com")
+                    .using_db(session)
+                    .count()
+                ) == 0
+                assert (
+                    await IdentityUserEmail.filter(email="rollback@example.com")
+                    .using_db(session)
+                    .count()
+                ) == 0
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_scope_rolls_back())
+
+
+def test_user_store_reduces_primary_email_rows_to_one(tmp_path: Path) -> None:
+    async def assert_primary_email_repaired() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "primary-email-repair.sqlite3")
+        )
+        try:
+            async with auth_persistence_scope(database) as scope:
+                user = await scope.users.create_local_user(
+                    {
+                        "email": "primary-original@example.com",
+                        "hashed_password": "hash",
+                        "is_verified": True,
+                    },
+                    primary_email="primary-original@example.com",
+                )
+                user_id = str(user.id)
+
+            async with connection_scope(database) as session:
+                await IdentityUserEmail.create(
+                    user_id=uuid.UUID(user_id),
+                    email="stale-primary@example.com",
+                    is_primary=True,
+                    is_verified=True,
+                    using_db=session,
+                )
+
+            async with auth_persistence_scope(database) as scope:
+                db_user = await scope.get_user(user_id)
+                assert db_user is not None
+                await scope.users.save_user(
+                    db_user,
+                    primary_email="primary-updated@example.com",
+                    primary_email_verified=True,
+                )
+
+            async with connection_scope(database) as session:
+                emails = (
+                    await IdentityUserEmail.filter(user_id=uuid.UUID(user_id))
+                    .using_db(session)
+                    .order_by("email")
+                )
+                primary_emails = [email for email in emails if email.is_primary]
+
+            assert [email.email for email in primary_emails] == [
+                "primary-updated@example.com"
+            ]
+            assert [email.email for email in emails if not email.is_primary] == [
+                "stale-primary@example.com"
+            ]
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_primary_email_repaired())
 
 
 def test_authorisation_scope_management_lifecycle(tmp_path: Path) -> None:
@@ -277,7 +378,7 @@ def test_authorisation_scope_management_lifecycle(tmp_path: Path) -> None:
             sqlite_file_url(tmp_path / "scope.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 created = await create_scope_for_management(
                     session,
                     scope="document:read",
@@ -332,13 +433,138 @@ def test_authorisation_scope_management_lifecycle(tmp_path: Path) -> None:
     asyncio.run(assert_scope_lifecycle())
 
 
+def test_authorisation_scope_integrity_race_keeps_transaction_usable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def assert_scope_race() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "scope-race.sqlite3")
+        )
+        original_get_or_none = Scope.get_or_none
+        injected = False
+
+        async def racing_get_or_none(*args: object, **kwargs: object) -> Scope | None:
+            nonlocal injected
+            if kwargs.get("scope") == "document:race" and not injected:
+                injected = True
+                connection = cast(BaseDBAsyncClient, kwargs["using_db"])
+                await Scope.create(
+                    scope="document:race",
+                    description="Race winner.",
+                    using_db=connection,
+                )
+                return None
+            return await original_get_or_none(*args, **kwargs)
+
+        monkeypatch.setattr(Scope, "get_or_none", staticmethod(racing_get_or_none))
+        try:
+            async with auth_persistence_scope(database) as scope:
+                created = await scope.management.create_scope(
+                    scope="document:race",
+                    description="Race loser.",
+                )
+                listed = await scope.management.list_scopes()
+
+            assert injected is True
+            assert created.is_failure() is True
+            assert created.error_type == ERROR_ALREADY_EXISTS
+            assert listed.value == {
+                "scopes": [
+                    {
+                        "scope": "document:race",
+                        "description": "Race winner.",
+                    }
+                ]
+            }
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_scope_race())
+
+
+def test_initial_admin_bootstrap_duplicate_claim_keeps_transaction_usable(
+    tmp_path: Path,
+) -> None:
+    async def assert_duplicate_claim() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "bootstrap-claim-race.sqlite3")
+        )
+        try:
+            with database.context:
+                async with in_transaction(DEFAULT_CONNECTION_NAME) as connection:
+                    await InitialAdminBootstrap.create(id=1, using_db=connection)
+
+                    claimed = await auth_bootstrap._claim_initial_admin_bootstrap(
+                        connection
+                    )
+                    admin = await auth_bootstrap.find_administrative_user(connection)
+
+            assert claimed is False
+            assert admin is None
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_duplicate_claim())
+
+
+def test_deactivate_local_user_rechecks_locked_superuser(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def assert_deactivate_protects_promoted_user() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "deactivate-promoted-superuser.sqlite3")
+        )
+        try:
+            async with connection_scope(database) as session:
+                stale_user = await create_test_user(
+                    session,
+                    email="promoted@example.com",
+                    is_superuser=False,
+                )
+                await (
+                    User.filter(id=stale_user.id)
+                    .using_db(session)
+                    .update(is_superuser=True)
+                )
+
+                async def stale_resolve_user_target(
+                    connection: BaseDBAsyncClient,
+                    target: str,
+                ):
+                    del connection, target
+                    return stale_user, None
+
+                monkeypatch.setattr(
+                    auth_management,
+                    "resolve_user_target",
+                    stale_resolve_user_target,
+                )
+
+                result = await auth_management.deactivate_local_user_for_management(
+                    session,
+                    target="promoted@example.com",
+                )
+                current_user = await User.get(id=stale_user.id, using_db=session)
+
+            assert result.is_failure() is True
+            assert result.error_type == auth_management.ERROR_SUPERUSER_PROTECTED
+            assert current_user.is_superuser is True
+            assert current_user.is_active is True
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_deactivate_protects_promoted_user())
+
+
 def test_authorisation_scope_delete_rejects_used_scope(tmp_path: Path) -> None:
     async def assert_used_scope_delete() -> None:
         database = await initialise_auth_database(
             sqlite_file_url(tmp_path / "used-scope.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 await create_scope_for_management(session, scope="admin:write")
                 await create_group_for_management(
                     session,
@@ -374,7 +600,7 @@ def test_authorisation_group_management_lifecycle(tmp_path: Path) -> None:
             sqlite_file_url(tmp_path / "group.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 created = await create_group_for_management(
                     session,
                     abbrev="ops",
@@ -433,7 +659,7 @@ def test_authorisation_group_target_distinguishes_invalid_from_missing_uuid(
             sqlite_file_url(tmp_path / "group-target.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 invalid_group, invalid_error = await resolve_group_target(
                     session,
                     "not a uuid",
@@ -461,7 +687,7 @@ def test_authorisation_group_scope_assignment_rejects_duplicates(
             sqlite_file_url(tmp_path / "group-scope.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 await create_scope_for_management(session, scope="admin:read")
                 created_group = await create_group_for_management(
                     session,
@@ -503,7 +729,7 @@ def test_authorisation_group_user_membership_rejects_duplicates_and_blocks_delet
             sqlite_file_url(tmp_path / "group-user.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 await create_group_for_management(
                     session,
                     abbrev="staff",
@@ -551,7 +777,7 @@ def test_authorisation_nested_group_membership_rejects_duplicates_and_cycles(
             sqlite_file_url(tmp_path / "group-group.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 for abbrev in ("parent", "child", "grandchild"):
                     await create_group_for_management(
                         session,
@@ -614,7 +840,7 @@ def test_authorisation_membership_removal_and_candidate_child_groups(
             sqlite_file_url(tmp_path / "group-removal.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 await create_scope_for_management(session, scope="staff:read")
                 await create_local_user_for_management(
                     session,
@@ -689,7 +915,7 @@ def test_effective_scopes_invalid_user_target_returns_invalid_user_id(
             sqlite_file_url(tmp_path / "effective-invalid-user-id.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 result = await effective_scopes_for_user_for_management(
                     session,
                     user_target="not-a-valid-user-id",
@@ -713,7 +939,7 @@ def test_effective_scopes_missing_user_returns_not_found(tmp_path: Path) -> None
             sqlite_file_url(tmp_path / "effective-missing-user.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 result = await effective_scopes_for_user_for_management(
                     session,
                     user_target="missing.user@example.com",
@@ -736,7 +962,7 @@ def test_effective_scopes_resolve_direct_nested_and_duplicate_group_scopes(
             sqlite_file_url(tmp_path / "effective.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 await create_local_user_for_management(
                     session,
                     IdentityOptions(),
@@ -809,7 +1035,7 @@ def test_effective_scope_resolution_is_cycle_safe_and_reads_current_data(
             sqlite_file_url(tmp_path / "effective-current.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 await create_local_user_for_management(
                     session,
                     IdentityOptions(),
@@ -840,19 +1066,16 @@ def test_effective_scope_resolution_is_cycle_safe_and_reads_current_data(
                 )
                 first_group, _ = await resolve_group_target(session, "first")
                 second_group, _ = await resolve_group_target(session, "second")
-                session.add(
-                    GroupGroup(
-                        parent_group_id=first_group.id,
-                        child_group_id=second_group.id,
-                    )
+                await GroupGroup.create(
+                    parent_group_id=first_group.id,
+                    child_group_id=second_group.id,
+                    using_db=session,
                 )
-                session.add(
-                    GroupGroup(
-                        parent_group_id=second_group.id,
-                        child_group_id=first_group.id,
-                    )
+                await GroupGroup.create(
+                    parent_group_id=second_group.id,
+                    child_group_id=first_group.id,
+                    using_db=session,
                 )
-                await session.commit()
                 before_second_scope = await effective_scopes_for_user_for_management(
                     session,
                     user_target="current@example.com",
@@ -1183,10 +1406,10 @@ def test_wybra_auth_no_challenge_policy_allows_direct_login() -> None:
 
 
 def test_wybra_auth_identity_provider_and_link_models_are_well_formed() -> None:
-    provider_columns = set(IdentityProvider.__table__.columns.keys())
-    external_identity_link_columns = set(ExternalIdentityLink.__table__.columns.keys())
-    access_token_columns = set(AccessToken.__table__.columns.keys())
-    user_email_columns = set(IdentityUserEmail.__table__.columns.keys())
+    provider_fields = set(IdentityProvider._meta.fields_map)
+    external_identity_link_fields = set(ExternalIdentityLink._meta.fields_map)
+    access_token_fields = set(AccessToken._meta.fields_map)
+    user_email_fields = set(IdentityUserEmail._meta.fields_map)
 
     assert {
         "provider_name",
@@ -1194,45 +1417,24 @@ def test_wybra_auth_identity_provider_and_link_models_are_well_formed() -> None:
         "crypt_access_token",
         "crypt_refresh_token",
         "account_email",
-    }.issubset(provider_columns)
-    assert {"user_id", "provider_id"}.issubset(external_identity_link_columns)
-    assert {"token", "created_at", "user_id"}.issubset(access_token_columns)
+    }.issubset(provider_fields)
+    assert {"user_id", "provider_id"}.issubset(external_identity_link_fields)
+    assert {"token", "created_at", "user_id"}.issubset(access_token_fields)
     assert {
         "user_id",
         "email",
         "is_primary",
         "is_verified",
-    }.issubset(user_email_columns)
+    }.issubset(user_email_fields)
 
-    assert IdentityProvider.__tablename__ == "identity_provider"
-    assert AccessToken.__tablename__ == "identity_access_token"
-    assert (
-        AccessToken.__table__.columns["token"].type.length == SESSION_TOKEN_MAX_LENGTH
+    assert IdentityProvider._meta.db_table == "identity_provider"
+    assert AccessToken._meta.db_table == "identity_access_token"
+    assert AccessToken._meta.fields_map["token"].max_length == SESSION_TOKEN_MAX_LENGTH
+    assert ExternalIdentityLink._meta.db_table == "identity_external_identity_link"
+    assert IdentityProvider._meta.unique_together == (
+        ("provider_name", "provider_subject"),
     )
-    assert ExternalIdentityLink.__tablename__ == "identity_external_identity_link"
-
-    assert {
-        str(foreign_key.column)
-        for foreign_key in ExternalIdentityLink.__table__.columns[
-            "user_id"
-        ].foreign_keys
-    } == {"identity_user.id"}
-    assert {
-        str(foreign_key.column)
-        for foreign_key in ExternalIdentityLink.__table__.columns[
-            "provider_id"
-        ].foreign_keys
-    } == {"identity_provider.id"}
-    assert {
-        str(foreign_key.column)
-        for foreign_key in AccessToken.__table__.columns["user_id"].foreign_keys
-    } == {"identity_user.id"}
-    assert {
-        str(foreign_key.column)
-        for foreign_key in IdentityUserEmail.__table__.columns["user_id"].foreign_keys
-    } == {"identity_user.id"}
-    assert User.external_identity_links.property.mapper.class_ is ExternalIdentityLink
-    assert User.emails.property.mapper.class_ is IdentityUserEmail
+    assert ExternalIdentityLink._meta.unique_together == (("user_id", "provider_id"),)
 
 
 def test_wybra_auth_generated_session_tokens_fit_configured_column() -> None:
@@ -1249,8 +1451,8 @@ def test_wybra_auth_provider_credential_store_encrypts_tokens(
             sqlite_file_url(tmp_path / "provider-encrypted.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                store = SqlAlchemyProviderCredentialStore(
+            async with connection_scope(database) as session:
+                store = TortoiseProviderCredentialStore(
                     session,
                     make_test_only_secret_service(),
                 )
@@ -1293,19 +1495,18 @@ def test_wybra_auth_provider_credential_store_handles_legacy_plaintext(
             sqlite_file_url(tmp_path / "provider-legacy.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                provider = IdentityProvider(
+            async with connection_scope(database) as session:
+                provider = await IdentityProvider.create(
                     provider_name="github",
                     provider_subject="subject-1",
                     crypt_access_token="legacy-access-token",
                     crypt_refresh_token="legacy-refresh-token",
                     account_email="person@example.com",
                     provider_enabled=True,
+                    using_db=session,
                 )
-                session.add(provider)
-                await session.flush()
 
-                store = SqlAlchemyProviderCredentialStore(
+                store = TortoiseProviderCredentialStore(
                     session,
                     make_test_only_secret_service(),
                 )
@@ -1326,19 +1527,18 @@ def test_wybra_auth_provider_credential_store_rejects_malformed_envelope(
             sqlite_file_url(tmp_path / "provider-malformed.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                provider = IdentityProvider(
+            async with connection_scope(database) as session:
+                provider = await IdentityProvider.create(
                     provider_name="github",
                     provider_subject="subject-1",
                     crypt_access_token=f"{ENVELOPE_PREFIX}|test",
                     crypt_refresh_token=None,
                     account_email="person@example.com",
                     provider_enabled=True,
+                    using_db=session,
                 )
-                session.add(provider)
-                await session.flush()
 
-                store = SqlAlchemyProviderCredentialStore(
+                store = TortoiseProviderCredentialStore(
                     session,
                     make_test_only_secret_service(),
                 )
@@ -1359,8 +1559,8 @@ def test_wybra_auth_provider_credential_store_requires_keys_for_secret_operation
             sqlite_file_url(tmp_path / "provider-required-keys.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                store = SqlAlchemyProviderCredentialStore(
+            async with connection_scope(database) as session:
+                store = TortoiseProviderCredentialStore(
                     session,
                     SecretEnvelopeService.from_env({}),
                 )
@@ -1402,25 +1602,17 @@ def test_wybra_auth_recovery_code_replacement_rejects_user_mismatch(
             sqlite_file_url(tmp_path / "recovery-mismatch.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                owner = User(
+            async with connection_scope(database) as session:
+                owner = await create_test_user(
+                    session,
                     email="owner@example.com",
-                    hashed_password="hash",
-                    is_active=True,
-                    is_superuser=False,
-                    is_verified=True,
                 )
-                other_user = User(
+                other_user = await create_test_user(
+                    session,
                     email="other@example.com",
-                    hashed_password="hash",
-                    is_active=True,
-                    is_superuser=False,
-                    is_verified=True,
                 )
-                session.add_all((owner, other_user))
-                await session.flush()
 
-                credential_store = SqlAlchemyTOTPCredentialStore(
+                credential_store = TortoiseTOTPCredentialStore(
                     session,
                     make_test_only_secret_service(),
                 )
@@ -1428,7 +1620,7 @@ def test_wybra_auth_recovery_code_replacement_rejects_user_mismatch(
                     str(owner.id),
                     "JBSWY3DPEHPK3PXP",
                 )
-                recovery_store = SqlAlchemyRecoveryCodeStore(
+                recovery_store = TortoiseRecoveryCodeStore(
                     session,
                     make_test_only_secret_service(),
                 )
@@ -1453,18 +1645,13 @@ def test_wybra_auth_totp_seed_storage_uses_encrypted_envelope(
             sqlite_file_url(tmp_path / "totp-encrypted.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                user = User(
+            async with connection_scope(database) as session:
+                user = await create_test_user(
+                    session,
                     email="totp@example.com",
-                    hashed_password="hash",
-                    is_active=True,
-                    is_superuser=False,
-                    is_verified=True,
                 )
-                session.add(user)
-                await session.flush()
 
-                store = SqlAlchemyTOTPCredentialStore(
+                store = TortoiseTOTPCredentialStore(
                     session,
                     make_test_only_secret_service(),
                 )
@@ -1496,25 +1683,19 @@ def test_wybra_auth_totp_rejects_replayed_code_and_persists_counter(
             code = generate_totp(secret, timestamp=timestamp)
             options = IdentityOptions(totp_mode="opt_in")
 
-            async with session_scope(database.session_factory) as session:
-                user = User(
+            async with connection_scope(database) as session:
+                user = await create_test_user(
+                    session,
                     email="totp-replay@example.com",
-                    hashed_password="hash",
-                    is_active=True,
-                    is_superuser=False,
-                    is_verified=True,
                 )
-                session.add(user)
-                await session.flush()
                 user_id = str(user.id)
 
-                store = SqlAlchemyTOTPCredentialStore(session, secret_service)
+                store = TortoiseTOTPCredentialStore(session, secret_service)
                 credential_id = await store.create_pending_totp_credential(
                     user_id,
                     secret,
                 )
                 await store.activate_totp_credential(credential_id)
-                await session.commit()
 
                 accepted, counter, error = await verify_totp_code_for_credential(
                     store=store,
@@ -1528,18 +1709,16 @@ def test_wybra_auth_totp_rejects_replayed_code_and_persists_counter(
                 assert accepted is True
                 assert counter is not None
                 assert error is None
-                await session.commit()
 
-            async with session_scope(database.session_factory) as session:
-                credential = await session.scalar(
-                    select(IdentityTotpCredential).where(
-                        IdentityTotpCredential.id == uuid.UUID(credential_id)
-                    )
+            async with connection_scope(database) as session:
+                credential = await IdentityTotpCredential.get_or_none(
+                    id=uuid.UUID(credential_id),
+                    using_db=session,
                 )
                 assert credential is not None
                 assert credential.last_used_counter == counter
 
-                store = SqlAlchemyTOTPCredentialStore(session, secret_service)
+                store = TortoiseTOTPCredentialStore(session, secret_service)
                 (
                     replay_accepted,
                     replay_counter,
@@ -1571,20 +1750,14 @@ def test_wybra_auth_management_scope_uses_configured_secret_service_for_totp(
         )
         try:
             secret_service = SecretEnvelopeService.for_testing(version="management")
-            async with session_scope(database.session_factory) as session:
-                user = User(
+            async with connection_scope(database) as session:
+                user = await create_test_user(
+                    session,
                     email="management-totp@example.com",
-                    hashed_password="hash",
-                    is_active=True,
-                    is_superuser=False,
-                    is_verified=True,
                 )
-                session.add(user)
-                await session.flush()
                 target = str(user.id)
-                await session.commit()
 
-            async with auth_persistence_session(
+            async with auth_persistence_scope(
                 database,
                 secret_service=secret_service,
             ) as scope:
@@ -1597,17 +1770,16 @@ def test_wybra_auth_management_scope_uses_configured_secret_service_for_totp(
             assert result.value is not None
             secret = result.value["totp"]["secret"]
 
-            async with session_scope(database.session_factory) as session:
+            async with connection_scope(database) as session:
                 credential = (
-                    await session.execute(select(IdentityTotpCredential))
-                ).scalar_one()
-                recovery_codes = (
-                    (await session.execute(select(IdentityTotpRecoveryCode)))
-                    .scalars()
-                    .all()
+                    await IdentityTotpCredential.all().using_db(session).first()
                 )
-                store = SqlAlchemyTOTPCredentialStore(session, secret_service)
+                recovery_codes = list(
+                    await IdentityTotpRecoveryCode.all().using_db(session)
+                )
+                store = TortoiseTOTPCredentialStore(session, secret_service)
 
+                assert credential is not None
                 assert credential.crypt_secret.startswith(
                     f"{ENVELOPE_PREFIX}|management|"
                 )
@@ -1634,19 +1806,14 @@ def test_wybra_auth_totp_verification_fails_closed_without_secret_keys(
             sqlite_file_url(tmp_path / "totp-missing-keys.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                user = User(
+            async with connection_scope(database) as session:
+                user = await create_test_user(
+                    session,
                     email="totp-missing-key@example.com",
-                    hashed_password="hash",
-                    is_active=True,
-                    is_superuser=False,
-                    is_verified=True,
                 )
-                session.add(user)
-                await session.flush()
 
                 secret_service = make_test_only_secret_service()
-                store = SqlAlchemyTOTPCredentialStore(session, secret_service)
+                store = TortoiseTOTPCredentialStore(session, secret_service)
                 secret = "JBSWY3DPEHPK3PXP"
                 credential_id = await store.create_pending_totp_credential(
                     str(user.id),
@@ -1654,7 +1821,7 @@ def test_wybra_auth_totp_verification_fails_closed_without_secret_keys(
                 )
                 await store.activate_totp_credential(credential_id)
 
-                missing_key_store = SqlAlchemyTOTPCredentialStore(
+                missing_key_store = TortoiseTOTPCredentialStore(
                     session,
                     SecretEnvelopeService.from_env({}),
                 )
@@ -1672,7 +1839,7 @@ def test_wybra_auth_totp_verification_fails_closed_without_secret_keys(
         finally:
             await close_database(database)
 
-    caplog.set_level(logging.ERROR, logger="wybra.auth.routes.totp")
+    caplog.set_level(logging.ERROR, logger="wybra.auth.mfa.storage")
     asyncio.run(assert_missing_keys_handled())
 
     assert "Unable to verify TOTP credential" in caplog.text
@@ -1686,19 +1853,14 @@ def test_wybra_auth_recovery_codes_use_keyed_verifiers(
             sqlite_file_url(tmp_path / "recovery-verifier.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                user = User(
+            async with connection_scope(database) as session:
+                user = await create_test_user(
+                    session,
                     email="recovery@example.com",
-                    hashed_password="hash",
-                    is_active=True,
-                    is_superuser=False,
-                    is_verified=True,
                 )
-                session.add(user)
-                await session.flush()
 
                 secret_service = make_test_only_secret_service()
-                credential_store = SqlAlchemyTOTPCredentialStore(
+                credential_store = TortoiseTOTPCredentialStore(
                     session,
                     secret_service,
                 )
@@ -1707,16 +1869,17 @@ def test_wybra_auth_recovery_codes_use_keyed_verifiers(
                     "JBSWY3DPEHPK3PXP",
                 )
                 await credential_store.activate_totp_credential(credential_id)
-                recovery_store = SqlAlchemyRecoveryCodeStore(session, secret_service)
+                recovery_store = TortoiseRecoveryCodeStore(session, secret_service)
                 await recovery_store.replace_recovery_codes(
                     str(user.id),
                     credential_id,
                     ("R3C0V3RY",),
                 )
                 recovery_record = (
-                    await session.execute(select(IdentityTotpRecoveryCode))
-                ).scalar_one()
+                    await IdentityTotpRecoveryCode.all().using_db(session).first()
+                )
 
+                assert recovery_record is not None
                 assert recovery_record.code_verifier.startswith(
                     f"{VERIFIER_PREFIX}|test|"
                 )
@@ -1742,18 +1905,13 @@ def test_wybra_auth_webauthn_credential_store_lifecycle(
             sqlite_file_url(tmp_path / "webauthn-storage.sqlite3")
         )
         try:
-            async with session_scope(database.session_factory) as session:
-                user = User(
+            async with connection_scope(database) as session:
+                user = await create_test_user(
+                    session,
                     email="passkey@example.com",
-                    hashed_password="hash",
-                    is_active=True,
-                    is_superuser=False,
-                    is_verified=True,
                 )
-                session.add(user)
-                await session.flush()
 
-                store = SqlAlchemyWebAuthnCredentialStore(session)
+                store = TortoiseWebAuthnCredentialStore(session)
                 row_id = await store.store_webauthn_credential(
                     str(user.id),
                     "credential-id",
@@ -1893,14 +2051,26 @@ def test_wybra_auth_user_verified_webauthn_assertion_satisfies_totp_requirement(
     )
 
 
-def test_identity_user_email_stores_normalised_email() -> None:
-    identity_email = IdentityUserEmail(
-        user_id=uuid.uuid4(),
-        email="Alias@Example.COM",
-        is_primary=True,
-        is_verified=True,
-    )
-    assert identity_email.email == "alias@example.com"
+def test_identity_user_email_stores_normalised_email(tmp_path: Path) -> None:
+    async def assert_normalised_email() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "normalised-email.sqlite3")
+        )
+        try:
+            async with connection_scope(database) as session:
+                identity_email = await IdentityUserEmail.create(
+                    user_id=uuid.uuid4(),
+                    email="Alias@Example.COM",
+                    is_primary=True,
+                    is_verified=True,
+                    using_db=session,
+                )
+
+                assert identity_email.email == "alias@example.com"
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_normalised_email())
 
 
 def test_wybra_auth_challenge_completion_consumes_existing_challenge() -> None:

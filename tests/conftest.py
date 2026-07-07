@@ -13,7 +13,6 @@ from wybra.core.config import (
     ENV_WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS,
 )
 from wybra.db.config import ENV_DATABASE_URL
-from wybra.db.models import metadata
 
 
 @pytest.fixture
@@ -50,11 +49,12 @@ def create_database_schema() -> Callable[[Any], Awaitable[None]]:
             raise RuntimeError(
                 "Test capability does not expose a database for schema creation."
             )
-        async with database.transaction() as db_session:
-
-            def _create_all(sync_session: Any) -> None:
-                metadata.create_all(sync_session.get_bind())
-
-            await db_session.run_sync(_create_all)
+        backing_database = getattr(database, "_database", None)
+        context = getattr(backing_database, "context", None)
+        if context is None:
+            raise RuntimeError(
+                "Test database does not expose a Tortoise context for schema creation."
+            )
+        await context.generate_schemas()
 
     return _create_database_schema

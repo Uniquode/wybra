@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from wybra.profile.models import metadata
+from wybra.db.surfaces import discover_model_package
 from wybra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 
 
@@ -17,9 +17,9 @@ def validate_profile(settings: ProfileValidationSettings) -> ValidationResult:
     record_check(
         checks,
         errors,
-        passed="profile_user_profile" in metadata.tables,
-        description="profile model metadata exposes profile_user_profile",
-        error="Profile metadata must expose profile_user_profile.",
+        passed=discover_model_package("wybra.profile") == "wybra.profile.models",
+        description="profile module exposes Tortoise models",
+        error="Profile module must expose Tortoise models.",
     )
     record_check(
         checks,

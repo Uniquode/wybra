@@ -1,22 +1,19 @@
-import asyncio
-import sqlite3
+import json
 import tempfile
-from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy.exc import SQLAlchemyError
 
 import wybra.db.migrate as migrate_module
 import wybra.db.provisioning as provisioning_module
 import wybra.tools.migrate as tools_migrate
 from support_database import sqlite_file_url
 from wybra.core.composition import AppConfig, load_app_config
-from wybra.db.alembic_attributes import LOGGING_CONFIG_ATTRIBUTE
-from wybra.db.surfaces import discover_migration_version_locations
+from wybra.db.surfaces import model_package_name
+from wybra.db.tortoise import tortoise_database_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +22,7 @@ class MigrationTestSettings:
     project_root: Path = Path.cwd()
     migrations_root: Path | None = None
     app_config: AppConfig | None = None
-    modules: tuple[str, ...] = ("wybra.auth",)
+    modules: tuple[str, ...] = ("wybra.sessions",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +36,7 @@ class MigrationCommandFixture:
 
 def create_migrate_command(
     *,
-    modules: tuple[str, ...] = ("wybra.auth",),
+    modules: tuple[str, ...] = ("wybra.sessions",),
 ) -> MigrationCommandFixture:
     app_config_file = tempfile.NamedTemporaryFile(
         "w",
@@ -73,7 +70,7 @@ def create_migrate_command(
 def run_migrate(
     argv: list[str],
     *,
-    modules: tuple[str, ...] = ("wybra.auth",),
+    modules: tuple[str, ...] = ("wybra.sessions",),
 ) -> int:
     fixture = create_migrate_command(modules=modules)
     try:
@@ -107,295 +104,134 @@ def _write_test_app_config(config_path: Path, modules: tuple[str, ...]) -> Path:
     return config_path
 
 
-def create_importable_module(root: Path, module_name: str) -> Path:
-    module_path = root.joinpath(*module_name.split("."))
-    module_path.mkdir(parents=True)
-    (module_path / "__init__.py").write_text("", encoding="utf-8")
-    return module_path
+def test_migrate_help_exposes_native_tortoise_commands(capsys) -> None:
+    fixture = create_migrate_command()
 
-
-def test_migrate_current_reports_missing_sqlite_database_without_creating_file(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    database_path = tmp_path / "missing.sqlite3"
-
-    exit_code = run_migrate(
-        ["--database-url", sqlite_file_url(database_path), "current"]
-    )
+    try:
+        exit_code = migrate_module.run_migrate_command(fixture.command, ["--help"])
+    finally:
+        fixture.cleanup()
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "database: not initialised" in captured.out
-    assert "SQLite database file does not exist" in captured.out
-    assert "current revision: none" in captured.out
-    assert not database_path.exists()
+    assert "Run application schema migrations through Tortoise." in captured.out
+    for command_name in (
+        "init",
+        "makemigrations",
+        "migrate",
+        "downgrade",
+        "history",
+        "heads",
+        "sqlmigrate",
+    ):
+        assert command_name in captured.out
+    assert "upgrade" not in captured.out
+    assert "revision" not in captured.out
+    assert "current" not in captured.out
 
 
-def test_migrate_current_reports_reachable_uninitialised_database(
-    tmp_path: Path,
+@pytest.mark.parametrize("command_name", ["upgrade", "revision", "current"])
+def test_migrate_rejects_removed_legacy_command_names(
+    command_name: str,
     capsys,
 ) -> None:
-    database_path = tmp_path / "empty.sqlite3"
-    sqlite3.connect(database_path).close()
-
     exit_code = run_migrate(
-        ["--database-url", sqlite_file_url(database_path), "current"]
+        [
+            "--database-url",
+            "sqlite+aiosqlite:///:memory:",
+            command_name,
+        ]
     )
 
     captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "database: not initialised" in captured.out
-    assert "current revision: none" in captured.out
+    assert exit_code == 2
+    assert command_name in captured.err
 
 
-def test_migrate_current_reports_connection_failure_without_credentials(
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["init"], ["init"]),
+        (["init", "wybra_sessions"], ["init", "wybra_sessions"]),
+        (
+            ["makemigrations", "wybra_sessions", "--empty", "-n", "initial"],
+            ["makemigrations", "wybra_sessions", "--empty", "-n", "initial"],
+        ),
+        (["migrate"], ["migrate"]),
+        (
+            ["migrate", "wybra_sessions", "0001_initial", "--fake", "--dry-run"],
+            ["migrate", "wybra_sessions", "0001_initial", "--fake", "--dry-run"],
+        ),
+        (
+            ["downgrade", "wybra_sessions", "0001_initial", "--fake"],
+            ["downgrade", "wybra_sessions", "0001_initial", "--fake"],
+        ),
+        (["history"], ["history"]),
+        (["history", "wybra_sessions"], ["history", "wybra_sessions"]),
+        (["heads"], ["heads"]),
+        (["heads", "wybra_sessions"], ["heads", "wybra_sessions"]),
+        (
+            ["sqlmigrate", "wybra_sessions", "0001_initial", "--backward"],
+            ["sqlmigrate", "wybra_sessions", "0001_initial", "--backward"],
+        ),
+    ],
+)
+def test_migrate_commands_delegate_to_tortoise_cli(
     tmp_path: Path,
-    monkeypatch,
-    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    expected: list[str],
 ) -> None:
-    database_url = "postgresql+asyncpg://user:secret@db.example/app"
-    driver_error_url = "postgresql://user:secret@db.example/app"
-
-    def fail_inspection(_database_url: str) -> migrate_module.MigrationState:
-        raise SQLAlchemyError(f"could not connect to {driver_error_url}")
-
-    monkeypatch.setattr(migrate_module, "inspect_migration_state", fail_inspection)
-
-    exit_code = run_migrate(["--database-url", database_url, "current"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "ERROR wybra.db.migrate migration: failed:" in captured.err
-    assert "migration: failed" in captured.err
-    assert "postgresql://***:***@db.example/app" in captured.err
-    assert "secret" not in captured.err
-    assert "Traceback" not in captured.err
-    assert not captured.err.startswith("ERROR:wybra.db.migrate:")
-
-
-def test_migrate_current_preserves_original_error_when_cleanup_fails(
-    monkeypatch,
-    capsys,
-) -> None:
-    class BrokenConnection:
-        async def __aenter__(self):
-            raise SQLAlchemyError(
-                "could not connect to postgresql://user:secret@db.example/app"
-            )
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-    class BrokenEngine:
-        def begin(self) -> BrokenConnection:
-            return BrokenConnection()
-
-    async def fail_close(_engine: object) -> None:
-        raise RuntimeError("cleanup failure")
-
-    monkeypatch.setattr(
-        migrate_module,
-        "create_database_engine",
-        lambda _database_url: BrokenEngine(),
-    )
-    monkeypatch.setattr(migrate_module, "close_database", fail_close)
-
-    exit_code = run_migrate(
-        ["--database-url", "postgresql+asyncpg://user:secret@db.example/app", "current"]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "could not connect to postgresql://***:***@db.example/app" in captured.err
-    assert "cleanup failure" not in captured.err
-    assert "secret" not in captured.err
-
-
-def test_migrate_disposes_engine_on_same_event_loop(monkeypatch) -> None:
-    observed: dict[str, int] = {}
-
-    class RecordingConnection:
-        async def __aenter__(self):
-            observed["connection_loop"] = id(asyncio.get_running_loop())
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def run_sync(self, operation):
-            return operation(object())
-
-    class RecordingEngine:
-        def begin(self) -> RecordingConnection:
-            return RecordingConnection()
-
-    async def close_on_current_loop(_engine: object) -> None:
-        observed["close_loop"] = id(asyncio.get_running_loop())
-
-    monkeypatch.setattr(
-        migrate_module,
-        "create_database_engine",
-        lambda _database_url: RecordingEngine(),
-    )
-    monkeypatch.setattr(migrate_module, "close_database", close_on_current_loop)
-    monkeypatch.setattr(
-        migrate_module,
-        "_migration_state_from_connection",
-        lambda _connection: migrate_module.MigrationState(initialised=False),
-    )
-
-    exit_code = run_migrate(
-        ["--database-url", "sqlite+aiosqlite:///:memory:", "current"]
-    )
-
-    assert exit_code == 0
-    assert observed["connection_loop"] == observed["close_loop"]
-
-
-def test_migrate_reports_runtime_configuration_errors_cleanly(
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    def fail_history(_config) -> None:
-        raise migrate_module.MigrationConfigurationError("missing database url")
-
-    monkeypatch.setattr(migrate_module.command, "history", fail_history)
-
-    exit_code = run_migrate(
-        ["--database-url", sqlite_file_url(tmp_path / "database.sqlite3"), "history"]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "ERROR wybra.db.migrate configuration: failed:" in captured.err
-    assert "configuration: failed" in captured.err
-    assert "missing database url" in captured.err
-    assert "Traceback" not in captured.err
-    assert not captured.err.startswith("ERROR:wybra.db.migrate:")
-
-
-def test_migrate_init_creates_sqlite_migration_state_without_schema(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "initialised.sqlite3"
-
-    exit_code = run_migrate(["--database-url", sqlite_file_url(database_path), "init"])
-
-    assert exit_code == 0
-    assert database_path.is_file()
-
-    with closing(sqlite3.connect(database_path)) as connection:
-        table_names = {
-            row[0]
-            for row in connection.execute(
-                "select name from sqlite_master where type = 'table'"
-            )
-        }
-
-    assert "alembic_version" in table_names
-    assert "identity_user" not in table_names
-
-
-def test_migrate_init_stamps_empty_alembic_version_table(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    database_path = tmp_path / "empty-version.sqlite3"
-    database_url = sqlite_file_url(database_path)
+    database_url = sqlite_file_url(tmp_path / "database.sqlite3")
     observed: dict[str, object] = {}
 
-    with closing(sqlite3.connect(database_path)) as connection, connection:
-        connection.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
+    def record_tortoise_cli(
+        context: migrate_module.MigrationContext,
+        args: list[str],
+    ) -> None:
+        observed["args"] = args
+        observed["config"] = context.config
 
-    def record_stamp(config, revision: str) -> None:
-        observed["revision"] = revision
-        observed["connection_supplied"] = (
-            config.attributes.get("connection") is not None
-        )
+    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", record_tortoise_cli)
 
-    monkeypatch.setattr(migrate_module.command, "stamp", record_stamp)
+    exit_code = run_migrate(["--database-url", database_url, *argv])
 
-    assert run_migrate(["--database-url", database_url, "init"]) == 0
-
-    assert observed == {"revision": "base", "connection_supplied": True}
-
-
-def test_migrate_upgrade_after_init_creates_sqlite_schema(tmp_path: Path) -> None:
-    database_path = tmp_path / "upgraded.sqlite3"
-    database_url = sqlite_file_url(database_path)
-
-    assert run_migrate(["--database-url", database_url, "init"]) == 0
-    assert run_migrate(["--database-url", database_url, "upgrade"]) == 0
-
-    with closing(sqlite3.connect(database_path)) as connection:
-        table_names = {
-            row[0]
-            for row in connection.execute(
-                "select name from sqlite_master where type = 'table'"
-            )
-        }
-        totp_columns = {
-            row[1]
-            for row in connection.execute("PRAGMA table_info(identity_totp_credential)")
-        }
-        recovery_columns = {
-            row[1]
-            for row in connection.execute(
-                "PRAGMA table_info(identity_totp_recovery_code)"
-            )
-        }
-
-    assert "alembic_version" in table_names
-    assert {
-        "identity_user",
-        "identity_provider",
-        "identity_external_identity_link",
-        "identity_access_token",
-        "identity_authentication_challenge",
-        "identity_totp_credential",
-        "identity_totp_recovery_code",
-    }.issubset(table_names)
-    assert "crypt_secret" in totp_columns
-    assert "code_verifier" in recovery_columns
+    assert exit_code == 0
+    assert observed["args"] == expected
+    assert observed["config"] == {
+        "connections": {"default": tortoise_database_url(database_url)},
+        "apps": {
+            "wybra_sessions": {
+                "models": ["wybra.sessions.models"],
+                "migrations": "wybra.sessions.migrations",
+                "default_connection": "default",
+            }
+        },
+    }
 
 
-def test_migrate_init_provisions_postgresql_before_stamping_base(
-    tmp_path: Path,
-    monkeypatch,
+def test_migrate_init_provisions_postgresql_before_tortoise_init(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = "postgresql+asyncpg://app:secret@db.example/app"
     admin_database_url = "postgresql+asyncpg://admin:admin-secret@db.example/postgres"
-    observed: dict[str, object] = {}
     events: list[str] = []
-
-    def run_with_connection(_database_url: str, operation):
-        events.append("connect")
-        return operation(object())
+    observed: dict[str, object] = {}
 
     def provision(database_url_arg: str, admin_database_url_arg: str | None) -> None:
         events.append("provision")
         observed["provision"] = (database_url_arg, admin_database_url_arg)
 
-    def stamp(config, revision: str) -> None:
-        events.append("stamp")
-        observed["stamp"] = (config.get_main_option("sqlalchemy.url"), revision)
+    def record_tortoise_cli(
+        context: migrate_module.MigrationContext,
+        args: list[str],
+    ) -> None:
+        events.append("tortoise")
+        observed["args"] = args
+        observed["config"] = context.config
 
-    def fail_upgrade(_config, _revision: str) -> None:
-        raise AssertionError("init must not run schema upgrades")
-
-    monkeypatch.setattr(
-        migrate_module, "_run_with_database_connection", run_with_connection
-    )
-    monkeypatch.setattr(
-        migrate_module,
-        "_migration_state_from_connection",
-        lambda _connection: migrate_module.MigrationState(initialised=False),
-    )
     monkeypatch.setattr(migrate_module, "provision_postgresql_database", provision)
-    monkeypatch.setattr(migrate_module.command, "stamp", stamp)
-    monkeypatch.setattr(migrate_module.command, "upgrade", fail_upgrade)
+    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", record_tortoise_cli)
 
     exit_code = run_migrate(
         [
@@ -408,25 +244,35 @@ def test_migrate_init_provisions_postgresql_before_stamping_base(
     )
 
     assert exit_code == 0
-    assert events == ["provision", "connect", "stamp"]
+    assert events == ["provision", "tortoise"]
     assert observed["provision"] == (database_url, admin_database_url)
-    assert observed["stamp"] == (database_url, "base")
+    assert observed["args"] == ["init"]
+    assert observed["config"] == {
+        "connections": {"default": "asyncpg://app:secret@db.example/app"},
+        "apps": {
+            "wybra_sessions": {
+                "models": ["wybra.sessions.models"],
+                "migrations": "wybra.sessions.migrations",
+                "default_connection": "default",
+            }
+        },
+    }
 
 
 def test_migrate_init_reports_missing_postgresql_admin_url(
-    tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
     database_url = "postgresql+asyncpg://app:secret@db.example/app"
 
-    def fail_connection(_database_url: str, _operation):
-        raise AssertionError("PostgreSQL init should provision before connecting")
+    def fail_tortoise_cli(
+        _context: migrate_module.MigrationContext,
+        _args: list[str],
+    ) -> None:
+        raise AssertionError("PostgreSQL init should provision before Tortoise")
 
     monkeypatch.delenv("SA_DATABASE_URL", raising=False)
-    monkeypatch.setattr(
-        migrate_module, "_run_with_database_connection", fail_connection
-    )
+    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", fail_tortoise_cli)
 
     exit_code = run_migrate(["--database-url", database_url, "init"])
 
@@ -440,21 +286,22 @@ def test_migrate_init_reports_missing_postgresql_admin_url(
 
 
 def test_migrate_init_rejects_blank_admin_database_url_without_env_fallback(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
     database_url = "postgresql+asyncpg://app:secret@db.example/app"
 
-    def fail_connection(_database_url: str, _operation):
-        raise AssertionError("PostgreSQL init should provision before connecting")
+    def fail_tortoise_cli(
+        _context: migrate_module.MigrationContext,
+        _args: list[str],
+    ) -> None:
+        raise AssertionError("PostgreSQL init should provision before Tortoise")
 
     monkeypatch.setenv(
         "SA_DATABASE_URL",
         "postgresql+asyncpg://admin:env-secret@db.example/postgres",
     )
-    monkeypatch.setattr(
-        migrate_module, "_run_with_database_connection", fail_connection
-    )
+    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", fail_tortoise_cli)
 
     exit_code = run_migrate(
         ["--database-url", database_url, "init", "--admin-database-url", ""]
@@ -467,30 +314,113 @@ def test_migrate_init_rejects_blank_admin_database_url_without_env_fallback(
     assert "env-secret" not in captured.err
 
 
-def test_migrate_init_redacts_non_postgresql_sqlalchemy_errors(
-    monkeypatch,
-    capsys,
-) -> None:
-    def fail_connection(_database_url: str, _operation):
-        raise SQLAlchemyError(
-            "sqlite unavailable after seeing postgresql://user:secret@db.example/app"
-        )
-
-    monkeypatch.setattr(
-        migrate_module, "_run_with_database_connection", fail_connection
+def test_tortoise_config_uses_configured_module_model_surfaces(tmp_path: Path) -> None:
+    app_config_path = _write_test_app_config(
+        tmp_path / "app.toml",
+        ("wybra.messages",),
+    )
+    app_config = load_app_config(project_root=tmp_path, config_path=app_config_path)
+    settings = MigrationTestSettings(
+        database_url="sqlite+aiosqlite:///app.sqlite3",
+        project_root=tmp_path,
+        app_config=app_config,
+        modules=("wybra.messages",),
     )
 
-    exit_code = run_migrate(["--database-url", "sqlite+aiosqlite:///:memory:", "init"])
+    config = migrate_module.build_tortoise_config(settings)
 
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "migration: failed" in captured.err
-    assert "postgresql://***:***@db.example/app" in captured.err
-    assert "secret" not in captured.err
+    assert config == {
+        "connections": {"default": "sqlite:///app.sqlite3"},
+        "apps": {
+            "wybra_sessions": {
+                "models": [model_package_name("wybra.sessions")],
+                "migrations": "wybra.sessions.migrations",
+                "default_connection": "default",
+            },
+            "wybra_messages": {
+                "models": [model_package_name("wybra.messages")],
+                "migrations": "wybra.messages.migrations",
+                "default_connection": "default",
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("database_url", "expected"),
+    [
+        ("sqlite+aiosqlite:///:memory:", "sqlite://:memory:"),
+        ("sqlite+aiosqlite:///relative.sqlite3", "sqlite:///relative.sqlite3"),
+        ("sqlite+aiosqlite:////tmp/app.sqlite3", "sqlite:////tmp/app.sqlite3"),
+        (
+            "postgresql+asyncpg://user:secret@db.example/app",
+            "asyncpg://user:secret@db.example/app",
+        ),
+        (
+            "postgres://user:secret@db.example/app",
+            "postgres://user:secret@db.example/app",
+        ),
+    ],
+)
+def test_tortoise_database_url_converts_wybra_database_urls(
+    database_url: str,
+    expected: str,
+) -> None:
+    assert tortoise_database_url(database_url) == expected
+
+
+def test_run_tortoise_cli_writes_temp_json_config_and_removes_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    settings = MigrationTestSettings(
+        database_url=sqlite_file_url(tmp_path / "database.sqlite3"),
+        project_root=tmp_path,
+    )
+    context = migrate_module.build_migration_context(settings)
+
+    async def record_cli(argv: list[str]) -> int:
+        config_path = Path(argv[1])
+        observed["argv"] = argv
+        observed["config_path"] = config_path
+        observed["config"] = json.loads(config_path.read_text(encoding="utf-8"))
+        return 0
+
+    monkeypatch.setattr(migrate_module.tortoise_cli, "run_cli_async", record_cli)
+
+    migrate_module._run_tortoise_cli(context, ["heads"])
+
+    assert observed["argv"] == [
+        "--config-file",
+        Path(observed["config_path"]).as_posix(),
+        "heads",
+    ]
+    assert observed["config"] == context.config
+    assert not Path(observed["config_path"]).exists()
+
+
+def test_run_tortoise_cli_reports_non_zero_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = MigrationTestSettings(
+        database_url=sqlite_file_url(tmp_path / "database.sqlite3"),
+        project_root=tmp_path,
+    )
+    context = migrate_module.build_migration_context(settings)
+
+    async def fail_cli(_argv: list[str]) -> int:
+        return 2
+
+    monkeypatch.setattr(migrate_module.tortoise_cli, "run_cli_async", fail_cli)
+
+    with pytest.raises(migrate_module.MigrationStateError, match="exit_code=2"):
+        migrate_module._run_tortoise_cli(context, ["heads"])
 
 
 def test_postgresql_provisioning_uses_dbscripts_with_sync_urls(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: dict[str, object] = {}
     monkeypatch.delenv("SA_DATABASE_URL", raising=False)
@@ -561,288 +491,6 @@ def test_postgresql_provisioning_reports_dbscripts_failures_as_operations(
         )
 
     assert isinstance(excinfo.value, provisioning_module.DatabaseProvisioningError)
-
-
-def test_migrate_upgrade_rejects_uninitialised_sqlite_database(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    database_path = tmp_path / "uninitialised.sqlite3"
-
-    exit_code = run_migrate(
-        ["--database-url", sqlite_file_url(database_path), "upgrade"]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "migration: failed" in captured.err
-    assert "Database is not initialised" in captured.err
-    assert "uv run wybra-migrate init" in captured.err
-    assert not database_path.exists()
-
-
-def test_migrate_upgrade_preserves_subcommand_database_url_override(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    observed: list[tuple[str, str]] = []
-    database_url = sqlite_file_url(tmp_path / "override.sqlite3")
-
-    with (
-        closing(sqlite3.connect(tmp_path / "override.sqlite3")) as connection,
-        connection,
-    ):
-        connection.execute("CREATE TABLE alembic_version (version_num VARCHAR(32))")
-
-    def record_upgrade(config, revision: str) -> None:
-        assert config.attributes.get("connection") is not None
-        observed.append((revision, config.get_main_option("sqlalchemy.url")))
-
-    monkeypatch.setattr(migrate_module.command, "upgrade", record_upgrade)
-
-    exit_code = run_migrate(
-        [
-            "upgrade",
-            "--database-url",
-            database_url,
-        ]
-    )
-
-    assert exit_code == 0
-    assert observed == [("heads", database_url)]
-
-
-@pytest.mark.parametrize(
-    ("argv", "command_name", "revision"),
-    [
-        (["downgrade", "base"], "downgrade", "base"),
-        (["history"], "history", None),
-    ],
-)
-def test_migrate_existing_subcommands_still_dispatch(
-    tmp_path: Path,
-    monkeypatch,
-    argv: list[str],
-    command_name: str,
-    revision: str | None,
-) -> None:
-    observed: list[tuple[str | None, str]] = []
-
-    def record_command(config, revision_arg: str | None = None) -> None:
-        observed.append((revision_arg, config.get_main_option("sqlalchemy.url")))
-
-    monkeypatch.setattr(migrate_module.command, command_name, record_command)
-
-    exit_code = run_migrate(
-        [
-            "--database-url",
-            sqlite_file_url(tmp_path / "database.sqlite3"),
-            *argv,
-        ]
-    )
-
-    assert exit_code == 0
-    assert observed == [(revision, sqlite_file_url(tmp_path / "database.sqlite3"))]
-
-
-def test_migrate_revision_passes_module_version_path_and_graph_options(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    base_module_path = create_importable_module(tmp_path, "base_app")
-    base_version_path = base_module_path / "migrations" / "versions"
-    base_version_path.mkdir(parents=True)
-    create_importable_module(tmp_path, "revision_app")
-    monkeypatch.syspath_prepend(str(tmp_path))
-    observed: dict[str, object] = {}
-
-    def record_revision(config, **kwargs) -> None:
-        observed["path_separator"] = config.get_main_option("path_separator")
-        observed["version_path_separator"] = config.get_main_option(
-            "version_path_separator"
-        )
-        observed["version_locations"] = config.get_main_option("version_locations")
-        observed["version_locations_list"] = config.get_version_locations_list()
-        observed.update(kwargs)
-
-    monkeypatch.setattr(migrate_module.command, "revision", record_revision)
-
-    exit_code = run_migrate(
-        [
-            "--database-url",
-            sqlite_file_url(tmp_path / "revision.sqlite3"),
-            "revision",
-            "--module",
-            "revision_app",
-            "-m",
-            "add revision",
-            "--autogenerate",
-            "--head",
-            "abc123",
-            "--splice",
-            "--branch-label",
-            "revision_app",
-            "--depends-on",
-            "def456",
-            "--rev-id",
-            "999999999999",
-        ],
-        modules=("base_app", "revision_app"),
-    )
-
-    version_path = tmp_path / "revision_app" / "migrations" / "versions"
-    sessions_version_path = discover_migration_version_locations("wybra.sessions")[0]
-    assert exit_code == 0
-    assert observed["message"] == "add revision"
-    assert observed["autogenerate"] is True
-    assert observed["head"] == "abc123"
-    assert observed["splice"] is True
-    assert observed["branch_label"] == "revision_app"
-    assert observed["depends_on"] == "def456"
-    assert observed["rev_id"] == "999999999999"
-    assert observed["version_path"] == version_path
-    assert observed["path_separator"] == "os"
-    assert observed["version_path_separator"] is None
-    assert version_path.as_posix() in str(observed["version_locations"])
-    assert set(observed["version_locations_list"] or []) == {
-        sessions_version_path.resolve().as_posix(),
-        base_version_path.resolve().as_posix(),
-        version_path.resolve().as_posix(),
-    }
-    assert version_path.is_dir()
-
-
-def test_migrate_revision_rejects_unconfigured_module(
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    module_path = create_importable_module(tmp_path, "unused_app")
-    monkeypatch.syspath_prepend(str(tmp_path))
-
-    exit_code = run_migrate(
-        [
-            "--database-url",
-            sqlite_file_url(tmp_path / "revision.sqlite3"),
-            "revision",
-            "--module",
-            "unused_app",
-            "-m",
-            "add revision",
-        ],
-        modules=("wybra.auth",),
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "configuration: failed" in captured.err
-    assert "unused_app" in captured.err
-    assert not (module_path / "migrations").exists()
-
-
-def test_migrate_revision_rejects_unconfigured_core_sessions(capsys) -> None:
-    exit_code = run_migrate(
-        [
-            "--database-url",
-            "sqlite+aiosqlite:///:memory:",
-            "revision",
-            "--module",
-            "wybra.sessions",
-            "-m",
-            "add revision",
-        ],
-        modules=("wybra.auth",),
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "configuration: failed" in captured.err
-    assert "wybra.sessions" in captured.err
-
-
-def test_migrate_revision_requires_module_and_message() -> None:
-    fixture = create_migrate_command()
-
-    try:
-        runner = migrate_module.run_migrate_command
-        missing_module = runner(fixture.command, ["revision", "-m", "add revision"])
-        missing_message = runner(
-            fixture.command,
-            ["revision", "--module", "wybra.auth"],
-        )
-    finally:
-        fixture.cleanup()
-
-    assert missing_module == 2
-    assert missing_message == 2
-
-
-def test_migrate_revision_help_describes_roll_forward_order(capsys) -> None:
-    fixture = create_migrate_command()
-
-    try:
-        exit_code = migrate_module.run_migrate_command(
-            fixture.command,
-            ["revision", "--help"],
-        )
-    finally:
-        fixture.cleanup()
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "Upgrade to the current head before autogenerate" in captured.out
-    assert "Review" in captured.out
-    assert "generated operations" in captured.out
-    assert "down_revision" in captured.out
-    assert "depends_on" in captured.out
-
-
-def test_build_alembic_config_is_programmatic(tmp_path: Path) -> None:
-    app_config_path = _write_test_app_config(tmp_path / "app.toml", ("wybra.db",))
-    app_config = load_app_config(project_root=tmp_path, config_path=app_config_path)
-    settings = MigrationTestSettings(
-        database_url="sqlite+aiosqlite:///app.sqlite3",
-        project_root=tmp_path,
-        app_config=app_config,
-        modules=(),
-    )
-
-    config = migrate_module.build_alembic_config(settings)
-
-    assert config.config_file_name is None
-    assert config.get_main_option("project_root") == tmp_path.as_posix()
-    assert (
-        config.get_main_option("script_location")
-        == migrate_module.DEFAULT_MIGRATIONS_SCRIPT_LOCATION
-    )
-    assert config.get_main_option("sqlalchemy.url") == "sqlite+aiosqlite:///app.sqlite3"
-    assert config.get_main_option("app_config") == app_config_path.as_posix()
-    assert (
-        config.attributes[LOGGING_CONFIG_ATTRIBUTE]["loggers"]["alembic"]["level"]
-        == "INFO"
-    )
-
-
-def test_build_alembic_config_rejects_empty_logging_config(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = MigrationTestSettings(
-        database_url="sqlite+aiosqlite:///app.sqlite3",
-        project_root=tmp_path,
-        modules=(),
-    )
-    monkeypatch.setattr(
-        migrate_module,
-        "logging_config_from_app_config",
-        lambda _app_config: None,
-    )
-
-    with pytest.raises(
-        migrate_module.MigrationConfigurationError,
-        match="Migration logging config must not be None.",
-    ):
-        migrate_module.build_alembic_config(settings)
 
 
 def test_load_migration_settings_passes_keyword_only_config_source(
@@ -962,14 +610,21 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
             project_root=tmp_path,
         )
 
-    def record_current(_config) -> None:
+    def record_tortoise_cli(
+        _context: migrate_module.MigrationContext,
+        _args: list[str],
+    ) -> None:
         return None
 
     monkeypatch.setattr(tools_migrate, "runtime_project_root", lambda: tmp_path)
     monkeypatch.setattr(tools_migrate, "load_project_settings", load_project_settings)
-    monkeypatch.setattr(tools_migrate.command, "current", record_current)
+    monkeypatch.setattr(
+        tools_migrate.data_migrate,
+        "_run_tortoise_cli",
+        record_tortoise_cli,
+    )
 
-    exit_code = tools_migrate.main(["--config", selected_config.as_posix(), "current"])
+    exit_code = tools_migrate.main(["--config", selected_config.as_posix(), "heads"])
 
     assert exit_code == 0
     assert observed["app_config"] == selected_config.as_posix()

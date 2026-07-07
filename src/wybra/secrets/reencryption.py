@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from tortoise.backends.base.client import BaseDBAsyncClient
 
 from wybra.auth.models import (
     IdentityProvider,
@@ -66,24 +65,24 @@ class _SecretFieldSpec:
 _REVERSIBLE_SECRET_FIELDS = (
     _SecretFieldSpec(
         IdentityProvider,
-        IdentityProvider.__tablename__,
+        IdentityProvider._meta.db_table,
         "crypt_access_token",
     ),
     _SecretFieldSpec(
         IdentityProvider,
-        IdentityProvider.__tablename__,
+        IdentityProvider._meta.db_table,
         "crypt_refresh_token",
     ),
     _SecretFieldSpec(
         IdentityTotpCredential,
-        IdentityTotpCredential.__tablename__,
+        IdentityTotpCredential._meta.db_table,
         "crypt_secret",
     ),
 )
 
 
 async def reencrypt_persisted_secrets(
-    session: AsyncSession,
+    connection: BaseDBAsyncClient,
     secret_service: SecretEnvelopeService,
     *,
     dry_run: bool = False,
@@ -95,7 +94,7 @@ async def reencrypt_persisted_secrets(
     for spec in _REVERSIBLE_SECRET_FIELDS:
         fields.append(
             await _reencrypt_secret_field(
-                session,
+                connection,
                 spec,
                 secret_service,
                 current_version=current_version,
@@ -103,33 +102,32 @@ async def reencrypt_persisted_secrets(
             )
         )
 
-    unsupported_recovery_code_verifiers = await _count_recovery_code_verifiers(session)
+    unsupported_recovery_code_verifiers = await _count_recovery_code_verifiers(
+        connection
+    )
     result = ReencryptSecretsResult(
         fields=tuple(fields),
         unsupported_recovery_code_verifiers=unsupported_recovery_code_verifiers,
         dry_run=dry_run,
     )
-    if not dry_run and result.rewritten:
-        await session.commit()
     return result
 
 
 async def _reencrypt_secret_field(
-    session: AsyncSession,
+    connection: BaseDBAsyncClient,
     spec: _SecretFieldSpec,
     secret_service: SecretEnvelopeService,
     *,
     current_version: str,
     dry_run: bool,
 ) -> ReencryptedSecretFieldStats:
-    result = await session.execute(select(spec.model))
     scanned = 0
     rewritten = 0
     skipped_current = 0
     skipped_plaintext = 0
     versions: dict[str, int] = {}
 
-    for row in result.scalars():
+    for row in await spec.model.all().using_db(connection):
         value = getattr(row, spec.field)
         if value is None:
             continue
@@ -147,6 +145,7 @@ async def _reencrypt_secret_field(
         rewritten += 1
         if not dry_run:
             setattr(row, spec.field, secret_service.encrypt_required(plaintext))
+            await row.save(using_db=connection)
 
     return ReencryptedSecretFieldStats(
         table=spec.table,
@@ -162,11 +161,8 @@ async def _reencrypt_secret_field(
     )
 
 
-async def _count_recovery_code_verifiers(session: AsyncSession) -> int:
-    count = await session.scalar(
-        select(func.count()).select_from(IdentityTotpRecoveryCode)
-    )
-    return int(count or 0)
+async def _count_recovery_code_verifiers(connection: BaseDBAsyncClient) -> int:
+    return await IdentityTotpRecoveryCode.all().using_db(connection).count()
 
 
 __all__ = (

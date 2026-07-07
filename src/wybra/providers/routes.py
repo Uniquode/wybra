@@ -742,8 +742,8 @@ async def _provider_resolution_user(request: Request, user_id: str) -> User | No
     if parsed_user_id is None:
         return None
     database = get_site(request.app).require_capability(DatabaseCapability)
-    async with database.session() as session:
-        user = await session.get(User, parsed_user_id)
+    async with database.transaction() as session:
+        user = await User.get_or_none(id=parsed_user_id, using_db=session)
         return user if user is not None and is_user_effectively_active(user) else None
 
 

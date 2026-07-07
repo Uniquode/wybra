@@ -5,16 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import func, select
 from starlette.requests import Request
 
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.resources import PackageResourceSource
-from wybra.db import DatabaseCapability, SqlAlchemyDatabaseCapability
+from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
 from wybra.db.persistence import close_database, create_database
 from wybra.db.surfaces import (
     discover_migration_version_locations,
-    metadata_from_model_package,
+    discover_model_package,
 )
 from wybra.messages import (
     ERROR_ALERT,
@@ -48,7 +47,6 @@ from wybra.sessions import (
 from wybra.sessions import (
     SessionCleanupRegistry,
     SessionRecord,
-    SessionRecordModel,
     create_session_id,
 )
 from wybra.site import Site, start
@@ -97,6 +95,26 @@ def _site(settings: MessagesSettings, capability: DefaultMessagesCapability) -> 
     app.state.messages_settings = settings
     site.provide_capability(MessagesCapability, capability)
     return site
+
+
+async def _database_capability(
+    *,
+    modules: tuple[str, ...] = ("wybra.messages",),
+) -> tuple[object, TortoiseDatabaseCapability]:
+    database = await create_database(
+        "sqlite+aiosqlite:///:memory:",
+        modules=modules,
+    )
+    capability = TortoiseDatabaseCapability(
+        database,
+        {"default": "default", "reader": "default", "writer": "default"},
+    )
+    try:
+        await database.context.generate_schemas()
+    except Exception:
+        await close_database(database)
+        raise
+    return database, capability
 
 
 @pytest.mark.anyio
@@ -321,16 +339,13 @@ async def test_redis_cache_storage_pops_queue_with_atomic_script() -> None:
 @pytest.mark.anyio
 async def test_database_storage_persists_and_pops_alerts() -> None:
     settings = _settings({"storage_backend": "database"})
-    database = create_database("sqlite+aiosqlite:///:memory:")
-    db_capability = SqlAlchemyDatabaseCapability.from_connections({"default": database})
+    database, db_capability = await _database_capability()
     app = FastAPI()
     site = Site(
         app=app,
         config=ConfigService([], discover_module_config=False),
     )
     site.provide_capability(DatabaseCapability, db_capability)
-    async with database.engine.begin() as connection:
-        await connection.run_sync(MessageAlert.__table__.create)
     storage = DatabaseMessagesStorage(
         settings,
         site.capability_proxy(DatabaseCapability),
@@ -353,17 +368,15 @@ async def test_database_storage_persists_and_pops_alerts() -> None:
 @pytest.mark.anyio
 async def test_database_storage_removes_alert_queue_when_session_is_deleted() -> None:
     settings = _settings({"storage_backend": "database"})
-    database = create_database("sqlite+aiosqlite:///:memory:")
-    db_capability = SqlAlchemyDatabaseCapability.from_connections({"default": database})
+    database, db_capability = await _database_capability(
+        modules=("wybra.messages", "wybra.sessions"),
+    )
     app = FastAPI()
     site = Site(
         app=app,
         config=ConfigService([], discover_module_config=False),
     )
     site.provide_capability(DatabaseCapability, db_capability)
-    async with database.engine.begin() as connection:
-        await connection.run_sync(MessageAlert.__table__.create)
-        await connection.run_sync(SessionRecordModel.__table__.create)
     messages = DefaultMessagesCapability(
         settings,
         DatabaseMessagesStorage(
@@ -407,17 +420,15 @@ async def test_database_storage_removes_alert_queue_when_session_is_deleted() ->
 @pytest.mark.anyio
 async def test_database_storage_removes_alert_queue_when_session_expires() -> None:
     settings = _settings({"storage_backend": "database"})
-    database = create_database("sqlite+aiosqlite:///:memory:")
-    db_capability = SqlAlchemyDatabaseCapability.from_connections({"default": database})
+    database, db_capability = await _database_capability(
+        modules=("wybra.messages", "wybra.sessions"),
+    )
     app = FastAPI()
     site = Site(
         app=app,
         config=ConfigService([], discover_module_config=False),
     )
     site.provide_capability(DatabaseCapability, db_capability)
-    async with database.engine.begin() as connection:
-        await connection.run_sync(MessageAlert.__table__.create)
-        await connection.run_sync(SessionRecordModel.__table__.create)
     messages = DefaultMessagesCapability(
         settings,
         DatabaseMessagesStorage(
@@ -459,31 +470,27 @@ async def test_database_storage_removes_alert_queue_when_session_expires() -> No
 @pytest.mark.anyio
 async def test_database_storage_cleanup_removes_expired_alerts() -> None:
     settings = _settings({"storage_backend": "database"})
-    database = create_database("sqlite+aiosqlite:///:memory:")
-    db_capability = SqlAlchemyDatabaseCapability.from_connections({"default": database})
+    database, db_capability = await _database_capability()
     app = FastAPI()
     site = Site(
         app=app,
         config=ConfigService([], discover_module_config=False),
     )
     site.provide_capability(DatabaseCapability, db_capability)
-    async with database.engine.begin() as connection:
-        await connection.run_sync(MessageAlert.__table__.create)
     storage = DatabaseMessagesStorage(
         settings,
         site.capability_proxy(DatabaseCapability),
     )
 
     try:
-        async with db_capability.transaction("default") as session:
-            session.add(
-                MessageAlert(
-                    queue_key="queue",
-                    severity=SUCCESS_ALERT,
-                    message="Expired",
-                    created_at=1.0,
-                    expires_at=2.0,
-                )
+        async with db_capability.transaction("default") as connection:
+            await MessageAlert.create(
+                queue_key="queue",
+                severity=SUCCESS_ALERT,
+                message="Expired",
+                created_at=1.0,
+                expires_at=2.0,
+                using_db=connection,
             )
 
         assert await _message_alert_count(db_capability) == 1
@@ -496,12 +503,14 @@ async def test_database_storage_cleanup_removes_expired_alerts() -> None:
 
 
 def test_database_storage_exposes_model_and_migration_surface() -> None:
-    metadata = metadata_from_model_package("wybra.messages.models")
     migration_locations = discover_migration_version_locations("wybra.messages")
 
-    assert "messages_alert" in metadata.tables
+    assert discover_model_package("wybra.messages") == "wybra.messages.models"
     assert migration_locations
-    assert any(path.name == "versions" for path in migration_locations)
+    assert any(
+        path.name == "migrations" and path.joinpath("0001_initial.py").is_file()
+        for path in migration_locations
+    )
 
 
 @pytest.mark.anyio
@@ -563,11 +572,10 @@ def test_default_alert_component_escapes_message_text() -> None:
 
 
 async def _message_alert_count(
-    db_capability: SqlAlchemyDatabaseCapability,
+    db_capability: TortoiseDatabaseCapability,
 ) -> int:
-    async with db_capability.transaction("default") as session:
-        result = await session.execute(select(func.count()).select_from(MessageAlert))
-        return int(result.scalar_one())
+    async with db_capability.transaction("default") as connection:
+        return await MessageAlert.all(using_db=connection).count()
 
 
 def test_widget_layout_renders_alert_component_when_context_exists() -> None:

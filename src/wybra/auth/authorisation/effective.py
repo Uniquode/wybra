@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from tortoise.backends.base.client import BaseDBAsyncClient
 
 from wybra.auth.models import Group, GroupGroup, GroupScope, GroupUser
 from wybra.auth.persistence.contracts import LocalUserRecord
@@ -33,25 +33,24 @@ def is_user_effectively_active(
 
 
 async def effective_scope_sets_for_user(
-    session: AsyncSession,
+    connection: BaseDBAsyncClient,
     user_id: UUID,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    scopes, group_abbrevs = await _resolve_effective_scope_sets(session, user_id)
+    scopes, group_abbrevs = await _resolve_effective_scope_sets(connection, user_id)
     return (tuple(sorted(scopes)), tuple(sorted(group_abbrevs)))
 
 
 async def _resolve_effective_scope_sets(
-    session: AsyncSession,
+    connection: BaseDBAsyncClient,
     user_id: UUID,
 ) -> tuple[set[str], set[str]]:
-    direct_group_ids = set(
-        (
-            await session.execute(
-                select(GroupUser.group_id).where(GroupUser.user_id == user_id)
-            )
-        )
-        .scalars()
-        .all()
+    direct_group_ids = cast(
+        set[UUID],
+        set(
+            await GroupUser.filter(user_id=user_id)
+            .using_db(connection)
+            .values_list("group_id", flat=True)
+        ),
     )
     if not direct_group_ids:
         return set(), set()
@@ -64,32 +63,31 @@ async def _resolve_effective_scope_sets(
         if not current_ids:
             break
         visited.update(current_ids)
-        child_ids = set(
-            (
-                await session.execute(
-                    select(GroupGroup.child_group_id).where(
-                        GroupGroup.parent_group_id.in_(current_ids)
-                    )
-                )
-            )
-            .scalars()
-            .all()
+        child_ids = cast(
+            set[UUID],
+            set(
+                await GroupGroup.filter(parent_group_id__in=current_ids)
+                .using_db(connection)
+                .values_list("child_group_id", flat=True)
+            ),
         )
         pending = child_ids - visited
 
-    scopes = set(
-        (
-            await session.execute(
-                select(GroupScope.scope).where(GroupScope.group_id.in_(visited))
-            )
-        )
-        .scalars()
-        .all()
+    scopes = cast(
+        set[str],
+        set(
+            await GroupScope.filter(group_id__in=visited)
+            .using_db(connection)
+            .values_list("scope", flat=True)
+        ),
     )
-    group_abbrevs = set(
-        (await session.execute(select(Group.abbrev).where(Group.id.in_(visited))))
-        .scalars()
-        .all()
+    group_abbrevs = cast(
+        set[str],
+        set(
+            await Group.filter(id__in=visited)
+            .using_db(connection)
+            .values_list("abbrev", flat=True)
+        ),
     )
 
     return scopes, group_abbrevs

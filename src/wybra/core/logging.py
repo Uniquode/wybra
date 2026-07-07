@@ -72,11 +72,8 @@ DEFAULT_LOGGING_CONFIG: Final[dict[str, Any]] = {
         "handlers": ["console"],
     },
     "loggers": {
-        "alembic": {
+        "tortoise": {
             "level": "INFO",
-        },
-        "sqlalchemy.engine": {
-            "level": "WARNING",
         },
     },
 }

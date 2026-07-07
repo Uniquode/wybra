@@ -34,7 +34,7 @@ Supported values are:
   restart and are not shared between workers.
 - `file`: server-side session files under a configured directory.
 - `cache`: Redis-compatible cache storage.
-- `database`: durable SQLAlchemy-backed storage.
+- `database`: durable Tortoise-backed storage.
 
 ## Recommended Production Backends
 

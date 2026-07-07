@@ -3,8 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Protocol
 
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from tortoise.exceptions import IntegrityError
 
 from wybra.db import DatabaseCapability
 from wybra.media.models import MediaItem, MediaResourceKey
@@ -16,7 +15,7 @@ class MediaResourceKeyConflictError(RuntimeError):
 
 
 class MediaCatalogueRepository(Protocol):
-    """Storage-neutral catalogue operations required by media capability."""
+    """Catalogue persistence operations required by media capability."""
 
     async def create_item(
         self,
@@ -42,8 +41,8 @@ class MediaCatalogueRepository(Protocol):
     ) -> None: ...
 
 
-class SqlAlchemyMediaCatalogueRepository:
-    """SQLAlchemy-backed media catalogue adapter."""
+class TortoiseMediaCatalogueRepository:
+    """Tortoise-backed media catalogue repository."""
 
     def __init__(self, database: SiteCapabilityProxy[DatabaseCapability]) -> None:
         self.database = database
@@ -57,32 +56,28 @@ class SqlAlchemyMediaCatalogueRepository:
         size: int,
         resource_key: str | None = None,
     ) -> MediaItem:
-        item = MediaItem(
-            category=category,
-            storage_key=storage_key,
-            content_type=content_type,
-            size=size,
-        )
         try:
-            async with self.database.transaction() as session:
+            async with self.database.transaction() as connection:
                 if resource_key is not None:
-                    conflicting = await session.scalar(
-                        select(MediaResourceKey).where(
-                            MediaResourceKey.resource_key == resource_key
-                        )
+                    conflicting = await MediaResourceKey.get_or_none(
+                        resource_key=resource_key,
+                        using_db=connection,
                     )
                     if conflicting is not None:
                         raise MediaResourceKeyConflictError(resource_key)
-                session.add(item)
-                await session.flush()
+                item = await MediaItem.create(
+                    category=category,
+                    storage_key=storage_key,
+                    content_type=content_type,
+                    size=size,
+                    using_db=connection,
+                )
                 if resource_key is not None:
-                    session.add(
-                        MediaResourceKey(
-                            media_id=item.id,
-                            resource_key=resource_key,
-                        )
+                    await MediaResourceKey.create(
+                        media_id=item.id,
+                        resource_key=resource_key,
+                        using_db=connection,
                     )
-                await session.refresh(item)
         except IntegrityError as exc:
             if resource_key is not None and _resource_key_conflict(exc):
                 raise MediaResourceKeyConflictError(resource_key) from exc
@@ -90,23 +85,23 @@ class SqlAlchemyMediaCatalogueRepository:
         return item
 
     async def get_item(self, media_id: uuid.UUID) -> MediaItem | None:
-        async with self.database.session() as session:
-            return await session.scalar(
-                select(MediaItem).where(MediaItem.id == media_id)
-            )
+        async with self.database.transaction() as connection:
+            return await MediaItem.get_or_none(id=media_id, using_db=connection)
 
     async def get_item_by_resource_key(
         self,
         resource_key: str,
     ) -> MediaItem | None:
-        async with self.database.session() as session:
-            return await session.scalar(
-                select(MediaItem)
-                .join(
-                    MediaResourceKey,
-                    MediaItem.id == MediaResourceKey.media_id,
-                )
-                .where(MediaResourceKey.resource_key == resource_key)
+        async with self.database.transaction() as connection:
+            resource = await MediaResourceKey.get_or_none(
+                resource_key=resource_key,
+                using_db=connection,
+            )
+            if resource is None:
+                return None
+            return await MediaItem.get_or_none(
+                id=resource.media_id,
+                using_db=connection,
             )
 
     async def assign_resource_key(
@@ -114,18 +109,16 @@ class SqlAlchemyMediaCatalogueRepository:
         media_id: uuid.UUID,
         resource_key: str,
     ) -> None:
-        async with self.database.transaction() as session:
-            existing = await session.scalar(
-                select(MediaResourceKey).where(
-                    MediaResourceKey.resource_key == resource_key
-                )
+        async with self.database.transaction() as connection:
+            existing = await MediaResourceKey.get_or_none(
+                resource_key=resource_key,
+                using_db=connection,
             )
             if existing is None:
-                session.add(
-                    MediaResourceKey(
-                        media_id=media_id,
-                        resource_key=resource_key,
-                    )
+                await MediaResourceKey.create(
+                    media_id=media_id,
+                    resource_key=resource_key,
+                    using_db=connection,
                 )
             elif existing.media_id == media_id:
                 return

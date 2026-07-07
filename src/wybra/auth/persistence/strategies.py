@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.exceptions import IntegrityError
+from tortoise.transactions import in_transaction
 
 from wybra.auth.accounts.manager import InvalidID, UserManager, UserNotExists
-from wybra.auth.admin.management import SqlAlchemyAuthManagementStore
+from wybra.auth.admin.management import TortoiseAuthManagementStore
+from wybra.auth.email_normalisation import normalise_email_target
 from wybra.auth.ids import parse_uuid
 from wybra.auth.mfa.storage import (
-    SqlAlchemyChallengeStore,
-    SqlAlchemyRecoveryCodeStore,
-    SqlAlchemyTOTPCredentialStore,
-    SqlAlchemyWebAuthnCredentialStore,
+    TortoiseChallengeStore,
+    TortoiseRecoveryCodeStore,
+    TortoiseTOTPCredentialStore,
+    TortoiseWebAuthnCredentialStore,
 )
 from wybra.auth.models import AccessToken, IdentityUserEmail, User
 from wybra.auth.options import IdentityOptions
@@ -30,41 +31,46 @@ from wybra.auth.persistence.contracts import (
     RecoveryCodeStore,
     SessionTokenStore,
     TOTPCredentialStore,
+    UserStore,
     WebAuthnCredentialStore,
 )
-from wybra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
+from wybra.auth.provider_credentials import provider_credential_store
 from wybra.auth.session_tokens import generate_session_token
 from wybra.db import DatabaseCapability
-from wybra.db.persistence import Database, session_scope
+from wybra.db.capabilities import DEFAULT_CONNECTION_NAME
+from wybra.db.persistence import Database
 from wybra.services.crypto import SecretEnvelopeService
 from wybra.site import SiteCapabilityProxy
 
 SecretEnvelopeServiceResolver = Callable[[], SecretEnvelopeService | None]
-_IDENTITY_USER_EMAIL_UNIQUE_CONSTRAINTS: frozenset[str] = frozenset(
+_IDENTITY_UNIQUE_MARKERS: frozenset[str] = frozenset(
     {
-        "uq_identity_user_email_email",
-        "identity_user_email_email_key",
-    }
-)
-_USER_EMAIL_UNIQUE_CONSTRAINTS: frozenset[str] = frozenset(
-    {
-        "identity_user_email_key",
+        "identity_user.email",
+        "identity_user_email.email",
+        "identity_user_email_email",
     }
 )
 
 
 @dataclass(frozen=True, slots=True)
-class SqlAlchemyUserStore:
-    session: AsyncSession
+class TortoiseUserStore:
+    connection: BaseDBAsyncClient
     user_table: type[User] = User
 
-    async def get(self, user_id) -> User | None:
-        return await self.session.get(self.user_table, user_id)
+    async def get(self, user_id: uuid.UUID) -> User | None:
+        return await self.user_table.get_or_none(id=user_id, using_db=self.connection)
 
     async def get_by_email(self, email: str) -> User | None:
-        from wybra.auth.emails import resolve_user_by_email
-
-        return await resolve_user_by_email(self.session, email)
+        normalised_email = normalise_email_target(email)
+        if normalised_email is None:
+            return None
+        primary_email = await IdentityUserEmail.get_or_none(
+            email=normalised_email,
+            using_db=self.connection,
+        )
+        if primary_email is None:
+            return None
+        return await self.get(primary_email.user_id)
 
     async def create_local_user(
         self,
@@ -73,35 +79,37 @@ class SqlAlchemyUserStore:
         primary_email: str,
         after_create: Callable[[LocalUserRecord], Awaitable[None]] | None = None,
     ) -> User:
-        created_user = self.user_table(**dict(values))
-
-        async def _create_and_persist_user() -> None:
-            self.session.add(created_user)
-            await self.session.flush()
-            self.session.add(
-                IdentityUserEmail(
-                    user=created_user,
-                    email=primary_email,
-                    is_primary=True,
-                    is_verified=created_user.is_verified,
-                )
+        create_values = dict(values)
+        created_at = create_values.setdefault("created_at", _timestamp_now())
+        create_values.setdefault("modified_at", created_at)
+        created_user = self.user_table(**create_values)
+        try:
+            await created_user.save(using_db=self.connection)
+            await IdentityUserEmail.create(
+                user_id=created_user.id,
+                email=primary_email,
+                is_primary=True,
+                is_verified=created_user.is_verified,
+                using_db=self.connection,
             )
             if after_create is not None:
-                await after_create(created_user)
-
-        try:
-            async with (
-                self.session.begin()
-                if not self.session.in_transaction()
-                else self.session.begin_nested()
-            ):
-                await _create_and_persist_user()
+                try:
+                    await after_create(created_user)
+                except Exception:
+                    await (
+                        IdentityUserEmail.filter(
+                            user_id=created_user.id,
+                        )
+                        .using_db(self.connection)
+                        .delete()
+                    )
+                    await created_user.delete(using_db=self.connection)
+                    raise
         except IntegrityError as exc:
             if _is_identity_unique_violation(exc):
                 raise DuplicateIdentityError() from exc
             raise
 
-        await self.session.refresh(created_user)
         return created_user
 
     async def save_user(
@@ -112,7 +120,9 @@ class SqlAlchemyUserStore:
         primary_email_verified: bool | None = None,
     ) -> LocalUserRecord:
         try:
-            self.session.add(user)
+            if isinstance(user, User):
+                user.modified_at = _timestamp_now()
+                await user.save(using_db=self.connection)
             if primary_email is not None:
                 await self._set_primary_email(
                     user,
@@ -123,10 +133,7 @@ class SqlAlchemyUserStore:
                         else primary_email_verified
                     ),
                 )
-            await self.session.commit()
-            await self.session.refresh(user)
         except IntegrityError as exc:
-            await self.session.rollback()
             if _is_identity_unique_violation(exc):
                 raise DuplicateIdentityError() from exc
             raise
@@ -139,33 +146,39 @@ class SqlAlchemyUserStore:
         *,
         is_verified: bool,
     ) -> None:
-        primary_email = await self.session.scalar(
-            select(IdentityUserEmail)
-            .where(
-                IdentityUserEmail.user_id == user.id,
-                IdentityUserEmail.is_primary.is_(True),
-            )
-            .with_for_update()
+        await (
+            self.user_table.filter(id=user.id)
+            .using_db(self.connection)
+            .select_for_update()
         )
+        primary_emails = (
+            await IdentityUserEmail.filter(user_id=user.id, is_primary=True)
+            .using_db(self.connection)
+            .select_for_update()
+        )
+        primary_email = primary_emails[0] if primary_emails else None
         if primary_email is None:
-            self.session.add(
-                IdentityUserEmail(
-                    user_id=user.id,
-                    email=email,
-                    is_primary=True,
-                    is_verified=is_verified,
-                )
+            await IdentityUserEmail.create(
+                user_id=user.id,
+                email=email,
+                is_primary=True,
+                is_verified=is_verified,
+                using_db=self.connection,
             )
             return
 
+        for stale_primary_email in primary_emails[1:]:
+            stale_primary_email.is_primary = False
+            await stale_primary_email.save(using_db=self.connection)
+
         primary_email.email = email
         primary_email.is_verified = is_verified
-        self.session.add(primary_email)
+        await primary_email.save(using_db=self.connection)
 
 
 @dataclass(frozen=True, slots=True)
-class SqlAlchemyAccessTokenStore:
-    session: AsyncSession
+class TortoiseAccessTokenStore:
+    connection: BaseDBAsyncClient
 
     async def resolve(
         self,
@@ -173,34 +186,29 @@ class SqlAlchemyAccessTokenStore:
         *,
         max_age_seconds: int | None,
     ) -> str | None:
-        statement = select(AccessToken).where(AccessToken.token == token)
+        query = AccessToken.filter(token=token).using_db(self.connection)
         if max_age_seconds is not None:
             max_age = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
-            statement = statement.where(AccessToken.created_at >= max_age)
-        access_token = (await self.session.execute(statement)).scalar_one_or_none()
+            query = query.filter(created_at__gte=max_age)
+        access_token = await query.first()
         return None if access_token is None else str(access_token.user_id)
 
     async def create(self, user: LocalUserRecord) -> str:
-        access_token = AccessToken(token=generate_session_token(), user_id=user.id)
-        self.session.add(access_token)
-        await self.session.commit()
-        await self.session.refresh(access_token)
+        access_token = await AccessToken.create(
+            token=generate_session_token(),
+            user_id=user.id,
+            using_db=self.connection,
+        )
         return access_token.token
 
     async def delete(self, token: str) -> None:
-        await self.session.execute(
-            delete(AccessToken).where(AccessToken.token == token)
-        )
-        await self.session.commit()
+        await AccessToken.filter(token=token).using_db(self.connection).delete()
 
     async def delete_by_token(self, token: str) -> None:
         await self.delete(token)
 
     async def delete_for_user(self, user: LocalUserRecord) -> None:
-        await self.session.execute(
-            delete(AccessToken).where(AccessToken.user_id == user.id)
-        )
-        await self.session.commit()
+        await AccessToken.filter(user_id=user.id).using_db(self.connection).delete()
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,85 +245,74 @@ class PersistentSessionTokenStrategy:
 
 
 @dataclass(frozen=True, slots=True)
-class SqlAlchemyAuthPersistenceScope:
-    """SQLAlchemy-backed auth repository scope.
+class TortoiseAuthPersistenceScope:
+    """Tortoise-backed auth repository scope."""
 
-    Runtime auth code receives this as an ``AuthPersistenceScope``. SQLAlchemy
-    sessions stay inside the adapter object rather than leaking through the
-    public capability contract.
-    """
-
-    session: AsyncSession
+    connection: BaseDBAsyncClient
     secret_service: SecretEnvelopeService | None = None
 
     @property
-    def users(self) -> SqlAlchemyUserStore:
-        return SqlAlchemyUserStore(self.session)
+    def users(self) -> TortoiseUserStore:
+        return TortoiseUserStore(self.connection)
 
     @property
-    def session_tokens(self) -> SqlAlchemyAccessTokenStore:
-        return SqlAlchemyAccessTokenStore(self.session)
+    def session_tokens(self) -> TortoiseAccessTokenStore:
+        return TortoiseAccessTokenStore(self.connection)
 
     @property
     def challenges(self) -> ChallengeStore:
-        return SqlAlchemyChallengeStore(self.session)
+        return TortoiseChallengeStore(self.connection)
 
     @property
     def totp_credentials(self) -> TOTPCredentialStore:
-        return SqlAlchemyTOTPCredentialStore(self.session, self.secret_service)
+        return TortoiseTOTPCredentialStore(self.connection, self.secret_service)
 
     @property
     def recovery_codes(self) -> RecoveryCodeStore:
-        return SqlAlchemyRecoveryCodeStore(self.session, self.secret_service)
+        return TortoiseRecoveryCodeStore(self.connection, self.secret_service)
 
     @property
     def webauthn_credentials(self) -> WebAuthnCredentialStore:
-        return SqlAlchemyWebAuthnCredentialStore(self.session)
+        return TortoiseWebAuthnCredentialStore(self.connection)
 
     @property
-    def provider_credentials(self) -> SqlAlchemyProviderCredentialStore:
-        return SqlAlchemyProviderCredentialStore(self.session, self.secret_service)
+    def provider_credentials(self) -> object:
+        return provider_credential_store(self.connection, self.secret_service)
 
     @property
     def management(self) -> AuthManagementStore:
-        return SqlAlchemyAuthManagementStore(self.session, self.secret_service)
+        return TortoiseAuthManagementStore(self.connection, self.secret_service)
 
     async def get_user(self, user_id: str | uuid.UUID) -> User | None:
         parsed_user_id = parse_uuid(user_id)
         if parsed_user_id is None:
             return None
-        return await self.session.get(User, parsed_user_id)
+        return await User.get_or_none(id=parsed_user_id, using_db=self.connection)
 
     async def get_user_by_email(self, email: str) -> User | None:
         return await self.users.get_by_email(email)
 
-    async def commit(self) -> None:
-        await self.session.commit()
-
-    async def rollback(self) -> None:
-        await self.session.rollback()
-
-    async def flush(self) -> None:
-        await self.session.flush()
-
 
 @dataclass(frozen=True, slots=True)
-class SqlAlchemyAuthPersistenceCapability:
-    """Auth persistence capability backed by the shared SQLAlchemy database."""
+class TortoiseAuthPersistenceCapability:
+    """Auth persistence capability backed by the shared Tortoise database."""
 
     database: SiteCapabilityProxy[DatabaseCapability]
     secret_service: SecretEnvelopeService | None = None
     secret_service_resolver: SecretEnvelopeServiceResolver | None = None
 
     @asynccontextmanager
-    async def session(self) -> AsyncIterator[AuthPersistenceScope]:
-        async with self.database.session() as session:
-            yield SqlAlchemyAuthPersistenceScope(session, self._secret_service())
+    async def scope(self) -> AsyncIterator[AuthPersistenceScope]:
+        async with self.transaction() as scope:
+            yield scope
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AuthPersistenceScope]:
-        async with self.database.transaction() as session:
-            yield SqlAlchemyAuthPersistenceScope(session, self._secret_service())
+        database = self.database.require()
+        context_scope = getattr(database, "context", nullcontext)()
+        with context_scope:
+            async with database.transaction() as connection:
+                yield TortoiseAuthPersistenceScope(connection, self._secret_service())
 
     def _secret_service(self) -> SecretEnvelopeService | None:
         if self.secret_service_resolver is not None:
@@ -324,61 +321,62 @@ class SqlAlchemyAuthPersistenceCapability:
 
 
 @asynccontextmanager
-async def auth_persistence_session(
+async def auth_persistence_scope(
     database: Database,
     *,
     secret_service: SecretEnvelopeService | None = None,
     secret_service_resolver: SecretEnvelopeServiceResolver | None = None,
 ) -> AsyncIterator[AuthPersistenceScope]:
-    """Yield an auth persistence scope for standalone SQLAlchemy tools."""
+    """Yield an auth persistence scope for standalone Tortoise tools."""
 
-    async with session_scope(database.session_factory) as session:
-        resolved_secret_service = (
-            secret_service_resolver()
-            if secret_service_resolver is not None
-            else secret_service
-        )
-        yield SqlAlchemyAuthPersistenceScope(session, resolved_secret_service)
-
-
-def create_access_token_database(
-    session: AsyncSession,
-) -> SqlAlchemyAccessTokenStore:
-    return SqlAlchemyAccessTokenStore(session)
+    resolved_secret_service = (
+        secret_service_resolver()
+        if secret_service_resolver is not None
+        else secret_service
+    )
+    with database.context:
+        async with in_transaction(DEFAULT_CONNECTION_NAME) as connection:
+            yield TortoiseAuthPersistenceScope(
+                connection,
+                resolved_secret_service,
+            )
 
 
-def create_database_strategy(
-    session: AsyncSession,
+def create_session_token_store(
+    connection: BaseDBAsyncClient,
+) -> TortoiseAccessTokenStore:
+    return TortoiseAccessTokenStore(connection)
+
+
+def create_session_token_strategy(
+    connection: BaseDBAsyncClient,
     options: IdentityOptions,
 ) -> PersistentSessionTokenStrategy:
     return PersistentSessionTokenStrategy(
-        create_access_token_database(session),
+        create_session_token_store(connection),
         lifetime_seconds=options.session_lifetime_seconds,
     )
 
 
-async def delete_session_token_by_value(session: AsyncSession, token: str) -> None:
-    await create_access_token_database(session).delete_by_token(token)
+async def delete_session_token_by_value(
+    connection: BaseDBAsyncClient,
+    token: str,
+) -> None:
+    await create_session_token_store(connection).delete_by_token(token)
 
 
-def create_user_database(
-    session: AsyncSession,
-) -> SqlAlchemyUserStore:
-    return SqlAlchemyUserStore(session)
+def create_user_store(connection: BaseDBAsyncClient) -> UserStore:
+    return TortoiseUserStore(connection)
 
 
 def _is_identity_unique_violation(exc: IntegrityError) -> bool:
-    constraint_name = getattr(
-        getattr(exc.orig, "diag", None),
-        "constraint_name",
-        None,
+    message = str(exc).lower()
+    return "unique" in message and any(
+        marker in message for marker in _IDENTITY_UNIQUE_MARKERS
     )
-    if constraint_name and constraint_name in (
-        _IDENTITY_USER_EMAIL_UNIQUE_CONSTRAINTS | _USER_EMAIL_UNIQUE_CONSTRAINTS
-    ):
-        return True
 
-    message = str(exc.orig).lower() if exc.orig else str(exc).lower()
-    return "unique" in message and (
-        "identity_user.email" in message or "identity_user_email.email" in message
-    )
+
+def _timestamp_now() -> float:
+    from wybra.auth.timestamps import current_timestamp
+
+    return current_timestamp()

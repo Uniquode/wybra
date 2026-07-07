@@ -6,10 +6,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from sqlalchemy import delete, select
-from sqlalchemy.engine import CursorResult
-from sqlalchemy.ext.asyncio import AsyncSession
+from tortoise.backends.base.client import BaseDBAsyncClient
 
+from wybra.auth.emails import resolve_user_by_normalised_email
 from wybra.auth.ids import parse_uuid
 from wybra.auth.models import (
     ExternalIdentityLink,
@@ -121,19 +120,19 @@ class ProviderCredentialStore(Protocol):
 
 
 def provider_credential_store(
-    session: AsyncSession,
+    connection: BaseDBAsyncClient,
     secret_service: SecretEnvelopeService | None = None,
 ) -> ProviderCredentialStore:
-    return SqlAlchemyProviderCredentialStore(session, secret_service)
+    return TortoiseProviderCredentialStore(connection, secret_service)
 
 
-class SqlAlchemyProviderCredentialStore:
+class TortoiseProviderCredentialStore:
     def __init__(
         self,
-        session: AsyncSession,
+        connection: BaseDBAsyncClient,
         secret_service: SecretEnvelopeService | None = None,
     ) -> None:
-        self._session = session
+        self._connection = connection
         self._secret_service = secret_service or SecretEnvelopeService.from_env(
             os.environ
         )
@@ -150,7 +149,7 @@ class SqlAlchemyProviderCredentialStore:
         provider_enabled: bool = True,
         provider_metadata: dict[str, object] | None = None,
     ) -> str:
-        provider = IdentityProvider(
+        provider = await IdentityProvider.create(
             provider_name=provider_name,
             provider_subject=provider_subject,
             crypt_access_token=self._encrypt_provider_token(access_token),
@@ -163,9 +162,8 @@ class SqlAlchemyProviderCredentialStore:
             account_email=account_email,
             provider_enabled=provider_enabled,
             provider_metadata=provider_metadata,
+            using_db=self._connection,
         )
-        self._session.add(provider)
-        await self._session.flush()
         return str(provider.id)
 
     async def upsert_provider_credential(
@@ -192,7 +190,6 @@ class SqlAlchemyProviderCredentialStore:
                 account_email=account_email,
                 provider_enabled=provider_enabled,
             )
-            self._session.add(provider)
 
         provider.crypt_access_token = self._encrypt_provider_token(access_token)
         provider.expires_at = expires_at
@@ -204,7 +201,7 @@ class SqlAlchemyProviderCredentialStore:
         provider.account_email = account_email
         provider.provider_enabled = provider_enabled
         provider.provider_metadata = provider_metadata
-        await self._session.flush()
+        await provider.save(using_db=self._connection)
         return provider
 
     async def get_provider_credential(
@@ -215,20 +212,21 @@ class SqlAlchemyProviderCredentialStore:
         if parsed_provider_id is None:
             return None
 
-        return await self._session.get(IdentityProvider, parsed_provider_id)
+        return await IdentityProvider.get_or_none(
+            id=parsed_provider_id,
+            using_db=self._connection,
+        )
 
     async def get_provider_by_identity(
         self,
         provider_name: str,
         provider_subject: str,
     ) -> IdentityProvider | None:
-        result = await self._session.execute(
-            select(IdentityProvider).where(
-                IdentityProvider.provider_name == provider_name,
-                IdentityProvider.provider_subject == provider_subject,
-            )
+        return await IdentityProvider.get_or_none(
+            provider_name=provider_name,
+            provider_subject=provider_subject,
+            using_db=self._connection,
         )
-        return result.unique().scalar_one_or_none()
 
     async def get_link_for_provider(
         self,
@@ -237,12 +235,10 @@ class SqlAlchemyProviderCredentialStore:
         parsed_provider_id = parse_uuid(provider_id)
         if parsed_provider_id is None:
             return None
-        result = await self._session.execute(
-            select(ExternalIdentityLink).where(
-                ExternalIdentityLink.provider_id == parsed_provider_id
-            )
+        return await ExternalIdentityLink.get_or_none(
+            provider_id=parsed_provider_id,
+            using_db=self._connection,
         )
-        return result.unique().scalar_one_or_none()
 
     async def get_user_providers(
         self,
@@ -250,18 +246,14 @@ class SqlAlchemyProviderCredentialStore:
         user_id: str | uuid.UUID,
         provider_name: str,
     ) -> tuple[IdentityProvider, ...]:
-        parsed_user_id = parse_uuid(user_id)
-        if parsed_user_id is None:
+        provider_ids = await self._provider_ids_for_user(user_id)
+        if not provider_ids:
             return ()
-        result = await self._session.execute(
-            select(IdentityProvider)
-            .join(ExternalIdentityLink)
-            .where(
-                ExternalIdentityLink.user_id == parsed_user_id,
-                IdentityProvider.provider_name == provider_name,
-            )
-        )
-        return tuple(result.unique().scalars().all())
+        providers = await IdentityProvider.filter(
+            id__in=provider_ids,
+            provider_name=provider_name,
+        ).using_db(self._connection)
+        return tuple(providers)
 
     async def get_user_provider_by_id(
         self,
@@ -273,15 +265,17 @@ class SqlAlchemyProviderCredentialStore:
         parsed_provider_id = parse_uuid(provider_id)
         if parsed_user_id is None or parsed_provider_id is None:
             return None
-        result = await self._session.execute(
-            select(IdentityProvider)
-            .join(ExternalIdentityLink)
-            .where(
-                ExternalIdentityLink.user_id == parsed_user_id,
-                IdentityProvider.id == parsed_provider_id,
-            )
+        link = await ExternalIdentityLink.get_or_none(
+            user_id=parsed_user_id,
+            provider_id=parsed_provider_id,
+            using_db=self._connection,
         )
-        return result.unique().scalar_one_or_none()
+        if link is None:
+            return None
+        return await IdentityProvider.get_or_none(
+            id=parsed_provider_id,
+            using_db=self._connection,
+        )
 
     async def user_has_enabled_provider_link(
         self,
@@ -291,32 +285,26 @@ class SqlAlchemyProviderCredentialStore:
         exclude_provider_id: str | uuid.UUID | None = None,
         exclude_provider_name: str | None = None,
     ) -> bool:
-        parsed_user_id = parse_uuid(user_id)
-        if parsed_user_id is None:
+        provider_ids = await self._provider_ids_for_user(user_id)
+        if not provider_ids:
             return False
         parsed_excluded_provider_id = (
             parse_uuid(exclude_provider_id) if exclude_provider_id is not None else None
         )
-        query = (
-            select(IdentityProvider.id)
-            .join(ExternalIdentityLink)
-            .where(
-                ExternalIdentityLink.user_id == parsed_user_id,
-                IdentityProvider.provider_enabled.is_(True),
-            )
-            .limit(1)
-        )
+        query = IdentityProvider.filter(
+            id__in=provider_ids,
+            provider_enabled=True,
+        ).using_db(self._connection)
         if provider_names is not None:
             names = tuple(provider_names)
             if not names:
                 return False
-            query = query.where(IdentityProvider.provider_name.in_(names))
+            query = query.filter(provider_name__in=names)
         if parsed_excluded_provider_id is not None:
-            query = query.where(IdentityProvider.id != parsed_excluded_provider_id)
+            query = query.exclude(id=parsed_excluded_provider_id)
         if exclude_provider_name is not None:
-            query = query.where(IdentityProvider.provider_name != exclude_provider_name)
-        result = await self._session.execute(query)
-        return result.scalar_one_or_none() is not None
+            query = query.exclude(provider_name=exclude_provider_name)
+        return await query.exists()
 
     async def unlink_user_provider(
         self,
@@ -328,50 +316,48 @@ class SqlAlchemyProviderCredentialStore:
         parsed_provider_id = parse_uuid(provider_id)
         if parsed_user_id is None or parsed_provider_id is None:
             return False
-        link_delete_result = cast(
-            CursorResult[object],
-            await self._session.execute(
-                delete(ExternalIdentityLink).where(
-                    ExternalIdentityLink.user_id == parsed_user_id,
-                    ExternalIdentityLink.provider_id == parsed_provider_id,
-                )
-            ),
+        deleted_links = (
+            await ExternalIdentityLink.filter(
+                user_id=parsed_user_id,
+                provider_id=parsed_provider_id,
+            )
+            .using_db(self._connection)
+            .delete()
         )
-        if link_delete_result.rowcount is None or link_delete_result.rowcount < 1:
+        if deleted_links < 1:
             return False
-        await self._session.execute(
-            delete(IdentityProvider).where(IdentityProvider.id == parsed_provider_id)
+        await (
+            IdentityProvider.filter(
+                id=parsed_provider_id,
+            )
+            .using_db(self._connection)
+            .delete()
         )
-        await self._session.flush()
         return True
 
     async def get_linked_user(
         self,
         provider: IdentityProvider,
     ) -> User | None:
-        result = await self._session.execute(
-            select(User)
-            .join(ExternalIdentityLink)
-            .where(ExternalIdentityLink.provider_id == provider.id)
-        )
-        return result.unique().scalar_one_or_none()
+        link = await self.get_link_for_provider(provider.id)
+        if link is None:
+            return None
+        return await self.get_user(link.user_id)
 
     async def get_user(self, user_id: str | uuid.UUID) -> User | None:
         parsed_user_id = parse_uuid(user_id)
         if parsed_user_id is None:
             return None
-        return await self._session.get(User, parsed_user_id)
+        return await User.get_or_none(id=parsed_user_id, using_db=self._connection)
 
     async def get_user_by_normalised_email(
         self,
         normalised_email: str,
     ) -> User | None:
-        result = await self._session.execute(
-            select(User)
-            .join(IdentityUserEmail)
-            .where(IdentityUserEmail.email == normalised_email)
+        return await resolve_user_by_normalised_email(
+            self._connection,
+            normalised_email,
         )
-        return result.unique().scalar_one_or_none()
 
     async def create_provider_user(
         self,
@@ -379,25 +365,22 @@ class SqlAlchemyProviderCredentialStore:
         email: str,
         is_verified: bool,
     ) -> User:
-        user = User(
+        user = await User.create(
             email=email,
             hashed_password=None,
             password_login_enabled=False,
             is_active=True,
             is_superuser=False,
             is_verified=is_verified,
+            using_db=self._connection,
         )
-        self._session.add(user)
-        await self._session.flush()
-        self._session.add(
-            IdentityUserEmail(
-                user=user,
-                email=email,
-                is_primary=True,
-                is_verified=is_verified,
-            )
+        await IdentityUserEmail.create(
+            user_id=user.id,
+            email=email,
+            is_primary=True,
+            is_verified=is_verified,
+            using_db=self._connection,
         )
-        await self._session.flush()
         return user
 
     async def verify_matching_user_email(
@@ -409,18 +392,18 @@ class SqlAlchemyProviderCredentialStore:
     ) -> bool:
         if not is_verified:
             return False
-        result = await self._session.execute(
-            select(IdentityUserEmail).where(
-                IdentityUserEmail.user_id == user.id,
-                IdentityUserEmail.email == email,
-            )
+        email_record = await IdentityUserEmail.get_or_none(
+            user_id=user.id,
+            email=email,
+            using_db=self._connection,
         )
-        email_record = result.unique().scalar_one_or_none()
         if email_record is None:
             return False
         email_record.is_verified = True
+        await email_record.save(using_db=self._connection)
         if user.email == email:
             user.is_verified = True
+            await user.save(using_db=self._connection)
         return True
 
     async def link_provider_to_user(
@@ -438,13 +421,11 @@ class SqlAlchemyProviderCredentialStore:
             if existing.user_id != parsed_user_id:
                 raise ValueError("Provider identity is already linked.")
             return existing
-        link = ExternalIdentityLink(
+        return await ExternalIdentityLink.create(
             provider_id=parsed_provider_id,
             user_id=parsed_user_id,
+            using_db=self._connection,
         )
-        self._session.add(link)
-        await self._session.flush()
-        return link
 
     def secret_envelopes(
         self,
@@ -472,6 +453,24 @@ class SqlAlchemyProviderCredentialStore:
 
         plaintext, _version = refresh_token.decrypt(service=self._secret_service)
         return plaintext
+
+    async def _provider_ids_for_user(
+        self,
+        user_id: str | uuid.UUID,
+    ) -> tuple[uuid.UUID, ...]:
+        parsed_user_id = parse_uuid(user_id)
+        if parsed_user_id is None:
+            return ()
+        return cast(
+            tuple[uuid.UUID, ...],
+            tuple(
+                await ExternalIdentityLink.filter(
+                    user_id=parsed_user_id,
+                )
+                .using_db(self._connection)
+                .values_list("provider_id", flat=True)
+            ),
+        )
 
     def _encrypt_provider_token(self, value: str) -> str:
         try:

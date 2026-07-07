@@ -16,6 +16,9 @@ _.env_setting_is_set
 _.migration_script_root
 _.discover_model_metadata
 _.redact_database_url
+_.model_packages_from_modules
+_.migration_version_locations_from_modules
+_.migration_version_location_for_configured_module
 _.register_error_handlers
 _.optional_current_user
 _.require_current_user
@@ -84,6 +87,10 @@ _.list_command
 _.password_command
 _.init_command
 _.revision_command
+_.makemigrations_command
+_.migrate_command_command
+_.heads_command
+_.sqlmigrate_command
 _.set_command
 _.rotate_secret_key_command
 _.rotate_csrf_token_secret_command
@@ -151,6 +158,7 @@ _.consume_recovery_code
 _.code
 _.destroy_token
 _.create_database_strategy
+_.create_session_token_strategy
 _.delete_session_token_by_value
 _.SqlAlchemyProviderCredentialStore
 _.create_provider_credential
@@ -282,9 +290,17 @@ _.shortcut_scope
 _.id
 
 # Alembic revision module metadata.
+_.initial
 _.down_revision
 _.branch_labels
 _.depends_on
+
+# Tortoise model metadata and fields consumed by Tortoise at runtime.
+_.unique_together
+_.indexes
+_.consumed_at
+_.parent_group_id
+_.child_group_id
 
 # HTMLParser callback invoked by the standard library.
 _.handle_starttag

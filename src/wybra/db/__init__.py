@@ -1,13 +1,13 @@
-"""Reusable SQLAlchemy and Alembic data infrastructure.
+"""Reusable Tortoise data infrastructure.
 
-`wybra.db` may depend on SQLAlchemy, Alembic, and shared composition contracts,
-but it must not import host application settings, route modules, or startup code.
+`wybra.db` may depend on Tortoise and shared composition contracts, but it must
+not import host application settings, route modules, or startup code.
 """
 
 from wybra.db.capabilities import (
     DatabaseCapability,
     DatabaseCapabilityError,
-    SqlAlchemyDatabaseCapability,
+    TortoiseDatabaseCapability,
 )
 from wybra.db.config import module_config
 from wybra.db.urls import resolve_database_url
@@ -28,8 +28,9 @@ async def setup_site(site: Site) -> None:
         )
     site.provide_capability(
         DatabaseCapability,
-        SqlAlchemyDatabaseCapability.from_database_url(
-            resolve_database_url(database_url, app_config.project_root)
+        await TortoiseDatabaseCapability.from_database_url(
+            resolve_database_url(database_url, app_config.project_root),
+            modules=site.modules,
         ),
     )
 
@@ -39,7 +40,7 @@ __all__ = (
     "DatabaseCapabilityError",
     "module_config",
     "PersistenceValidationSettings",
-    "SqlAlchemyDatabaseCapability",
+    "TortoiseDatabaseCapability",
     "setup_site",
     "validate_persistence",
 )

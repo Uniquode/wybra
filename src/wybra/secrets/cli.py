@@ -23,7 +23,7 @@ from wybra.core.composition import (
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.logging import merge_logging_config
-from wybra.db.persistence import close_database, create_database, session_scope
+from wybra.db.persistence import close_database, create_database
 from wybra.forms.rotation import plan_csrf_token_secret_rotation
 from wybra.forms.settings import FormsSettings
 from wybra.secrets.config import KeychainSecretSourceSettings, SecretsSettings
@@ -492,11 +492,14 @@ async def _reencrypt_secrets(
     command_settings = _secret_command_settings_from_context(ctx)
     secret_service = _secret_envelope_service_from_command_settings(command_settings)
     auth_settings = _auth_settings_from_context(ctx)
-    database = create_database(auth_settings.database_url)
+    database = await create_database(
+        auth_settings.database_url,
+        modules=("wybra.auth",),
+    )
     try:
-        async with session_scope(database.session_factory) as session:
+        with database.context:
             return await reencrypt_persisted_secrets(
-                session,
+                database.connection(),
                 secret_service,
                 dry_run=dry_run,
             )

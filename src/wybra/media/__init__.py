@@ -18,7 +18,7 @@ from wybra.media.capabilities import (
     MediaStorageReadinessError,
 )
 from wybra.media.config import MediaSettings, module_config
-from wybra.media.persistence import SqlAlchemyMediaCatalogueRepository
+from wybra.media.persistence import TortoiseMediaCatalogueRepository
 from wybra.media.validation import MediaValidationSettings, validate_media
 from wybra.site import Site
 
@@ -27,7 +27,7 @@ async def setup_site(site: Site) -> None:
     settings = MediaSettings.load_settings(site.config)
     capability = FilesystemMediaCapability(
         settings=settings,
-        catalogue=SqlAlchemyMediaCatalogueRepository(
+        catalogue=TortoiseMediaCatalogueRepository(
             site.capability_proxy(DatabaseCapability)
         ),
     )
@@ -46,7 +46,7 @@ async def post_setup_site(site: Site) -> None:
     capability = site.require_capability(MediaCapability)
     if isinstance(capability, FilesystemMediaCapability):
         catalogue = capability.catalogue
-        if isinstance(catalogue, SqlAlchemyMediaCatalogueRepository):
+        if isinstance(catalogue, TortoiseMediaCatalogueRepository):
             catalogue.database.finalise_required()
 
 

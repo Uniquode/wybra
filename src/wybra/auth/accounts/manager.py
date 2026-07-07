@@ -16,9 +16,7 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 
 from wybra.auth.accounts.schemas import UserCreate, UserUpdate
 from wybra.auth.delivery import IdentityDelivery, NullIdentityDelivery
-from wybra.auth.emails import (
-    normalise_email_target,
-)
+from wybra.auth.email_normalisation import normalise_email_target
 from wybra.auth.options import IdentityOptions
 from wybra.auth.persistence.contracts import (
     DuplicateIdentityError,
@@ -502,15 +500,15 @@ def public_password_error_type(error: object) -> ResultErrorType:
 
 
 def create_user_manager(
-    session,
+    connection,
     options: IdentityOptions,
     delivery: IdentityDelivery | None = None,
     profile_lookup: PasswordProfileLookup | None = None,
 ) -> UserManager:
-    from wybra.auth.persistence import create_user_database
+    from wybra.auth.persistence import create_user_store
 
     return create_user_manager_from_store(
-        create_user_database(session),
+        create_user_store(connection),
         options,
         delivery,
         profile_lookup,

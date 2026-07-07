@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, cast
 
-from sqlalchemy import Table
-from sqlalchemy import inspect as sqlalchemy_inspect
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
+from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.exceptions import BaseORMException
+from tortoise.models import Model
 
 from wybra.auth.models import (
     Group,
@@ -20,16 +17,16 @@ from wybra.auth.models import (
     User,
 )
 from wybra.core.exceptions import ConfigurationError
-from wybra.db.persistence import Database, session_scope
+from wybra.db.persistence import Database
 
 SCHEMA_MIGRATION_MESSAGE = (
     "Auth database schema is not up to date; run `uv run wybra-migrate init` "
     "for first-time database provisioning and migration-state setup, then "
-    "`uv run wybra-migrate upgrade` to apply schema migrations from the host "
+    "`uv run wybra-migrate migrate` to apply schema migrations from the host "
     "app project with the same selected app config used by wybra-authmgr. "
     "If deliberately overriding the application database, run "
     "`uv run wybra-migrate --database-url <database-url> init` followed by "
-    "`uv run wybra-migrate --database-url <database-url> upgrade`."
+    "`uv run wybra-migrate --database-url <database-url> migrate`."
 )
 SCHEMA_INSPECTION_MESSAGE = (
     "Auth database schema could not be inspected; verify database connectivity, "
@@ -47,25 +44,21 @@ class IdentitySchemaStatus:
 
 
 async def verify_identity_schema_for_database(database: Database) -> None:
-    async with session_scope(database.session_factory) as session:
-        await _verify_identity_schema(session)
+    await _verify_identity_schema(database.connection())
 
 
-async def _verify_identity_schema(session: AsyncSession) -> None:
+async def _verify_identity_schema(connection: BaseDBAsyncClient) -> None:
     try:
-        schema_status = await session.run_sync(_identity_schema_status)
-    except SQLAlchemyError as exc:
+        schema_status = await _identity_schema_status(connection)
+    except BaseORMException as exc:
         logger.warning(
             "Auth database schema inspection failed.",
-            extra={
-                "table_name": User.__tablename__,
-                "schema": getattr(User.__table__, "schema", None),
-            },
+            extra={"table_name": _model_table_name(User)},
         )
         _log_schema_inspection_error(exc)
         raise ConfigurationError(SCHEMA_INSPECTION_MESSAGE) from exc
 
-    table_name = _identity_table_qualified_name()
+    table_name = _model_table_name(User)
     if not schema_status.table_exists:
         raise ConfigurationError(
             f"{SCHEMA_MIGRATION_MESSAGE} Missing {table_name} table."
@@ -88,80 +81,129 @@ async def _verify_identity_schema(session: AsyncSession) -> None:
         )
 
 
-def _identity_table_qualified_name() -> str:
-    user_table = cast(Table, User.__table__)
-    if user_table.schema:
-        return f"{user_table.schema}.{user_table.name}"
-    return user_table.name
-
-
-def _identity_schema_status(session: Session) -> IdentitySchemaStatus:
-    inspector = sqlalchemy_inspect(session.get_bind())
-    user_table = _identity_schema_tables()[0]
-    if not inspector.has_table(user_table.name, schema=user_table.schema):
+async def _identity_schema_status(
+    connection: BaseDBAsyncClient,
+) -> IdentitySchemaStatus:
+    table_columns = await _database_table_columns(connection)
+    user_table = _identity_schema_models()[0]
+    user_table_name = _model_table_name(user_table)
+    if user_table_name not in table_columns:
         return IdentitySchemaStatus(
-            primary_table_name=user_table.name,
+            primary_table_name=user_table_name,
             table_exists=False,
             missing_columns=(),
         )
 
     missing_tables: list[str] = []
     missing_columns: list[str] = []
-    for table in _identity_schema_tables():
-        if not inspector.has_table(table.name, schema=table.schema):
-            missing_tables.append(_qualified_table_name(table))
+    for model in _identity_schema_models():
+        table_name = _model_table_name(model)
+        database_columns = table_columns.get(table_name)
+        if database_columns is None:
+            missing_tables.append(table_name)
             continue
 
-        missing_columns.extend(_missing_schema_columns(inspector, table))
+        missing_columns.extend(_missing_schema_columns(model, database_columns))
 
     return IdentitySchemaStatus(
-        primary_table_name=user_table.name,
+        primary_table_name=user_table_name,
         table_exists=True,
         missing_columns=tuple(sorted(missing_columns)),
         missing_tables=tuple(sorted(missing_tables)),
     )
 
 
-def _identity_schema_tables() -> tuple[Table, ...]:
+def _identity_schema_models() -> tuple[type[Model], ...]:
     return (
-        cast(Table, User.__table__),
-        cast(Table, Group.__table__),
-        cast(Table, Scope.__table__),
-        cast(Table, GroupScope.__table__),
-        cast(Table, GroupUser.__table__),
-        cast(Table, GroupGroup.__table__),
-        cast(Table, IdentityUserEmail.__table__),
+        User,
+        Group,
+        Scope,
+        GroupScope,
+        GroupUser,
+        GroupGroup,
+        IdentityUserEmail,
     )
 
 
-def _missing_schema_columns(inspector: Any, table: Table) -> list[str]:
-    expected_column_names = tuple(str(column.name) for column in table.columns)
+async def _database_table_columns(
+    connection: BaseDBAsyncClient,
+) -> dict[str, set[str]]:
+    dialect = str(getattr(connection.capabilities, "dialect", "")).casefold()
+    if dialect == "sqlite":
+        return await _sqlite_table_columns(connection)
+    if dialect == "postgres":
+        return await _postgres_table_columns(connection)
+    raise ConfigurationError(
+        f"{SCHEMA_INSPECTION_MESSAGE} Unsupported database dialect: {dialect}."
+    )
+
+
+async def _sqlite_table_columns(
+    connection: BaseDBAsyncClient,
+) -> dict[str, set[str]]:
+    tables = await connection.execute_query_dict(
+        "SELECT name FROM sqlite_master WHERE type = 'table'"
+    )
+    table_columns: dict[str, set[str]] = {}
+    for row in tables:
+        table_name = str(row["name"])
+        columns = await connection.execute_query_dict(
+            f"PRAGMA table_info({_quote_sqlite_identifier(table_name)})"
+        )
+        table_columns[table_name] = {
+            _normalise_identifier(column["name"]) for column in columns
+        }
+    return table_columns
+
+
+async def _postgres_table_columns(
+    connection: BaseDBAsyncClient,
+) -> dict[str, set[str]]:
+    rows = await connection.execute_query_dict(
+        """
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+        """
+    )
+    table_columns: dict[str, set[str]] = {}
+    for row in rows:
+        table_columns.setdefault(str(row["table_name"]), set()).add(
+            _normalise_identifier(row["column_name"])
+        )
+    return table_columns
+
+
+def _missing_schema_columns(
+    model: type[Model],
+    database_columns: set[str],
+) -> list[str]:
     expected_columns = {
         _normalise_identifier(column_name): column_name
-        for column_name in expected_column_names
-    }
-    database_columns = {
-        _normalise_identifier(column["name"])
-        for column in inspector.get_columns(table.name, schema=table.schema)
+        for column_name in _model_column_names(model)
     }
     return [
-        _qualified_column_name(table, column_name)
+        _qualified_column_name(model, column_name)
         for normalised_name, column_name in expected_columns.items()
         if normalised_name not in database_columns
     ]
 
 
-def _qualified_table_name(table: Table) -> str:
-    if table.schema:
-        return f"{table.schema}.{table.name}"
-    return table.name
+def _model_column_names(model: type[Model]) -> tuple[str, ...]:
+    return tuple(
+        str(field.source_field or field_name)
+        for field_name, field in model._meta.fields_map.items()
+    )
 
 
-def _qualified_column_name(table: Table, column_name: str) -> str:
-    user_table = cast(Table, User.__table__)
-    if table is user_table:
+def _model_table_name(model: type[Model]) -> str:
+    return str(model._meta.db_table)
+
+
+def _qualified_column_name(model: type[Model], column_name: str) -> str:
+    if model is User:
         return column_name
-    return f"{_qualified_table_name(table)}.{column_name}"
+    return f"{_model_table_name(model)}.{column_name}"
 
 
 def _missing_tables_message(table_names: tuple[str, ...]) -> str:
@@ -172,13 +214,16 @@ def _normalise_identifier(value: object) -> str:
     return str(value).casefold()
 
 
-def _log_schema_inspection_error(exc: SQLAlchemyError) -> None:
+def _quote_sqlite_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _log_schema_inspection_error(exc: BaseORMException) -> None:
     logger.debug(
         "Failed to inspect identity_user schema.",
         exc_info=True,
         extra={
-            "table_name": User.__tablename__,
-            "schema": getattr(User.__table__, "schema", None),
+            "table_name": _model_table_name(User),
             "error_type": type(exc).__name__,
             "error_message": str(exc),
         },

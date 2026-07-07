@@ -52,8 +52,8 @@ from .shared import (
     _identity_options,
     _load_active_totp_credential_id,
     _load_user_by_id,
+    _persistence_scope_from_request,
     _public_signup_enabled,
-    _session_factory_from_request,
     account_router,
 )
 
@@ -202,9 +202,9 @@ async def _unlink_provider_response(
 ) -> Response:
     form_data = await request_form_data(request)
     provider_id = _form_value(form_data, "provider_id")
-    session_factory = _session_factory_from_request(request)
+    scope_factory = _persistence_scope_from_request(request)
     error: str | None = None
-    async with session_factory() as scope:
+    async with scope_factory() as scope:
         db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
@@ -232,7 +232,6 @@ async def _unlink_provider_response(
                 user_id=db_user.id,
                 provider_id=provider.id,
             )
-            await scope.commit()
 
     if error is not None:
         return await _security_page_response(
@@ -253,9 +252,9 @@ async def disable_password_login(
     request: Request,
     user: User = LOGIN_REQUIRED,
 ) -> Response:
-    session_factory = _session_factory_from_request(request)
+    scope_factory = _persistence_scope_from_request(request)
     error: str | None = None
-    async with session_factory() as scope:
+    async with scope_factory() as scope:
         db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
@@ -275,7 +274,7 @@ async def disable_password_login(
             error = "Add another sign-in method before disabling password sign-in."
         else:
             db_user.password_login_enabled = False
-            await scope.commit()
+            await scope.users.save_user(db_user)
 
     if error is not None:
         return await _security_page_response(
@@ -319,8 +318,8 @@ async def _security_totp_section(request: Request, user: User) -> dict[str, obje
     if options.totp_mode == TOTP_DISABLED:
         return {"available": False}
 
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         active_credential_id = await _load_active_totp_credential_id(scope, user.id)
 
     return {
@@ -361,8 +360,8 @@ async def _security_passkey_section(
         return {"available": False}
 
     credentials: list[dict[str, object]] = []
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         db_user = await _load_user_by_id(scope, user.id)
         if db_user is None:
             return {"available": False}
@@ -417,8 +416,8 @@ async def _security_password_disable_available(
     request: Request,
     user: User,
 ) -> bool:
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         db_user = await _load_user_by_id(scope, user.id)
         return bool(
             db_user is not None
@@ -470,8 +469,8 @@ async def _security_named_provider_section(
         return {"available": False}
 
     linked_accounts: list[dict[str, str]] = []
-    session_factory = _session_factory_from_request(request)
-    async with session_factory() as scope:
+    scope_factory = _persistence_scope_from_request(request)
+    async with scope_factory() as scope:
         store = _provider_credential_store(request, scope)
         providers = await store.get_user_providers(
             user_id=user.id,
@@ -583,8 +582,8 @@ async def verify_confirm(request: Request) -> Response:
     options = _identity_options(request)
     totp_setup_required = False
     if did_verify and options.totp_mode == TOTP_REQUIRED and verification_result.value:
-        session_factory = _session_factory_from_request(request)
-        async with session_factory() as scope:
+        scope_factory = _persistence_scope_from_request(request)
+        async with scope_factory() as scope:
             totp_setup_required = (
                 await _load_active_totp_credential_id(scope, verification_result.value)
             ) is None

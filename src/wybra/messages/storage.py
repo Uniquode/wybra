@@ -10,7 +10,7 @@ from typing import Any, Protocol, cast
 from urllib.parse import urlparse
 
 from fastapi import Request
-from sqlalchemy import delete, or_, select
+from tortoise.expressions import Q
 
 from wybra.db import DatabaseCapability
 from wybra.messages.config import MessageStorageBackend
@@ -335,20 +335,17 @@ class DatabaseMessagesStorage:
         queue_key = server_side_queue_key(request, prefix="")
         async with self.database.require().transaction(
             self.settings.database_connection_name
-        ) as session:
-            session.add(
-                MessageAlert(
-                    queue_key=queue_key,
-                    severity=alert.severity,
-                    message=alert.message,
-                    created_at=alert.created_at,
-                    expires_at=(
-                        alert.created_at + self.settings.resolved_message_ttl_seconds
-                    ),
-                )
+        ) as connection:
+            await MessageAlert.create(
+                queue_key=queue_key,
+                severity=alert.severity,
+                message=alert.message,
+                created_at=alert.created_at,
+                expires_at=alert.created_at
+                + self.settings.resolved_message_ttl_seconds,
+                using_db=connection,
             )
-            await session.flush()
-            await self._trim_queue(session, queue_key)
+            await self._trim_queue(connection, queue_key)
 
     async def peek(self, request: Request, *, now: float) -> tuple[AlertRecord, ...]:
         queue_key = optional_server_side_queue_key(request, prefix="")
@@ -356,19 +353,14 @@ class DatabaseMessagesStorage:
             return ()
         async with self.database.require().transaction(
             self.settings.database_connection_name
-        ) as session:
-            result = await session.execute(
-                select(MessageAlert)
-                .where(MessageAlert.queue_key == queue_key)
-                .where(
-                    or_(
-                        MessageAlert.expires_at.is_(None),
-                        MessageAlert.expires_at > now,
-                    )
-                )
-                .order_by(MessageAlert.id)
+        ) as connection:
+            rows = tuple(
+                await MessageAlert.filter(queue_key=queue_key)
+                .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+                .using_db(connection)
+                .order_by("id")
+                .all()
             )
-            rows = tuple(result.scalars())
             if not rows:
                 return ()
             return tuple(
@@ -387,10 +379,8 @@ class DatabaseMessagesStorage:
             return
         async with self.database.require().transaction(
             self.settings.database_connection_name
-        ) as session:
-            await session.execute(
-                delete(MessageAlert).where(MessageAlert.queue_key == queue_key)
-            )
+        ) as connection:
+            await self._delete_queue(connection, queue_key)
 
     async def pop(self, request: Request, *, now: float) -> tuple[AlertRecord, ...]:
         alerts = await self.peek(request, now=now)
@@ -403,42 +393,38 @@ class DatabaseMessagesStorage:
             return
         async with self.database.require().transaction(
             self.settings.database_connection_name
-        ) as session:
-            await self._delete_queue(session, queue_key)
+        ) as connection:
+            await self._delete_queue(connection, queue_key)
 
     async def cleanup(self, *, now: float) -> None:
         async with self.database.require().transaction(
             self.settings.database_connection_name
-        ) as session:
-            await self._delete_expired(session, now)
+        ) as connection:
+            await self._delete_expired(connection, now)
 
     async def validate(self) -> None:
         self.database.require()
 
-    async def _delete_expired(self, session: Any, now: float) -> None:
-        await session.execute(
-            delete(MessageAlert)
-            .where(MessageAlert.expires_at.is_not(None))
-            .where(MessageAlert.expires_at <= now)
+    async def _delete_expired(self, connection: Any, now: float) -> None:
+        await (
+            MessageAlert.filter(Q(expires_at__isnull=False), expires_at__lte=now)
+            .using_db(connection)
+            .delete()
         )
 
-    async def _delete_queue(self, session: Any, queue_key: str) -> None:
-        await session.execute(
-            delete(MessageAlert).where(MessageAlert.queue_key == queue_key)
-        )
+    async def _delete_queue(self, connection: Any, queue_key: str) -> None:
+        await MessageAlert.filter(queue_key=queue_key).using_db(connection).delete()
 
-    async def _trim_queue(self, session: Any, queue_key: str) -> None:
-        result = await session.execute(
-            select(MessageAlert.id)
-            .where(MessageAlert.queue_key == queue_key)
-            .order_by(MessageAlert.id.desc())
+    async def _trim_queue(self, connection: Any, queue_key: str) -> None:
+        stale_ids = tuple(
+            await MessageAlert.filter(queue_key=queue_key)
+            .using_db(connection)
+            .order_by("-id")
             .offset(self.settings.resolved_queue_depth)
+            .values_list("id", flat=True)
         )
-        stale_ids = tuple(result.scalars())
         if stale_ids:
-            await session.execute(
-                delete(MessageAlert).where(MessageAlert.id.in_(stale_ids))
-            )
+            await MessageAlert.filter(id__in=stale_ids).using_db(connection).delete()
 
 
 def storage_from_settings(site: Site, settings: MessagesSettings) -> MessagesStorage:

@@ -101,7 +101,7 @@ def _persistence_from_request(request: Request) -> AuthPersistenceCapability:
 def _persistence_scope_from_request(
     request: Request,
 ) -> AbstractAsyncContextManager[AuthPersistenceScope]:
-    return _persistence_from_request(request).session()
+    return _persistence_from_request(request).scope()
 
 
 def _delivery_from_request(request: Request) -> IdentityDelivery:
@@ -424,6 +424,7 @@ async def complete_authentication_ceremony(
             return Result.failure(ERROR_AUTHENTICATION_METHOD_REQUIRED)
 
         current_user.last_login_at = now
+        await scope.users.save_user(current_user)
         strategy = PersistentSessionTokenStrategy(
             scope.session_tokens,
             lifetime_seconds=options.session_lifetime_seconds,
@@ -529,7 +530,7 @@ async def request_verification(request: Request, email: str) -> None:
             return
 
         user.email_verification_sent_at = now
-        await scope.commit()
+        await scope.users.save_user(user)
 
 
 async def _active_user_from_verification_token(

@@ -1,9 +1,9 @@
 """Configured-module data surface discovery.
 
 `wybra.db` imports configured root modules and their optional conventional
-`<module>.models` surfaces only when callers ask for data metadata. Model
-metadata is returned in configured order, while migration version locations are
-discovered beside the owning module and later composed into one Alembic graph.
+`<module>.models` surfaces only when callers ask for data model modules. Model
+module names are returned in configured order, while migration version locations
+are discovered beside the owning module for Tortoise migration commands.
 No host application settings, routes, or startup modules should be imported
 here.
 """
@@ -16,20 +16,17 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Final
 
-from sqlalchemy import MetaData
+from tortoise.models import Model
 
 from wybra.core.conventions import (
     MIGRATION_RESOURCE_DIRECTORY,
-    MIGRATION_VERSIONS_DIRECTORY,
-    MODEL_METADATA_ATTRIBUTE,
     MODEL_SURFACE_MODULE,
     module_surface_name,
 )
 from wybra.core.diagnostics import configured_module_message, surface_message
 from wybra.core.modules import CORE_MODULES
 
-_MAX_AVAILABLE_ATTRIBUTE_NAMES: Final = 20
-_METADATA_CACHE_SIZE: Final = 32
+_MODEL_PACKAGE_CACHE_SIZE: Final = 32
 
 
 class DataCompositionError(ValueError):
@@ -39,26 +36,38 @@ class DataCompositionError(ValueError):
 def model_packages_from_modules(
     module_names: tuple[str, ...],
 ) -> tuple[str, ...]:
-    model_packages: list[str] = []
+    return tuple(
+        model_package
+        for model_packages in model_packages_by_module(module_names).values()
+        for model_package in model_packages
+    )
+
+
+def model_packages_by_module(
+    module_names: tuple[str, ...],
+) -> dict[str, tuple[str, ...]]:
+    packages: dict[str, tuple[str, ...]] = {}
     for module_name in _data_modules(module_names):
         _require_configured_module(module_name)
-        model_package = model_package_name(module_name)
-        if _find_module_spec(model_package) is not None:
-            model_packages.append(model_package)
+        model_package = discover_model_package(module_name)
+        if model_package is not None:
+            packages[module_name] = (model_package,)
 
-    return tuple(model_packages)
-
-
-def model_package_name(module_name: str) -> str:
-    return module_surface_name(module_name, MODEL_SURFACE_MODULE)
+    return packages
 
 
-def discover_model_metadata(module_name: str) -> MetaData | None:
+def discover_model_package(module_name: str) -> str | None:
     model_package = model_package_name(module_name)
     if _find_module_spec(model_package) is None:
         return None
 
-    return metadata_from_model_package(model_package)
+    if _model_package_has_model(model_package):
+        return model_package
+    return None
+
+
+def model_package_name(module_name: str) -> str:
+    return module_surface_name(module_name, MODEL_SURFACE_MODULE)
 
 
 def migration_version_locations_from_modules(
@@ -99,11 +108,7 @@ def migration_version_location_for_module(module_name: str) -> Path:
             )
         )
 
-    return (
-        Path(package_file).resolve().parent
-        / MIGRATION_RESOURCE_DIRECTORY
-        / MIGRATION_VERSIONS_DIRECTORY
-    )
+    return Path(package_file).resolve().parent / MIGRATION_RESOURCE_DIRECTORY
 
 
 def discover_migration_version_locations(module_name: str) -> tuple[Path, ...]:
@@ -114,9 +119,7 @@ def discover_migration_version_locations(module_name: str) -> tuple[Path, ...]:
         return ()
 
     version_location = (
-        Path(package_file).resolve().parent
-        / MIGRATION_RESOURCE_DIRECTORY
-        / MIGRATION_VERSIONS_DIRECTORY
+        Path(package_file).resolve().parent / MIGRATION_RESOURCE_DIRECTORY
     )
     if version_location.is_dir():
         return (version_location,)
@@ -124,8 +127,8 @@ def discover_migration_version_locations(module_name: str) -> tuple[Path, ...]:
     return ()
 
 
-@lru_cache(maxsize=_METADATA_CACHE_SIZE)
-def metadata_from_model_package(package_name: str) -> MetaData:
+@lru_cache(maxsize=_MODEL_PACKAGE_CACHE_SIZE)
+def _model_package_has_model(package_name: str) -> bool:
     try:
         module = import_module(package_name)
     except ModuleNotFoundError as exc:
@@ -139,23 +142,7 @@ def metadata_from_model_package(package_name: str) -> MetaData:
             ) from None
 
         raise
-
-    metadata = getattr(module, MODEL_METADATA_ATTRIBUTE, None)
-    if not isinstance(metadata, MetaData):
-        raise DataCompositionError(
-            surface_message(
-                "Model package",
-                package_name,
-                (
-                    "must expose SQLAlchemy metadata as a top-level "
-                    f"`{MODEL_METADATA_ATTRIBUTE}` attribute. Module origin: "
-                    f"{_module_origin(module)}. Available attributes: "
-                    f"{_available_attribute_summary(module)}."
-                ),
-            )
-        )
-
-    return metadata
+    return _has_tortoise_model(module)
 
 
 def _require_configured_module(module_name: str) -> None:
@@ -186,20 +173,8 @@ def _missing_configured_package(exc: ModuleNotFoundError, package_name: str) -> 
     )
 
 
-def _available_attribute_summary(module: object) -> str:
-    names = sorted(name for name in dir(module) if not name.startswith("__"))
-    if not names:
-        return "<none>"
-
-    visible_names = names[:_MAX_AVAILABLE_ATTRIBUTE_NAMES]
-    summary = ", ".join(visible_names)
-    hidden_count = len(names) - len(visible_names)
-    if hidden_count > 0:
-        return f"{summary}, ... (+{hidden_count} more)"
-
-    return summary
-
-
-def _module_origin(module: object) -> str:
-    origin = getattr(module, "__file__", None)
-    return origin if isinstance(origin, str) and origin else "<unknown>"
+def _has_tortoise_model(module: object) -> bool:
+    return any(
+        isinstance(value, type) and issubclass(value, Model) and value is not Model
+        for value in vars(module).values()
+    )
