@@ -278,7 +278,7 @@ class SqlAlchemyAuthPersistenceScope:
 
     @property
     def management(self) -> AuthManagementStore:
-        return SqlAlchemyAuthManagementStore(self.session)
+        return SqlAlchemyAuthManagementStore(self.session, self.secret_service)
 
     async def get_user(self, user_id: str | uuid.UUID) -> User | None:
         parsed_user_id = parse_uuid(user_id)

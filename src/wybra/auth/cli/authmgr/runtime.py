@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -17,10 +19,21 @@ from wybra.auth.persistence import auth_persistence_session
 from wybra.auth.persistence.contracts import AuthManagementStore, AuthPersistenceScope
 from wybra.auth.result import Result
 from wybra.auth.settings import AuthSettings, load_auth_settings
-from wybra.core.composition import CompositionError, load_app_config
+from wybra.config.service import ConfigService
+from wybra.config.sources import AppConfigSource
+from wybra.core.composition import AppConfig, CompositionError, load_app_config
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.logging import LoggingConfigurationError
 from wybra.db.persistence import close_database, create_database
+from wybra.secrets.capabilities import DefaultSecretsCapability
+from wybra.secrets.config import SecretsSettings
+from wybra.secrets.sources import (
+    AwsSecretsManagerSourceDriver,
+    EnvironmentSecretSourceDriver,
+    KeychainSecretSourceDriver,
+    VaultSecretSourceDriver,
+)
+from wybra.services.crypto import SecretEnvelopeService
 from wybra.tools.app_startup import (
     config_source_from_click_context,
 )
@@ -40,6 +53,12 @@ from .schema import verify_identity_schema_for_database
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class _AuthmgrCommandSettings:
+    auth: AuthSettings
+    secret_service: SecretEnvelopeService
+
+
 def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
     try:
         exit_code = asyncio.run(
@@ -56,12 +75,15 @@ def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
 
 
 async def _main_async(args: AuthmgrArgs, *, config_source: str | None = None) -> int:
-    settings = _load_auth_settings_for_command(config_source=config_source)
-    database = create_database(settings.database_url)
+    settings = _load_command_settings_for_command(config_source=config_source)
+    database = create_database(settings.auth.database_url)
     try:
         await verify_identity_schema_for_database(database)
-        async with auth_persistence_session(database) as scope:
-            return await _run_command(scope, settings, args)
+        async with auth_persistence_session(
+            database,
+            secret_service=settings.secret_service,
+        ) as scope:
+            return await _run_command(scope, settings.auth, args)
     finally:
         await close_database(database)
 
@@ -577,7 +599,9 @@ _COMMAND_HANDLERS: dict[str, CommandHandler] = {
 }
 
 
-def _load_auth_settings_for_command(config_source: str | None = None) -> AuthSettings:
+def _load_command_settings_for_command(
+    config_source: str | None = None,
+) -> _AuthmgrCommandSettings:
     try:
         configure_cli_logging()
         project_root = runtime_project_root()
@@ -593,7 +617,42 @@ def _load_auth_settings_for_command(config_source: str | None = None) -> AuthSet
             f"{str(exc).rstrip('.')}. Pass --config or set APP_CONFIG."
         ) from exc
 
-    return load_auth_settings(app_config=app_config)
+    return _AuthmgrCommandSettings(
+        auth=load_auth_settings(app_config=app_config),
+        secret_service=_secret_envelope_service_for_command(app_config),
+    )
+
+
+def _secret_envelope_service_for_command(
+    app_config: AppConfig,
+) -> SecretEnvelopeService:
+    settings = _secrets_settings_for_app_config(app_config)
+    if settings.crypto.source is None:
+        return SecretEnvelopeService.from_env(os.environ)
+
+    secrets = DefaultSecretsCapability.from_drivers(
+        (
+            EnvironmentSecretSourceDriver(os.environ),
+            AwsSecretsManagerSourceDriver(settings.kms),
+            KeychainSecretSourceDriver(settings.keychain),
+            VaultSecretSourceDriver(settings.vault),
+        )
+    )
+    return SecretEnvelopeService.from_secrets(
+        secrets,
+        source=settings.crypto.source,
+        current_key=settings.crypto.current_key,
+        previous_keys=settings.crypto.previous_keys,
+    )
+
+
+def _secrets_settings_for_app_config(app_config: AppConfig) -> SecretsSettings:
+    config = ConfigService(
+        [AppConfigSource(app_config)],
+        config_defs=(SecretsSettings.module_config,),
+        discover_module_config=False,
+    )
+    return SecretsSettings.load_settings(config)
 
 
 def _config_source_from_context(ctx: click.Context) -> str | None:

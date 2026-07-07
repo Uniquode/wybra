@@ -748,6 +748,30 @@ def test_authmgr_loads_app_auth_configuration(
     assert user.email == email
 
 
+def test_authmgr_command_secret_service_uses_configured_crypto_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured_key_name = "AUTHMGR_CONFIGURED_SECRET_KEY"
+    monkeypatch.setenv(ENV_WYBRA_SECRET_KEY_CURRENT, secret_key_entry_for_tests())
+    monkeypatch.setenv(configured_key_name, secret_key_entry_for_tests("configured"))
+    config_path = write_auth_app_toml(tmp_path / "app.toml")
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"""
+
+[secrets.crypto]
+source = "environment"
+current_key = "{configured_key_name}"
+"""
+        )
+    app_config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    service = authmgr_runtime._secret_envelope_service_for_command(app_config)
+
+    assert service.current_version_required() == "configured"
+
+
 def test_authmgr_config_option_overrides_app_config_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -66,6 +66,7 @@ from wybra.auth.admin.management import (
 )
 from wybra.auth.mfa.challenges import assertions_satisfy_required_methods
 from wybra.auth.mfa.storage import (
+    TOTP_CODE_REPLAY_MESSAGE,
     SqlAlchemyRecoveryCodeStore,
     SqlAlchemyTOTPCredentialStore,
     SqlAlchemyWebAuthnCredentialStore,
@@ -95,6 +96,7 @@ from wybra.auth.models import (
 )
 from wybra.auth.models import metadata as wybra_auth_metadata
 from wybra.auth.options import VALID_IDENTITY_INTEGRATIONS
+from wybra.auth.persistence import auth_persistence_session
 from wybra.auth.persistence.database import (
     close_database,
     create_database,
@@ -1478,6 +1480,149 @@ def test_wybra_auth_totp_seed_storage_uses_encrypted_envelope(
             await close_database(database)
 
     asyncio.run(assert_encrypted_storage())
+
+
+def test_wybra_auth_totp_rejects_replayed_code_and_persists_counter(
+    tmp_path: Path,
+) -> None:
+    async def assert_replay_rejected() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "totp-replay.sqlite3")
+        )
+        try:
+            secret_service = make_test_only_secret_service()
+            secret = "JBSWY3DPEHPK3PXP"
+            timestamp = 1_700_000_000.0
+            code = generate_totp(secret, timestamp=timestamp)
+            options = IdentityOptions(totp_mode="opt_in")
+
+            async with session_scope(database.session_factory) as session:
+                user = User(
+                    email="totp-replay@example.com",
+                    hashed_password="hash",
+                    is_active=True,
+                    is_superuser=False,
+                    is_verified=True,
+                )
+                session.add(user)
+                await session.flush()
+                user_id = str(user.id)
+
+                store = SqlAlchemyTOTPCredentialStore(session, secret_service)
+                credential_id = await store.create_pending_totp_credential(
+                    user_id,
+                    secret,
+                )
+                await store.activate_totp_credential(credential_id)
+                await session.commit()
+
+                accepted, counter, error = await verify_totp_code_for_credential(
+                    store=store,
+                    credential_id=credential_id,
+                    user_id=user_id,
+                    code=code,
+                    options=options,
+                    timestamp=timestamp,
+                )
+
+                assert accepted is True
+                assert counter is not None
+                assert error is None
+                await session.commit()
+
+            async with session_scope(database.session_factory) as session:
+                credential = await session.scalar(
+                    select(IdentityTotpCredential).where(
+                        IdentityTotpCredential.id == uuid.UUID(credential_id)
+                    )
+                )
+                assert credential is not None
+                assert credential.last_used_counter == counter
+
+                store = SqlAlchemyTOTPCredentialStore(session, secret_service)
+                (
+                    replay_accepted,
+                    replay_counter,
+                    replay_error,
+                ) = await verify_totp_code_for_credential(
+                    store=store,
+                    credential_id=credential_id,
+                    user_id=user_id,
+                    code=code,
+                    options=options,
+                    timestamp=timestamp,
+                )
+
+                assert replay_accepted is False
+                assert replay_counter is None
+                assert replay_error == TOTP_CODE_REPLAY_MESSAGE
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_replay_rejected())
+
+
+def test_wybra_auth_management_scope_uses_configured_secret_service_for_totp(
+    tmp_path: Path,
+) -> None:
+    async def assert_management_secret_service_used() -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "management-totp-crypto.sqlite3")
+        )
+        try:
+            secret_service = SecretEnvelopeService.for_testing(version="management")
+            async with session_scope(database.session_factory) as session:
+                user = User(
+                    email="management-totp@example.com",
+                    hashed_password="hash",
+                    is_active=True,
+                    is_superuser=False,
+                    is_verified=True,
+                )
+                session.add(user)
+                await session.flush()
+                target = str(user.id)
+                await session.commit()
+
+            async with auth_persistence_session(
+                database,
+                secret_service=secret_service,
+            ) as scope:
+                result = await scope.management.provision_totp(
+                    IdentityOptions(totp_mode="opt_in"),
+                    target=target,
+                )
+
+            assert result.is_ok() is True
+            assert result.value is not None
+            secret = result.value["totp"]["secret"]
+
+            async with session_scope(database.session_factory) as session:
+                credential = (
+                    await session.execute(select(IdentityTotpCredential))
+                ).scalar_one()
+                recovery_codes = (
+                    (await session.execute(select(IdentityTotpRecoveryCode)))
+                    .scalars()
+                    .all()
+                )
+                store = SqlAlchemyTOTPCredentialStore(session, secret_service)
+
+                assert credential.crypt_secret.startswith(
+                    f"{ENVELOPE_PREFIX}|management|"
+                )
+                assert store.decrypt_totp_secret(credential) == secret
+                assert recovery_codes
+                assert all(
+                    recovery_code.code_verifier.startswith(
+                        f"{VERIFIER_PREFIX}|management|"
+                    )
+                    for recovery_code in recovery_codes
+                )
+        finally:
+            await close_database(database)
+
+    asyncio.run(assert_management_secret_service_used())
 
 
 def test_wybra_auth_totp_verification_fails_closed_without_secret_keys(

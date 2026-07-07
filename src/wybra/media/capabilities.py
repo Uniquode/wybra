@@ -138,13 +138,19 @@ class FilesystemMediaCapability:
         resource_key: str | None = None,
     ) -> MediaItem:
         media_resource_key = _resource_key_value(resource_key)
-        return await self.catalogue.create_item(
-            category=_category_value(category),
-            storage_key=_storage_key(storage_key),
-            content_type=content_type,
-            size=_size_value(size),
-            resource_key=media_resource_key,
-        )
+        try:
+            return await self.catalogue.create_item(
+                category=_category_value(category),
+                storage_key=_storage_key(storage_key),
+                content_type=content_type,
+                size=_size_value(size),
+                resource_key=media_resource_key,
+            )
+        except MediaResourceKeyConflictError as exc:
+            raise MediaInputError(
+                f"Media resource key is already assigned: "
+                f"resource_key={media_resource_key}."
+            ) from exc
 
     async def store(
         self,

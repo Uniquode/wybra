@@ -370,6 +370,30 @@ async def test_media_capability_rejects_resource_key_reassignment(
 
 
 @pytest.mark.anyio
+async def test_media_capability_rejects_duplicate_resource_key_on_register(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+) -> None:
+    capability = _capability(tmp_path)
+    await create_database_schema(capability)
+
+    first = await capability.register(
+        category="profile",
+        storage_key="profile/ab/cd/first.png",
+        resource_key="default-avatar",
+    )
+
+    with pytest.raises(MediaInputError, match="Media resource key is already assigned"):
+        await capability.register(
+            category="profile",
+            storage_key="profile/ab/cd/second.png",
+            resource_key="default-avatar",
+        )
+
+    assert (await capability.get_by_resource_key("default-avatar")).id == first.id
+
+
+@pytest.mark.anyio
 async def test_create_database_schema_reports_missing_database(
     create_database_schema: Callable[[object], Awaitable[None]],
 ) -> None:

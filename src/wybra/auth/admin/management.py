@@ -55,6 +55,7 @@ from wybra.auth.result import (
     ResultErrorType,
 )
 from wybra.auth.timestamps import current_timestamp
+from wybra.services.crypto import SecretEnvelopeService
 
 ERROR_INVALID_TIMEZONE = "invalid_timezone"
 ERROR_NO_CHANGES = "no_changes"
@@ -121,6 +122,7 @@ class SqlAlchemyAuthManagementStore:
     """SQLAlchemy-backed implementation of auth management workflows."""
 
     session: AsyncSession
+    secret_service: SecretEnvelopeService | None = None
 
     async def resolve_user_record(self, target: str) -> Result[dict[str, Any]]:
         user, target_error = await resolve_user_target(self.session, target)
@@ -305,6 +307,7 @@ class SqlAlchemyAuthManagementStore:
             self.session,
             cast(IdentityOptions, options),
             user=cast(User, user_result.value),
+            secret_service=self.secret_service,
         )
 
     async def disable_totp(self, *, target: str) -> Result[dict[str, Any]]:
@@ -317,6 +320,7 @@ class SqlAlchemyAuthManagementStore:
         return await disable_totp_for_management(
             self.session,
             user=cast(User, user_result.value),
+            secret_service=self.secret_service,
         )
 
     async def rotate_totp_recovery_codes(
@@ -333,6 +337,7 @@ class SqlAlchemyAuthManagementStore:
         return await rotate_totp_recovery_codes_for_management(
             self.session,
             user=cast(User, user_result.value),
+            secret_service=self.secret_service,
         )
 
     async def revoke_passkeys(
@@ -751,9 +756,10 @@ async def provision_totp_for_management(
     *,
     user: User,
     issuer: str = DEFAULT_MANAGEMENT_TOTP_ISSUER,
+    secret_service: SecretEnvelopeService | None = None,
 ) -> Result[dict[str, Any]]:
     secret = generate_totp_secret()
-    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    credential_store = SqlAlchemyTOTPCredentialStore(session, secret_service)
     credential_id = await credential_store.create_pending_totp_credential(
         str(user.id),
         secret,
@@ -763,7 +769,7 @@ async def provision_totp_for_management(
     await credential_store.activate_totp_credential(credential_id)
 
     recovery_codes = generate_recovery_codes()
-    recovery_store = SqlAlchemyRecoveryCodeStore(session)
+    recovery_store = SqlAlchemyRecoveryCodeStore(session, secret_service)
     await recovery_store.replace_recovery_codes(
         str(user.id),
         credential_id,
@@ -792,8 +798,9 @@ async def disable_totp_for_management(
     session: AsyncSession,
     *,
     user: User,
+    secret_service: SecretEnvelopeService | None = None,
 ) -> Result[dict[str, Any]]:
-    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    credential_store = SqlAlchemyTOTPCredentialStore(session, secret_service)
     active_credential_id = await credential_store.get_active_totp_credential(
         str(user.id)
     )
@@ -809,8 +816,9 @@ async def rotate_totp_recovery_codes_for_management(
     session: AsyncSession,
     *,
     user: User,
+    secret_service: SecretEnvelopeService | None = None,
 ) -> Result[dict[str, Any]]:
-    credential_store = SqlAlchemyTOTPCredentialStore(session)
+    credential_store = SqlAlchemyTOTPCredentialStore(session, secret_service)
     active_credential_id = await credential_store.get_active_totp_credential(
         str(user.id)
     )
@@ -818,7 +826,7 @@ async def rotate_totp_recovery_codes_for_management(
         return Result.failure(ERROR_NO_ACTIVE_TOTP, "User does not have active TOTP.")
 
     recovery_codes = generate_recovery_codes()
-    recovery_store = SqlAlchemyRecoveryCodeStore(session)
+    recovery_store = SqlAlchemyRecoveryCodeStore(session, secret_service)
     await recovery_store.replace_recovery_codes(
         str(user.id),
         active_credential_id,

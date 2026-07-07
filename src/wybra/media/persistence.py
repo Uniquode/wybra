@@ -4,6 +4,7 @@ import uuid
 from typing import Protocol
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from wybra.db import DatabaseCapability
 from wybra.media.models import MediaItem, MediaResourceKey
@@ -62,17 +63,30 @@ class SqlAlchemyMediaCatalogueRepository:
             content_type=content_type,
             size=size,
         )
-        async with self.database.transaction() as session:
-            session.add(item)
-            await session.flush()
-            if resource_key is not None:
-                session.add(
-                    MediaResourceKey(
-                        media_id=item.id,
-                        resource_key=resource_key,
+        try:
+            async with self.database.transaction() as session:
+                if resource_key is not None:
+                    conflicting = await session.scalar(
+                        select(MediaResourceKey).where(
+                            MediaResourceKey.resource_key == resource_key
+                        )
                     )
-                )
-            await session.refresh(item)
+                    if conflicting is not None:
+                        raise MediaResourceKeyConflictError(resource_key)
+                session.add(item)
+                await session.flush()
+                if resource_key is not None:
+                    session.add(
+                        MediaResourceKey(
+                            media_id=item.id,
+                            resource_key=resource_key,
+                        )
+                    )
+                await session.refresh(item)
+        except IntegrityError as exc:
+            if resource_key is not None and _resource_key_conflict(exc):
+                raise MediaResourceKeyConflictError(resource_key) from exc
+            raise
         return item
 
     async def get_item(self, media_id: uuid.UUID) -> MediaItem | None:
@@ -117,3 +131,8 @@ class SqlAlchemyMediaCatalogueRepository:
                 return
             else:
                 raise MediaResourceKeyConflictError(resource_key)
+
+
+def _resource_key_conflict(exc: IntegrityError) -> bool:
+    message = str(exc).lower()
+    return "media_resource_key" in message or "resource_key" in message
