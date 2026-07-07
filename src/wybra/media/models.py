@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from tortoise import fields
+from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.indexes import Index
 from tortoise.models import Model
 
@@ -25,6 +27,23 @@ class MediaItem(Model):
         indexes = (
             Index(fields=("category",)),
             Index(fields=("created_at",)),
+        )
+
+    async def save(
+        self,
+        using_db: BaseDBAsyncClient | None = None,
+        update_fields: Iterable[str] | None = None,
+        force_create: bool = False,
+        force_update: bool = False,
+    ) -> None:
+        self.modified_at = time.time()
+        if update_fields is not None and "modified_at" not in update_fields:
+            update_fields = (*update_fields, "modified_at")
+        await super().save(
+            using_db=using_db,
+            update_fields=update_fields,
+            force_create=force_create,
+            force_update=force_update,
         )
 
 

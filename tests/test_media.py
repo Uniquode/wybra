@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import wybra.media as media_module
 import wybra.media.capabilities as media_capabilities
+import wybra.media.models as media_models
 from support_database import sqlite_file_url
 from wybra.auth import models as auth_models  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
@@ -372,6 +373,35 @@ async def test_media_capability_registers_catalogue_item_and_resolves_by_id(
         == (tmp_path / "profile" / "ab" / "cd" / "user.png").resolve()
     )
     assert await capability.url_for(item.id) == "/media/profile/ab/cd/user.png"
+
+
+@pytest.mark.anyio
+async def test_media_item_save_refreshes_modified_timestamp_for_partial_updates(
+    tmp_path: Path,
+    create_database_schema: Callable[[FilesystemMediaCapability], Awaitable[None]],
+    database_capability_factory: Callable[..., Awaitable[FilesystemMediaCapability]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = await database_capability_factory(tmp_path)
+    await create_database_schema(capability)
+
+    item = await capability.register(
+        category="profile",
+        storage_key="profile/ab/cd/user.png",
+        content_type="image/png",
+        size=123,
+    )
+    updated_timestamp = item.modified_at + 10.0
+    monkeypatch.setattr(media_models.time, "time", lambda: updated_timestamp)
+
+    item.content_type = "image/jpeg"
+    database = capability.catalogue.database.require()
+    async with database.transaction() as connection:
+        await item.save(using_db=connection, update_fields=("content_type",))
+        stored = await MediaItem.get(id=item.id, using_db=connection)
+
+    assert stored.content_type == "image/jpeg"
+    assert stored.modified_at == updated_timestamp
 
 
 @pytest.mark.anyio
