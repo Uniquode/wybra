@@ -106,6 +106,10 @@ from wybra.auth.provider_credentials import (
 )
 from wybra.auth.routes import normalise_return_to
 from wybra.auth.routes.totp import verify_totp_code_for_credential
+from wybra.auth.session_tokens import (
+    SESSION_TOKEN_MAX_LENGTH,
+    generate_session_token,
+)
 from wybra.core.exceptions import ConfigurationError
 from wybra.services.crypto import (
     ENVELOPE_PREFIX,
@@ -1200,6 +1204,9 @@ def test_wybra_auth_identity_provider_and_link_models_are_well_formed() -> None:
 
     assert IdentityProvider.__tablename__ == "identity_provider"
     assert AccessToken.__tablename__ == "identity_access_token"
+    assert (
+        AccessToken.__table__.columns["token"].type.length == SESSION_TOKEN_MAX_LENGTH
+    )
     assert ExternalIdentityLink.__tablename__ == "identity_external_identity_link"
 
     assert {
@@ -1224,6 +1231,12 @@ def test_wybra_auth_identity_provider_and_link_models_are_well_formed() -> None:
     } == {"identity_user.id"}
     assert User.external_identity_links.property.mapper.class_ is ExternalIdentityLink
     assert User.emails.property.mapper.class_ is IdentityUserEmail
+
+
+def test_wybra_auth_generated_session_tokens_fit_configured_column() -> None:
+    token = generate_session_token()
+
+    assert len(token) <= SESSION_TOKEN_MAX_LENGTH
 
 
 def test_wybra_auth_provider_credential_store_encrypts_tokens(

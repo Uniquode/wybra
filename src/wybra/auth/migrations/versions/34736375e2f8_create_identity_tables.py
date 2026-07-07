@@ -10,6 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
+from wybra.auth.session_tokens import SESSION_TOKEN_MAX_LENGTH
 from wybra.db import types as generics
 
 revision: str = "34736375e2f8"
@@ -40,7 +41,7 @@ def upgrade() -> None:
     op.create_table(
         "identity_access_token",
         sa.Column("user_id", generics.GUID(), nullable=False),
-        sa.Column("token", sa.String(length=43), nullable=False),
+        sa.Column("token", sa.String(length=SESSION_TOKEN_MAX_LENGTH), nullable=False),
         sa.Column("created_at", generics.TIMESTAMPAware(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["identity_user.id"], ondelete="cascade"),
         sa.PrimaryKeyConstraint("token"),

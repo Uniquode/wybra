@@ -21,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from wybra.auth.email_normalisation import normalise_email
+from wybra.auth.session_tokens import SESSION_TOKEN_MAX_LENGTH
 from wybra.auth.timestamps import current_timestamp
 from wybra.db.models import Base
 from wybra.db.types import GUID, TIMESTAMPAware, now_utc
@@ -515,7 +516,10 @@ class AccessToken(Base):
 
     __tablename__ = "identity_access_token"
 
-    token: Mapped[str] = mapped_column(String(length=43), primary_key=True)
+    token: Mapped[str] = mapped_column(
+        String(length=SESSION_TOKEN_MAX_LENGTH),
+        primary_key=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMPAware(timezone=True),
         index=True,

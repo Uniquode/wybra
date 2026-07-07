@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -34,6 +33,7 @@ from wybra.auth.persistence.contracts import (
     WebAuthnCredentialStore,
 )
 from wybra.auth.provider_credentials import SqlAlchemyProviderCredentialStore
+from wybra.auth.session_tokens import generate_session_token
 from wybra.db import DatabaseCapability
 from wybra.db.persistence import Database, session_scope
 from wybra.services.crypto import SecretEnvelopeService
@@ -181,7 +181,7 @@ class SqlAlchemyAccessTokenStore:
         return None if access_token is None else str(access_token.user_id)
 
     async def create(self, user: LocalUserRecord) -> str:
-        access_token = AccessToken(token=secrets.token_urlsafe(), user_id=user.id)
+        access_token = AccessToken(token=generate_session_token(), user_id=user.id)
         self.session.add(access_token)
         await self.session.commit()
         await self.session.refresh(access_token)
