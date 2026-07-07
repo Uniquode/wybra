@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from tortoise.transactions import in_transaction
 
 from wybra import start_site
 from wybra.config import MappingConfigSource
@@ -263,6 +264,28 @@ async def test_tortoise_instrumentation_is_idempotent() -> None:
         await close_database(database)
 
     assert diagnostics.sql_query_count == 1
+
+
+@pytest.mark.anyio
+async def test_tortoise_instrumentation_records_transaction_queries() -> None:
+    database = await create_database(
+        "sqlite+aiosqlite:///:memory:",
+        modules=("wybra.sessions",),
+    )
+    diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
+    token = set_current_diagnostics(diagnostics)
+
+    try:
+        with database.context:
+            async with in_transaction("default") as connection:
+                await connection.execute_query("select 1")
+                async with in_transaction(connection.connection_name) as savepoint:
+                    await savepoint.execute_query("select 2")
+    finally:
+        reset_current_diagnostics(token)
+        await close_database(database)
+
+    assert diagnostics.sql_query_count == 2
 
 
 @pytest.mark.anyio

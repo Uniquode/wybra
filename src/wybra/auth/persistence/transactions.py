@@ -16,6 +16,9 @@ async def auth_savepoint(
     PostgreSQL aborts a whole transaction after an integrity error unless the
     failed statement is isolated in a savepoint. Tortoise implements nested
     transactions as savepoints when a transaction is already active.
+
+    The supplied connection must belong to the currently active Tortoise
+    context; the nested transaction is resolved by connection name.
     """
 
     async with in_transaction(connection.connection_name) as savepoint_connection:

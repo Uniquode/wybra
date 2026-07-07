@@ -76,6 +76,11 @@ ERROR_INVALID_GROUP_ID = "invalid_group_id"
 ERROR_GROUP_HAS_MEMBERSHIPS = "group_has_memberships"
 ERROR_CYCLIC_GROUP_MEMBERSHIP = "cyclic_group_membership"
 ERROR_SCOPE_IN_USE = "scope_in_use"
+
+# Admin mutation guards use select_for_update() where the database supports row
+# locks. SQLite ignores FOR UPDATE, so it remains a local/test backend rather
+# than a concurrency boundary for simultaneous administrative writes.
+
 USER_TIMESTAMP_FIELDS: tuple[str, ...] = (
     "created_at",
     "modified_at",
