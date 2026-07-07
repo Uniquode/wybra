@@ -19,7 +19,7 @@ dependencies = [
     "envex>=5.0.0",
     "fastapi>=0.139.0",
     "jinja2>=3.1.6",
-    "phonenumbers>=9.0.33",
+    "phonenumbers>=9.0.34",
     "pwdlib[argon2,bcrypt]==0.3.0",
     "pycountry>=26.2.16",
     "pydantic>=2.13.4",
@@ -28,13 +28,13 @@ dependencies = [
     "qrcode>=8.0",
     "starlette>=1.3.1",
     "tortoise-orm>=1.1.7",
-    "uvicorn>=0.49.0",
+    "uvicorn>=0.50.2",
     "webauthn>=3.0.0",
 ]
 
 [project.optional-dependencies]
 kms = [
-    "boto3>=1.43.39",
+    "boto3>=1.43.42",
 ]
 keychain = [
     "keyring>=25.7.0",
@@ -56,7 +56,7 @@ wybra-secret = "wybra.secrets.cli:main"
 wybra-validate = "wybra.tools.validate:main"
 
 [build-system]
-requires = ["uv_build>=0.11.26,<0.12.0"]
+requires = ["uv_build>=0.11.27,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
