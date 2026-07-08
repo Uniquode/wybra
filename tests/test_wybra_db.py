@@ -25,7 +25,12 @@ from wybra.db.capabilities import (
 from wybra.db.config import ENV_DATABASE_URL
 from wybra.db.config import module_config as db_module_config
 from wybra.db.models import Model as WybraModel
-from wybra.db.persistence import Database, close_database_connections, create_database
+from wybra.db.persistence import (
+    Database,
+    close_database,
+    close_database_connections,
+    create_database,
+)
 from wybra.db.settings import (
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
@@ -900,6 +905,47 @@ async def test_close_database_connections_does_not_reconnect_cross_loop_client(
         other_loop.close()
         if database._connections:
             await close_database_connections(database)
+
+
+@pytest.mark.anyio
+async def test_close_database_connections_restores_connection_factory(
+    tmp_path: Path,
+) -> None:
+    database = await create_database(
+        sqlite_file_url(tmp_path / "restore-factory.sqlite3"),
+        modules=("wybra.db",),
+    )
+
+    try:
+        assert "_create_connection" in database.context.connections.__dict__
+
+        await close_database_connections(database)
+
+        assert "_create_connection" not in database.context.connections.__dict__
+    finally:
+        if database._connections:
+            await close_database_connections(database)
+
+
+@pytest.mark.anyio
+async def test_create_close_database_cycles_do_not_rewrap_connection_factory(
+    tmp_path: Path,
+) -> None:
+    for index in range(2):
+        database = await create_database(
+            sqlite_file_url(tmp_path / f"cycle-{index}.sqlite3"),
+            modules=("wybra.db",),
+        )
+
+        try:
+            database.connection()
+            await close_database(database)
+
+            assert "_create_connection" not in database.context.connections.__dict__
+            assert database._connections == []
+        finally:
+            if database._connections:
+                await close_database_connections(database)
 
 
 @pytest.mark.anyio

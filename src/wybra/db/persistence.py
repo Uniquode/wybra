@@ -28,6 +28,7 @@ TORTOISE_PRIVATE_API_ERROR = (
     "missing from the installed tortoise-orm version. Use the pinned Wybra "
     "tortoise-orm version or upgrade Wybra with a compatible shutdown adapter."
 )
+_MISSING_CREATE_CONNECTION = object()
 
 __all__ = (
     "Database",
@@ -50,6 +51,10 @@ class DatabaseSettings(Protocol):
 class Database:
     context: TortoiseContext
     config: dict[str, object]
+    _create_connection_restore: object = field(
+        compare=False,
+        repr=False,
+    )
     _connections: list[BaseDBAsyncClient] = field(
         default_factory=list,
         compare=False,
@@ -90,10 +95,14 @@ async def create_database(
         _enable_global_fallback=enable_global_fallback,
     )
     instrument_tortoise_context(context)
+    create_connection_restore, tracked_connections = _track_created_connections(
+        context.connections
+    )
     return Database(
         context=context,
         config=config,
-        _connections=_track_created_connections(context.connections),
+        _create_connection_restore=create_connection_restore,
+        _connections=tracked_connections,
     )
 
 
@@ -114,17 +123,24 @@ async def close_database_connections(database: Database) -> None:
     with database.context:
         await _close_tracked_connections(database)
         _discard_stored_connections(database.context.connections)
+        _restore_create_connection(database)
 
 
 def _track_created_connections(
     connections: ConnectionHandler,
-) -> list[BaseDBAsyncClient]:
+) -> tuple[object, list[BaseDBAsyncClient]]:
     # Tortoise close_all() calls get(), which can replace cross-loop clients
     # during shutdown. Track created clients so close never creates replacements.
+    # Remove this shim once the upstream Tortoise close_all() fix is released
+    # and Wybra pins a version that includes it.
     copy_storage = _copy_tortoise_connection_storage(connections)
     create_connection = getattr(connections, "_create_connection", None)
     if not callable(create_connection):
         raise ConfigurationError(TORTOISE_PRIVATE_API_ERROR)
+    create_connection_restore = connections.__dict__.get(
+        "_create_connection",
+        _MISSING_CREATE_CONNECTION,
+    )
     tracked_connections = list(copy_storage.values())
 
     def tracked_create_connection(
@@ -139,7 +155,17 @@ def _track_created_connections(
         Any,
         MethodType(tracked_create_connection, connections),
     )
-    return tracked_connections
+    return create_connection_restore, tracked_connections
+
+
+def _restore_create_connection(database: Database) -> None:
+    if database._create_connection_restore is _MISSING_CREATE_CONNECTION:
+        database.context.connections.__dict__.pop("_create_connection", None)
+        return
+    database.context.connections._create_connection = cast(
+        Any,
+        database._create_connection_restore,
+    )
 
 
 async def _close_tracked_connections(database: Database) -> None:
