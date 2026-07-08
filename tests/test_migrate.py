@@ -3,12 +3,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from types import SimpleNamespace
 
 import pytest
 
 import wybra.db.migrate as migrate_module
-import wybra.db.provisioning as provisioning_module
 import wybra.tools.migrate as tools_migrate
 from support_database import sqlite_file_url
 from wybra.core.composition import AppConfig, load_app_config
@@ -209,28 +207,20 @@ def test_migrate_commands_delegate_to_tortoise_cli(
     }
 
 
-def test_migrate_init_provisions_postgresql_before_tortoise_init(
+def test_migrate_init_uses_normalised_postgresql_tortoise_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = "postgresql://app:secret@db.example/app"
-    admin_database_url = "postgresql://admin:admin-secret@db.example/postgres"
-    events: list[str] = []
     observed: dict[str, object] = {}
-
-    def provision(database_url_arg: str, admin_database_url_arg: str | None) -> None:
-        events.append("provision")
-        observed["provision"] = (database_url_arg, admin_database_url_arg)
 
     def record_tortoise_cli(
         context: migrate_module.MigrationContext,
         args: list[str],
     ) -> None:
-        events.append("tortoise")
         observed["args"] = args
         observed["config"] = context.config
 
     monkeypatch.setattr(migrate_module, "is_supported_database_url", lambda _url: True)
-    monkeypatch.setattr(migrate_module, "provision_postgresql_database", provision)
     monkeypatch.setattr(migrate_module, "_run_tortoise_cli", record_tortoise_cli)
 
     exit_code = run_migrate(
@@ -238,14 +228,10 @@ def test_migrate_init_provisions_postgresql_before_tortoise_init(
             "--database-url",
             database_url,
             "init",
-            "--admin-database-url",
-            admin_database_url,
         ]
     )
 
     assert exit_code == 0
-    assert events == ["provision", "tortoise"]
-    assert observed["provision"] == (database_url, admin_database_url)
     assert observed["args"] == ["init"]
     assert observed["config"] == {
         "connections": {"default": "asyncpg://app:secret@db.example/app"},
@@ -257,63 +243,6 @@ def test_migrate_init_provisions_postgresql_before_tortoise_init(
             }
         },
     }
-
-
-def test_migrate_init_reports_missing_postgresql_admin_url(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys,
-) -> None:
-    database_url = "postgresql://app:secret@db.example/app"
-
-    def fail_tortoise_cli(
-        _context: migrate_module.MigrationContext,
-        _args: list[str],
-    ) -> None:
-        raise AssertionError("PostgreSQL init should provision before Tortoise")
-
-    monkeypatch.delenv("SA_DATABASE_URL", raising=False)
-    monkeypatch.setattr(migrate_module, "is_supported_database_url", lambda _url: True)
-    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", fail_tortoise_cli)
-
-    exit_code = run_migrate(["--database-url", database_url, "init"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "configuration: failed" in captured.err
-    assert "--admin-database-url" in captured.err
-    assert "SA_DATABASE_URL" in captured.err
-    assert "secret" not in captured.err
-    assert "Traceback" not in captured.err
-
-
-def test_migrate_init_rejects_blank_admin_database_url_without_env_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys,
-) -> None:
-    database_url = "postgresql://app:secret@db.example/app"
-
-    def fail_tortoise_cli(
-        _context: migrate_module.MigrationContext,
-        _args: list[str],
-    ) -> None:
-        raise AssertionError("PostgreSQL init should provision before Tortoise")
-
-    monkeypatch.setattr(migrate_module, "is_supported_database_url", lambda _url: True)
-    monkeypatch.setenv(
-        "SA_DATABASE_URL",
-        "postgresql://admin:env-secret@db.example/postgres",
-    )
-    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", fail_tortoise_cli)
-
-    exit_code = run_migrate(
-        ["--database-url", database_url, "init", "--admin-database-url", ""]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "configuration: failed" in captured.err
-    assert "--admin-database-url must not be blank" in captured.err
-    assert "env-secret" not in captured.err
 
 
 def test_tortoise_config_uses_configured_module_model_surfaces(tmp_path: Path) -> None:
@@ -396,80 +325,6 @@ def test_run_tortoise_cli_reports_non_zero_exit(
 
     with pytest.raises(migrate_module.MigrationStateError, match="exit_code=2"):
         migrate_module._run_tortoise_cli(context, ["heads"])
-
-
-def test_postgresql_provisioning_uses_dbscripts_with_sync_urls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: dict[str, object] = {}
-    monkeypatch.delenv("SA_DATABASE_URL", raising=False)
-
-    def pg_db_info(*, url: str):
-        observed["database_url"] = url
-        return SimpleNamespace(name="app")
-
-    def pg_setup(db: object) -> None:
-        observed["setup"] = db
-        observed["admin_url"] = provisioning_module.os.environ.get("SA_DATABASE_URL")
-
-    monkeypatch.setattr(
-        provisioning_module,
-        "_dbscripts_dblib",
-        lambda: SimpleNamespace(pg_db_info=pg_db_info, pg_setup=pg_setup),
-        raising=False,
-    )
-
-    migrate_module.provision_postgresql_database(
-        "postgresql://app:secret@db.example/app",
-        "postgresql://admin:admin-secret@db.example/postgres",
-    )
-
-    assert observed["database_url"] == "postgresql://app:secret@db.example/app"
-    assert (
-        observed["admin_url"] == "postgresql://admin:admin-secret@db.example/postgres"
-    )
-    assert "SA_DATABASE_URL" not in provisioning_module.os.environ
-
-
-def test_postgresql_provisioning_rejects_unsupported_database_url() -> None:
-    with pytest.raises(
-        provisioning_module.DatabaseProvisioningConfigurationError,
-        match="requires a PostgreSQL database URL",
-    ) as excinfo:
-        migrate_module.provision_postgresql_database(
-            "sqlite://:memory:",
-            "postgresql://admin:admin-secret@db.example/postgres",
-        )
-
-    assert isinstance(excinfo.value, provisioning_module.DatabaseProvisioningError)
-
-
-def test_postgresql_provisioning_reports_dbscripts_failures_as_operations(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def pg_db_info(*, url: str):
-        return SimpleNamespace(name="app", url=url)
-
-    def pg_setup(_db: object) -> None:
-        raise RuntimeError("could not connect")
-
-    monkeypatch.setattr(
-        provisioning_module,
-        "_dbscripts_dblib",
-        lambda: SimpleNamespace(pg_db_info=pg_db_info, pg_setup=pg_setup),
-        raising=False,
-    )
-
-    with pytest.raises(
-        provisioning_module.DatabaseProvisioningOperationError,
-        match="could not connect",
-    ) as excinfo:
-        migrate_module.provision_postgresql_database(
-            "postgresql://app:secret@db.example/app",
-            "postgresql://admin:admin-secret@db.example/postgres",
-        )
-
-    assert isinstance(excinfo.value, provisioning_module.DatabaseProvisioningError)
 
 
 def test_load_migration_settings_passes_keyword_only_config_source(

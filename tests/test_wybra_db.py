@@ -34,6 +34,7 @@ from wybra.db.surfaces import (
 )
 from wybra.db.urls import (
     available_database_url_schemes,
+    database_url_support_error,
     is_supported_database_url,
     parse_sqlite_database_url,
     redact_database_url,
@@ -389,7 +390,7 @@ def test_resolve_database_url_preserves_relative_suffix(
         ("", "Database URL must not be empty."),
         (
             "ftp://example.com/database",
-            "Database URL must use an available Tortoise database scheme:",
+            "Database URL must use a supported Tortoise database scheme:",
         ),
         (
             "sqlite://:memory:",
@@ -446,6 +447,24 @@ def test_database_url_support_uses_available_backend_modules(
     assert not is_supported_database_url("mysql://user:password@host.example/app")
 
 
+def test_database_url_support_error_names_missing_backend_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    available_modules = {"aiosqlite"}
+
+    def find_spec(module_name: str):
+        return object() if module_name in available_modules else None
+
+    monkeypatch.setattr(database_urls.importlib.util, "find_spec", find_spec)
+
+    assert database_url_support_error(
+        "postgresql://user:password@host.example/app"
+    ) == (
+        "Database URL scheme postgresql:// requires the wybra[postgresql] "
+        "optional dependency."
+    )
+
+
 @pytest.mark.anyio
 async def test_create_database_rejects_unavailable_backend(
     monkeypatch: pytest.MonkeyPatch,
@@ -459,7 +478,7 @@ async def test_create_database_rejects_unavailable_backend(
 
     with pytest.raises(
         ConfigurationError,
-        match="Database URL must use an available Tortoise database scheme",
+        match=r"Database URL scheme postgresql:// requires the wybra\[postgresql\]",
     ):
         await create_database(
             "postgresql://user:password@host.example/app",
@@ -489,6 +508,26 @@ async def test_create_database_rejects_unavailable_backend(
         (
             "mysql://user:password@host.example/app",
             "mysql://user:password@host.example/app",
+        ),
+        (
+            "sqlite://:memory:",
+            "sqlite://:memory:",
+        ),
+        (
+            "sqlite:///app.db",
+            "sqlite:///app.db",
+        ),
+        (
+            "mssql://user:password@host.example/app",
+            "mssql://user:password@host.example/app",
+        ),
+        (
+            "oracle://user:password@host.example/app",
+            "oracle://user:password@host.example/app",
+        ),
+        (
+            "ftp://host.example/app",
+            "ftp://host.example/app",
         ),
     ),
 )

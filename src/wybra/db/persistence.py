@@ -51,7 +51,7 @@ async def create_database(
 ) -> Database:
     database_url = _database_url_from(settings_or_url)
     if not is_supported_database_url(database_url):
-        raise ConfigurationError(database_url_support_error())
+        raise ConfigurationError(database_url_support_error(database_url))
 
     config = build_tortoise_config(
         database_url=database_url,

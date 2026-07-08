@@ -34,6 +34,7 @@ class DatabaseBackend:
     scheme: str
     tortoise_scheme: str
     required_module_groups: tuple[tuple[str, ...], ...]
+    install_extra: str | None = None
 
 
 DATABASE_BACKENDS = (
@@ -46,41 +47,55 @@ DATABASE_BACKENDS = (
         scheme="postgresql",
         tortoise_scheme=POSTGRESQL_TORTOISE_DATABASE_URL_SCHEME,
         required_module_groups=(("asyncpg",),),
+        install_extra="postgresql",
     ),
     DatabaseBackend(
         scheme="postgres",
         tortoise_scheme=POSTGRESQL_TORTOISE_DATABASE_URL_SCHEME,
         required_module_groups=(("asyncpg",),),
+        install_extra="postgresql",
     ),
     DatabaseBackend(
         scheme="asyncpg",
         tortoise_scheme=POSTGRESQL_TORTOISE_DATABASE_URL_SCHEME,
         required_module_groups=(("asyncpg",),),
+        install_extra="postgresql",
     ),
     DatabaseBackend(
         scheme="psycopg",
         tortoise_scheme="psycopg",
         required_module_groups=(("psycopg", "psycopg_pool"),),
+        install_extra="psycopg",
     ),
     DatabaseBackend(
         scheme="mysql",
         tortoise_scheme="mysql",
         required_module_groups=(("asyncmy",), ("aiomysql",)),
+        install_extra="mysql",
     ),
     DatabaseBackend(
         scheme="mssql",
         tortoise_scheme="mssql",
         required_module_groups=(("asyncodbc", "pyodbc"),),
+        install_extra="mssql",
     ),
     DatabaseBackend(
         scheme="oracle",
         tortoise_scheme="oracle",
         required_module_groups=(("asyncodbc", "pyodbc"),),
+        install_extra="oracle",
     ),
 )
 SUPPORTED_DATABASE_URL_SCHEMES = tuple(backend.scheme for backend in DATABASE_BACKENDS)
+REDACTABLE_DATABASE_URL_SCHEMES = tuple(
+    sorted(
+        SUPPORTED_DATABASE_URL_SCHEMES,
+        key=len,
+        reverse=True,
+    )
+)
 DATABASE_URL_TEXT_PATTERN = re.compile(
-    rf"(?:{'|'.join(re.escape(scheme) for scheme in SUPPORTED_DATABASE_URL_SCHEMES)})"
+    rf"(?:{'|'.join(re.escape(scheme) for scheme in REDACTABLE_DATABASE_URL_SCHEMES)})"
     r"://[^\s]+"
 )
 
@@ -106,10 +121,16 @@ def is_supported_database_url(database_url: str) -> bool:
     return backend is not None and is_database_backend_available(backend)
 
 
-def database_url_support_error() -> str:
+def database_url_support_error(database_url: str | None = None) -> str:
+    if database_url is not None:
+        backend = database_backend_for_url(database_url)
+        if backend is not None and not is_database_backend_available(backend):
+            return _unavailable_database_backend_error(backend)
+
     return (
-        "Database URL must use an available Tortoise database scheme: "
-        f"{_database_url_scheme_list()}."
+        "Database URL must use a supported Tortoise database scheme: "
+        f"{_database_url_scheme_list()}. Install the matching Wybra optional "
+        "dependency for non-SQLite backends."
     )
 
 
@@ -168,7 +189,25 @@ def tortoise_database_url(database_url: str) -> str:
 
 
 def _database_url_scheme_list() -> str:
-    return ", ".join(f"{scheme}://" for scheme in available_database_url_schemes())
+    return ", ".join(f"{scheme}://" for scheme in supported_database_url_schemes())
+
+
+def _unavailable_database_backend_error(backend: DatabaseBackend) -> str:
+    if backend.install_extra is None:
+        required = _required_module_list(backend)
+        return (
+            f"Database URL scheme {backend.scheme}:// requires unavailable "
+            f"Python module(s): {required}."
+        )
+
+    return (
+        f"Database URL scheme {backend.scheme}:// requires the "
+        f"wybra[{backend.install_extra}] optional dependency."
+    )
+
+
+def _required_module_list(backend: DatabaseBackend) -> str:
+    return " or ".join(" + ".join(group) for group in backend.required_module_groups)
 
 
 def is_memory_database_url(database_url: str) -> bool:

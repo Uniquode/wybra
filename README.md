@@ -502,24 +502,20 @@ are `asset_url`, `request`, `route_name`, `csrf_field_name`,
 configuration for the configured Wybra modules, and dispatches lifecycle
 operations through Tortoise's native migration tooling.
 
-Provision a first-time managed database and initialise migration state
-explicitly:
+Initialise migration state explicitly:
 
 ```sh
 uv run wybra-migrate init
 uv run wybra-migrate --config config/app.toml init
 ```
 
-`init` stops after infrastructure and migration-state setup. After migration
-state exists, apply schema migrations with:
+`init` does not provision database infrastructure. Create the database and
+application role before running Wybra migrations. After migration state exists,
+apply schema migrations with:
 
 ```sh
 uv run wybra-migrate migrate
 ```
-
-For PostgreSQL, `init` provisions the database, user, role, and privileges.
-Provide administrative connection details with `--admin-database-url` or the
-dbscripts-compatible `SA_DATABASE_URL` environment variable.
 
 Inspect migration state without mutating the database:
 
@@ -777,7 +773,7 @@ their URL scheme is treated as available by validation or startup.
 
 | Database | URL scheme | Install extra |
 | --- | --- | --- |
-| SQLite | `sqlite:///app.sqlite3`, `sqlite://:memory:` | built in |
+| SQLite | `sqlite:///app.sqlite3`, `sqlite://:memory:` | built-in |
 | PostgreSQL via asyncpg | `postgresql://user:pass@host/db` | `wybra[postgresql]` |
 | PostgreSQL via Tortoise asyncpg alias | `postgres://...`, `asyncpg://...` | `wybra[postgresql]` |
 | PostgreSQL via psycopg | `psycopg://user:pass@host/db` | `wybra[psycopg]` |

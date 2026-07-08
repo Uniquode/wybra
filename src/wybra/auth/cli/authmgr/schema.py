@@ -21,9 +21,9 @@ from wybra.db.persistence import Database
 
 SCHEMA_MIGRATION_MESSAGE = (
     "Auth database schema is not up to date; run `uv run wybra-migrate init` "
-    "for first-time database provisioning and migration-state setup, then "
-    "`uv run wybra-migrate migrate` to apply schema migrations from the host "
-    "app project with the same selected app config used by wybra-authmgr. "
+    "to initialise migration state, then `uv run wybra-migrate migrate` to "
+    "apply schema migrations from the host app project with the same selected "
+    "app config used by wybra-authmgr. "
     "If deliberately overriding the application database, run "
     "`uv run wybra-migrate --database-url <database-url> init` followed by "
     "`uv run wybra-migrate --database-url <database-url> migrate`."
