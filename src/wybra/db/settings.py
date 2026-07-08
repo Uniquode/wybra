@@ -384,6 +384,8 @@ def effective_database_config_from_config(
         database_url is not None
         and database_url_source == DATABASE_URL_SOURCE_ENVIRONMENT
     ):
+        if _structured_database_configured(structured_values):
+            logger.info("Using DATABASE_URL, overriding config")
         return EffectiveDatabaseConfig.from_url(database_url, project_root=project_root)
 
     if _structured_database_configured(structured_values):
@@ -501,6 +503,8 @@ def _validate_database_credential_configuration(
         raise ConfigurationError(
             "[app.database] credentials are not supported for the sqlite backend."
         )
+    if credential_source is not None and not keys_configured:
+        raise ConfigurationError("database configuration error, missing key fields")
 
 
 def _validate_database_backend_fields(

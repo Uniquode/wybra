@@ -339,6 +339,7 @@ def test_structured_database_config_overrides_legacy_url_with_info_log(
 
 def test_database_url_environment_overrides_structured_database_config(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     env_url = sqlite_file_url(tmp_path / "env.sqlite3")
     ConfigService.set_runtime_environment({ENV_DATABASE_URL: env_url})
@@ -347,14 +348,16 @@ def test_database_url_environment_overrides_structured_database_config(
         config_defs=(db_module_config,),
     )
 
-    connection = resolve_database_connection_from_config(
-        config,
-        project_root=tmp_path,
-    )
+    with caplog.at_level("INFO", logger="wybra.db.settings"):
+        connection = resolve_database_connection_from_config(
+            config,
+            project_root=tmp_path,
+        )
 
     assert connection is not None
     assert connection.source == "url"
     assert connection.database_url == env_url
+    assert "Using DATABASE_URL, overriding config" in caplog.text
 
 
 def test_structured_database_config_resolves_environment_credentials(
@@ -531,6 +534,33 @@ def test_structured_database_config_requires_credential_source_for_keys(
     )
 
     with pytest.raises(ConfigurationError, match="credential_source is required"):
+        resolve_database_connection_from_config(config, project_root=tmp_path)
+
+
+def test_structured_database_config_rejects_credential_source_without_keys(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "credential_source": "environment",
+                        "user": "database/app/user",
+                        "password": "database/app/password",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="database configuration error, missing key fields",
+    ):
         resolve_database_connection_from_config(config, project_root=tmp_path)
 
 
