@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import importlib
 import tomllib
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ from wybra.db.capabilities import (
 from wybra.db.config import ENV_DATABASE_URL
 from wybra.db.config import module_config as db_module_config
 from wybra.db.models import Model as WybraModel
-from wybra.db.persistence import Database, create_database
+from wybra.db.persistence import Database, close_database_connections, create_database
 from wybra.db.settings import (
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
@@ -58,8 +59,9 @@ from wybra.tools.validation.core import ValidationResult
 
 @dataclass(frozen=True, slots=True)
 class _PersistenceSettings:
-    database_url: str
+    database_url: str | None
     migrations_root: Path | None
+    database_connection: object | None = None
     configured_modules: tuple[str, ...] = ()
 
     @property
@@ -109,12 +111,14 @@ def _imported_modules(path: Path) -> set[str]:
 def _persistence_settings(
     tmp_path: Path,
     *,
-    database_url: str = "sqlite:///local.sqlite3",
+    database_url: str | None = "sqlite:///local.sqlite3",
+    database_connection: object | None = None,
     migrations_root: Path | None = None,
     modules: tuple[str, ...] = (),
 ) -> _PersistenceSettings:
     return _PersistenceSettings(
         database_url=database_url,
+        database_connection=database_connection,
         migrations_root=migrations_root,
         configured_modules=modules,
     )
@@ -257,6 +261,41 @@ def test_structured_database_config_builds_sqlite_connection(tmp_path: Path) -> 
             "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
         },
     }
+
+
+def test_structured_sqlite_config_resolves_relative_path_from_project_root(
+    tmp_path: Path,
+) -> None:
+    config_directory = tmp_path / "config"
+    project_root = tmp_path / "project"
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "project_root": project_root,
+                    },
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "structured.sqlite3",
+                    },
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=project_root,
+    )
+
+    assert config_directory != project_root
+    assert connection is not None
+    assert (
+        connection.credentials["file_path"]
+        == (project_root / "structured.sqlite3").resolve().as_posix()
+    )
 
 
 def test_structured_database_config_overrides_legacy_url_with_info_log(
@@ -439,6 +478,43 @@ def test_structured_database_config_requires_credential_source_for_keys(
         resolve_database_connection_from_config(config, project_root=tmp_path)
 
 
+@pytest.mark.parametrize(
+    "credential_fields",
+    (
+        {"user": "app_user"},
+        {"password": "app_password"},
+        {"credential_source": "environment", "user_key": "WYBRA_DB_USER"},
+        {"sa_user": "admin_user"},
+        {"sa_password": "admin_password"},
+    ),
+)
+def test_structured_sqlite_config_rejects_credentials(
+    tmp_path: Path,
+    credential_fields: dict[str, str],
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "structured.sqlite3",
+                        **credential_fields,
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+        environ={"WYBRA_DB_USER": "app_user"},
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="credentials are not supported for the sqlite backend",
+    ):
+        resolve_database_connection_from_config(config, project_root=tmp_path)
+
+
 def test_service_account_credentials_are_separate_from_runtime_credentials(
     tmp_path: Path,
 ) -> None:
@@ -539,6 +615,24 @@ def test_provisioning_connection_rejects_runtime_credentials_only(
         )
 
 
+def test_provisioning_connection_rejects_sqlite_backend(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [_structured_database_config_source(tmp_path)],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="provisioning is not supported for the sqlite backend",
+    ):
+        resolve_database_provisioning_connection_from_config(
+            config,
+            project_root=tmp_path,
+        )
+
+
 def test_provisioning_connection_accepts_admin_database_url_override(
     tmp_path: Path,
 ) -> None:
@@ -616,6 +710,34 @@ async def test_database_capability_supports_named_connection_aliases(
             assert callable(writer_connection.execute_query)
     finally:
         await database.close()
+
+
+@pytest.mark.anyio
+async def test_close_database_connections_does_not_reconnect_cross_loop_client(
+    tmp_path: Path,
+) -> None:
+    database = await create_database(
+        sqlite_file_url(tmp_path / "loop-switch.sqlite3"),
+        modules=("wybra.db",),
+    )
+    connection = database.connection()
+    other_loop = asyncio.new_event_loop()
+    try:
+        connection._bound_loop = other_loop
+
+        def fail_create_connection(_alias: str) -> BaseDBAsyncClient:
+            raise AssertionError("close must not create replacement connections")
+
+        database.context.connections._create_connection = fail_create_connection
+
+        await close_database_connections(database)
+
+        assert database._connections == []
+        assert database.context.connections._copy_storage() == {}
+    finally:
+        other_loop.close()
+        if database._connections:
+            await close_database_connections(database)
 
 
 @pytest.mark.anyio
@@ -778,6 +900,20 @@ def test_validate_persistence_reports_database_url_failures(
     )
 
     assert any(expected_error in error for error in result.errors)
+    assert not result.is_ok
+
+
+def test_validate_persistence_reports_missing_database_connection(
+    tmp_path: Path,
+) -> None:
+    result = validate_persistence(_persistence_settings(tmp_path, database_url=None))
+
+    assert any(
+        check.description == "database connection is not configured"
+        and not check.passed
+        for check in result.checks
+    )
+    assert "Database connection must be configured." in result.errors
     assert not result.is_ok
 
 

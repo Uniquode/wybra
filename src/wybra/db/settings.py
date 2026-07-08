@@ -86,6 +86,18 @@ class DatabaseCredentialConfig:
     def has_keys(self) -> bool:
         return self.user_key is not None or self.password_key is not None
 
+    @property
+    def configured(self) -> bool:
+        return any(
+            value is not None
+            for value in (
+                self.user,
+                self.password,
+                self.user_key,
+                self.password_key,
+            )
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedDatabaseCredentials:
@@ -123,7 +135,6 @@ class StructuredDatabaseConfig:
                 + "."
             )
 
-        credential_source = _optional_secret_source(values.get("credential_source"))
         runtime_credentials = DatabaseCredentialConfig(
             user=cast(str | None, values.get("user")),
             password=cast(str | None, values.get("password")),
@@ -136,21 +147,17 @@ class StructuredDatabaseConfig:
             user_key=cast(str | None, values.get("sa_user_key")),
             password_key=cast(str | None, values.get("sa_password_key")),
         )
-        if (
-            runtime_credentials.has_keys or service_account_credentials.has_keys
-        ) and credential_source is None:
-            raise ConfigurationError(
-                "[app.database].credential_source is required when any database "
-                "credential key is configured."
-            )
 
         return cls(
-            backend=_required_non_blank_string(values.get("backend"), "backend"),
-            database=_required_non_blank_string(values.get("database"), "database"),
-            host=_optional_non_blank_string(values.get("host"), "host"),
-            port=_optional_positive_int(values.get("port"), "port"),
-            options=_normalise_options(values.get("options")),
-            credential_source=credential_source,
+            backend=cast(str, values.get("backend")),
+            database=cast(str, values.get("database")),
+            host=cast(str | None, values.get("host")),
+            port=cast(int | None, values.get("port")),
+            options=cast(Mapping[str, Any], values.get("options") or {}),
+            credential_source=cast(
+                SecretSource | None,
+                values.get("credential_source"),
+            ),
             runtime_credentials=runtime_credentials,
             service_account_credentials=service_account_credentials,
         )
@@ -178,14 +185,12 @@ class StructuredDatabaseConfig:
             "credential_source",
             _optional_secret_source(self.credential_source),
         )
-        if (
-            self.runtime_credentials.has_keys
-            or self.service_account_credentials.has_keys
-        ) and self.credential_source is None:
-            raise ConfigurationError(
-                "[app.database].credential_source is required when any database "
-                "credential key is configured."
-            )
+        _validate_database_credential_configuration(
+            backend_info,
+            self.credential_source,
+            self.runtime_credentials,
+            self.service_account_credentials,
+        )
 
     @property
     def backend_info(self) -> DatabaseBackend:
@@ -437,10 +442,12 @@ def resolve_database_provisioning_connection_from_config(
     secrets: SecretsCapability | None = None,
 ) -> ResolvedDatabaseConnection:
     if admin_database_url is not None:
-        return EffectiveDatabaseConfig.from_url(
+        connection = EffectiveDatabaseConfig.from_url(
             admin_database_url,
             project_root=project_root,
         ).resolve(environ=_config_environ(config), secrets=secrets)
+        _reject_unsupported_provisioning_backend(connection)
+        return connection
 
     connection = resolve_database_connection_from_config(
         config,
@@ -454,6 +461,7 @@ def resolve_database_provisioning_connection_from_config(
             "Database provisioning requires [app.database] service-account "
             "credentials or an explicit admin database URL."
         )
+    _reject_unsupported_provisioning_backend(connection)
     if connection.credentials.get("user") is None:
         raise ConfigurationError(
             "Database provisioning requires a service-account database user "
@@ -465,6 +473,40 @@ def resolve_database_provisioning_connection_from_config(
             "or an explicit admin database URL."
         )
     return connection
+
+
+def _validate_database_credential_configuration(
+    backend: DatabaseBackend,
+    credential_source: SecretSource | None,
+    runtime_credentials: DatabaseCredentialConfig,
+    service_account_credentials: DatabaseCredentialConfig,
+) -> None:
+    credentials_configured = (
+        runtime_credentials.configured or service_account_credentials.configured
+    )
+    keys_configured = (
+        runtime_credentials.has_keys or service_account_credentials.has_keys
+    )
+    if keys_configured and credential_source is None:
+        raise ConfigurationError(
+            "[app.database].credential_source is required when any database "
+            "credential key is configured."
+        )
+    if backend.tortoise_scheme == "sqlite" and (
+        credential_source is not None or credentials_configured
+    ):
+        raise ConfigurationError(
+            "[app.database] credentials are not supported for the sqlite backend."
+        )
+
+
+def _reject_unsupported_provisioning_backend(
+    connection: ResolvedDatabaseConnection,
+) -> None:
+    if connection.backend.tortoise_scheme == "sqlite":
+        raise ConfigurationError(
+            "Database provisioning is not supported for the sqlite backend."
+        )
 
 
 def _resolve_structured_database_connection(

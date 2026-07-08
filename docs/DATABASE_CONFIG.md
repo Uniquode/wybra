@@ -35,7 +35,11 @@ For local development, a URL is still acceptable:
 database_url = "sqlite:///local.sqlite3"
 ```
 
-Relative SQLite file paths are resolved from the effective project root.
+Relative SQLite file paths are resolved from the effective project root, not
+from the directory containing the configuration file and not from the process
+working directory. This remains true when the active config file is supplied
+from another location with `--config`, `APP_CONFIG`, or equivalent startup
+configuration.
 
 The structured equivalent is:
 
@@ -44,6 +48,10 @@ The structured equivalent is:
 backend = "sqlite"
 database = "local.sqlite3"
 ```
+
+When constructing settings directly from a database URL, use an absolute
+SQLite URL. Relative SQLite URLs require the application project root and are
+only accepted through the application configuration path.
 
 ## PostgreSQL With Secret-Backed Credentials
 

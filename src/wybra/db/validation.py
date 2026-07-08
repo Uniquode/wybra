@@ -150,7 +150,7 @@ def _database_connection_description(
             + database_connection.redacted_description
         )
     if database_url is None:
-        return "database connection is configured"
+        return "database connection is not configured"
     return f"database URL is configured: {redact_database_url(database_url)}"
 
 

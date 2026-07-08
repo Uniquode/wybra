@@ -23,9 +23,16 @@ from wybra.db.urls import (
 )
 from wybra.diagnostics.tortoise import instrument_tortoise_context
 
+TORTOISE_PRIVATE_API_ERROR = (
+    "Wybra database shutdown requires Tortoise connection internals that are "
+    "missing from the installed tortoise-orm version. Use the pinned Wybra "
+    "tortoise-orm version or upgrade Wybra with a compatible shutdown adapter."
+)
+
 __all__ = (
     "Database",
     "close_database",
+    "close_database_connections",
     "create_database",
     "is_memory_database_url",
     "is_supported_database_url",
@@ -94,7 +101,11 @@ async def close_database(database: Database) -> None:
     context = database.context
     with context:
         await close_database_connections(database)
+        if not hasattr(context, "_connections"):
+            raise ConfigurationError(TORTOISE_PRIVATE_API_ERROR)
         context._connections = None
+    if not hasattr(tortoise_context, "_global_context"):
+        raise ConfigurationError(TORTOISE_PRIVATE_API_ERROR)
     if tortoise_context._global_context is context:
         tortoise_context._global_context = None
 
@@ -110,8 +121,11 @@ def _track_created_connections(
 ) -> list[BaseDBAsyncClient]:
     # Tortoise close_all() calls get(), which can replace cross-loop clients
     # during shutdown. Track created clients so close never creates replacements.
-    tracked_connections = list(connections._copy_storage().values())
-    create_connection = connections._create_connection
+    copy_storage = _copy_tortoise_connection_storage(connections)
+    create_connection = getattr(connections, "_create_connection", None)
+    if not callable(create_connection):
+        raise ConfigurationError(TORTOISE_PRIVATE_API_ERROR)
+    tracked_connections = list(copy_storage.values())
 
     def tracked_create_connection(
         _connections: ConnectionHandler,
@@ -144,13 +158,24 @@ async def _close_tracked_connections(database: Database) -> None:
 
 
 def _discard_stored_connections(connections: ConnectionHandler) -> None:
+    if not hasattr(connections, "_db_config"):
+        raise ConfigurationError(TORTOISE_PRIVATE_API_ERROR)
     if connections._db_config is None:
         return
 
-    for alias in tuple(connections._copy_storage()):
+    for alias in tuple(_copy_tortoise_connection_storage(connections)):
         connections.discard(alias)
     for alias in tuple(connections.db_config):
         connections.discard(alias)
+
+
+def _copy_tortoise_connection_storage(
+    connections: ConnectionHandler,
+) -> dict[str, BaseDBAsyncClient]:
+    copy_storage = getattr(connections, "_copy_storage", None)
+    if not callable(copy_storage):
+        raise ConfigurationError(TORTOISE_PRIVATE_API_ERROR)
+    return copy_storage()
 
 
 def _database_connection_from(

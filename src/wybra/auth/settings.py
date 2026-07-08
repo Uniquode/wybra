@@ -41,6 +41,7 @@ from wybra.db.settings import (
     ResolvedDatabaseConnection,
     resolve_database_connection_from_config,
 )
+from wybra.db.urls import parse_sqlite_database_url
 
 DATABASE_URL_ENV = "DATABASE_URL"
 AUTH_SETTINGS_OWNER: Final = "wybra.auth"
@@ -333,10 +334,9 @@ class AuthSettings(BaseSettings):
 
     def __post_init__(self) -> None:
         if self.database_connection is None and self.database_url is not None:
-            database_connection = EffectiveDatabaseConfig.from_url(
-                self.database_url,
-                project_root=Path.cwd(),
-            ).resolve()
+            database_connection = _database_connection_from_direct_url(
+                self.database_url
+            )
             object.__setattr__(
                 self,
                 "database_connection",
@@ -426,10 +426,7 @@ def load_runtime_auth_settings(
             )
         settings = AuthSettings(
             database_url=database_url,
-            database_connection=EffectiveDatabaseConfig.from_url(
-                database_url,
-                project_root=Path.cwd(),
-            ).resolve(),
+            database_connection=_database_connection_from_direct_url(database_url),
             deployment_environment=normalise_deployment_environment(
                 deployment_environment
             ),
@@ -624,6 +621,22 @@ def _configured_env_value(
 ) -> str | None:
     value = env.get(field_name)
     return value if value and value.strip() else None
+
+
+def _database_connection_from_direct_url(
+    database_url: str,
+) -> ResolvedDatabaseConnection:
+    sqlite_url = parse_sqlite_database_url(database_url)
+    if sqlite_url is not None and not sqlite_url.is_absolute:
+        raise ConfigurationError(
+            "Relative SQLite database URLs require an application project root. "
+            "Load auth settings from application config or use an absolute "
+            "SQLite database URL."
+        )
+    return EffectiveDatabaseConfig.from_url(
+        database_url,
+        project_root=Path.cwd(),
+    ).resolve()
 
 
 def _identity_options_from_config(

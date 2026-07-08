@@ -866,14 +866,15 @@ def test_app_database_url_precedence(
     assert settings.database_url == urls[expected_url]
 
 
-def test_app_database_url_resolves_relative_sqlite_path_from_config_directory(
+def test_app_database_url_resolves_relative_sqlite_path_from_project_root(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config" / "app.toml"
-    app_config = load_auth_test_app_config(
+    write_auth_app_toml(
         config_path,
         database_url="sqlite:///relative-auth.sqlite3",
     )
+    app_config = load_app_config(project_root=tmp_path, config_path=config_path)
 
     settings = AuthSettings.load_settings(
         auth_settings_config(app_config),
@@ -881,9 +882,7 @@ def test_app_database_url_resolves_relative_sqlite_path_from_config_directory(
         environ={},
     )
 
-    assert settings.database_url == sqlite_file_url(
-        config_path.parent / "relative-auth.sqlite3"
-    )
+    assert settings.database_url == sqlite_file_url(tmp_path / "relative-auth.sqlite3")
 
 
 def test_auth_settings_use_structured_database_config(tmp_path: Path) -> None:
@@ -1220,7 +1219,7 @@ def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None
     )
 
     assert settings.database_url == sqlite_file_url(
-        config_path.parent / "from-config.sqlite3"
+        app_config.project_root / "from-config.sqlite3"
     )
     assert settings.owner == AUTH_SETTINGS_OWNER
     assert settings.integration_enabled(PROVIDER) is True
@@ -1303,6 +1302,14 @@ def test_auth_settings_validation_allows_local_secret_sentinels() -> None:
     settings = AuthSettings(database_url=SQLITE_MEMORY_DATABASE_URL)
 
     validate_auth_settings(settings)
+
+
+def test_direct_auth_settings_reject_relative_sqlite_database_url() -> None:
+    with pytest.raises(
+        ConfigurationError,
+        match="Relative SQLite database URLs require an application project root",
+    ):
+        AuthSettings(database_url="sqlite:///relative-auth.sqlite3")
 
 
 def test_auth_settings_rejects_unknown_deployment_environment() -> None:
