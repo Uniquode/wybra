@@ -688,10 +688,10 @@ def test_project_settings_environment_overrides_config_deployment_environment(
         _app_config(tmp_path, ("wybra.assets",)),
         deployment_environment="production",
     )
+    ConfigService.set_runtime_environment({ENV_APP_ENV: "staging"})
     config = ConfigService(
         [AppConfigSource(app_config)],
         config_defs=(RUNTIME_CONFIG_DEF,),
-        environ={ENV_APP_ENV: "staging"},
     )
 
     settings = ProjectSettings.load_settings(config, app_config=app_config)
@@ -703,10 +703,10 @@ def test_project_settings_environment_overrides_config_debug(
     tmp_path: Path,
 ) -> None:
     app_config = _app_config(tmp_path, ("wybra.assets",))
+    ConfigService.set_runtime_environment({ENV_APP_DEBUG: "true"})
     config = ConfigService(
         [AppConfigSource(app_config)],
         config_defs=(RUNTIME_CONFIG_DEF,),
-        environ={ENV_APP_DEBUG: "true"},
     )
 
     settings = ProjectSettings.load_settings(config, app_config=app_config)
@@ -719,10 +719,10 @@ def test_project_settings_rejects_non_local_debug(tmp_path: Path) -> None:
         _app_config(tmp_path, ("wybra.assets",)),
         deployment_environment="production",
     )
+    ConfigService.set_runtime_environment({ENV_APP_DEBUG: "true"})
     config = ConfigService(
         [AppConfigSource(app_config)],
         config_defs=(RUNTIME_CONFIG_DEF,),
-        environ={ENV_APP_DEBUG: "true"},
     )
 
     with pytest.raises(ConfigurationError, match="app.debug is only allowed"):

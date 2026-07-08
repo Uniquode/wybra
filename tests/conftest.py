@@ -1,8 +1,9 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 
 import pytest
 
+from wybra.config import ConfigService
 from wybra.core.composition import APP_CONFIG_ENV, APP_ROOT_ENV
 from wybra.core.config import (
     ENV_APP_DEBUG,
@@ -21,8 +22,9 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture(autouse=True)
-def isolate_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def isolate_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Keep project-level shell config from changing test config discovery."""
+    ConfigService.set_runtime_environment({})
     for name in (
         APP_ROOT_ENV,
         APP_CONFIG_ENV,
@@ -35,6 +37,8 @@ def isolate_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         ENV_WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS,
     ):
         monkeypatch.delenv(name, raising=False)
+    yield
+    ConfigService.set_runtime_environment({})
 
 
 @pytest.fixture

@@ -39,6 +39,7 @@ from wybra.auth.routes.pages import totp_management as totp_management_pages
 from wybra.auth.routes.totp import TOTP_LOGIN_NONCE_COOKIE
 from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
+from wybra.db.persistence import close_database_connections
 from wybra.providers.apple import (
     APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
     APPLE_OAUTH_STATE_COOKIE,
@@ -111,11 +112,7 @@ async def _close_testclient_tortoise_connections(app) -> None:
     if not isinstance(database, TortoiseDatabaseCapability):
         return
 
-    # TestClient runs requests on a private loop. Close any connections opened
-    # there before that loop is torn down; the next request or assertion can
-    # reconnect through the same Tortoise context.
-    with database._database.context:
-        await database._database.context.connections.close_all(discard=True)
+    await close_database_connections(database._database)
 
 
 # These async tests intentionally exercise the ASGI app through Starlette's

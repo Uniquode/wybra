@@ -12,6 +12,7 @@ from wybra.assets.validation import validate_assets
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.logging import LoggingConfigurationError
 from wybra.core.routes.validation import validate_routes
+from wybra.db.settings import EffectiveDatabaseConfig
 from wybra.errors.validation import validate_errors
 from wybra.forms.validation import validate_forms
 from wybra.security.validation import validate_security
@@ -116,6 +117,12 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
     project_root = runtime_project_root()
     try:
         defaults = load_project_settings(project_root=project_root)
+        database_connection = defaults.database_connection
+        if overrides.database_url is not None:
+            database_connection = EffectiveDatabaseConfig.from_url(
+                overrides.database_url,
+                project_root=defaults.project_root,
+            ).resolve()
         return replace(
             defaults,
             database_url=(
@@ -123,6 +130,7 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
                 if overrides.database_url is not None
                 else defaults.database_url
             ),
+            database_connection=database_connection,
             template_root=(
                 overrides.template_root
                 if overrides.template_root is not None

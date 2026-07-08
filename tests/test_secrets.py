@@ -475,6 +475,7 @@ async def test_secrets_setup_site_registers_environment_capability() -> None:
 @pytest.mark.anyio
 async def test_auth_setup_uses_secrets_backed_secret_envelope_service() -> None:
     key_entry = _crypto_key_entry()
+    ConfigService.set_runtime_environment({"SYSTEM_SECRET_KEY": key_entry})
     site = Site(
         FastAPI(),
         ConfigService(
@@ -492,7 +493,6 @@ async def test_auth_setup_uses_secrets_backed_secret_envelope_service() -> None:
                     }
                 )
             ],
-            environ={"SYSTEM_SECRET_KEY": key_entry},
         ),
     )
     await setup_secrets_site(site)
@@ -506,6 +506,7 @@ async def test_auth_setup_uses_secrets_backed_secret_envelope_service() -> None:
 
 @pytest.mark.anyio
 async def test_auth_setup_requires_secrets_capability_for_crypto_source() -> None:
+    ConfigService.set_runtime_environment({"SYSTEM_SECRET_KEY": _crypto_key_entry()})
     site = Site(
         FastAPI(),
         ConfigService(
@@ -523,7 +524,6 @@ async def test_auth_setup_requires_secrets_capability_for_crypto_source() -> Non
                     }
                 )
             ],
-            environ={"SYSTEM_SECRET_KEY": _crypto_key_entry()},
         ),
     )
 

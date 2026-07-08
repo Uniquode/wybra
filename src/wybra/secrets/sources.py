@@ -3,10 +3,10 @@ from __future__ import annotations
 import importlib
 import re
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from wybra.core.environment import environment_get, environment_is_set
 from wybra.secrets.config import (
     KeychainSecretSourceSettings,
     KmsSecretSourceSettings,
@@ -49,19 +49,18 @@ class SecretSourceDriver(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class EnvironmentSecretSourceDriver:
-    environ: Mapping[str, str]
+    environ: object
     source: SecretSource = ENVIRONMENT_SOURCE
 
     def resolve(self, key: str) -> SecretValue:
         env_key = environment_key_name(key)
-        try:
-            value = self.environ[env_key]
-        except KeyError as exc:
-            raise MissingSecretError(source=self.source, key=env_key) from exc
+        value = environment_get(self.environ, env_key)
+        if value is None:
+            raise MissingSecretError(source=self.source, key=env_key)
         return SecretValue(value, source=self.source, key=env_key)
 
     def exists(self, key: str) -> bool:
-        return environment_key_name(key) in self.environ
+        return environment_is_set(self.environ, environment_key_name(key))
 
 
 @dataclass(frozen=True, slots=True)

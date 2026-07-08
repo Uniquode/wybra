@@ -206,12 +206,13 @@ def _forms_site(
     deployment_environment: str = "local",
     environ: dict[str, str] | None = None,
 ) -> Site:
+    if environ is not None:
+        ConfigService.set_runtime_environment(environ)
     return Site(
         app=FastAPI(),
         config=ConfigService(
             [MappingConfigSource(values)],
             config_defs=(FormsSettings.module_config,),
-            environ=environ,
             discover_module_config=False,
         ),
         deployment_environment=normalise_deployment_environment(deployment_environment),

@@ -216,7 +216,7 @@ def test_later_source_overrides_earlier_source_and_tracks_origin() -> None:
     assert service.config.sources["app.debug"] == "first"
 
 
-def test_environment_source_parses_explicit_environment_mapping() -> None:
+def test_environment_source_parses_explicit_environment_values() -> None:
     service = ConfigService(
         [
             EnvironmentConfigSource(
@@ -342,6 +342,10 @@ def test_file_source_reads_resolved_app_config(tmp_path: Path) -> None:
 modules = ["wybra"]
 database_url = "sqlite:///app.sqlite3"
 
+[app.database]
+backend = "sqlite"
+database = "structured.sqlite3"
+
 [app.templates]
 auto_reload = true
 cache_size = 0
@@ -369,6 +373,10 @@ username = "deployment"
     app_section = service.get_config("app")
     assert app_section is not None
     assert app_section["database_url"] == "sqlite:///app.sqlite3"
+    assert service.get_config("app.database") == {
+        "backend": "sqlite",
+        "database": "structured.sqlite3",
+    }
     assert service.get_config("app.assets") == {
         "url_path": "/static",
         "root": Path("static"),
@@ -432,10 +440,8 @@ def test_config_def_applies_raw_defaults_and_env_overrides() -> None:
         }
     )
 
-    service = ConfigService(
-        config_defs=(config_def,),
-        environ={"APP_STATIC_EXPORT": "public-static"},
-    )
+    ConfigService.set_runtime_environment({"APP_STATIC_EXPORT": "public-static"})
+    service = ConfigService(config_defs=(config_def,))
 
     assert service.get_config("app.assets") == {
         "url_path": "/static/",
@@ -475,10 +481,8 @@ def test_config_def_field_transform_applies_to_resolved_value() -> None:
         }
     )
 
-    service = ConfigService(
-        config_defs=(config_def,),
-        environ={"APP_ENABLED": "yes"},
-    )
+    ConfigService.set_runtime_environment({"APP_ENABLED": "yes"})
+    service = ConfigService(config_defs=(config_def,))
 
     assert service.get_config("app") == {"enabled": True}
     assert service.config.sources["app.enabled"] == "environment"
@@ -553,7 +557,8 @@ def test_config_def_field_transform_failure_names_environment_source() -> None:
             r"\(source: environment\)"
         ),
     ):
-        ConfigService(config_defs=(config_def,), environ={"APP_ENABLED": "maybe"})
+        ConfigService.set_runtime_environment({"APP_ENABLED": "maybe"})
+        ConfigService(config_defs=(config_def,))
 
 
 def test_base_settings_infers_single_config_section() -> None:
@@ -915,10 +920,8 @@ def test_config_def_env_override_uses_first_present_environment_name() -> None:
         }
     )
 
-    service = ConfigService(
-        config_defs=(config_def,),
-        environ={"APP_DATABASE_URL": "sqlite:///fallback.db"},
-    )
+    ConfigService.set_runtime_environment({"APP_DATABASE_URL": "sqlite:///fallback.db"})
+    service = ConfigService(config_defs=(config_def,))
 
     assert service.get_config("app") == {"database_url": "sqlite:///fallback.db"}
 
@@ -938,13 +941,13 @@ def test_config_def_env_override_prefers_first_environment_name() -> None:
         }
     )
 
-    service = ConfigService(
-        config_defs=(config_def,),
-        environ={
+    ConfigService.set_runtime_environment(
+        {
             "DATABASE_URL": "sqlite:///primary.db",
             "APP_DATABASE_URL": "sqlite:///fallback.db",
-        },
+        }
     )
+    service = ConfigService(config_defs=(config_def,))
 
     assert service.get_config("app") == {"database_url": "sqlite:///primary.db"}
 

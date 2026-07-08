@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -27,7 +27,7 @@ from wybra.auth.sessions import (
 from wybra.auth.sessions import (
     require_current_user as _require_current_user,
 )
-from wybra.auth.settings import AuthSettings
+from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.capabilities import DatabaseCapability
 from wybra.forms import FormsCapability
@@ -96,7 +96,7 @@ async def anonymous_required(request: Request) -> None:
 
 async def setup_site(site: Site) -> None:
     app_config = app_config_from_site(site)
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         site.config,
         app_config=app_config,
         deployment_environment=app_config.deployment_environment,
@@ -180,7 +180,7 @@ def _current_secret_envelope_service(site: Site) -> SecretEnvelopeService | None
     return value if isinstance(value, SecretEnvelopeService) else None
 
 
-def _resolved_environ(site: Site) -> Mapping[str, str]:
+def _resolved_environ(site: Site) -> object:
     return site.config.environ if site.config.environ is not None else os.environ
 
 

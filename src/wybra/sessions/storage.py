@@ -11,6 +11,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from anyio import Path as AsyncPath
 
+from wybra.core.environment import environment_get
 from wybra.core.runtime import LOCAL_ENVIRONMENT
 from wybra.db import DatabaseCapability
 from wybra.services.crypto import (
@@ -532,11 +533,11 @@ def _cookie_secret_service(
     return SecretEnvelopeService.from_env(environ)
 
 
-def _has_configured_secret_key(environ: Mapping[str, str] | None) -> bool:
+def _has_configured_secret_key(environ: object | None) -> bool:
     if environ is None:
         return False
     return any(
-        isinstance(environ.get(name), str) and bool(environ[name].strip())
+        isinstance(value := environment_get(environ, name), str) and bool(value.strip())
         for name in (ENV_WYBRA_SECRET_KEY_CURRENT, ENV_WYBRA_SECRET_KEYS_PREVIOUS)
     )
 

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Iterator, Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
-from typing import Protocol, cast
+from typing import cast
 
 from envex import Env
 
-from wybra.config.types import ConfigDef, config_environment_names
 from wybra.core.exceptions import ConfigurationError
 
 
@@ -42,54 +41,32 @@ def load_environment(
         ) from exc
 
 
-class LoadedEnvironment(Protocol):
-    def is_set(self, _var: str, /) -> bool: ...
-
-    def get(self, _var: str, /) -> str | None: ...
+def runtime_environment() -> Env:
+    return load_environment()
 
 
-class EnvironmentMapping(Mapping[str, str]):
-    """Mapping adapter for envex values used by config-service env lookup."""
-
-    def __init__(self, env: LoadedEnvironment) -> None:
-        self._env = env
-
-    def __getitem__(self, key: str) -> str:
-        value = self._env.get(key)
-        if value is None:
-            raise KeyError(key)
-        return value
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(())
-
-    def __len__(self) -> int:
-        return 0
-
-    def __contains__(self, key: object) -> bool:
-        return isinstance(key, str) and self._env.is_set(key)
+def environment_get(environ: object | None, name: str) -> str | None:
+    if environ is None:
+        return None
+    getter = getattr(environ, "get", None)
+    if not callable(getter):
+        return None
+    value = getter(name)
+    return value if isinstance(value, str) else None
 
 
-def environment_mapping(
-    env: LoadedEnvironment,
-    config_defs: Iterable[ConfigDef],
-    *,
-    extra_names: Iterable[str] = (),
-) -> dict[str, str]:
-    """Return configured environment values relevant to config definitions."""
-    names = set(extra_names)
-    for config_def in config_defs:
-        names.update(config_environment_names(config_def))
-    return {
-        name: value
-        for name in names
-        if env.is_set(name) and (value := env.get(name)) is not None
-    }
+def environment_is_set(environ: object | None, name: str) -> bool:
+    if environ is None:
+        return False
+    is_set = getattr(environ, "is_set", None)
+    if callable(is_set):
+        return bool(is_set(name))
+    return isinstance(environ, Mapping) and name in environ
 
 
 __all__ = (
-    "EnvironmentMapping",
-    "LoadedEnvironment",
-    "environment_mapping",
+    "environment_get",
+    "environment_is_set",
     "load_environment",
+    "runtime_environment",
 )

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
-import tempfile
+import sys
+import types
+import uuid
 from collections.abc import Callable, Sequence
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,6 +18,7 @@ from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
 
 from wybra.core.composition import AppConfig
 from wybra.core.logging import LoggingConfigurationError
+from wybra.db.settings import ResolvedDatabaseConnection
 from wybra.db.surfaces import DataCompositionError
 from wybra.db.tortoise import build_tortoise_config as build_config
 from wybra.db.urls import (
@@ -36,6 +37,7 @@ from wybra.tools.cli_logging import configure_cli_logging
 DATABASE_URL_HELP = "Override the configured database URL for this migration command."
 
 logger = logging.getLogger(__name__)
+TORTOISE_CONFIG_VARIABLE = "TORTOISE_ORM"
 
 
 class MigrationSettings(Protocol):
@@ -46,7 +48,8 @@ class MigrationSettings(Protocol):
     and optional composition metadata.
     """
 
-    database_url: str
+    database_url: str | None
+    database_connection: ResolvedDatabaseConnection | None
     project_root: Path
     migrations_root: Path | None
     app_config: AppConfig | None
@@ -594,6 +597,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def build_migration_context(settings: MigrationSettings) -> MigrationContext:
+    database_connection = getattr(settings, "database_connection", None)
+    if database_connection is not None:
+        return MigrationContext(
+            settings=settings,
+            config=build_tortoise_config(settings),
+        )
+
+    if settings.database_url is None or not settings.database_url.strip():
+        raise MigrationConfigurationError("Database URL is required.")
     if not is_supported_database_url(settings.database_url):
         raise MigrationConfigurationError(
             database_url_support_error(settings.database_url)
@@ -606,18 +618,31 @@ def build_migration_context(settings: MigrationSettings) -> MigrationContext:
 
 
 def build_tortoise_config(settings: MigrationSettings) -> dict[str, Any]:
+    database_connection = getattr(settings, "database_connection", None)
+    if database_connection is not None:
+        return build_config(
+            database_connection=database_connection,
+            modules=settings.modules,
+        )
+    if settings.database_url is None:
+        raise MigrationConfigurationError("Database URL is required.")
     return build_config(database_url=settings.database_url, modules=settings.modules)
 
 
 def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
-    config_file = _write_tortoise_config_file(context.config)
+    config_module = _register_tortoise_config_module(context.config)
     try:
         exit_code = asyncio.run(
-            tortoise_cli.run_cli_async(["--config-file", config_file.as_posix(), *args])
+            tortoise_cli.run_cli_async(
+                [
+                    "--config",
+                    f"{config_module}.{TORTOISE_CONFIG_VARIABLE}",
+                    *args,
+                ]
+            )
         )
     finally:
-        with suppress(OSError):
-            config_file.unlink()
+        sys.modules.pop(config_module, None)
 
     if exit_code:
         command_name = args[0] if args else "<unknown>"
@@ -627,16 +652,12 @@ def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
         )
 
 
-def _write_tortoise_config_file(config: dict[str, Any]) -> Path:
-    handle = tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        suffix=".json",
-        delete=False,
-    )
-    with handle:
-        json.dump(config, handle, sort_keys=True)
-    return Path(handle.name)
+def _register_tortoise_config_module(config: dict[str, Any]) -> str:
+    module_name = f"_wybra_tortoise_config_{uuid.uuid4().hex}"
+    module = types.ModuleType(module_name)
+    setattr(module, TORTOISE_CONFIG_VARIABLE, config)
+    sys.modules[module_name] = module
+    return module_name
 
 
 def _missing_settings_loader(

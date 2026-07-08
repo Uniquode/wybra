@@ -57,6 +57,7 @@ def _config(
     sessions: dict[str, object] | None = None,
     environ: dict[str, str] | None = None,
 ) -> ConfigService:
+    ConfigService.set_runtime_environment({} if environ is None else environ)
     return ConfigService(
         [
             MappingConfigSource(
@@ -67,7 +68,6 @@ def _config(
             )
         ],
         config_defs=(RUNTIME_CONFIG_DEF, module_config),
-        environ={} if environ is None else environ,
         discover_module_config=False,
     )
 

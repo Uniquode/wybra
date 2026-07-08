@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import importlib
 import tomllib
 from dataclasses import dataclass
@@ -14,15 +15,26 @@ import wybra.db.migrate as migrate_module
 import wybra.db.urls as database_urls
 from support_database import sqlite_file_url
 from wybra import SiteCapabilityError
-from wybra.config import MappingConfigSource
+from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability
 from wybra.db.capabilities import (
     DatabaseCapabilityError,
     TortoiseDatabaseCapability,
 )
+from wybra.db.config import ENV_DATABASE_URL
+from wybra.db.config import module_config as db_module_config
 from wybra.db.models import Model as WybraModel
-from wybra.db.persistence import Database, create_database
+from wybra.db.persistence import (
+    Database,
+    close_database,
+    close_database_connections,
+    create_database,
+)
+from wybra.db.settings import (
+    resolve_database_connection_from_config,
+    resolve_database_provisioning_connection_from_config,
+)
 from wybra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
@@ -45,14 +57,17 @@ from wybra.db.urls import (
     tortoise_database_url,
 )
 from wybra.db.validation import validate_persistence
+from wybra.services.secrets import SecretValue
 from wybra.site import start
+from wybra.tools.settings import load_project_settings
 from wybra.tools.validation.core import ValidationResult
 
 
 @dataclass(frozen=True, slots=True)
 class _PersistenceSettings:
-    database_url: str
+    database_url: str | None
     migrations_root: Path | None
+    database_connection: object | None = None
     configured_modules: tuple[str, ...] = ()
 
     @property
@@ -70,6 +85,17 @@ class _MigrationCommandSettings:
     @property
     def modules(self) -> tuple[str, ...]:
         return ()
+
+
+class _RecordingSecretsCapability:
+    def __init__(self, values: dict[tuple[str, str], str]) -> None:
+        self.values = values
+
+    def resolve(self, source: str, key: str) -> SecretValue:
+        return SecretValue(self.values[(source, key)], source=source, key=key)
+
+    def exists(self, source: str, key: str) -> bool:
+        return (source, key) in self.values
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -91,12 +117,14 @@ def _imported_modules(path: Path) -> set[str]:
 def _persistence_settings(
     tmp_path: Path,
     *,
-    database_url: str = "sqlite:///local.sqlite3",
+    database_url: str | None = "sqlite:///local.sqlite3",
+    database_connection: object | None = None,
     migrations_root: Path | None = None,
     modules: tuple[str, ...] = (),
 ) -> _PersistenceSettings:
     return _PersistenceSettings(
         database_url=database_url,
+        database_connection=database_connection,
         migrations_root=migrations_root,
         configured_modules=modules,
     )
@@ -113,6 +141,25 @@ def _database_config_source(tmp_path: Path) -> MappingConfigSource:
                 "modules": ("wybra.db",),
                 "database_url": sqlite_file_url(tmp_path / "app.sqlite3"),
             }
+        }
+    )
+
+
+def _structured_database_config_source(
+    tmp_path: Path,
+    *,
+    database: str = "structured.sqlite3",
+) -> MappingConfigSource:
+    return MappingConfigSource(
+        {
+            "app": {
+                "modules": ("wybra.db",),
+                "project_root": tmp_path,
+            },
+            "app.database": {
+                "backend": "sqlite",
+                "database": database,
+            },
         }
     )
 
@@ -177,11 +224,726 @@ async def test_wybra_db_setup_site_resolves_relative_database_url(
 
 
 @pytest.mark.anyio
+async def test_wybra_db_setup_site_uses_structured_sqlite_config(
+    tmp_path: Path,
+) -> None:
+    site = await start(
+        FastAPI(),
+        config_source=_structured_database_config_source(tmp_path),
+    )
+    database = site.require_capability(DatabaseCapability)
+    try:
+        async with database.transaction() as connection:
+            await connection.execute_script(
+                "CREATE TABLE structured_probe (id INTEGER)"
+            )
+
+        assert (tmp_path / "structured.sqlite3").exists()
+    finally:
+        await database.close()
+
+
+@pytest.mark.anyio
 async def test_wybra_db_setup_site_requires_database_url() -> None:
     with pytest.raises(SiteCapabilityError, match="database_url"):
         await start(
             FastAPI(),
             config_source=MappingConfigSource({"app": {"modules": ("wybra.db",)}}),
+        )
+
+
+def test_structured_database_config_builds_sqlite_connection(tmp_path: Path) -> None:
+    config = ConfigService([_structured_database_config_source(tmp_path)])
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+    )
+
+    assert connection is not None
+    assert connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.sqlite",
+        "credentials": {
+            "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
+        },
+    }
+
+
+def test_structured_sqlite_config_resolves_relative_path_from_project_root(
+    tmp_path: Path,
+) -> None:
+    config_directory = tmp_path / "config"
+    project_root = tmp_path / "project"
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "project_root": project_root,
+                    },
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "structured.sqlite3",
+                    },
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=project_root,
+    )
+
+    assert config_directory != project_root
+    assert connection is not None
+    assert (
+        connection.credentials["file_path"]
+        == (project_root / "structured.sqlite3").resolve().as_posix()
+    )
+
+
+def test_structured_database_config_overrides_legacy_url_with_info_log(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.db",),
+                        "database_url": "sqlite:///legacy.sqlite3",
+                    },
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "structured.sqlite3",
+                    },
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with caplog.at_level("INFO", logger="wybra.db.settings"):
+        connection = resolve_database_connection_from_config(
+            config,
+            project_root=tmp_path,
+        )
+
+    assert connection is not None
+    assert connection.source == "structured"
+    assert "overrides [app].database_url" in caplog.text
+
+
+def test_database_url_environment_overrides_structured_database_config(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    env_url = sqlite_file_url(tmp_path / "env.sqlite3")
+    ConfigService.set_runtime_environment({ENV_DATABASE_URL: env_url})
+    config = ConfigService(
+        [_structured_database_config_source(tmp_path)],
+        config_defs=(db_module_config,),
+    )
+
+    with caplog.at_level("INFO", logger="wybra.db.settings"):
+        connection = resolve_database_connection_from_config(
+            config,
+            project_root=tmp_path,
+        )
+
+    assert connection is not None
+    assert connection.source == "url"
+    assert connection.database_url == env_url
+    assert "Using DATABASE_URL, overriding config" in caplog.text
+
+
+def test_structured_database_config_resolves_environment_credentials(
+    tmp_path: Path,
+) -> None:
+    ConfigService.set_runtime_environment(
+        {
+            "WYBRA_DB_USER": "app_user",
+            "WYBRA_DB_PASSWORD": "app_password",
+        }
+    )
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "host": "/var/run/postgresql",
+                        "database": "uniquode",
+                        "credential_source": "environment",
+                        "user_key": "WYBRA_DB_USER",
+                        "password_key": "WYBRA_DB_PASSWORD",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+    )
+
+    assert connection is not None
+    assert connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.asyncpg",
+        "credentials": {
+            "database": "uniquode",
+            "host": "/var/run/postgresql",
+            "user": "app_user",
+            "password": "app_password",
+        },
+    }
+
+
+def test_project_settings_resolve_environment_database_credentials(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+        [app]
+        modules = ["wybra.db"]
+
+        [app.templates]
+        auto_reload = false
+        cache_size = 400
+
+        [app.assets]
+        url_path = "/static/"
+
+        [app.database]
+        backend = "postgresql"
+        database = "uniquode"
+        credential_source = "environment"
+        user_key = "UNIQUODE_DB_USER"
+        password_key = "UNIQUODE_DB_PASSWORD"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_project_settings(
+        project_root=tmp_path,
+        environ={
+            "APP_CONFIG": config_path.as_posix(),
+            "UNIQUODE_DB_USER": "app_user",
+            "UNIQUODE_DB_PASSWORD": "app_password",
+        },
+        read_dotenv=False,
+    )
+
+    assert settings.database_connection is not None
+    assert settings.database_connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.asyncpg",
+        "credentials": {
+            "database": "uniquode",
+            "user": "app_user",
+            "password": "app_password",
+        },
+    }
+
+
+def test_project_settings_resolve_service_account_database_credentials(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+        [app]
+        modules = ["wybra.db"]
+
+        [app.templates]
+        auto_reload = false
+        cache_size = 400
+
+        [app.assets]
+        url_path = "/static/"
+
+        [app.database]
+        backend = "postgresql"
+        database = "uniquode"
+        user = "app_user"
+        password = "app_password"
+        sa_user = "admin_user"
+        sa_password = "admin_password"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_project_settings(
+        project_root=tmp_path,
+        environ={"APP_CONFIG": config_path.as_posix()},
+        read_dotenv=False,
+        database_credential_purpose="service_account",
+    )
+
+    assert settings.database_connection is not None
+    assert settings.database_connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.asyncpg",
+        "credentials": {
+            "database": "uniquode",
+            "user": "admin_user",
+            "password": "admin_password",
+        },
+    }
+
+
+def test_project_settings_service_account_can_fallback_to_runtime_credentials(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+        [app]
+        modules = ["wybra.db"]
+
+        [app.templates]
+        auto_reload = false
+        cache_size = 400
+
+        [app.assets]
+        url_path = "/static/"
+
+        [app.database]
+        backend = "postgresql"
+        database = "uniquode"
+        user = "app_user"
+        password = "app_password"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_project_settings(
+        project_root=tmp_path,
+        environ={"APP_CONFIG": config_path.as_posix()},
+        read_dotenv=False,
+        database_credential_purpose="service_account",
+        fallback_to_runtime_credentials=True,
+    )
+
+    assert settings.database_connection is not None
+    assert settings.database_connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.asyncpg",
+        "credentials": {
+            "database": "uniquode",
+            "user": "app_user",
+            "password": "app_password",
+        },
+    }
+
+
+def test_structured_database_config_resolves_secret_credentials(
+    tmp_path: Path,
+) -> None:
+    ConfigService.set_runtime_environment({"WYBRA_DB_USER": "app_user"})
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "credential_source": "keychain",
+                        "user_key": "database/app/user",
+                        "password_key": "database/app/password",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+    secrets = _RecordingSecretsCapability(
+        {
+            ("keychain", "database/app/user"): "app_user",
+            ("keychain", "database/app/password"): "app_password",
+        }
+    )
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+        secrets=secrets,
+    )
+
+    assert connection is not None
+    assert connection.credentials["user"] == "app_user"
+    assert connection.credentials["password"] == "app_password"
+    assert "app_password" not in repr(connection)
+    assert "app_password" not in connection.redacted_description
+
+
+def test_structured_database_config_rejects_plain_and_key_credentials(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "credential_source": "environment",
+                        "user": "plain_user",
+                        "user_key": "WYBRA_DB_USER",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(ConfigurationError, match="mutually exclusive"):
+        resolve_database_connection_from_config(config, project_root=tmp_path)
+
+
+def test_structured_database_config_ignores_keys_without_credential_source(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "user": "plain_user",
+                        "user_key": "WYBRA_DB_USER",
+                        "password_key": "WYBRA_DB_PASSWORD",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_connection_from_config(config, project_root=tmp_path)
+
+    assert connection is not None
+    assert connection.credentials == {
+        "database": "uniquode",
+        "user": "plain_user",
+    }
+
+
+def test_structured_database_config_rejects_credential_source_without_keys(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "credential_source": "environment",
+                        "user": "database/app/user",
+                        "password": "database/app/password",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="missing credential keys",
+    ):
+        resolve_database_connection_from_config(config, project_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "credential_fields",
+    (
+        {"user": "app_user"},
+        {"password": "app_password"},
+        {"user": "app_user", "user_key": "WYBRA_DB_USER"},
+        {"credential_source": "environment", "user_key": "WYBRA_DB_USER"},
+        {"credential_source": "keychain", "user_key": "database/app/user"},
+        {"sa_user": "admin_user"},
+        {"sa_password": "admin_password"},
+    ),
+)
+def test_structured_sqlite_config_ignores_credentials(
+    tmp_path: Path,
+    credential_fields: dict[str, str],
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "structured.sqlite3",
+                        **credential_fields,
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_connection_from_config(config, project_root=tmp_path)
+
+    assert connection is not None
+    assert connection.credentials == {
+        "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
+    }
+
+
+@pytest.mark.parametrize(
+    "sqlite_fields",
+    (
+        {"host": "db.internal"},
+        {"port": 5432},
+        {"host": "db.internal", "port": 5432},
+    ),
+)
+def test_structured_sqlite_config_ignores_network_fields(
+    tmp_path: Path,
+    sqlite_fields: dict[str, str | int],
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "structured.sqlite3",
+                        **sqlite_fields,
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_connection_from_config(config, project_root=tmp_path)
+
+    assert connection is not None
+    assert connection.credentials == {
+        "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
+    }
+
+
+def test_service_account_credentials_are_separate_from_runtime_credentials(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "user": "app_user",
+                        "password": "app_password",
+                        "sa_user": "admin_user",
+                        "sa_password": "admin_password",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    runtime_connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+    )
+    service_account_connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+        purpose="service_account",
+    )
+
+    assert runtime_connection is not None
+    assert service_account_connection is not None
+    assert runtime_connection.credentials["user"] == "app_user"
+    assert runtime_connection.credentials["password"] == "app_password"
+    assert service_account_connection.credentials["user"] == "admin_user"
+    assert service_account_connection.credentials["password"] == "admin_password"
+
+
+def test_runtime_connection_does_not_require_service_account_secret_source(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "app.database": {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "keychain",
+            "user": "app_user",
+            "password": "app_password",
+            "sa_user_key": "database/app/admin-user",
+            "sa_password_key": "database/app/admin-password",
+        }
+    }
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+    )
+
+    assert connection is not None
+    assert connection.credentials["user"] == "app_user"
+    assert connection.credentials["password"] == "app_password"
+
+
+def test_service_account_connection_requires_secret_source_for_service_keys(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "app.database": {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "keychain",
+            "user": "app_user",
+            "password": "app_password",
+            "sa_user_key": "database/app/admin-user",
+            "sa_password_key": "database/app/admin-password",
+        }
+    }
+
+    with pytest.raises(
+        ConfigurationError,
+        match="SecretsCapability is required to resolve database credentials",
+    ):
+        resolve_database_connection_from_config(
+            config,
+            project_root=tmp_path,
+            purpose="service_account",
+        )
+
+
+def test_provisioning_connection_resolves_service_account_keys(
+    tmp_path: Path,
+) -> None:
+    ConfigService.set_runtime_environment(
+        {
+            "WYBRA_DB_ADMIN_USER": "admin_user",
+            "WYBRA_DB_ADMIN_PASSWORD": "admin_password",
+        }
+    )
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "credential_source": "environment",
+                        "user": "app_user",
+                        "password": "app_password",
+                        "sa_user_key": "WYBRA_DB_ADMIN_USER",
+                        "sa_password_key": "WYBRA_DB_ADMIN_PASSWORD",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_provisioning_connection_from_config(
+        config,
+        project_root=tmp_path,
+    )
+
+    assert connection.credentials["user"] == "admin_user"
+    assert connection.credentials["password"] == "admin_password"
+
+
+def test_provisioning_connection_rejects_runtime_credentials_only(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "user": "app_user",
+                        "password": "app_password",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(ConfigurationError, match="service-account database user"):
+        resolve_database_provisioning_connection_from_config(
+            config,
+            project_root=tmp_path,
+        )
+
+
+def test_provisioning_connection_rejects_sqlite_backend(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [_structured_database_config_source(tmp_path)],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="provisioning is not supported for the sqlite backend",
+    ):
+        resolve_database_provisioning_connection_from_config(
+            config,
+            project_root=tmp_path,
+        )
+
+
+def test_provisioning_connection_accepts_admin_database_url_override(
+    tmp_path: Path,
+) -> None:
+    admin_url = "postgresql://admin:secret@db.example/uniquode"
+    config = ConfigService([MappingConfigSource({})], config_defs=(db_module_config,))
+
+    connection = resolve_database_provisioning_connection_from_config(
+        config,
+        project_root=tmp_path,
+        admin_database_url=admin_url,
+    )
+
+    assert connection.source == "url"
+    assert connection.database_url == admin_url
+
+
+def test_provisioning_connection_rejects_application_database_url(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "database_url": "postgresql://admin:secret@db.example/app",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="does not use application database_url configuration",
+    ):
+        resolve_database_provisioning_connection_from_config(
+            config,
+            project_root=tmp_path,
         )
 
 
@@ -246,6 +1008,75 @@ async def test_database_capability_supports_named_connection_aliases(
             assert callable(writer_connection.execute_query)
     finally:
         await database.close()
+
+
+@pytest.mark.anyio
+async def test_close_database_connections_does_not_reconnect_cross_loop_client(
+    tmp_path: Path,
+) -> None:
+    database = await create_database(
+        sqlite_file_url(tmp_path / "loop-switch.sqlite3"),
+        modules=("wybra.db",),
+    )
+    connection = database.connection()
+    other_loop = asyncio.new_event_loop()
+    try:
+        connection._bound_loop = other_loop
+
+        def fail_create_connection(_alias: str) -> BaseDBAsyncClient:
+            raise AssertionError("close must not create replacement connections")
+
+        database.context.connections._create_connection = fail_create_connection
+
+        await close_database_connections(database)
+
+        assert database._connections == []
+        assert database.context.connections._copy_storage() == {}
+    finally:
+        other_loop.close()
+        if database._connections:
+            await close_database_connections(database)
+
+
+@pytest.mark.anyio
+async def test_close_database_connections_restores_connection_factory(
+    tmp_path: Path,
+) -> None:
+    database = await create_database(
+        sqlite_file_url(tmp_path / "restore-factory.sqlite3"),
+        modules=("wybra.db",),
+    )
+
+    try:
+        assert "_create_connection" in database.context.connections.__dict__
+
+        await close_database_connections(database)
+
+        assert "_create_connection" not in database.context.connections.__dict__
+    finally:
+        if database._connections:
+            await close_database_connections(database)
+
+
+@pytest.mark.anyio
+async def test_create_close_database_cycles_do_not_rewrap_connection_factory(
+    tmp_path: Path,
+) -> None:
+    for index in range(2):
+        database = await create_database(
+            sqlite_file_url(tmp_path / f"cycle-{index}.sqlite3"),
+            modules=("wybra.db",),
+        )
+
+        try:
+            database.connection()
+            await close_database(database)
+
+            assert "_create_connection" not in database.context.connections.__dict__
+            assert database._connections == []
+        finally:
+            if database._connections:
+                await close_database_connections(database)
 
 
 @pytest.mark.anyio
@@ -408,6 +1239,20 @@ def test_validate_persistence_reports_database_url_failures(
     )
 
     assert any(expected_error in error for error in result.errors)
+    assert not result.is_ok
+
+
+def test_validate_persistence_reports_missing_database_connection(
+    tmp_path: Path,
+) -> None:
+    result = validate_persistence(_persistence_settings(tmp_path, database_url=None))
+
+    assert any(
+        check.description == "database connection is not configured"
+        and not check.passed
+        for check in result.checks
+    )
+    assert "Database connection must be configured." in result.errors
     assert not result.is_ok
 
 

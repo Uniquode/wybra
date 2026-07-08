@@ -36,7 +36,6 @@ from wybra.config.types import (
     ConfigSourceResult,
     ConfigTransform,
     LoadedConfig,
-    config_environment_names,
 )
 
 __all__ = (
@@ -60,7 +59,6 @@ __all__ = (
     "FileConfigSource",
     "LoadedConfig",
     "load_configured_settings",
-    "config_environment_names",
     "MappingConfigSource",
     "SettingsConfigSource",
     "discover_module_config_defs",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -21,7 +21,7 @@ from wybra.core.composition import (
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.diagnostics import wrapped_error
-from wybra.core.environment import environment_mapping, load_environment
+from wybra.core.environment import load_environment
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.modules import CORE_MODULES
 from wybra.core.runtime import (
@@ -33,7 +33,12 @@ from wybra.core.settings import (
     SettingsLoadError,
     load_composition_config_from_environment,
 )
-from wybra.db.urls import resolve_database_url
+from wybra.db.settings import (
+    CredentialPurpose,
+    EffectiveDatabaseConfig,
+    ResolvedDatabaseConnection,
+    resolve_database_connection_from_config,
+)
 from wybra.media.config import MEDIA_URL_MODES
 
 
@@ -46,6 +51,10 @@ class ProjectSettings(BaseSettings):
     app_config: AppConfig
     config: ConfigService
     database_url: str | None = None
+    database_connection: ResolvedDatabaseConnection | None = field(
+        default=None,
+        repr=False,
+    )
     template_root: Path | None = None
     static_root: Path | None = None
     static_root_configured: bool = False
@@ -66,18 +75,31 @@ class ProjectSettings(BaseSettings):
         config: ConfigService,
         *,
         app_config: AppConfig,
+        database_credential_purpose: CredentialPurpose = "runtime",
+        fallback_to_runtime_credentials: bool = False,
     ) -> ProjectSettings:  # ty: ignore[invalid-method-override]
-        return cls(**_project_settings_kwargs(config, app_config))
+        return cls(
+            **_project_settings_kwargs(
+                config,
+                app_config,
+                database_credential_purpose=database_credential_purpose,
+                fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+            )
+        )
 
     def __post_init__(self) -> None:
         project_root = self.project_root.resolve()
         object.__setattr__(self, "project_root", project_root)
         if self.database_url is not None:
-            object.__setattr__(
-                self,
-                "database_url",
-                resolve_database_url(self.database_url, project_root),
+            database_connection = (
+                self.database_connection
+                or EffectiveDatabaseConfig.from_url(
+                    self.database_url,
+                    project_root=project_root,
+                ).resolve()
             )
+            object.__setattr__(self, "database_connection", database_connection)
+            object.__setattr__(self, "database_url", database_connection.database_url)
         object.__setattr__(
             self,
             "template_root",
@@ -156,6 +178,8 @@ def load_project_settings(
     environ: Mapping[str, str] | None = None,
     project_root: Path | None = None,
     read_dotenv: bool = True,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
 ) -> ProjectSettings:
     resolved_project_root = resolve_project_root(project_root, environ)
     try:
@@ -176,16 +200,17 @@ def load_project_settings(
                 f"{APP_CONFIG_ENV}."
             )
         config_defs = _project_config_defs(app_config)
+        ConfigService.set_runtime_environment(env)
         config = ConfigService(
             [AppConfigSource(app_config)],
             config_defs=config_defs,
-            environ=environment_mapping(
-                env,
-                config_defs,
-                extra_names=(APP_CONFIG_ENV,),
-            ),
         )
-        return ProjectSettings.load_settings(config, app_config=app_config)
+        return ProjectSettings.load_settings(
+            config,
+            app_config=app_config,
+            database_credential_purpose=database_credential_purpose,
+            fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+        )
     except (SettingsLoadError, ConfigDefinitionError, ConfigSourceError) as exc:
         raise wrapped_error(ConfigurationError, exc) from exc
 
@@ -201,12 +226,21 @@ def _project_config_defs(app_config: AppConfig) -> tuple[ConfigDef, ...]:
 def _project_settings_kwargs(
     config: ConfigService,
     app_config: AppConfig,
+    *,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
 ) -> dict[str, Any]:
     app_values = ProjectSettings.section_values(config, "app")
     static_values = ProjectSettings.section_values(config, "app.assets")
     template_values = ProjectSettings.section_values(config, "app.templates")
     media_values = ProjectSettings.section_values(config, "wybra.media")
-    database_url = _configured_database_url(app_values, app_config.database_url)
+    database_connection = resolve_database_connection_from_config(
+        config,
+        project_root=app_config.project_root,
+        configured_database_url=app_config.database_url,
+        purpose=database_credential_purpose,
+        fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+    )
     settings_kwargs: dict[str, Any] = {
         "project_root": app_config.project_root,
         "app_config": app_config,
@@ -221,8 +255,10 @@ def _project_settings_kwargs(
             app_config.templates.cache_size,
         ),
     }
-    if database_url is not None:
-        settings_kwargs["database_url"] = database_url
+    if database_connection is not None:
+        settings_kwargs["database_connection"] = database_connection
+        if database_connection.database_url is not None:
+            settings_kwargs["database_url"] = database_connection.database_url
     settings_kwargs["deployment_environment"] = _deployment_environment(
         app_values,
         app_config,
@@ -254,18 +290,6 @@ def _deployment_environment(
     if app_config.deployment_environment is not None:
         return normalise_deployment_environment(app_config.deployment_environment)
     return DEFAULT_DEPLOYMENT_ENVIRONMENT
-
-
-def _configured_database_url(
-    app_values: Mapping[str, Any],
-    configured_database_url: str | None,
-) -> str | None:
-    database_url = app_values.get("database_url")
-    if isinstance(database_url, str):
-        if not database_url.strip():
-            raise ConfigurationError("DATABASE_URL must not be blank.")
-        return database_url
-    return configured_database_url
 
 
 def _resolve_optional_path(

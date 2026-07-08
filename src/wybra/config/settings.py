@@ -18,7 +18,7 @@ from wybra.config.types import (
 )
 from wybra.core.composition import APP_CONFIG_ENV, AppConfig
 from wybra.core.diagnostics import wrapped_error
-from wybra.core.environment import environment_mapping, load_environment
+from wybra.core.environment import load_environment
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.settings import (
     SettingsLoadError,
@@ -123,14 +123,10 @@ def load_configured_settings[SettingsT: BaseSettings](
             env,
             project_root=resolved_project_root,
         )
+        ConfigService.set_runtime_environment(env)
         config = ConfigService(
             [source],
             config_defs=(config_def,),
-            environ=environment_mapping(
-                env,
-                (config_def,),
-                extra_names=(APP_CONFIG_ENV,),
-            ),
             discover_module_config=False,
         )
         return settings_type.load_settings(config)
