@@ -808,7 +808,7 @@ def test_config_def_rejects_conflicting_env_definitions() -> None:
     second = ConfigDef(
         {
             "app": ConfigGroup(
-                fields=(ConfigField(name="database_url", env="SA_DATABASE_URL"),),
+                fields=(ConfigField(name="database_url", env="APP_DATABASE_URL"),),
             )
         }
     )
@@ -908,7 +908,7 @@ def test_config_def_env_override_uses_first_present_environment_name() -> None:
                     ConfigField(
                         name="database_url",
                         default="sqlite:///default.db",
-                        env=("DATABASE_URL", "SA_DATABASE_URL"),
+                        env=("DATABASE_URL", "APP_DATABASE_URL"),
                     ),
                 ),
             )
@@ -917,7 +917,7 @@ def test_config_def_env_override_uses_first_present_environment_name() -> None:
 
     service = ConfigService(
         config_defs=(config_def,),
-        environ={"SA_DATABASE_URL": "sqlite:///fallback.db"},
+        environ={"APP_DATABASE_URL": "sqlite:///fallback.db"},
     )
 
     assert service.get_config("app") == {"database_url": "sqlite:///fallback.db"}
@@ -931,7 +931,7 @@ def test_config_def_env_override_prefers_first_environment_name() -> None:
                     ConfigField(
                         name="database_url",
                         default="sqlite:///default.db",
-                        env=("DATABASE_URL", "SA_DATABASE_URL"),
+                        env=("DATABASE_URL", "APP_DATABASE_URL"),
                     ),
                 ),
             )
@@ -942,7 +942,7 @@ def test_config_def_env_override_prefers_first_environment_name() -> None:
         config_defs=(config_def,),
         environ={
             "DATABASE_URL": "sqlite:///primary.db",
-            "SA_DATABASE_URL": "sqlite:///fallback.db",
+            "APP_DATABASE_URL": "sqlite:///fallback.db",
         },
     )
 
