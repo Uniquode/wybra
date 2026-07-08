@@ -3,17 +3,14 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from types import SimpleNamespace
 
 import pytest
 
 import wybra.db.migrate as migrate_module
-import wybra.db.provisioning as provisioning_module
 import wybra.tools.migrate as tools_migrate
 from support_database import sqlite_file_url
 from wybra.core.composition import AppConfig, load_app_config
 from wybra.db.surfaces import model_package_name
-from wybra.db.tortoise import tortoise_database_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +135,7 @@ def test_migrate_rejects_removed_legacy_command_names(
     exit_code = run_migrate(
         [
             "--database-url",
-            "sqlite+aiosqlite:///:memory:",
+            "sqlite://:memory:",
             command_name,
         ]
     )
@@ -199,7 +196,7 @@ def test_migrate_commands_delegate_to_tortoise_cli(
     assert exit_code == 0
     assert observed["args"] == expected
     assert observed["config"] == {
-        "connections": {"default": tortoise_database_url(database_url)},
+        "connections": {"default": database_url},
         "apps": {
             "wybra_sessions": {
                 "models": ["wybra.sessions.models"],
@@ -210,27 +207,20 @@ def test_migrate_commands_delegate_to_tortoise_cli(
     }
 
 
-def test_migrate_init_provisions_postgresql_before_tortoise_init(
+def test_migrate_init_uses_normalised_postgresql_tortoise_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = "postgresql+asyncpg://app:secret@db.example/app"
-    admin_database_url = "postgresql+asyncpg://admin:admin-secret@db.example/postgres"
-    events: list[str] = []
+    database_url = "postgresql://app:secret@db.example/app"
     observed: dict[str, object] = {}
-
-    def provision(database_url_arg: str, admin_database_url_arg: str | None) -> None:
-        events.append("provision")
-        observed["provision"] = (database_url_arg, admin_database_url_arg)
 
     def record_tortoise_cli(
         context: migrate_module.MigrationContext,
         args: list[str],
     ) -> None:
-        events.append("tortoise")
         observed["args"] = args
         observed["config"] = context.config
 
-    monkeypatch.setattr(migrate_module, "provision_postgresql_database", provision)
+    monkeypatch.setattr(migrate_module, "is_supported_database_url", lambda _url: True)
     monkeypatch.setattr(migrate_module, "_run_tortoise_cli", record_tortoise_cli)
 
     exit_code = run_migrate(
@@ -238,14 +228,10 @@ def test_migrate_init_provisions_postgresql_before_tortoise_init(
             "--database-url",
             database_url,
             "init",
-            "--admin-database-url",
-            admin_database_url,
         ]
     )
 
     assert exit_code == 0
-    assert events == ["provision", "tortoise"]
-    assert observed["provision"] == (database_url, admin_database_url)
     assert observed["args"] == ["init"]
     assert observed["config"] == {
         "connections": {"default": "asyncpg://app:secret@db.example/app"},
@@ -259,61 +245,6 @@ def test_migrate_init_provisions_postgresql_before_tortoise_init(
     }
 
 
-def test_migrate_init_reports_missing_postgresql_admin_url(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys,
-) -> None:
-    database_url = "postgresql+asyncpg://app:secret@db.example/app"
-
-    def fail_tortoise_cli(
-        _context: migrate_module.MigrationContext,
-        _args: list[str],
-    ) -> None:
-        raise AssertionError("PostgreSQL init should provision before Tortoise")
-
-    monkeypatch.delenv("SA_DATABASE_URL", raising=False)
-    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", fail_tortoise_cli)
-
-    exit_code = run_migrate(["--database-url", database_url, "init"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "configuration: failed" in captured.err
-    assert "--admin-database-url" in captured.err
-    assert "SA_DATABASE_URL" in captured.err
-    assert "secret" not in captured.err
-    assert "Traceback" not in captured.err
-
-
-def test_migrate_init_rejects_blank_admin_database_url_without_env_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys,
-) -> None:
-    database_url = "postgresql+asyncpg://app:secret@db.example/app"
-
-    def fail_tortoise_cli(
-        _context: migrate_module.MigrationContext,
-        _args: list[str],
-    ) -> None:
-        raise AssertionError("PostgreSQL init should provision before Tortoise")
-
-    monkeypatch.setenv(
-        "SA_DATABASE_URL",
-        "postgresql+asyncpg://admin:env-secret@db.example/postgres",
-    )
-    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", fail_tortoise_cli)
-
-    exit_code = run_migrate(
-        ["--database-url", database_url, "init", "--admin-database-url", ""]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "configuration: failed" in captured.err
-    assert "--admin-database-url must not be blank" in captured.err
-    assert "env-secret" not in captured.err
-
-
 def test_tortoise_config_uses_configured_module_model_surfaces(tmp_path: Path) -> None:
     app_config_path = _write_test_app_config(
         tmp_path / "app.toml",
@@ -321,7 +252,7 @@ def test_tortoise_config_uses_configured_module_model_surfaces(tmp_path: Path) -
     )
     app_config = load_app_config(project_root=tmp_path, config_path=app_config_path)
     settings = MigrationTestSettings(
-        database_url="sqlite+aiosqlite:///app.sqlite3",
+        database_url="sqlite:///app.sqlite3",
         project_root=tmp_path,
         app_config=app_config,
         modules=("wybra.messages",),
@@ -344,29 +275,6 @@ def test_tortoise_config_uses_configured_module_model_surfaces(tmp_path: Path) -
             },
         },
     }
-
-
-@pytest.mark.parametrize(
-    ("database_url", "expected"),
-    [
-        ("sqlite+aiosqlite:///:memory:", "sqlite://:memory:"),
-        ("sqlite+aiosqlite:///relative.sqlite3", "sqlite:///relative.sqlite3"),
-        ("sqlite+aiosqlite:////tmp/app.sqlite3", "sqlite:////tmp/app.sqlite3"),
-        (
-            "postgresql+asyncpg://user:secret@db.example/app",
-            "asyncpg://user:secret@db.example/app",
-        ),
-        (
-            "postgres://user:secret@db.example/app",
-            "postgres://user:secret@db.example/app",
-        ),
-    ],
-)
-def test_tortoise_database_url_converts_wybra_database_urls(
-    database_url: str,
-    expected: str,
-) -> None:
-    assert tortoise_database_url(database_url) == expected
 
 
 def test_run_tortoise_cli_writes_temp_json_config_and_removes_it(
@@ -419,80 +327,6 @@ def test_run_tortoise_cli_reports_non_zero_exit(
         migrate_module._run_tortoise_cli(context, ["heads"])
 
 
-def test_postgresql_provisioning_uses_dbscripts_with_sync_urls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: dict[str, object] = {}
-    monkeypatch.delenv("SA_DATABASE_URL", raising=False)
-
-    def pg_db_info(*, url: str):
-        observed["database_url"] = url
-        return SimpleNamespace(name="app")
-
-    def pg_setup(db: object) -> None:
-        observed["setup"] = db
-        observed["admin_url"] = provisioning_module.os.environ.get("SA_DATABASE_URL")
-
-    monkeypatch.setattr(
-        provisioning_module,
-        "_dbscripts_dblib",
-        lambda: SimpleNamespace(pg_db_info=pg_db_info, pg_setup=pg_setup),
-        raising=False,
-    )
-
-    migrate_module.provision_postgresql_database(
-        "postgresql+asyncpg://app:secret@db.example/app",
-        "postgresql+asyncpg://admin:admin-secret@db.example/postgres",
-    )
-
-    assert observed["database_url"] == "postgresql://app:secret@db.example/app"
-    assert (
-        observed["admin_url"] == "postgresql://admin:admin-secret@db.example/postgres"
-    )
-    assert "SA_DATABASE_URL" not in provisioning_module.os.environ
-
-
-def test_postgresql_provisioning_rejects_unsupported_database_url() -> None:
-    with pytest.raises(
-        provisioning_module.DatabaseProvisioningConfigurationError,
-        match="requires a postgresql database URL",
-    ) as excinfo:
-        migrate_module.provision_postgresql_database(
-            "sqlite+aiosqlite:///:memory:",
-            "postgresql+asyncpg://admin:admin-secret@db.example/postgres",
-        )
-
-    assert isinstance(excinfo.value, provisioning_module.DatabaseProvisioningError)
-
-
-def test_postgresql_provisioning_reports_dbscripts_failures_as_operations(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def pg_db_info(*, url: str):
-        return SimpleNamespace(name="app", url=url)
-
-    def pg_setup(_db: object) -> None:
-        raise RuntimeError("could not connect")
-
-    monkeypatch.setattr(
-        provisioning_module,
-        "_dbscripts_dblib",
-        lambda: SimpleNamespace(pg_db_info=pg_db_info, pg_setup=pg_setup),
-        raising=False,
-    )
-
-    with pytest.raises(
-        provisioning_module.DatabaseProvisioningOperationError,
-        match="could not connect",
-    ) as excinfo:
-        migrate_module.provision_postgresql_database(
-            "postgresql+asyncpg://app:secret@db.example/app",
-            "postgresql+asyncpg://admin:admin-secret@db.example/postgres",
-        )
-
-    assert isinstance(excinfo.value, provisioning_module.DatabaseProvisioningError)
-
-
 def test_load_migration_settings_passes_keyword_only_config_source(
     tmp_path: Path,
 ) -> None:
@@ -506,18 +340,18 @@ def test_load_migration_settings_passes_keyword_only_config_source(
         observed["database_url"] = database_url
         observed["config_source"] = config_source
         return MigrationTestSettings(
-            database_url=database_url or "sqlite+aiosqlite:///:memory:",
+            database_url=database_url or "sqlite://:memory:",
             project_root=tmp_path,
         )
 
     migrate_module._load_migration_settings(
         load_settings,
-        "sqlite+aiosqlite:///app.sqlite3",
+        "sqlite:///app.sqlite3",
         "app.toml",
     )
 
     assert observed == {
-        "database_url": "sqlite+aiosqlite:///app.sqlite3",
+        "database_url": "sqlite:///app.sqlite3",
         "config_source": "app.toml",
     }
 
@@ -533,18 +367,18 @@ def test_load_migration_settings_passes_config_source_to_kwargs_loader(
         observed["database_url"] = database_url
         observed["kwargs"] = kwargs
         return MigrationTestSettings(
-            database_url=database_url or "sqlite+aiosqlite:///:memory:",
+            database_url=database_url or "sqlite://:memory:",
             project_root=tmp_path,
         )
 
     migrate_module._load_migration_settings(
         load_settings,
-        "sqlite+aiosqlite:///app.sqlite3",
+        "sqlite:///app.sqlite3",
         "app.toml",
     )
 
     assert observed == {
-        "database_url": "sqlite+aiosqlite:///app.sqlite3",
+        "database_url": "sqlite:///app.sqlite3",
         "kwargs": {"config_source": "app.toml"},
     }
 
@@ -557,17 +391,17 @@ def test_load_migration_settings_uses_legacy_loader_without_config_source(
     def load_settings(database_url: str | None) -> MigrationTestSettings:
         observed["database_url"] = database_url
         return MigrationTestSettings(
-            database_url=database_url or "sqlite+aiosqlite:///:memory:",
+            database_url=database_url or "sqlite://:memory:",
             project_root=tmp_path,
         )
 
     migrate_module._load_migration_settings(
         load_settings,
-        "sqlite+aiosqlite:///app.sqlite3",
+        "sqlite:///app.sqlite3",
         None,
     )
 
-    assert observed == {"database_url": "sqlite+aiosqlite:///app.sqlite3"}
+    assert observed == {"database_url": "sqlite:///app.sqlite3"}
 
 
 def test_load_migration_settings_rejects_config_source_for_unsupported_loader(
@@ -579,7 +413,7 @@ def test_load_migration_settings_rejects_config_source_for_unsupported_loader(
         /,
     ) -> MigrationTestSettings:
         return MigrationTestSettings(
-            database_url=database_url or "sqlite+aiosqlite:///:memory:",
+            database_url=database_url or "sqlite://:memory:",
             project_root=tmp_path,
         )
 
@@ -589,7 +423,7 @@ def test_load_migration_settings_rejects_config_source_for_unsupported_loader(
     ):
         migrate_module._load_migration_settings(
             load_settings,
-            "sqlite+aiosqlite:///app.sqlite3",
+            "sqlite:///app.sqlite3",
             "app.toml",
         )
 
@@ -606,7 +440,7 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
     def load_project_settings(*, environ=None, project_root=None, read_dotenv=True):
         observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
         return MigrationTestSettings(
-            database_url="sqlite+aiosqlite:///:memory:",
+            database_url="sqlite://:memory:",
             project_root=tmp_path,
         )
 

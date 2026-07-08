@@ -18,15 +18,13 @@ from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
 
 from wybra.core.composition import AppConfig
 from wybra.core.logging import LoggingConfigurationError
-from wybra.db.provisioning import (
-    DatabaseProvisioningConfigurationError,
-    DatabaseProvisioningError,
-    is_postgresql_database_url,
-    provision_postgresql_database,
-)
 from wybra.db.surfaces import DataCompositionError
 from wybra.db.tortoise import build_tortoise_config as build_config
-from wybra.db.urls import safe_database_error_message
+from wybra.db.urls import (
+    database_url_support_error,
+    is_supported_database_url,
+    safe_database_error_message,
+)
 from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
@@ -98,7 +96,6 @@ class MigrationBackend(Protocol):
         self,
         context: MigrationContext,
         *,
-        admin_database_url: str | None,
         app_labels: tuple[str, ...],
     ) -> None: ...
 
@@ -164,14 +161,8 @@ class TortoiseMigrationBackend:
         self,
         context: MigrationContext,
         *,
-        admin_database_url: str | None,
         app_labels: tuple[str, ...],
     ) -> None:
-        if is_postgresql_database_url(context.settings.database_url):
-            provision_postgresql_database(
-                context.settings.database_url,
-                admin_database_url,
-            )
         _run_tortoise_cli(context, ["init", *app_labels])
 
     def makemigrations(
@@ -267,22 +258,14 @@ def create_migrate_command(
 
     @migrate_command.command(
         "init",
-        help="Provision database infrastructure and create migration packages.",
+        help="Initialise migration packages.",
     )
     @_database_url_option
-    @click.option(
-        "--admin-database-url",
-        help=(
-            "PostgreSQL administrative database URL for database, user, role, "
-            "and privilege provisioning."
-        ),
-    )
     @click.argument("app_labels", nargs=-1)
     @click.pass_context
     def init_command(
         ctx: click.Context,
         database_url: str | None,
-        admin_database_url: str | None,
         app_labels: tuple[str, ...],
     ) -> int:
         return _run_migration(
@@ -291,7 +274,6 @@ def create_migrate_command(
             _config_source_for_command(ctx),
             lambda backend, context: backend.initialise(
                 context,
-                admin_database_url=admin_database_url,
                 app_labels=app_labels,
             ),
         )
@@ -528,17 +510,11 @@ def _run_migration(
 
     try:
         operation(backend, context)
-    except (
-        MigrationConfigurationError,
-        DatabaseProvisioningConfigurationError,
-    ) as exc:
+    except MigrationConfigurationError as exc:
         logger.error("configuration: failed: %s", exc)
         return 1
     except MigrationStateError as exc:
         logger.error("migration: failed: %s", exc)
-        return 1
-    except DatabaseProvisioningError as exc:
-        logger.error("provisioning: failed: %s", exc)
         return 1
     except (TortoiseConfigurationError, tortoise_cli_utils.CLIError) as exc:
         logger.error("migration: failed: %s", safe_database_error_message(exc))
@@ -618,6 +594,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def build_migration_context(settings: MigrationSettings) -> MigrationContext:
+    if not is_supported_database_url(settings.database_url):
+        raise MigrationConfigurationError(
+            database_url_support_error(settings.database_url)
+        )
+
     return MigrationContext(
         settings=settings,
         config=build_tortoise_config(settings),

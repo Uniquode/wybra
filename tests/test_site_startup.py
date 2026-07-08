@@ -121,7 +121,7 @@ def _write_app_config(
         f"""
         [app]
         modules = {json.dumps(list(modules))}
-        database_url = "sqlite+aiosqlite:///app.sqlite3"
+        database_url = "sqlite:///app.sqlite3"
 {deployment_config.rstrip()}
 {debug_config.rstrip()}
 
@@ -543,14 +543,14 @@ async def test_start_environment_overrides_database_url_and_sets_deployment_fall
         environ={
             APP_ROOT_ENV: project_root.as_posix(),
             APP_CONFIG_ENV: "app.toml",
-            ENV_DATABASE_URL: "sqlite+aiosqlite:///override.sqlite3",
+            ENV_DATABASE_URL: "sqlite:///override.sqlite3",
             ENV_APP_ENV: "staging",
         },
     )
 
     try:
         app_config = app_config_from_site(site)
-        assert app_config.database_url == "sqlite+aiosqlite:///override.sqlite3"
+        assert app_config.database_url == "sqlite:///override.sqlite3"
         assert site.deployment_environment == "staging"
         assert app_config.deployment_environment == "staging"
     finally:

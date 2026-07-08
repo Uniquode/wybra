@@ -8,8 +8,10 @@ from tortoise import Tortoise
 from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.context import TortoiseContext
 
+from wybra.core.exceptions import ConfigurationError
 from wybra.db.tortoise import build_tortoise_config
 from wybra.db.urls import (
+    database_url_support_error,
     is_memory_database_url,
     is_supported_database_url,
     sqlite_database_path,
@@ -47,8 +49,12 @@ async def create_database(
     modules: Sequence[str],
     enable_global_fallback: bool = False,
 ) -> Database:
+    database_url = _database_url_from(settings_or_url)
+    if not is_supported_database_url(database_url):
+        raise ConfigurationError(database_url_support_error(database_url))
+
     config = build_tortoise_config(
-        database_url=_database_url_from(settings_or_url),
+        database_url=database_url,
         modules=modules,
     )
     context = await Tortoise.init(

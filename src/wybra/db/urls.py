@@ -1,3 +1,4 @@
+import importlib.util
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,12 +11,9 @@ from urllib.parse import (
     urlunsplit,
 )
 
-SQLITE_ASYNC_DATABASE_URL_PREFIX = "sqlite+aiosqlite:///"
-SQLITE_MEMORY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
-SUPPORTED_DATABASE_URL_PREFIXES = (
-    "sqlite+aiosqlite://",
-    "postgresql+asyncpg://",
-)
+SQLITE_DATABASE_URL_PREFIX = "sqlite:///"
+SQLITE_MEMORY_DATABASE_URL = "sqlite://:memory:"
+POSTGRESQL_TORTOISE_DATABASE_URL_SCHEME = "asyncpg"
 SENSITIVE_QUERY_PARAMS = frozenset(
     {
         "access_token",
@@ -29,8 +27,76 @@ SENSITIVE_QUERY_PARAMS = frozenset(
         "token",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseBackend:
+    scheme: str
+    tortoise_scheme: str
+    required_module_groups: tuple[tuple[str, ...], ...]
+    install_extra: str | None = None
+
+
+DATABASE_BACKENDS = (
+    DatabaseBackend(
+        scheme="sqlite",
+        tortoise_scheme="sqlite",
+        required_module_groups=(("aiosqlite",),),
+    ),
+    DatabaseBackend(
+        scheme="postgresql",
+        tortoise_scheme=POSTGRESQL_TORTOISE_DATABASE_URL_SCHEME,
+        required_module_groups=(("asyncpg",),),
+        install_extra="postgresql",
+    ),
+    DatabaseBackend(
+        scheme="postgres",
+        tortoise_scheme=POSTGRESQL_TORTOISE_DATABASE_URL_SCHEME,
+        required_module_groups=(("asyncpg",),),
+        install_extra="postgresql",
+    ),
+    DatabaseBackend(
+        scheme="asyncpg",
+        tortoise_scheme=POSTGRESQL_TORTOISE_DATABASE_URL_SCHEME,
+        required_module_groups=(("asyncpg",),),
+        install_extra="postgresql",
+    ),
+    DatabaseBackend(
+        scheme="psycopg",
+        tortoise_scheme="psycopg",
+        required_module_groups=(("psycopg", "psycopg_pool"),),
+        install_extra="psycopg",
+    ),
+    DatabaseBackend(
+        scheme="mysql",
+        tortoise_scheme="mysql",
+        required_module_groups=(("asyncmy",), ("aiomysql",)),
+        install_extra="mysql",
+    ),
+    DatabaseBackend(
+        scheme="mssql",
+        tortoise_scheme="mssql",
+        required_module_groups=(("asyncodbc", "pyodbc"),),
+        install_extra="mssql",
+    ),
+    DatabaseBackend(
+        scheme="oracle",
+        tortoise_scheme="oracle",
+        required_module_groups=(("asyncodbc", "pyodbc"),),
+        install_extra="oracle",
+    ),
+)
+SUPPORTED_DATABASE_URL_SCHEMES = tuple(backend.scheme for backend in DATABASE_BACKENDS)
+REDACTABLE_DATABASE_URL_SCHEMES = tuple(
+    sorted(
+        SUPPORTED_DATABASE_URL_SCHEMES,
+        key=len,
+        reverse=True,
+    )
+)
 DATABASE_URL_TEXT_PATTERN = re.compile(
-    r"(?:sqlite\+aiosqlite|postgresql(?:\+[A-Za-z0-9_]+)?)://[^\s]+"
+    rf"(?:{'|'.join(re.escape(scheme) for scheme in REDACTABLE_DATABASE_URL_SCHEMES)})"
+    r"://[^\s]+"
 )
 
 
@@ -51,7 +117,97 @@ class SqliteDatabaseUrl:
 
 
 def is_supported_database_url(database_url: str) -> bool:
-    return database_url.startswith(SUPPORTED_DATABASE_URL_PREFIXES)
+    backend = database_backend_for_url(database_url)
+    return backend is not None and is_database_backend_available(backend)
+
+
+def database_url_support_error(database_url: str | None = None) -> str:
+    if database_url is not None:
+        backend = database_backend_for_url(database_url)
+        if backend is not None and not is_database_backend_available(backend):
+            return _unavailable_database_backend_error(backend)
+
+    return (
+        "Database URL must use a supported Tortoise database scheme: "
+        f"{_database_url_scheme_list()}. Install the matching Wybra optional "
+        "dependency for non-SQLite backends."
+    )
+
+
+def supported_database_url_schemes() -> tuple[str, ...]:
+    return SUPPORTED_DATABASE_URL_SCHEMES
+
+
+def available_database_url_schemes() -> tuple[str, ...]:
+    return tuple(
+        backend.scheme
+        for backend in DATABASE_BACKENDS
+        if is_database_backend_available(backend)
+    )
+
+
+def database_backend_for_url(database_url: str) -> DatabaseBackend | None:
+    try:
+        scheme = urlsplit(database_url).scheme
+    except ValueError:
+        return None
+    return database_backend_for_scheme(scheme)
+
+
+def database_backend_for_scheme(scheme: str) -> DatabaseBackend | None:
+    for backend in DATABASE_BACKENDS:
+        if backend.scheme == scheme:
+            return backend
+    return None
+
+
+def is_database_backend_available(backend: DatabaseBackend) -> bool:
+    return any(
+        all(importlib.util.find_spec(module_name) is not None for module_name in group)
+        for group in backend.required_module_groups
+    )
+
+
+def tortoise_database_url(database_url: str) -> str:
+    backend = database_backend_for_url(database_url)
+    if backend is None:
+        return database_url
+
+    parsed = urlsplit(database_url)
+    if parsed.scheme == backend.tortoise_scheme:
+        return database_url
+
+    return urlunsplit(
+        SplitResult(
+            scheme=backend.tortoise_scheme,
+            netloc=parsed.netloc,
+            path=parsed.path,
+            query=parsed.query,
+            fragment=parsed.fragment,
+        )
+    )
+
+
+def _database_url_scheme_list() -> str:
+    return ", ".join(f"{scheme}://" for scheme in supported_database_url_schemes())
+
+
+def _unavailable_database_backend_error(backend: DatabaseBackend) -> str:
+    if backend.install_extra is None:
+        required = _required_module_list(backend)
+        return (
+            f"Database URL scheme {backend.scheme}:// requires unavailable "
+            f"Python module(s): {required}."
+        )
+
+    return (
+        f"Database URL scheme {backend.scheme}:// requires the "
+        f"wybra[{backend.install_extra}] optional dependency."
+    )
+
+
+def _required_module_list(backend: DatabaseBackend) -> str:
+    return " or ".join(" + ".join(group) for group in backend.required_module_groups)
 
 
 def is_memory_database_url(database_url: str) -> bool:
@@ -59,7 +215,7 @@ def is_memory_database_url(database_url: str) -> bool:
 
 
 def parse_sqlite_database_url(database_url: str) -> SqliteDatabaseUrl | None:
-    """Parse supported sqlite+aiosqlite URLs without authority components.
+    """Parse supported sqlite URLs without authority components.
 
     URL text determines path absoluteness so the same configuration resolves
     consistently on POSIX and Windows hosts.
@@ -68,11 +224,11 @@ def parse_sqlite_database_url(database_url: str) -> SqliteDatabaseUrl | None:
     if is_memory_database_url(database_url):
         return None
 
-    if not database_url.startswith(SQLITE_ASYNC_DATABASE_URL_PREFIX):
+    if not database_url.startswith(SQLITE_DATABASE_URL_PREFIX):
         return None
 
     parsed = urlsplit(database_url)
-    if parsed.scheme != "sqlite+aiosqlite" or parsed.netloc or not parsed.path:
+    if parsed.scheme != "sqlite" or parsed.netloc or not parsed.path:
         return None
 
     raw_path = parsed.path
@@ -109,7 +265,7 @@ def resolve_database_url(database_url: str, project_root: Path) -> str:
 
 
 def sqlite_file_url(path: Path) -> str:
-    return f"{SQLITE_ASYNC_DATABASE_URL_PREFIX}{path.resolve().as_posix()}"
+    return f"{SQLITE_DATABASE_URL_PREFIX}{path.resolve().as_posix()}"
 
 
 def sqlite_database_path(database_url: str) -> Path | None:

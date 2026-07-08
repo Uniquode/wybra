@@ -483,7 +483,7 @@ async def test_auth_setup_uses_secrets_backed_secret_envelope_service() -> None:
                     {
                         "app": {
                             "modules": ("wybra.secrets", "wybra.auth"),
-                            "database_url": "sqlite+aiosqlite:///app.sqlite3",
+                            "database_url": "sqlite:///app.sqlite3",
                         },
                         "secrets.crypto": {
                             "source": "environment",
@@ -514,7 +514,7 @@ async def test_auth_setup_requires_secrets_capability_for_crypto_source() -> Non
                     {
                         "app": {
                             "modules": ("wybra.auth",),
-                            "database_url": "sqlite+aiosqlite:///app.sqlite3",
+                            "database_url": "sqlite:///app.sqlite3",
                         },
                         "secrets.crypto": {
                             "source": "environment",

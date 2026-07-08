@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 from wybra.db.surfaces import model_packages_by_module
+from wybra.db.urls import tortoise_database_url
 
 
 def build_tortoise_config(
@@ -27,17 +27,6 @@ def build_tortoise_config(
             ).items()
         },
     }
-
-
-def tortoise_database_url(database_url: str) -> str:
-    if database_url == "sqlite+aiosqlite:///:memory:":
-        return "sqlite://:memory:"
-    parsed = urlsplit(database_url)
-    if parsed.scheme == "sqlite+aiosqlite":
-        return urlunsplit(parsed._replace(scheme="sqlite"))
-    if parsed.scheme == "postgresql+asyncpg":
-        return urlunsplit(parsed._replace(scheme="asyncpg"))
-    return database_url
 
 
 def tortoise_app_label(module_name: str) -> str:

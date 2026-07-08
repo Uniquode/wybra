@@ -15,7 +15,11 @@ from wybra.db.surfaces import (
     discover_model_package,
     model_package_name,
 )
-from wybra.db.urls import parse_sqlite_database_url, redact_database_url
+from wybra.db.urls import (
+    database_url_support_error,
+    parse_sqlite_database_url,
+    redact_database_url,
+)
 from wybra.tools.validation.core import (
     ValidationCheck,
     ValidationResult,
@@ -48,10 +52,8 @@ def validate_persistence(settings: PersistenceValidationSettings) -> ValidationR
             checks,
             errors,
             passed=is_supported_database_url(settings.database_url),
-            description="database URL uses supported async database driver",
-            error=(
-                "Database URL must use sqlite+aiosqlite:// or postgresql+asyncpg://."
-            ),
+            description="database URL uses an available Tortoise database scheme",
+            error=database_url_support_error(settings.database_url),
         )
 
     _record_sqlite_persistence_check(settings, checks, errors)

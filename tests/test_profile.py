@@ -687,7 +687,7 @@ async def test_profile_setup_registers_profile_capability_before_media_exists() 
                         "wybra.auth",
                         "wybra.db",
                     ),
-                    "database_url": "sqlite+aiosqlite:///profile.sqlite3",
+                    "database_url": "sqlite:///profile.sqlite3",
                 },
             }
         ),
@@ -1571,7 +1571,7 @@ async def test_profile_post_setup_requires_auth_capability() -> None:
                 {
                     "app": {
                         "modules": ("wybra.profile", "wybra.db"),
-                        "database_url": "sqlite+aiosqlite:///profile.sqlite3",
+                        "database_url": "sqlite:///profile.sqlite3",
                     },
                 }
             ),
@@ -1587,7 +1587,7 @@ async def test_profile_post_setup_requires_database_capability() -> None:
                 {
                     "app": {
                         "modules": ("wybra.profile", "wybra.auth"),
-                        "database_url": "sqlite+aiosqlite:///profile.sqlite3",
+                        "database_url": "sqlite:///profile.sqlite3",
                     }
                 }
             ),
@@ -1603,7 +1603,7 @@ async def test_profile_post_setup_requires_forms_when_editing_enabled() -> None:
                 {
                     "app": {
                         "modules": ("wybra.profile", "wybra.auth", "wybra.db"),
-                        "database_url": "sqlite+aiosqlite:///profile.sqlite3",
+                        "database_url": "sqlite:///profile.sqlite3",
                     }
                 }
             ),

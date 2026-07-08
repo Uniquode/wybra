@@ -103,7 +103,7 @@ async def _database_capability(
     modules: tuple[str, ...] = ("wybra.sessions",),
 ) -> tuple[object, TortoiseDatabaseCapability]:
     database = await create_database(
-        "sqlite+aiosqlite:///:memory:",
+        "sqlite://:memory:",
         modules=modules,
     )
     capability = TortoiseDatabaseCapability(

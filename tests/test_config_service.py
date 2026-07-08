@@ -340,7 +340,7 @@ def test_file_source_reads_resolved_app_config(tmp_path: Path) -> None:
         """
 [app]
 modules = ["wybra"]
-database_url = "sqlite+aiosqlite:///app.sqlite3"
+database_url = "sqlite:///app.sqlite3"
 
 [app.templates]
 auto_reload = true
@@ -368,7 +368,7 @@ username = "deployment"
 
     app_section = service.get_config("app")
     assert app_section is not None
-    assert app_section["database_url"] == "sqlite+aiosqlite:///app.sqlite3"
+    assert app_section["database_url"] == "sqlite:///app.sqlite3"
     assert service.get_config("app.assets") == {
         "url_path": "/static",
         "root": Path("static"),
@@ -808,7 +808,7 @@ def test_config_def_rejects_conflicting_env_definitions() -> None:
     second = ConfigDef(
         {
             "app": ConfigGroup(
-                fields=(ConfigField(name="database_url", env="SA_DATABASE_URL"),),
+                fields=(ConfigField(name="database_url", env="APP_DATABASE_URL"),),
             )
         }
     )
@@ -908,7 +908,7 @@ def test_config_def_env_override_uses_first_present_environment_name() -> None:
                     ConfigField(
                         name="database_url",
                         default="sqlite:///default.db",
-                        env=("DATABASE_URL", "SA_DATABASE_URL"),
+                        env=("DATABASE_URL", "APP_DATABASE_URL"),
                     ),
                 ),
             )
@@ -917,7 +917,7 @@ def test_config_def_env_override_uses_first_present_environment_name() -> None:
 
     service = ConfigService(
         config_defs=(config_def,),
-        environ={"SA_DATABASE_URL": "sqlite:///fallback.db"},
+        environ={"APP_DATABASE_URL": "sqlite:///fallback.db"},
     )
 
     assert service.get_config("app") == {"database_url": "sqlite:///fallback.db"}
@@ -931,7 +931,7 @@ def test_config_def_env_override_prefers_first_environment_name() -> None:
                     ConfigField(
                         name="database_url",
                         default="sqlite:///default.db",
-                        env=("DATABASE_URL", "SA_DATABASE_URL"),
+                        env=("DATABASE_URL", "APP_DATABASE_URL"),
                     ),
                 ),
             )
@@ -942,7 +942,7 @@ def test_config_def_env_override_prefers_first_environment_name() -> None:
         config_defs=(config_def,),
         environ={
             "DATABASE_URL": "sqlite:///primary.db",
-            "SA_DATABASE_URL": "sqlite:///fallback.db",
+            "APP_DATABASE_URL": "sqlite:///fallback.db",
         },
     )
 
@@ -970,7 +970,7 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
                 },
             ),
         ),
-        database_url="sqlite+aiosqlite:///app.sqlite3",
+        database_url="sqlite:///app.sqlite3",
         auth={"account_creation_policy": "closed"},
     )
 
@@ -980,7 +980,7 @@ def test_app_config_source_loads_app_config_sections(tmp_path: Path) -> None:
         "config_path": tmp_path / "app.toml",
         "project_root": tmp_path,
         "modules": ("app",),
-        "database_url": "sqlite+aiosqlite:///app.sqlite3",
+        "database_url": "sqlite:///app.sqlite3",
         "deployment_environment": None,
     }
     assert service.get_config("app.routes") == {"prefixes": {"app": {"default": ""}}}
