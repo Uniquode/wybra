@@ -515,7 +515,7 @@ def test_structured_database_config_rejects_plain_and_key_credentials(
         resolve_database_connection_from_config(config, project_root=tmp_path)
 
 
-def test_structured_database_config_requires_credential_source_for_keys(
+def test_structured_database_config_ignores_keys_without_credential_source(
     tmp_path: Path,
 ) -> None:
     config = ConfigService(
@@ -525,6 +525,8 @@ def test_structured_database_config_requires_credential_source_for_keys(
                     "app.database": {
                         "backend": "postgresql",
                         "database": "uniquode",
+                        "user": "plain_user",
+                        "user_key": "WYBRA_DB_USER",
                         "password_key": "WYBRA_DB_PASSWORD",
                     }
                 }
@@ -533,8 +535,13 @@ def test_structured_database_config_requires_credential_source_for_keys(
         config_defs=(db_module_config,),
     )
 
-    with pytest.raises(ConfigurationError, match="credential_source is required"):
-        resolve_database_connection_from_config(config, project_root=tmp_path)
+    connection = resolve_database_connection_from_config(config, project_root=tmp_path)
+
+    assert connection is not None
+    assert connection.credentials == {
+        "database": "uniquode",
+        "user": "plain_user",
+    }
 
 
 def test_structured_database_config_rejects_credential_source_without_keys(
@@ -559,7 +566,7 @@ def test_structured_database_config_rejects_credential_source_without_keys(
 
     with pytest.raises(
         ConfigurationError,
-        match="database configuration error, missing key fields",
+        match="missing credential keys",
     ):
         resolve_database_connection_from_config(config, project_root=tmp_path)
 
@@ -569,12 +576,14 @@ def test_structured_database_config_rejects_credential_source_without_keys(
     (
         {"user": "app_user"},
         {"password": "app_password"},
+        {"user": "app_user", "user_key": "WYBRA_DB_USER"},
         {"credential_source": "environment", "user_key": "WYBRA_DB_USER"},
+        {"credential_source": "keychain", "user_key": "database/app/user"},
         {"sa_user": "admin_user"},
         {"sa_password": "admin_password"},
     ),
 )
-def test_structured_sqlite_config_rejects_credentials(
+def test_structured_sqlite_config_ignores_credentials(
     tmp_path: Path,
     credential_fields: dict[str, str],
 ) -> None:
@@ -593,11 +602,12 @@ def test_structured_sqlite_config_rejects_credentials(
         config_defs=(db_module_config,),
     )
 
-    with pytest.raises(
-        ConfigurationError,
-        match="credentials are not supported for the sqlite backend",
-    ):
-        resolve_database_connection_from_config(config, project_root=tmp_path)
+    connection = resolve_database_connection_from_config(config, project_root=tmp_path)
+
+    assert connection is not None
+    assert connection.credentials == {
+        "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
+    }
 
 
 @pytest.mark.parametrize(

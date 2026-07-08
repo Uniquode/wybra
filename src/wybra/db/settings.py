@@ -75,13 +75,6 @@ class DatabaseCredentialConfig:
             "password_key",
             _optional_non_blank_string(self.password_key, "password_key"),
         )
-        _reject_plain_and_key(self.user, self.user_key, "user", "user_key")
-        _reject_plain_and_key(
-            self.password,
-            self.password_key,
-            "password",
-            "password_key",
-        )
 
     @property
     def has_keys(self) -> bool:
@@ -136,28 +129,38 @@ class StructuredDatabaseConfig:
                 + "."
             )
 
-        runtime_credentials = DatabaseCredentialConfig(
-            user=cast(str | None, values.get("user")),
-            password=cast(str | None, values.get("password")),
-            user_key=cast(str | None, values.get("user_key")),
-            password_key=cast(str | None, values.get("password_key")),
+        backend = values.get("backend")
+        ignore_credentials = isinstance(backend, str) and backend.strip() == "sqlite"
+        runtime_credentials = (
+            DatabaseCredentialConfig()
+            if ignore_credentials
+            else DatabaseCredentialConfig(
+                user=cast(str | None, values.get("user")),
+                password=cast(str | None, values.get("password")),
+                user_key=cast(str | None, values.get("user_key")),
+                password_key=cast(str | None, values.get("password_key")),
+            )
         )
-        service_account_credentials = DatabaseCredentialConfig(
-            user=cast(str | None, values.get("sa_user")),
-            password=cast(str | None, values.get("sa_password")),
-            user_key=cast(str | None, values.get("sa_user_key")),
-            password_key=cast(str | None, values.get("sa_password_key")),
+        service_account_credentials = (
+            DatabaseCredentialConfig()
+            if ignore_credentials
+            else DatabaseCredentialConfig(
+                user=cast(str | None, values.get("sa_user")),
+                password=cast(str | None, values.get("sa_password")),
+                user_key=cast(str | None, values.get("sa_user_key")),
+                password_key=cast(str | None, values.get("sa_password_key")),
+            )
         )
 
         return cls(
-            backend=cast(str, values.get("backend")),
+            backend=cast(str, backend),
             database=cast(str, values.get("database")),
             host=cast(str | None, values.get("host")),
             port=cast(int | None, values.get("port")),
             options=cast(Mapping[str, Any], values.get("options") or {}),
             credential_source=cast(
                 SecretSource | None,
-                values.get("credential_source"),
+                None if ignore_credentials else values.get("credential_source"),
             ),
             runtime_credentials=runtime_credentials,
             service_account_credentials=service_account_credentials,
@@ -181,11 +184,12 @@ class StructuredDatabaseConfig:
             "options",
             MappingProxyType(dict(_normalise_options(self.options))),
         )
-        object.__setattr__(
-            self,
-            "credential_source",
-            _optional_secret_source(self.credential_source),
+        credential_source = (
+            None
+            if backend_info.tortoise_scheme == "sqlite"
+            else _optional_secret_source(self.credential_source)
         )
+        object.__setattr__(self, "credential_source", credential_source)
         _validate_database_credential_configuration(
             backend_info,
             self.credential_source,
@@ -202,6 +206,8 @@ class StructuredDatabaseConfig:
         return backend
 
     def requires_secret_capability_for(self, purpose: CredentialPurpose) -> bool:
+        if self.backend_info.tortoise_scheme == "sqlite":
+            return False
         return (
             self.credential_source is not None
             and self.credential_source != ENVIRONMENT_SOURCE
@@ -486,25 +492,39 @@ def _validate_database_credential_configuration(
     runtime_credentials: DatabaseCredentialConfig,
     service_account_credentials: DatabaseCredentialConfig,
 ) -> None:
-    credentials_configured = (
-        runtime_credentials.configured or service_account_credentials.configured
-    )
     keys_configured = (
         runtime_credentials.has_keys or service_account_credentials.has_keys
     )
-    if keys_configured and credential_source is None:
-        raise ConfigurationError(
-            "[app.database].credential_source is required when any database "
-            "credential key is configured."
-        )
-    if backend.tortoise_scheme == "sqlite" and (
-        credential_source is not None or credentials_configured
-    ):
-        raise ConfigurationError(
-            "[app.database] credentials are not supported for the sqlite backend."
-        )
+    if backend.tortoise_scheme == "sqlite":
+        return
+    if credential_source is None:
+        return
     if credential_source is not None and not keys_configured:
-        raise ConfigurationError("database configuration error, missing key fields")
+        raise ConfigurationError("missing credential keys")
+    _reject_plain_and_key(
+        runtime_credentials.user,
+        runtime_credentials.user_key,
+        "user",
+        "user_key",
+    )
+    _reject_plain_and_key(
+        runtime_credentials.password,
+        runtime_credentials.password_key,
+        "password",
+        "password_key",
+    )
+    _reject_plain_and_key(
+        service_account_credentials.user,
+        service_account_credentials.user_key,
+        "user",
+        "user_key",
+    )
+    _reject_plain_and_key(
+        service_account_credentials.password,
+        service_account_credentials.password_key,
+        "password",
+        "password_key",
+    )
 
 
 def _validate_database_backend_fields(
@@ -541,6 +561,11 @@ def _resolve_structured_database_connection(
         structured,
         project_root=project_root,
     )
+    if backend.tortoise_scheme == "sqlite":
+        return ResolvedDatabaseConnection.from_structured(
+            backend=backend,
+            credentials=credentials,
+        )
     resolved_credentials = _resolve_credentials(
         structured.credential_config(purpose),
         source=structured.credential_source,
@@ -632,9 +657,7 @@ def _resolve_credential_value(
     if key is None:
         return plain_value
     if source is None:
-        raise ConfigurationError(
-            f"[app.database].credential_source is required for {field_name}."
-        )
+        return plain_value
     if source == ENVIRONMENT_SOURCE:
         environment = environ if environ is not None else os.environ
         value = environment_get(environment, key)
@@ -763,7 +786,7 @@ def _normalise_options(value: object) -> Mapping[str, Any]:
 def _optional_secret_source(value: object) -> SecretSource | None:
     if value is None:
         return None
-    return normalise_secret_source(value, name="[app.database].credential_source")
+    return normalise_secret_source(value, name="credential_source")
 
 
 def _required_non_blank_string(value: object, field_name: str) -> str:
