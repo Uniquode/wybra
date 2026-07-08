@@ -10,9 +10,15 @@ from wybra.db.capabilities import (
     TortoiseDatabaseCapability,
 )
 from wybra.db.config import module_config
+from wybra.db.settings import (
+    EffectiveDatabaseConfig,
+    ResolvedDatabaseConnection,
+    StructuredDatabaseConfig,
+    resolve_database_connection_from_config,
+    resolve_database_provisioning_connection_from_config,
+)
 from wybra.db.urls import (
     available_database_url_schemes,
-    resolve_database_url,
     sqlite_database_path,
     sqlite_file_url,
     supported_database_url_schemes,
@@ -27,15 +33,20 @@ from wybra.site_config import app_config_from_site
 
 async def setup_site(site: Site) -> None:
     app_config = app_config_from_site(site)
-    database_url = app_config.database_url
-    if not isinstance(database_url, str) or not database_url.strip():
+    database_connection = resolve_database_connection_from_config(
+        site.config,
+        project_root=app_config.project_root,
+        configured_database_url=app_config.database_url,
+    )
+    if database_connection is None:
         raise SiteCapabilityError(
-            "Database capability requires [app].database_url to be configured."
+            "Database capability requires [app.database] or [app].database_url "
+            "to be configured."
         )
     site.provide_capability(
         DatabaseCapability,
-        await TortoiseDatabaseCapability.from_database_url(
-            resolve_database_url(database_url, app_config.project_root),
+        await TortoiseDatabaseCapability.from_database_connection(
+            database_connection,
             modules=site.modules,
         ),
     )
@@ -44,10 +55,15 @@ async def setup_site(site: Site) -> None:
 __all__ = (
     "DatabaseCapability",
     "DatabaseCapabilityError",
+    "EffectiveDatabaseConfig",
     "module_config",
     "PersistenceValidationSettings",
+    "ResolvedDatabaseConnection",
+    "StructuredDatabaseConfig",
     "TortoiseDatabaseCapability",
     "available_database_url_schemes",
+    "resolve_database_connection_from_config",
+    "resolve_database_provisioning_connection_from_config",
     "setup_site",
     "sqlite_database_path",
     "sqlite_file_url",

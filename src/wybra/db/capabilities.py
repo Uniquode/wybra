@@ -15,6 +15,7 @@ from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.transactions import in_transaction
 
 from wybra.db.persistence import Database, close_database, create_database
+from wybra.db.settings import ResolvedDatabaseConnection
 
 DEFAULT_CONNECTION_NAME = "default"
 READER_CONNECTION_NAME = "reader"
@@ -55,14 +56,14 @@ class TortoiseDatabaseCapability:
     _closed: bool = field(default=False, init=False, repr=False)
 
     @classmethod
-    async def from_database_url(
+    async def from_database_connection(
         cls,
-        database_url: str,
+        database_connection: ResolvedDatabaseConnection,
         *,
         modules: Sequence[str],
     ) -> TortoiseDatabaseCapability:
         database = await create_database(
-            database_url,
+            database_connection,
             modules=modules,
         )
         connection_aliases = {

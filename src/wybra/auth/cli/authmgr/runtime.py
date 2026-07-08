@@ -77,8 +77,10 @@ def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
 
 async def _main_async(args: AuthmgrArgs, *, config_source: str | None = None) -> int:
     settings = _load_command_settings_for_command(config_source=config_source)
+    if settings.auth.database_connection is None:
+        raise ConfigurationError("Auth database connection is not configured.")
     database = await create_database(
-        settings.auth.database_url,
+        settings.auth.database_connection,
         modules=("wybra.auth",),
     )
     try:

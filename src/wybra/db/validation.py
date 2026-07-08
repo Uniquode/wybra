@@ -9,6 +9,7 @@ from wybra.db.persistence import (
     is_memory_database_url,
     is_supported_database_url,
 )
+from wybra.db.settings import ResolvedDatabaseConnection
 from wybra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
@@ -17,6 +18,7 @@ from wybra.db.surfaces import (
 )
 from wybra.db.urls import (
     database_url_support_error,
+    is_database_backend_available,
     parse_sqlite_database_url,
     redact_database_url,
 )
@@ -28,7 +30,8 @@ from wybra.tools.validation.core import (
 
 
 class PersistenceValidationSettings(Protocol):
-    database_url: str
+    database_url: str | None
+    database_connection: ResolvedDatabaseConnection | None
     migrations_root: Path | None
 
     @property
@@ -38,22 +41,34 @@ class PersistenceValidationSettings(Protocol):
 def validate_persistence(settings: PersistenceValidationSettings) -> ValidationResult:
     errors: list[str] = []
     checks: list[ValidationCheck] = []
-    display_database_url = redact_database_url(settings.database_url)
+    database_connection = getattr(settings, "database_connection", None)
+    database_url = settings.database_url
 
-    has_database_url = record_check(
+    has_database_connection = record_check(
         checks,
         errors,
-        passed=bool(settings.database_url.strip()),
-        description=f"database URL is configured: {display_database_url}",
-        error="Database URL must not be empty.",
+        passed=database_connection is not None
+        or bool(database_url is not None and database_url.strip()),
+        description=_database_connection_description(database_connection, database_url),
+        error=_database_connection_error(database_url),
     )
-    if has_database_url:
+    if database_connection is not None:
         record_check(
             checks,
             errors,
-            passed=is_supported_database_url(settings.database_url),
+            passed=is_database_backend_available(database_connection.backend),
+            description="database backend is available",
+            error=database_url_support_error(
+                f"{database_connection.backend.scheme}://"
+            ),
+        )
+    elif has_database_connection and database_url is not None:
+        record_check(
+            checks,
+            errors,
+            passed=is_supported_database_url(database_url),
             description="database URL uses an available Tortoise database scheme",
-            error=database_url_support_error(settings.database_url),
+            error=database_url_support_error(database_url),
         )
 
     _record_sqlite_persistence_check(settings, checks, errors)
@@ -86,6 +101,22 @@ def _record_sqlite_persistence_check(
     checks: list[ValidationCheck],
     errors: list[str],
 ) -> None:
+    database_connection = getattr(settings, "database_connection", None)
+    if database_connection is not None:
+        if database_connection.backend.tortoise_scheme != "sqlite":
+            return
+        file_path = database_connection.credentials.get("file_path")
+        record_check(
+            checks,
+            errors,
+            passed=file_path != ":memory:",
+            description="SQLite database uses persistent file storage",
+            error="SQLite database must not force in-memory storage.",
+        )
+        return
+
+    if settings.database_url is None:
+        return
     if is_memory_database_url(settings.database_url):
         record_check(
             checks,
@@ -107,6 +138,26 @@ def _record_sqlite_persistence_check(
         description="SQLite database URL uses persistent file storage",
         error="SQLite database URL must not force in-memory storage.",
     )
+
+
+def _database_connection_description(
+    database_connection: ResolvedDatabaseConnection | None,
+    database_url: str | None,
+) -> str:
+    if database_connection is not None:
+        return (
+            "database connection is configured: "
+            + database_connection.redacted_description
+        )
+    if database_url is None:
+        return "database connection is configured"
+    return f"database URL is configured: {redact_database_url(database_url)}"
+
+
+def _database_connection_error(database_url: str | None) -> str:
+    if database_url is not None:
+        return "Database URL must not be empty."
+    return "Database connection must be configured."
 
 
 def _record_migration_resource_checks(

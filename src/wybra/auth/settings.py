@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar, Final, cast
 
 from envex import Env
@@ -34,7 +35,12 @@ from wybra.core.settings import (
     env_setting_is_set,
     values_from_env_settings,
 )
-from wybra.db.urls import resolve_database_url
+from wybra.db.config import DATABASE_CONFIG_SECTION
+from wybra.db.settings import (
+    EffectiveDatabaseConfig,
+    ResolvedDatabaseConnection,
+    resolve_database_connection_from_config,
+)
 
 DATABASE_URL_ENV = "DATABASE_URL"
 AUTH_SETTINGS_OWNER: Final = "wybra.auth"
@@ -163,6 +169,24 @@ module_config: Final = ConfigDef(
         APP_CONFIG_SECTION: ConfigGroup(
             fields=(ConfigField(name="database_url", env=DATABASE_URL_ENV),),
         ),
+        DATABASE_CONFIG_SECTION: ConfigGroup(
+            fields=(
+                ConfigField(name="backend"),
+                ConfigField(name="host"),
+                ConfigField(name="port"),
+                ConfigField(name="database"),
+                ConfigField(name="options"),
+                ConfigField(name="credential_source"),
+                ConfigField(name="user"),
+                ConfigField(name="password"),
+                ConfigField(name="user_key"),
+                ConfigField(name="password_key"),
+                ConfigField(name="sa_user"),
+                ConfigField(name="sa_password"),
+                ConfigField(name="sa_user_key"),
+                ConfigField(name="sa_password_key"),
+            ),
+        ),
         AUTH_CONFIG_SECTION: ConfigGroup(
             fields=(
                 ConfigField(
@@ -233,7 +257,11 @@ class AuthSettings(BaseSettings):
     module_config: ClassVar[ConfigDef] = module_config
     config_section: ClassVar[str | None] = AUTH_CONFIG_SECTION
 
-    database_url: str
+    database_url: str | None = None
+    database_connection: ResolvedDatabaseConnection | None = field(
+        default=None,
+        repr=False,
+    )
     identity_options: IdentityOptions = field(default_factory=IdentityOptions)
     deployment_environment: DeploymentEnvironment = LOCAL_ENVIRONMENT
 
@@ -268,7 +296,17 @@ class AuthSettings(BaseSettings):
             cls.section_values(config, AUTH_CONFIG_SECTION),
         )
         _reject_unknown_auth_options(auth_config)
-        database_url = _configured_database_url(config, app_config, env)
+        database_connection = resolve_database_connection_from_config(
+            config,
+            project_root=app_config.project_root,
+            configured_database_url=app_config.database_url,
+            database_url_override=_configured_env_value(env, DATABASE_URL_ENV),
+        )
+        if database_connection is None:
+            raise ConfigurationError(
+                "Application database must be configured as [app.database], "
+                "[app].database_url, or DATABASE_URL."
+            )
         identity_values = _identity_values_from_environment(env)
         identity_options = _identity_options_from_config(
             config,
@@ -285,10 +323,8 @@ class AuthSettings(BaseSettings):
                 ),
             )
         return cls(
-            database_url=resolve_database_url(
-                database_url,
-                app_config.config_path.resolve().parent,
-            ),
+            database_url=database_connection.database_url,
+            database_connection=database_connection,
             identity_options=identity_options,
             deployment_environment=normalise_deployment_environment(
                 deployment_environment
@@ -296,6 +332,17 @@ class AuthSettings(BaseSettings):
         )
 
     def __post_init__(self) -> None:
+        if self.database_connection is None and self.database_url is not None:
+            database_connection = EffectiveDatabaseConfig.from_url(
+                self.database_url,
+                project_root=Path.cwd(),
+            ).resolve()
+            object.__setattr__(
+                self,
+                "database_connection",
+                database_connection,
+            )
+            object.__setattr__(self, "database_url", database_connection.database_url)
         object.__setattr__(
             self,
             "deployment_environment",
@@ -379,6 +426,10 @@ def load_runtime_auth_settings(
             )
         settings = AuthSettings(
             database_url=database_url,
+            database_connection=EffectiveDatabaseConfig.from_url(
+                database_url,
+                project_root=Path.cwd(),
+            ).resolve(),
             deployment_environment=normalise_deployment_environment(
                 deployment_environment
             ),
@@ -566,27 +617,6 @@ def _reject_unknown_passkey_options(auth_config: Mapping[str, Any]) -> None:
             f"Unknown option(s) in [auth.{PASSKEY_SECTION_FIELD}] configuration: "
             f"{unknown_list}. Allowed options are: {allowed_fields}."
         )
-
-
-def _configured_database_url(
-    config: ConfigService | Mapping[str, Mapping[str, Any]],
-    app_config: AppConfig,
-    env: Mapping[str, str | None] | Env,
-) -> str:
-    app_values = AuthSettings.section_values(config, APP_CONFIG_SECTION)
-    database_url = (
-        _configured_env_value(env, DATABASE_URL_ENV)
-        or app_values.get("database_url")
-        or app_config.database_url
-    )
-
-    if not isinstance(database_url, str) or not database_url.strip():
-        raise ConfigurationError(
-            "Application database_url must be configured as [app].database_url "
-            "or DATABASE_URL."
-        )
-
-    return database_url
 
 
 def _configured_env_value(

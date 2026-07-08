@@ -342,6 +342,10 @@ def test_file_source_reads_resolved_app_config(tmp_path: Path) -> None:
 modules = ["wybra"]
 database_url = "sqlite:///app.sqlite3"
 
+[app.database]
+backend = "sqlite"
+database = "structured.sqlite3"
+
 [app.templates]
 auto_reload = true
 cache_size = 0
@@ -369,6 +373,10 @@ username = "deployment"
     app_section = service.get_config("app")
     assert app_section is not None
     assert app_section["database_url"] == "sqlite:///app.sqlite3"
+    assert service.get_config("app.database") == {
+        "backend": "sqlite",
+        "database": "structured.sqlite3",
+    }
     assert service.get_config("app.assets") == {
         "url_path": "/static",
         "root": Path("static"),

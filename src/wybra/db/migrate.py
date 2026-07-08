@@ -18,6 +18,7 @@ from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
 
 from wybra.core.composition import AppConfig
 from wybra.core.logging import LoggingConfigurationError
+from wybra.db.settings import ResolvedDatabaseConnection
 from wybra.db.surfaces import DataCompositionError
 from wybra.db.tortoise import build_tortoise_config as build_config
 from wybra.db.urls import (
@@ -46,7 +47,8 @@ class MigrationSettings(Protocol):
     and optional composition metadata.
     """
 
-    database_url: str
+    database_url: str | None
+    database_connection: ResolvedDatabaseConnection | None
     project_root: Path
     migrations_root: Path | None
     app_config: AppConfig | None
@@ -594,6 +596,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def build_migration_context(settings: MigrationSettings) -> MigrationContext:
+    database_connection = getattr(settings, "database_connection", None)
+    if database_connection is not None:
+        return MigrationContext(
+            settings=settings,
+            config=build_tortoise_config(settings),
+        )
+
+    if settings.database_url is None or not settings.database_url.strip():
+        raise MigrationConfigurationError("Database URL is required.")
     if not is_supported_database_url(settings.database_url):
         raise MigrationConfigurationError(
             database_url_support_error(settings.database_url)
@@ -606,6 +617,14 @@ def build_migration_context(settings: MigrationSettings) -> MigrationContext:
 
 
 def build_tortoise_config(settings: MigrationSettings) -> dict[str, Any]:
+    database_connection = getattr(settings, "database_connection", None)
+    if database_connection is not None:
+        return build_config(
+            database_connection=database_connection,
+            modules=settings.modules,
+        )
+    if settings.database_url is None:
+        raise MigrationConfigurationError("Database URL is required.")
     return build_config(database_url=settings.database_url, modules=settings.modules)
 
 

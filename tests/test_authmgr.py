@@ -886,6 +886,42 @@ def test_app_database_url_resolves_relative_sqlite_path_from_config_directory(
     )
 
 
+def test_auth_settings_use_structured_database_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+[app]
+modules = ["wybra.auth"]
+
+[app.templates]
+auto_reload = true
+cache_size = 0
+
+[app.assets]
+url_path = "/static/"
+
+[app.database]
+backend = "sqlite"
+database = "structured-auth.sqlite3"
+""".strip(),
+        encoding="utf-8",
+    )
+    app_config = load_app_config(project_root=tmp_path, config_path=config_path)
+
+    settings = AuthSettings.load_settings(
+        auth_settings_config(app_config),
+        app_config=app_config,
+        environ={},
+    )
+
+    assert settings.database_url is None
+    assert settings.database_connection is not None
+    assert (
+        settings.database_connection.credentials["file_path"]
+        == (tmp_path / "structured-auth.sqlite3").resolve().as_posix()
+    )
+
+
 def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None:
     app_config = AppConfig(
         config_path=tmp_path / "app.toml",

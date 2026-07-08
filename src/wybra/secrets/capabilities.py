@@ -4,6 +4,7 @@ import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
+from wybra.config import ConfigService
 from wybra.secrets.config import SecretsSettings
 from wybra.secrets.sources import (
     AwsSecretsManagerSourceDriver,
@@ -38,6 +39,24 @@ class DefaultSecretsCapability:
             registry[source] = driver
         return cls(_drivers=registry)
 
+    @classmethod
+    def from_settings(
+        cls,
+        settings: SecretsSettings,
+        *,
+        environ: Mapping[str, str] | None = None,
+    ) -> DefaultSecretsCapability:
+        return cls.from_drivers(
+            (
+                EnvironmentSecretSourceDriver(
+                    environ if environ is not None else os.environ
+                ),
+                AwsSecretsManagerSourceDriver(settings.kms),
+                KeychainSecretSourceDriver(settings.keychain),
+                VaultSecretSourceDriver(settings.vault),
+            )
+        )
+
     @property
     def sources(self) -> tuple[SecretSource, ...]:
         return tuple(self._drivers)
@@ -62,13 +81,9 @@ async def setup_site(site: Site) -> None:
     settings = SecretsSettings.load_settings(site.config)
     site.provide_capability(
         SecretsCapability,
-        DefaultSecretsCapability.from_drivers(
-            (
-                EnvironmentSecretSourceDriver(_resolved_environ(site)),
-                AwsSecretsManagerSourceDriver(settings.kms),
-                KeychainSecretSourceDriver(settings.keychain),
-                VaultSecretSourceDriver(settings.vault),
-            )
+        DefaultSecretsCapability.from_settings(
+            settings,
+            environ=_resolved_environ(site),
         ),
     )
 
@@ -77,8 +92,16 @@ def _resolved_environ(site: Site) -> Mapping[str, str]:
     return site.config.environ if site.config.environ is not None else os.environ
 
 
+def secrets_capability_from_config(config: ConfigService) -> DefaultSecretsCapability:
+    return DefaultSecretsCapability.from_settings(
+        SecretsSettings.load_settings(config),
+        environ=config.environ,
+    )
+
+
 __all__ = (
     "DefaultSecretsCapability",
     "SecretsCapability",
+    "secrets_capability_from_config",
     "setup_site",
 )

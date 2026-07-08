@@ -233,7 +233,7 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             for key, value in app_data.items()
             if not isinstance(value, Mapping)
         }
-        for nested_name in ("assets", "routes", "runserver", "templates"):
+        for nested_name in ("assets", "database", "routes", "runserver", "templates"):
             nested_value = app_data.get(nested_name)
             if isinstance(nested_value, Mapping):
                 sections[f"app.{nested_name}"] = dict(nested_value)

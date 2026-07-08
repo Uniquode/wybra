@@ -493,8 +493,10 @@ async def _reencrypt_secrets(
     command_settings = _secret_command_settings_from_context(ctx)
     secret_service = _secret_envelope_service_from_command_settings(command_settings)
     auth_settings = _auth_settings_from_context(ctx)
+    if auth_settings.database_connection is None:
+        raise click.ClickException("Auth database connection is not configured.")
     database = await create_database(
-        auth_settings.database_url,
+        auth_settings.database_connection,
         modules=("wybra.auth",),
     )
     try:
