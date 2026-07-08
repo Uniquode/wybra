@@ -615,9 +615,10 @@ def test_structured_sqlite_config_ignores_credentials(
     (
         {"host": "db.internal"},
         {"port": 5432},
+        {"host": "db.internal", "port": 5432},
     ),
 )
-def test_structured_sqlite_config_rejects_network_fields(
+def test_structured_sqlite_config_ignores_network_fields(
     tmp_path: Path,
     sqlite_fields: dict[str, str | int],
 ) -> None:
@@ -636,11 +637,12 @@ def test_structured_sqlite_config_rejects_network_fields(
         config_defs=(db_module_config,),
     )
 
-    with pytest.raises(
-        ConfigurationError,
-        match="host and \\[app.database\\].port are not supported",
-    ):
-        resolve_database_connection_from_config(config, project_root=tmp_path)
+    connection = resolve_database_connection_from_config(config, project_root=tmp_path)
+
+    assert connection is not None
+    assert connection.credentials == {
+        "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
+    }
 
 
 def test_service_account_credentials_are_separate_from_runtime_credentials(

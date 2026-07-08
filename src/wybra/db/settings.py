@@ -177,8 +177,18 @@ class StructuredDatabaseConfig:
             "database",
             _required_non_blank_string(self.database, "database"),
         )
-        object.__setattr__(self, "host", _optional_non_blank_string(self.host, "host"))
-        object.__setattr__(self, "port", _optional_positive_int(self.port, "port"))
+        host = (
+            None
+            if backend_info.tortoise_scheme == "sqlite"
+            else _optional_non_blank_string(self.host, "host")
+        )
+        port = (
+            None
+            if backend_info.tortoise_scheme == "sqlite"
+            else _optional_positive_int(self.port, "port")
+        )
+        object.__setattr__(self, "host", host)
+        object.__setattr__(self, "port", port)
         object.__setattr__(
             self,
             "options",
@@ -196,7 +206,6 @@ class StructuredDatabaseConfig:
             self.runtime_credentials,
             self.service_account_credentials,
         )
-        _validate_database_backend_fields(backend_info, self.host, self.port)
 
     @property
     def backend_info(self) -> DatabaseBackend:
@@ -525,18 +534,6 @@ def _validate_database_credential_configuration(
         "password",
         "password_key",
     )
-
-
-def _validate_database_backend_fields(
-    backend: DatabaseBackend,
-    host: str | None,
-    port: int | None,
-) -> None:
-    if backend.tortoise_scheme == "sqlite" and (host is not None or port is not None):
-        raise ConfigurationError(
-            "[app.database].host and [app.database].port are not supported for "
-            "the sqlite backend."
-        )
 
 
 def _reject_unsupported_provisioning_backend(
