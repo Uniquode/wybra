@@ -191,6 +191,7 @@ class StructuredDatabaseConfig:
             self.runtime_credentials,
             self.service_account_credentials,
         )
+        _validate_database_backend_fields(backend_info, self.host, self.port)
 
     @property
     def backend_info(self) -> DatabaseBackend:
@@ -462,6 +463,12 @@ def resolve_database_provisioning_connection_from_config(
             "credentials or an explicit admin database URL."
         )
     _reject_unsupported_provisioning_backend(connection)
+    if connection.source == "url":
+        raise ConfigurationError(
+            "Database provisioning does not use application database_url "
+            "configuration. Configure [app.database] service-account credentials "
+            "or supply an explicit admin database URL."
+        )
     if connection.credentials.get("user") is None:
         raise ConfigurationError(
             "Database provisioning requires a service-account database user "
@@ -497,6 +504,18 @@ def _validate_database_credential_configuration(
     ):
         raise ConfigurationError(
             "[app.database] credentials are not supported for the sqlite backend."
+        )
+
+
+def _validate_database_backend_fields(
+    backend: DatabaseBackend,
+    host: str | None,
+    port: int | None,
+) -> None:
+    if backend.tortoise_scheme == "sqlite" and (host is not None or port is not None):
+        raise ConfigurationError(
+            "[app.database].host and [app.database].port are not supported for "
+            "the sqlite backend."
         )
 
 

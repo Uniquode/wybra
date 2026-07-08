@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
-import tempfile
+import sys
+import types
+import uuid
 from collections.abc import Callable, Sequence
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -37,6 +37,7 @@ from wybra.tools.cli_logging import configure_cli_logging
 DATABASE_URL_HELP = "Override the configured database URL for this migration command."
 
 logger = logging.getLogger(__name__)
+TORTOISE_CONFIG_VARIABLE = "TORTOISE_ORM"
 
 
 class MigrationSettings(Protocol):
@@ -629,14 +630,19 @@ def build_tortoise_config(settings: MigrationSettings) -> dict[str, Any]:
 
 
 def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
-    config_file = _write_tortoise_config_file(context.config)
+    config_module = _register_tortoise_config_module(context.config)
     try:
         exit_code = asyncio.run(
-            tortoise_cli.run_cli_async(["--config-file", config_file.as_posix(), *args])
+            tortoise_cli.run_cli_async(
+                [
+                    "--config",
+                    f"{config_module}.{TORTOISE_CONFIG_VARIABLE}",
+                    *args,
+                ]
+            )
         )
     finally:
-        with suppress(OSError):
-            config_file.unlink()
+        sys.modules.pop(config_module, None)
 
     if exit_code:
         command_name = args[0] if args else "<unknown>"
@@ -646,16 +652,12 @@ def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
         )
 
 
-def _write_tortoise_config_file(config: dict[str, Any]) -> Path:
-    handle = tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        suffix=".json",
-        delete=False,
-    )
-    with handle:
-        json.dump(config, handle, sort_keys=True)
-    return Path(handle.name)
+def _register_tortoise_config_module(config: dict[str, Any]) -> str:
+    module_name = f"_wybra_tortoise_config_{uuid.uuid4().hex}"
+    module = types.ModuleType(module_name)
+    setattr(module, TORTOISE_CONFIG_VARIABLE, config)
+    sys.modules[module_name] = module
+    return module_name
 
 
 def _missing_settings_loader(

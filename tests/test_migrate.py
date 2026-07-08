@@ -1,4 +1,4 @@
-import json
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -277,7 +277,7 @@ def test_tortoise_config_uses_configured_module_model_surfaces(tmp_path: Path) -
     }
 
 
-def test_run_tortoise_cli_writes_temp_json_config_and_removes_it(
+def test_run_tortoise_cli_uses_transient_config_module_and_removes_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -289,10 +289,11 @@ def test_run_tortoise_cli_writes_temp_json_config_and_removes_it(
     context = migrate_module.build_migration_context(settings)
 
     async def record_cli(argv: list[str]) -> int:
-        config_path = Path(argv[1])
         observed["argv"] = argv
-        observed["config_path"] = config_path
-        observed["config"] = json.loads(config_path.read_text(encoding="utf-8"))
+        module_name, variable_name = argv[1].rsplit(".", 1)
+        observed["config_module"] = module_name
+        observed["config_variable"] = variable_name
+        observed["config"] = getattr(sys.modules[module_name], variable_name)
         return 0
 
     monkeypatch.setattr(migrate_module.tortoise_cli, "run_cli_async", record_cli)
@@ -300,12 +301,13 @@ def test_run_tortoise_cli_writes_temp_json_config_and_removes_it(
     migrate_module._run_tortoise_cli(context, ["heads"])
 
     assert observed["argv"] == [
-        "--config-file",
-        Path(observed["config_path"]).as_posix(),
+        "--config",
+        f"{observed['config_module']}.{migrate_module.TORTOISE_CONFIG_VARIABLE}",
         "heads",
     ]
+    assert observed["config_variable"] == migrate_module.TORTOISE_CONFIG_VARIABLE
     assert observed["config"] == context.config
-    assert not Path(observed["config_path"]).exists()
+    assert observed["config_module"] not in sys.modules
 
 
 def test_run_tortoise_cli_reports_non_zero_exit(

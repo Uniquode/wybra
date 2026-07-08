@@ -515,6 +515,39 @@ def test_structured_sqlite_config_rejects_credentials(
         resolve_database_connection_from_config(config, project_root=tmp_path)
 
 
+@pytest.mark.parametrize(
+    "sqlite_fields",
+    (
+        {"host": "db.internal"},
+        {"port": 5432},
+    ),
+)
+def test_structured_sqlite_config_rejects_network_fields(
+    tmp_path: Path,
+    sqlite_fields: dict[str, str | int],
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "structured.sqlite3",
+                        **sqlite_fields,
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="host and \\[app.database\\].port are not supported",
+    ):
+        resolve_database_connection_from_config(config, project_root=tmp_path)
+
+
 def test_service_account_credentials_are_separate_from_runtime_credentials(
     tmp_path: Path,
 ) -> None:
@@ -647,6 +680,32 @@ def test_provisioning_connection_accepts_admin_database_url_override(
 
     assert connection.source == "url"
     assert connection.database_url == admin_url
+
+
+def test_provisioning_connection_rejects_application_database_url(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app": {
+                        "database_url": "postgresql://admin:secret@db.example/app",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="does not use application database_url configuration",
+    ):
+        resolve_database_provisioning_connection_from_config(
+            config,
+            project_root=tmp_path,
+        )
 
 
 @pytest.mark.anyio
