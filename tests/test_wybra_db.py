@@ -587,6 +587,57 @@ def test_service_account_credentials_are_separate_from_runtime_credentials(
     assert service_account_connection.credentials["password"] == "admin_password"
 
 
+def test_runtime_connection_does_not_require_service_account_secret_source(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "app.database": {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "keychain",
+            "user": "app_user",
+            "password": "app_password",
+            "sa_user_key": "database/app/admin-user",
+            "sa_password_key": "database/app/admin-password",
+        }
+    }
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+    )
+
+    assert connection is not None
+    assert connection.credentials["user"] == "app_user"
+    assert connection.credentials["password"] == "app_password"
+
+
+def test_service_account_connection_requires_secret_source_for_service_keys(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "app.database": {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "keychain",
+            "user": "app_user",
+            "password": "app_password",
+            "sa_user_key": "database/app/admin-user",
+            "sa_password_key": "database/app/admin-password",
+        }
+    }
+
+    with pytest.raises(
+        ConfigurationError,
+        match="SecretsCapability is required to resolve database credentials",
+    ):
+        resolve_database_connection_from_config(
+            config,
+            project_root=tmp_path,
+            purpose="service_account",
+        )
+
+
 def test_provisioning_connection_resolves_service_account_keys(
     tmp_path: Path,
 ) -> None:

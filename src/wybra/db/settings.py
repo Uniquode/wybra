@@ -200,15 +200,11 @@ class StructuredDatabaseConfig:
             raise ConfigurationError(database_url_support_error(f"{self.backend}://"))
         return backend
 
-    @property
-    def requires_secret_capability(self) -> bool:
+    def requires_secret_capability_for(self, purpose: CredentialPurpose) -> bool:
         return (
             self.credential_source is not None
             and self.credential_source != ENVIRONMENT_SOURCE
-            and (
-                self.runtime_credentials.has_keys
-                or self.service_account_credentials.has_keys
-            )
+            and self.credential_config(purpose).has_keys
         )
 
     def credential_config(self, purpose: CredentialPurpose) -> DatabaseCredentialConfig:
@@ -276,10 +272,9 @@ class EffectiveDatabaseConfig:
 
         raise ConfigurationError(f"Unsupported database config source: {self.source}.")
 
-    @property
-    def requires_secret_capability(self) -> bool:
+    def requires_secret_capability_for(self, purpose: CredentialPurpose) -> bool:
         return (
-            self.structured.requires_secret_capability
+            self.structured.requires_secret_capability_for(purpose)
             if self.structured is not None
             else False
         )
@@ -425,7 +420,7 @@ def resolve_database_connection_from_config(
     if effective is None:
         return None
     resolved_secrets = secrets
-    if effective.requires_secret_capability and resolved_secrets is None:
+    if effective.requires_secret_capability_for(purpose) and resolved_secrets is None:
         resolved_secrets = _secrets_capability_from_config(config)
     return effective.resolve(
         environ=_config_environ(config),
@@ -674,6 +669,8 @@ def _config_environ(
 ) -> Mapping[str, str] | None:
     if isinstance(config, ConfigService):
         return config.environ
+    # Plain mappings do not carry an isolated environment; environment-source
+    # credential keys fall back to os.environ in _resolve_credential_value.
     return None
 
 
