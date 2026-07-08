@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Final, cast
 
-from envex import Env
 from starlette.datastructures import State
 
 from wybra.auth.options import (
@@ -19,7 +17,7 @@ from wybra.auth.options import (
     identity_env_setting_name,
     is_generate_local_identity_secret,
 )
-from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup, to_bool
+from wybra.config import ConfigDef, ConfigField, ConfigGroup, to_bool
 from wybra.config.service import ConfigService
 from wybra.config.sources import AppConfigSource
 from wybra.core.composition import AppConfig
@@ -29,11 +27,6 @@ from wybra.core.runtime import (
     LOCAL_ENVIRONMENT,
     DeploymentEnvironment,
     normalise_deployment_environment,
-)
-from wybra.core.settings import (
-    EnvironmentSetting,
-    env_setting_is_set,
-    values_from_env_settings,
 )
 from wybra.db.config import DATABASE_CONFIG_SECTION
 from wybra.db.settings import (
@@ -100,50 +93,32 @@ ENV_RESET_SECRET: Final = "RESET_SECRET"
 ENV_SESSION_COOKIE: Final = "SESSION_COOKIE"
 ENV_SESSION_FORCE_SECURE: Final = "SESSION_FORCE_SECURE"
 ENV_SESSION_LIFETIME: Final = "SESSION_LIFETIME"
+ENV_PROVIDER_ENABLED: Final = identity_env_setting_name(
+    cast(IdentityIntegration, PROVIDER)
+)
+ENV_PASSKEY_ENABLED: Final = identity_env_setting_name(
+    cast(IdentityIntegration, PASSKEY)
+)
 ENV_TOTP_MODE: Final = "TOTP_MODE"
 ENV_TOTP_ALLOWED_DRIFT: Final = "TOTP_ALLOWED_DRIFT"
 ENV_TOTP_PERIOD_SECONDS: Final = "TOTP_PERIOD_SECONDS"
 ENV_TOTP_CHALLENGE_EXPIRY_SECONDS: Final = "TOTP_CHALLENGE_EXPIRY_SECONDS"
 ENV_TOTP_RECOVERY_WINDOW_SECONDS: Final = "TOTP_RECOVERY_WINDOW_SECONDS"
 ENV_VERIFICATION_SECRET: Final = "VERIFICATION_SECRET"
-
-
-def _identity_env_settings() -> tuple[EnvironmentSetting, ...]:
-    return (
-        EnvironmentSetting(
-            identity_env_setting_name(cast(IdentityIntegration, PROVIDER)),
-            "provider_enabled",
-            "bool",
-        ),
-        EnvironmentSetting(
-            identity_env_setting_name(cast(IdentityIntegration, PASSKEY)),
-            "passkey_enabled",
-            "bool",
-        ),
-    )
-
-
-IDENTITY_ENV_SETTINGS: Final[tuple[EnvironmentSetting, ...]] = (
-    EnvironmentSetting(ENV_ACCOUNT_CREATION_POLICY, "account_creation_policy"),
-    *_identity_env_settings(),
-    EnvironmentSetting(ENV_RESET_SECRET, "reset_password_token_secret"),
-    EnvironmentSetting(ENV_SESSION_COOKIE, "session_cookie_name"),
-    EnvironmentSetting(ENV_SESSION_FORCE_SECURE, "session_cookie_force_secure", "bool"),
-    EnvironmentSetting(ENV_SESSION_LIFETIME, "session_lifetime_seconds", "int"),
-    EnvironmentSetting(ENV_TOTP_MODE, TOTP_MODE),
-    EnvironmentSetting(ENV_TOTP_ALLOWED_DRIFT, "totp_allowed_drift", "int"),
-    EnvironmentSetting(ENV_TOTP_PERIOD_SECONDS, "totp_period_seconds", "int"),
-    EnvironmentSetting(
-        ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
-        "totp_challenge_expiry_seconds",
-        "int",
-    ),
-    EnvironmentSetting(
-        ENV_TOTP_RECOVERY_WINDOW_SECONDS,
-        "totp_recovery_window_seconds",
-        "int",
-    ),
-    EnvironmentSetting(ENV_VERIFICATION_SECRET, "verification_token_secret"),
+AUTH_ENVIRONMENT_NAMES: Final[tuple[str, ...]] = (
+    ENV_ACCOUNT_CREATION_POLICY,
+    ENV_PROVIDER_ENABLED,
+    ENV_PASSKEY_ENABLED,
+    ENV_RESET_SECRET,
+    ENV_SESSION_COOKIE,
+    ENV_SESSION_FORCE_SECURE,
+    ENV_SESSION_LIFETIME,
+    ENV_TOTP_MODE,
+    ENV_TOTP_ALLOWED_DRIFT,
+    ENV_TOTP_PERIOD_SECONDS,
+    ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
+    ENV_TOTP_RECOVERY_WINDOW_SECONDS,
+    ENV_VERIFICATION_SECRET,
 )
 
 
@@ -194,8 +169,16 @@ module_config: Final = ConfigDef(
                     name="account_creation_policy",
                     env=ENV_ACCOUNT_CREATION_POLICY,
                 ),
-                ConfigField(name="provider_enabled", transform=to_bool),
-                ConfigField(name="passkey_enabled", transform=to_bool),
+                ConfigField(
+                    name="provider_enabled",
+                    env=ENV_PROVIDER_ENABLED,
+                    transform=to_bool,
+                ),
+                ConfigField(
+                    name="passkey_enabled",
+                    env=ENV_PASSKEY_ENABLED,
+                    transform=to_bool,
+                ),
                 ConfigField(name=TOTP_MODE, env=ENV_TOTP_MODE),
                 ConfigField(name="session_cookie_name", env=ENV_SESSION_COOKIE),
                 ConfigField(
@@ -254,7 +237,7 @@ module_config: Final = ConfigDef(
 
 
 @dataclass(frozen=True, slots=True)
-class AuthSettings(BaseSettings):
+class AuthSettings:
     module_config: ClassVar[ConfigDef] = module_config
     config_section: ClassVar[str | None] = AUTH_CONFIG_SECTION
 
@@ -265,72 +248,6 @@ class AuthSettings(BaseSettings):
     )
     identity_options: IdentityOptions = field(default_factory=IdentityOptions)
     deployment_environment: DeploymentEnvironment = LOCAL_ENVIRONMENT
-
-    @classmethod
-    def load_settings(
-        cls,
-        config: ConfigService | Mapping[str, Mapping[str, Any]],
-        *,
-        app_config: AppConfig,
-        environ: Mapping[str, str] | None = None,
-        deployment_environment: DeploymentEnvironment | str | None = LOCAL_ENVIRONMENT,
-    ) -> AuthSettings:  # ty: ignore[invalid-method-override]
-        """Load auth settings from ConfigService or section-keyed raw config.
-
-        Plain mappings are expected to use ``{section_name: {field: value}}``
-        shape so auth settings can combine ``app``, ``auth``, and nested auth
-        policy sections consistently.
-        """
-        env_values = os.environ if environ is None else environ
-        env = Env(
-            environ=dict(env_values),
-            readenv=False,
-            update=False,
-        )
-        if app_config.auth is not None and not isinstance(app_config.auth, Mapping):
-            raise ConfigurationError(
-                "Invalid auth configuration: [auth] must be a table when defined."
-            )
-        app_auth_config = app_config.auth or {}
-        auth_config = _merge_auth_with_loaded_precedence(
-            app_auth_config,
-            cls.section_values(config, AUTH_CONFIG_SECTION),
-        )
-        _reject_unknown_auth_options(auth_config)
-        database_connection = resolve_database_connection_from_config(
-            config,
-            project_root=app_config.project_root,
-            configured_database_url=app_config.database_url,
-            database_url_override=_configured_env_value(env, DATABASE_URL_ENV),
-        )
-        if database_connection is None:
-            raise ConfigurationError(
-                "Application database must be configured as [app.database], "
-                "[app].database_url, or DATABASE_URL."
-            )
-        identity_values = _identity_values_from_environment(env)
-        identity_options = _identity_options_from_config(
-            config,
-            {**auth_config, **identity_values},
-        )
-        if identity_values:
-            object.__setattr__(
-                identity_options,
-                "token_secrets_configured",
-                _identity_token_secrets_configured(
-                    identity_options,
-                    auth_config,
-                    identity_values,
-                ),
-            )
-        return cls(
-            database_url=database_connection.database_url,
-            database_connection=database_connection,
-            identity_options=identity_options,
-            deployment_environment=normalise_deployment_environment(
-                deployment_environment
-            ),
-        )
 
     def __post_init__(self) -> None:
         if self.database_connection is None and self.database_url is not None:
@@ -361,6 +278,45 @@ class AuthSettings(BaseSettings):
 
     def is_local(self) -> bool:
         return self.deployment_environment == LOCAL_ENVIRONMENT
+
+
+def load_auth_settings(
+    config: ConfigService | Mapping[str, Mapping[str, Any]],
+    *,
+    app_config: AppConfig,
+    deployment_environment: DeploymentEnvironment | str | None = LOCAL_ENVIRONMENT,
+    database_url_override: str | None = None,
+) -> AuthSettings:
+    """Compose auth settings from app config and module config."""
+
+    if app_config.auth is not None and not isinstance(app_config.auth, Mapping):
+        raise ConfigurationError(
+            "Invalid auth configuration: [auth] must be a table when defined."
+        )
+    app_auth_config = app_config.auth or {}
+    auth_config = _merge_auth_with_loaded_precedence(
+        app_auth_config,
+        _section_values(config, AUTH_CONFIG_SECTION),
+    )
+    _reject_unknown_auth_options(auth_config)
+    database_connection = resolve_database_connection_from_config(
+        config,
+        project_root=app_config.project_root,
+        configured_database_url=app_config.database_url,
+        database_url_override=database_url_override,
+    )
+    if database_connection is None:
+        raise ConfigurationError(
+            "Application database must be configured as [app.database], "
+            "[app].database_url, or DATABASE_URL."
+        )
+    identity_options = _identity_options_from_config(config, auth_config)
+    return AuthSettings(
+        database_url=database_connection.database_url,
+        database_connection=database_connection,
+        identity_options=identity_options,
+        deployment_environment=normalise_deployment_environment(deployment_environment),
+    )
 
 
 def auth_settings_from_state(state: State) -> AuthSettings:
@@ -403,7 +359,6 @@ def load_runtime_auth_settings(
     app_config: AppConfig | None,
     deployment_environment: DeploymentEnvironment | str | None,
     database_url: str | None = None,
-    environ: Mapping[str, str] | None = None,
 ) -> AuthSettings:
     """Load and validate auth settings for application runtime composition."""
 
@@ -413,11 +368,11 @@ def load_runtime_auth_settings(
             config_defs=(RUNTIME_CONFIG_DEF, AuthSettings.module_config),
             discover_module_config=False,
         )
-        settings = AuthSettings.load_settings(
+        settings = load_auth_settings(
             config,
             app_config=app_config,
-            environ=environ,
             deployment_environment=deployment_environment,
+            database_url_override=database_url,
         )
     else:
         if database_url is None or not database_url.strip():
@@ -444,14 +399,7 @@ def supported_auth_environment_names() -> tuple[str, ...]:
     config, CLI override, or runtime composition rather than auth settings.
     """
 
-    return tuple(setting.name for setting in IDENTITY_ENV_SETTINGS)
-
-
-def _identity_values_from_environment(env: Env) -> dict[str, Any]:
-    if not env_setting_is_set(env, IDENTITY_ENV_SETTINGS):
-        return {}
-
-    return values_from_env_settings(env, IDENTITY_ENV_SETTINGS)
+    return AUTH_ENVIRONMENT_NAMES
 
 
 def _merge_auth_with_loaded_precedence(
@@ -504,46 +452,6 @@ def _merge_nested_auth_table_with_loaded_precedence(
             continue
         merged[key] = value
     return merged
-
-
-def _identity_token_secrets_configured(
-    identity_options: IdentityOptions,
-    auth_config: Mapping[str, Any],
-    identity_values: Mapping[str, Any],
-) -> bool:
-    return _identity_token_secret_configured(
-        "reset_password_token_secret",
-        identity_options,
-        auth_config,
-        identity_values,
-    ) and _identity_token_secret_configured(
-        "verification_token_secret",
-        identity_options,
-        auth_config,
-        identity_values,
-    )
-
-
-def _identity_token_secret_configured(
-    field_name: str,
-    identity_options: IdentityOptions,
-    auth_config: Mapping[str, Any],
-    identity_values: Mapping[str, Any],
-) -> bool:
-    if field_name in identity_values:
-        return _identity_token_secret_value_configured(identity_values[field_name])
-    if field_name in auth_config:
-        return _identity_token_secret_value_configured(auth_config[field_name])
-
-    return identity_options.token_secrets_configured
-
-
-def _identity_token_secret_value_configured(value: Any) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value.strip())
-        and not is_generate_local_identity_secret(value)
-    )
 
 
 def _reject_unknown_auth_options(auth_config: Mapping[str, Any]) -> None:
@@ -616,13 +524,6 @@ def _reject_unknown_passkey_options(auth_config: Mapping[str, Any]) -> None:
         )
 
 
-def _configured_env_value(
-    env: Mapping[str, str | None] | Env, field_name: str
-) -> str | None:
-    value = env.get(field_name)
-    return value if value and value.strip() else None
-
-
 def _database_connection_from_direct_url(
     database_url: str,
 ) -> ResolvedDatabaseConnection:
@@ -665,7 +566,7 @@ def _passkey_options_from_config(
     if not isinstance(passkey_config, dict):
         passkey_config = {}
     if not passkey_config:
-        passkey_config = AuthSettings.section_values(config, PASSKEY_CONFIG_SECTION)
+        passkey_config = _section_values(config, PASSKEY_CONFIG_SECTION)
 
     return {
         identity_option: passkey_config[config_key]
@@ -695,7 +596,7 @@ def _password_policy_options_from_config(
                 "table."
             )
     else:
-        policy_config = AuthSettings.section_values(
+        policy_config = _section_values(
             config,
             PASSWORD_POLICY_CONFIG_SECTION,
         )
@@ -705,3 +606,17 @@ def _password_policy_options_from_config(
         for config_key, identity_option in PASSWORD_POLICY_OPTION_MAP.items()
         if config_key in policy_config
     }
+
+
+def _section_values(
+    config: ConfigService | Mapping[str, Mapping[str, Any]],
+    section_name: str,
+) -> dict[str, Any]:
+    if isinstance(config, ConfigService):
+        return dict(config.get_config(section_name) or {})
+    configured_section = config.get(section_name)
+    if configured_section is None:
+        return {}
+    if not isinstance(configured_section, Mapping):
+        raise ConfigurationError(f"Config section {section_name!r} must be a table.")
+    return dict(configured_section)

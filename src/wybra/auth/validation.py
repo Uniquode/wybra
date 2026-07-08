@@ -4,7 +4,6 @@ from collections import Counter
 from typing import Protocol
 
 from wybra.auth.settings import (
-    DATABASE_URL_ENV,
     DeploymentEnvironment,
     load_runtime_auth_settings,
     supported_auth_environment_names,
@@ -38,13 +37,12 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
                 app_config=None,
                 database_url=settings.database_url,
                 deployment_environment=_deployment_environment(settings),
-                environ=_auth_settings_environ(settings),
             )
         else:
             load_runtime_auth_settings(
                 app_config=settings.app_config,
+                database_url=settings.database_url,
                 deployment_environment=_deployment_environment(settings),
-                environ=_auth_settings_environ(settings),
             )
     except ConfigurationError as exc:
         record_check(
@@ -84,13 +82,6 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
         error=uniqueness_error,
     )
     return ValidationResult(name="auth", errors=tuple(errors), checks=tuple(checks))
-
-
-def _auth_settings_environ(settings: AuthValidationSettings) -> dict[str, str]:
-    if settings.database_url is None or not settings.database_url.strip():
-        return {}
-
-    return {DATABASE_URL_ENV: settings.database_url}
 
 
 def _deployment_environment(

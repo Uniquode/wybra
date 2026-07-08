@@ -188,10 +188,10 @@ def load_project_settings(
                 f"{APP_CONFIG_ENV}."
             )
         config_defs = _project_config_defs(app_config)
+        ConfigService.set_runtime_environment(env)
         config = ConfigService(
             [AppConfigSource(app_config)],
             config_defs=config_defs,
-            environ=env,
         )
         return ProjectSettings.load_settings(config, app_config=app_config)
     except (SettingsLoadError, ConfigDefinitionError, ConfigSourceError) as exc:

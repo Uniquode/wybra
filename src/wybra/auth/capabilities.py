@@ -27,7 +27,7 @@ from wybra.auth.sessions import (
 from wybra.auth.sessions import (
     require_current_user as _require_current_user,
 )
-from wybra.auth.settings import AuthSettings
+from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.capabilities import DatabaseCapability
 from wybra.forms import FormsCapability
@@ -96,7 +96,7 @@ async def anonymous_required(request: Request) -> None:
 
 async def setup_site(site: Site) -> None:
     app_config = app_config_from_site(site)
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         site.config,
         app_config=app_config,
         deployment_environment=app_config.deployment_environment,

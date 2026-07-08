@@ -123,10 +123,10 @@ def load_configured_settings[SettingsT: BaseSettings](
             env,
             project_root=resolved_project_root,
         )
+        ConfigService.set_runtime_environment(env)
         config = ConfigService(
             [source],
             config_defs=(config_def,),
-            environ=env,
             discover_module_config=False,
         )
         return settings_type.load_settings(config)

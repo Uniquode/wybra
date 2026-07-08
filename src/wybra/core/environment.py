@@ -41,6 +41,10 @@ def load_environment(
         ) from exc
 
 
+def runtime_environment() -> Env:
+    return load_environment()
+
+
 def environment_get(environ: object | None, name: str) -> str | None:
     if environ is None:
         return None
@@ -64,4 +68,5 @@ __all__ = (
     "environment_get",
     "environment_is_set",
     "load_environment",
+    "runtime_environment",
 )

@@ -18,7 +18,7 @@ from wybra.auth.admin.management import (
 from wybra.auth.persistence import auth_persistence_scope
 from wybra.auth.persistence.contracts import AuthManagementStore, AuthPersistenceScope
 from wybra.auth.result import Result
-from wybra.auth.settings import AuthSettings
+from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.config.service import ConfigService
 from wybra.config.sources import AppConfigSource
 from wybra.core.composition import AppConfig, CompositionError, load_app_config
@@ -624,7 +624,7 @@ def _load_command_settings_for_command(
         ) from exc
 
     return _AuthmgrCommandSettings(
-        auth=AuthSettings.load_settings(
+        auth=load_auth_settings(
             ConfigService(
                 [AppConfigSource(app_config)],
                 config_defs=(RUNTIME_CONFIG_DEF, AuthSettings.module_config),

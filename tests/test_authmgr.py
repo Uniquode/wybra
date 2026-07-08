@@ -80,6 +80,8 @@ from wybra.auth.settings import (
     PASSWORD_POLICY_SECTION_FIELD,
     PASSWORD_SECTION_FIELD,
     AuthSettings,
+    load_auth_settings,
+    load_runtime_auth_settings,
     validate_auth_settings,
 )
 from wybra.config import (
@@ -831,11 +833,6 @@ def test_authmgr_rejects_missing_app_config_even_when_auth_toml_exists(
             "config",
             id="auth-env-ignored",
         ),
-        pytest.param(
-            {"DATABASE_URL": "   "},
-            "config",
-            id="blank-database-env-falls-back-to-config",
-        ),
     ],
 )
 def test_app_database_url_precedence(
@@ -856,14 +853,28 @@ def test_app_database_url_precedence(
         key: urls[value] if value in urls else value
         for key, value in environ_template.items()
     }
+    ConfigService.set_runtime_environment(environ)
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         auth_settings_config(app_config),
         app_config=app_config,
-        environ=environ,
     )
 
     assert settings.database_url == urls[expected_url]
+
+
+def test_app_database_url_rejects_blank_database_env(tmp_path: Path) -> None:
+    app_config = load_auth_test_app_config(
+        tmp_path / "app.toml",
+        database_url=sqlite_file_url(tmp_path / "auth.sqlite3"),
+    )
+    ConfigService.set_runtime_environment({"DATABASE_URL": "   "})
+
+    with pytest.raises(ConfigurationError, match="DATABASE_URL must not be blank"):
+        load_auth_settings(
+            auth_settings_config(app_config),
+            app_config=app_config,
+        )
 
 
 def test_app_database_url_resolves_relative_sqlite_path_from_project_root(
@@ -876,10 +887,9 @@ def test_app_database_url_resolves_relative_sqlite_path_from_project_root(
     )
     app_config = load_app_config(project_root=tmp_path, config_path=config_path)
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         auth_settings_config(app_config),
         app_config=app_config,
-        environ={},
     )
 
     assert settings.database_url == sqlite_file_url(tmp_path / "relative-auth.sqlite3")
@@ -907,10 +917,9 @@ database = "structured-auth.sqlite3"
     )
     app_config = load_app_config(project_root=tmp_path, config_path=config_path)
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         auth_settings_config(app_config),
         app_config=app_config,
-        environ={},
     )
 
     assert settings.database_url is None
@@ -919,6 +928,60 @@ database = "structured-auth.sqlite3"
         settings.database_connection.credentials["file_path"]
         == (tmp_path / "structured-auth.sqlite3").resolve().as_posix()
     )
+
+
+def test_runtime_auth_settings_use_structured_environment_database_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+[app]
+modules = ["wybra.auth"]
+
+[app.templates]
+auto_reload = true
+cache_size = 0
+
+[app.assets]
+url_path = "/static/"
+
+[app.database]
+backend = "postgresql"
+database = "uniquode"
+credential_source = "environment"
+user_key = "UNIQUODE_DB_USER"
+password_key = "UNIQUODE_DB_PASSWORD"
+""".strip(),
+        encoding="utf-8",
+    )
+    app_config = load_app_config(project_root=tmp_path, config_path=config_path)
+    monkeypatch.delenv("UNIQUODE_DB_USER", raising=False)
+    monkeypatch.delenv("UNIQUODE_DB_PASSWORD", raising=False)
+    ConfigService.set_runtime_environment(
+        {
+            "UNIQUODE_DB_USER": "app_user",
+            "UNIQUODE_DB_PASSWORD": "app_password",
+        }
+    )
+
+    settings = load_runtime_auth_settings(
+        app_config=app_config,
+        deployment_environment="local",
+    )
+
+    assert settings.database_connection is not None
+    connection_config = settings.database_connection.tortoise_connection_config
+    assert isinstance(connection_config, dict)
+    assert connection_config == {
+        "engine": "tortoise.backends.asyncpg",
+        "credentials": {
+            "database": "uniquode",
+            "user": "app_user",
+            "password": "app_password",
+        },
+    }
 
 
 def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None:
@@ -932,10 +995,9 @@ def test_app_database_url_error_names_app_config_section(tmp_path: Path) -> None
     )
 
     with pytest.raises(ConfigurationError, match=r"\[app\]\.database_url"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             auth_settings_config(app_config),
             app_config=app_config,
-            environ={},
         )
 
 
@@ -946,10 +1008,9 @@ def test_app_auth_config_rejects_unknown_auth_options(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigurationError, match="session_lifetme_seconds"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             auth_settings_config(app_config),
             app_config=app_config,
-            environ={},
         )
 
 
@@ -960,10 +1021,9 @@ def test_app_auth_config_rejects_stale_auth_database_url(tmp_path: Path) -> None
     )
 
     with pytest.raises(ConfigurationError, match="database_url"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             auth_settings_config(app_config),
             app_config=app_config,
-            environ={},
         )
 
 
@@ -974,11 +1034,8 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
         'totp_mode = "disabled"',
         "passkey_enabled = true",
     )
-
-    settings = AuthSettings.load_settings(
-        auth_settings_config(app_config),
-        app_config=app_config,
-        environ={
+    ConfigService.set_runtime_environment(
+        {
             "PROVIDER_ENABLED": "false",
             "TOTP_MODE": "opt_in",
             "PASSKEY_ENABLED": "false",
@@ -986,7 +1043,12 @@ def test_app_auth_config_applies_identity_env_overrides(tmp_path: Path) -> None:
             ENV_TOTP_PERIOD_SECONDS: "60",
             ENV_TOTP_CHALLENGE_EXPIRY_SECONDS: "450",
             ENV_TOTP_RECOVERY_WINDOW_SECONDS: "900",
-        },
+        }
+    )
+
+    settings = load_auth_settings(
+        auth_settings_config(app_config),
+        app_config=app_config,
     )
 
     assert settings.identity_options.provider_enabled is False
@@ -1015,10 +1077,9 @@ def test_app_auth_configures_passkey_options(tmp_path: Path) -> None:
         'counter_policy = "reject-regression"',
     )
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         auth_settings_config(app_config),
         app_config=app_config,
-        environ={},
     )
 
     assert settings.identity_options.passkey_enabled is True
@@ -1066,10 +1127,9 @@ def test_auth_settings_merges_nested_passkey_config(
         discover_module_config=False,
     )
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         config,
         app_config=app_config,
-        environ={},
     )
 
     assert settings.identity_options.passkey_rp_id == "app.example.com"
@@ -1107,10 +1167,9 @@ def test_auth_settings_uses_section_passkey_config_when_inline_config_missing(
         discover_module_config=False,
     )
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         config,
         app_config=app_config,
-        environ={},
     )
 
     assert settings.identity_options.passkey_rp_id == "app.example.com"
@@ -1133,10 +1192,9 @@ def test_app_auth_rejects_unknown_passkey_options(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigurationError, match="credential_policy"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             auth_settings_config(app_config),
             app_config=app_config,
-            environ={},
         )
 
 
@@ -1160,35 +1218,41 @@ def test_app_auth_config_rejects_non_positive_duration_settings(
         ConfigSourceError,
         match=rf"auth\.{setting_name} is invalid: .*positive integer",
     ):
-        AuthSettings.load_settings(
+        load_auth_settings(
             auth_settings_config(app_config),
             app_config=app_config,
-            environ={},
         )
 
 
 @pytest.mark.parametrize(
-    ("env_name", "env_value", "message"),
+    ("env_name", "env_value", "setting_name"),
     [
-        (ENV_SESSION_LIFETIME, "0", "Session lifetime"),
-        (ENV_TOTP_PERIOD_SECONDS, "0", "TOTP period"),
-        (ENV_TOTP_CHALLENGE_EXPIRY_SECONDS, "-1", "TOTP challenge expiry"),
-        (ENV_TOTP_RECOVERY_WINDOW_SECONDS, "0", "TOTP recovery window"),
+        (ENV_SESSION_LIFETIME, "0", "session_lifetime_seconds"),
+        (ENV_TOTP_PERIOD_SECONDS, "0", "totp_period_seconds"),
+        (
+            ENV_TOTP_CHALLENGE_EXPIRY_SECONDS,
+            "-1",
+            "totp_challenge_expiry_seconds",
+        ),
+        (ENV_TOTP_RECOVERY_WINDOW_SECONDS, "0", "totp_recovery_window_seconds"),
     ],
 )
 def test_app_auth_env_rejects_non_positive_duration_settings(
     tmp_path: Path,
     env_name: str,
     env_value: str,
-    message: str,
+    setting_name: str,
 ) -> None:
     app_config = load_auth_test_app_config(tmp_path / "app.toml")
+    ConfigService.set_runtime_environment({env_name: env_value})
 
-    with pytest.raises(ConfigurationError, match=message):
-        AuthSettings.load_settings(
+    with pytest.raises(
+        ConfigSourceError,
+        match=rf"auth\.{setting_name} is invalid: .*positive integer",
+    ):
+        load_auth_settings(
             auth_settings_config(app_config),
             app_config=app_config,
-            environ={env_name: env_value},
         )
 
 
@@ -1212,10 +1276,9 @@ def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None
         discover_module_config=False,
     )
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         config,
         app_config=app_config,
-        environ={},
     )
 
     assert settings.database_url == sqlite_file_url(
@@ -1251,10 +1314,9 @@ def test_auth_settings_rejects_unknown_loaded_auth_options_when_app_auth_exists(
     )
 
     with pytest.raises(ConfigurationError, match="session_lifetme_seconds"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             config,
             app_config=app_config,
-            environ={},
         )
 
 
@@ -1276,10 +1338,9 @@ def test_auth_settings_rejects_non_table_app_config_auth(tmp_path: Path) -> None
     )
 
     with pytest.raises(ConfigurationError, match=r"\[auth\] must be a table"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             config,
             app_config=app_config,
-            environ={},
         )
 
 
@@ -1380,10 +1441,9 @@ def test_app_auth_configures_default_password_policy(tmp_path: Path) -> None:
         'common_fragments = ["example"]',
     )
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         auth_settings_config(app_config),
         app_config=app_config,
-        environ={},
     )
 
     assert settings.identity_options.session_cookie_force_secure is True
@@ -1426,10 +1486,9 @@ def test_auth_settings_merges_nested_password_policy_config(
         discover_module_config=False,
     )
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         config,
         app_config=app_config,
-        environ={},
     )
 
     policy = settings.identity_options.resolved_password_policy()
@@ -1462,10 +1521,9 @@ def test_auth_settings_uses_section_password_policy_when_inline_policy_missing(
         discover_module_config=False,
     )
 
-    settings = AuthSettings.load_settings(
+    settings = load_auth_settings(
         config,
         app_config=app_config,
-        environ={},
     )
 
     assert settings.identity_options.resolved_password_policy().minimum_length == 10
@@ -1498,10 +1556,9 @@ def test_auth_settings_rejects_conflicting_password_config_shapes(
     )
 
     with pytest.raises(ConfigurationError, match="Conflicting auth.password"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             config,
             app_config=app_config,
-            environ={},
         )
 
 
@@ -1525,10 +1582,9 @@ def test_auth_settings_rejects_non_table_password_config(tmp_path: Path) -> None
     )
 
     with pytest.raises(ConfigurationError, match=r"\[auth\.password\] table"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             config,
             app_config=app_config,
-            environ={},
         )
 
 
@@ -1559,10 +1615,9 @@ def test_auth_settings_rejects_non_table_inline_password_policy(
     )
 
     with pytest.raises(ConfigurationError, match=r"\[auth\.password\.policy\] table"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             config,
             app_config=app_config,
-            environ={},
         )
 
 
@@ -1585,10 +1640,9 @@ def test_app_auth_rejects_invalid_password_common_fragments(
     )
 
     with pytest.raises(ConfigurationError, match="common fragments"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             auth_settings_config(app_config),
             app_config=app_config,
-            environ={},
         )
 
 
@@ -1601,10 +1655,9 @@ def test_app_auth_rejects_unknown_password_policy_options(tmp_path: Path) -> Non
     )
 
     with pytest.raises(ConfigurationError, match="minimum_strenth"):
-        AuthSettings.load_settings(
+        load_auth_settings(
             auth_settings_config(app_config),
             app_config=app_config,
-            environ={},
         )
 
 

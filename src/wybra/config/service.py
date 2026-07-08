@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from importlib import import_module
-from typing import Any
+from typing import Any, ClassVar
 
 from wybra.config.types import (
     ConfigDef,
@@ -15,7 +15,11 @@ from wybra.config.types import (
     LoadedConfig,
     merge_config_defs,
 )
-from wybra.core.environment import environment_get, environment_is_set
+from wybra.core.environment import (
+    environment_get,
+    environment_is_set,
+    runtime_environment,
+)
 
 APP_SECTION = "app"
 APP_MODULES_KEY = "modules"
@@ -23,19 +27,29 @@ MODULE_CONFIG_ATTRIBUTE = "module_config"
 
 
 class ConfigService:
+    _environ: ClassVar[object | None] = None
+
     def __init__(
         self,
         sources: Iterable[ConfigSource] = (),
         *,
         config_defs: Iterable[ConfigDef] = (),
-        environ: object | None = None,
         discover_module_config: bool = True,
     ) -> None:
         self._sources = tuple(sources)
         self._config_defs = tuple(config_defs)
-        self._environ = environ
         self._discover_module_config = discover_module_config
         self._config = self._load_sources()
+
+    @classmethod
+    def set_runtime_environment(cls, environ: object) -> None:
+        cls._environ = environ
+
+    @classmethod
+    def runtime_environment(cls) -> object:
+        if cls._environ is None:
+            cls._environ = runtime_environment()
+        return cls._environ
 
     @property
     def config(self) -> LoadedConfig:
@@ -46,8 +60,8 @@ class ConfigService:
         return self._config.diagnostics
 
     @property
-    def environ(self) -> object | None:
-        return self._environ
+    def environ(self) -> object:
+        return self.__class__.runtime_environment()
 
     def get_config(self, section: str) -> Mapping[str, Any] | None:
         return self._config.get_config(section)
@@ -89,7 +103,7 @@ class ConfigService:
             config_defs,
             source_values,
             value_sources,
-            self._environ,
+            self.environ,
         )
         return LoadedConfig(
             values=values,

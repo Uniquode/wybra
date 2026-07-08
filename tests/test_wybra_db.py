@@ -336,10 +336,10 @@ def test_database_url_environment_overrides_structured_database_config(
     tmp_path: Path,
 ) -> None:
     env_url = sqlite_file_url(tmp_path / "env.sqlite3")
+    ConfigService.set_runtime_environment({ENV_DATABASE_URL: env_url})
     config = ConfigService(
         [_structured_database_config_source(tmp_path)],
         config_defs=(db_module_config,),
-        environ={ENV_DATABASE_URL: env_url},
     )
 
     connection = resolve_database_connection_from_config(
@@ -355,6 +355,12 @@ def test_database_url_environment_overrides_structured_database_config(
 def test_structured_database_config_resolves_environment_credentials(
     tmp_path: Path,
 ) -> None:
+    ConfigService.set_runtime_environment(
+        {
+            "WYBRA_DB_USER": "app_user",
+            "WYBRA_DB_PASSWORD": "app_password",
+        }
+    )
     config = ConfigService(
         [
             MappingConfigSource(
@@ -371,10 +377,6 @@ def test_structured_database_config_resolves_environment_credentials(
             )
         ],
         config_defs=(db_module_config,),
-        environ={
-            "WYBRA_DB_USER": "app_user",
-            "WYBRA_DB_PASSWORD": "app_password",
-        },
     )
 
     connection = resolve_database_connection_from_config(
@@ -444,6 +446,7 @@ def test_project_settings_resolve_environment_database_credentials(
 def test_structured_database_config_resolves_secret_credentials(
     tmp_path: Path,
 ) -> None:
+    ConfigService.set_runtime_environment({"WYBRA_DB_USER": "app_user"})
     config = ConfigService(
         [
             MappingConfigSource(
@@ -553,7 +556,6 @@ def test_structured_sqlite_config_rejects_credentials(
             )
         ],
         config_defs=(db_module_config,),
-        environ={"WYBRA_DB_USER": "app_user"},
     )
 
     with pytest.raises(
@@ -689,6 +691,12 @@ def test_service_account_connection_requires_secret_source_for_service_keys(
 def test_provisioning_connection_resolves_service_account_keys(
     tmp_path: Path,
 ) -> None:
+    ConfigService.set_runtime_environment(
+        {
+            "WYBRA_DB_ADMIN_USER": "admin_user",
+            "WYBRA_DB_ADMIN_PASSWORD": "admin_password",
+        }
+    )
     config = ConfigService(
         [
             MappingConfigSource(
@@ -706,10 +714,6 @@ def test_provisioning_connection_resolves_service_account_keys(
             )
         ],
         config_defs=(db_module_config,),
-        environ={
-            "WYBRA_DB_ADMIN_USER": "admin_user",
-            "WYBRA_DB_ADMIN_PASSWORD": "admin_password",
-        },
     )
 
     connection = resolve_database_provisioning_connection_from_config(

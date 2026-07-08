@@ -340,10 +340,10 @@ async def start(
         configure_runtime_logging(startup_config.app_config)
     except LoggingConfigurationError as exc:
         raise ConfigSourceError(str(exc)) from exc
+    ConfigService.set_runtime_environment(startup_config.environ)
     config = ConfigService(
         [startup_config.source],
         config_defs=_core_config_defs(),
-        environ=startup_config.environ,
     )
     deployment_environment = _deployment_environment(config)
     _apply_runtime_debug(app, config, deployment_environment)
@@ -386,7 +386,8 @@ def _startup_environ(
     environ: Mapping[str, str] | None,
 ) -> object:
     if environ is not None:
-        return environ
+        project_root = _config_source_project_root(config_source, environ)
+        return load_environment(environ=environ, project_root=project_root)
     project_root = _config_source_project_root(config_source, environ)
     return load_environment(project_root=project_root)
 

@@ -13,7 +13,7 @@ from typing import Any, TextIO
 import click
 from tortoise.transactions import in_transaction
 
-from wybra.auth.settings import AuthSettings
+from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.config import AppConfigSource, ConfigService, MappingConfigSource
 from wybra.core.composition import (
     APP_CONFIG_ENV,
@@ -461,7 +461,7 @@ def _auth_settings_from_context(ctx: click.Context) -> AuthSettings:
             config_defs=(RUNTIME_CONFIG_DEF, AuthSettings.module_config),
             discover_module_config=False,
         )
-        return AuthSettings.load_settings(config, app_config=app_config)
+        return load_auth_settings(config, app_config=app_config)
     except ConfigurationError as exc:
         raise click.ClickException(str(exc)) from exc
 
