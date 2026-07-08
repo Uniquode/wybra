@@ -10,11 +10,9 @@ requires-python = ">=3.13"
 dependencies = [
     "aiosqlite>=0.22.1",
     "anyio>=4.14.0",
-    "asyncpg>=0.31.0",
     "click>=8.4.2",
     "cryptography>=49.0.0",
     "dateparser>=1.4.1",
-    "dbscripts",
     "email-validator>=2.3.0",
     "envex>=5.0.0",
     "fastapi>=0.139.0",
@@ -44,6 +42,33 @@ vault = [
 ]
 cache = [
     "redis>=8.0.1",
+]
+postgresql = [
+    "asyncpg>=0.31.0",
+    "dbscripts",
+]
+psycopg = [
+    "dbscripts",
+    "psycopg[binary,pool]>=3.0.12,<4.0.0",
+]
+mysql = [
+    "aiomysql",
+]
+mssql = [
+    "asyncodbc>=0.1.1,<1.0.0",
+    "pyodbc",
+]
+oracle = [
+    "asyncodbc>=0.1.1,<1.0.0",
+    "pyodbc",
+]
+databases = [
+    "aiomysql",
+    "asyncodbc>=0.1.1,<1.0.0",
+    "asyncpg>=0.31.0",
+    "dbscripts",
+    "pyodbc",
+    "psycopg[binary,pool]>=3.0.12,<4.0.0",
 ]
 
 [project.scripts]

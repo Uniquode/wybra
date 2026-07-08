@@ -37,7 +37,7 @@ server process.
   `windows-latest` runners.
 - SQLite file database URLs should use forward-slash URL paths. For Windows
   drive paths, use the normal SQLite URL form such as
-  `sqlite+aiosqlite:///C:/path/to/app.sqlite3`.
+  `sqlite:///C:/path/to/app.sqlite3`.
 - Optional operating-system integrations, such as the keychain backend, require
   their Python extra and an accessible platform service. Tests that cannot
   reach that service must skip with a prerequisite-specific reason.

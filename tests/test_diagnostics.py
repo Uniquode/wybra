@@ -249,7 +249,7 @@ def test_sql_template_and_backend_diagnostics_are_collected(tmp_path: Path) -> N
 @pytest.mark.anyio
 async def test_tortoise_instrumentation_is_idempotent() -> None:
     database = await create_database(
-        "sqlite+aiosqlite:///:memory:",
+        "sqlite://:memory:",
         modules=("wybra.sessions",),
     )
     instrument_tortoise_context(database.context)
@@ -269,7 +269,7 @@ async def test_tortoise_instrumentation_is_idempotent() -> None:
 @pytest.mark.anyio
 async def test_tortoise_instrumentation_records_transaction_queries() -> None:
     database = await create_database(
-        "sqlite+aiosqlite:///:memory:",
+        "sqlite://:memory:",
         modules=("wybra.sessions",),
     )
     diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")

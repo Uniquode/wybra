@@ -122,7 +122,7 @@ def test_logging_config_from_app_config_reads_log_table(tmp_path) -> None:
         """
         [app]
         modules = ["wybra.db"]
-        database_url = "sqlite+aiosqlite:///app.sqlite3"
+        database_url = "sqlite:///app.sqlite3"
 
         [app.templates]
         auto_reload = true

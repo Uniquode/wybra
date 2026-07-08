@@ -276,7 +276,7 @@ def run_auth_migration(argv: list[str]) -> int:
 def write_auth_app_toml(
     config_path: Path,
     *auth_lines: str,
-    database_url: str = "sqlite+aiosqlite:///auth.sqlite3",
+    database_url: str = "sqlite:///auth.sqlite3",
 ) -> Path:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
@@ -306,7 +306,7 @@ def write_auth_app_toml(
 def load_auth_test_app_config(
     config_path: Path,
     *auth_lines: str,
-    database_url: str = "sqlite+aiosqlite:///auth.sqlite3",
+    database_url: str = "sqlite:///auth.sqlite3",
 ) -> AppConfig:
     return load_app_config(
         project_root=config_path.parent,
@@ -797,7 +797,7 @@ def test_authmgr_rejects_missing_app_config_even_when_auth_toml_exists(
         "\n".join(
             [
                 "[auth]",
-                'database_url = "sqlite+aiosqlite:///auth.sqlite3"',
+                'database_url = "sqlite:///auth.sqlite3"',
             ]
         ),
         encoding="utf-8",
@@ -872,7 +872,7 @@ def test_app_database_url_resolves_relative_sqlite_path_from_config_directory(
     config_path = tmp_path / "config" / "app.toml"
     app_config = load_auth_test_app_config(
         config_path,
-        database_url="sqlite+aiosqlite:///relative-auth.sqlite3",
+        database_url="sqlite:///relative-auth.sqlite3",
     )
 
     settings = AuthSettings.load_settings(
@@ -921,7 +921,7 @@ def test_app_auth_config_rejects_unknown_auth_options(tmp_path: Path) -> None:
 def test_app_auth_config_rejects_stale_auth_database_url(tmp_path: Path) -> None:
     app_config = load_auth_test_app_config(
         tmp_path / "app.toml",
-        'database_url = "sqlite+aiosqlite:///stale-auth.sqlite3"',
+        'database_url = "sqlite:///stale-auth.sqlite3"',
     )
 
     with pytest.raises(ConfigurationError, match="database_url"):
@@ -1016,7 +1016,7 @@ def test_auth_settings_merges_nested_passkey_config(
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     AUTH_CONFIG_SECTION: {
                         PASSKEY_SECTION_FIELD: {
@@ -1059,7 +1059,7 @@ def test_auth_settings_uses_section_passkey_config_when_inline_config_missing(
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     PASSKEY_CONFIG_SECTION: {
                         "rp_id": "app.example.com",
@@ -1165,7 +1165,7 @@ def test_auth_settings_load_from_central_config_provider(tmp_path: Path) -> None
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     AUTH_CONFIG_SECTION: {
                         "provider_enabled": True,
@@ -1204,7 +1204,7 @@ def test_auth_settings_rejects_unknown_loaded_auth_options_when_app_auth_exists(
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     AUTH_CONFIG_SECTION: {
                         "session_lifetme_seconds": 3600,
@@ -1232,7 +1232,7 @@ def test_auth_settings_rejects_non_table_app_config_auth(tmp_path: Path) -> None
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                 }
             )
@@ -1255,7 +1255,7 @@ def test_auth_settings_public_values_are_immutable() -> None:
     )
 
     with pytest.raises(AttributeError):
-        settings.database_url = "sqlite+aiosqlite:///mutated.sqlite3"  # type: ignore[misc]
+        settings.database_url = "sqlite:///mutated.sqlite3"  # type: ignore[misc]
 
     with pytest.raises(AttributeError):
         settings.identity_options.password_common_fragments = ("mutated",)  # type: ignore[misc]
@@ -1367,7 +1367,7 @@ def test_auth_settings_merges_nested_password_policy_config(
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     AUTH_CONFIG_SECTION: {
                         PASSWORD_SECTION_FIELD: {
@@ -1405,7 +1405,7 @@ def test_auth_settings_uses_section_password_policy_when_inline_policy_missing(
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     AUTH_CONFIG_SECTION: {
                         PASSWORD_SECTION_FIELD: {},
@@ -1443,7 +1443,7 @@ def test_auth_settings_rejects_conflicting_password_config_shapes(
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     AUTH_CONFIG_SECTION: {
                         PASSWORD_SECTION_FIELD: "strict",
@@ -1470,7 +1470,7 @@ def test_auth_settings_rejects_non_table_password_config(tmp_path: Path) -> None
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     AUTH_CONFIG_SECTION: {
                         PASSWORD_SECTION_FIELD: "strict",
@@ -1499,7 +1499,7 @@ def test_auth_settings_rejects_non_table_inline_password_policy(
             MappingConfigSource(
                 {
                     APP_CONFIG_SECTION: {
-                        "database_url": "sqlite+aiosqlite:///from-config.sqlite3",
+                        "database_url": "sqlite:///from-config.sqlite3",
                     },
                     AUTH_CONFIG_SECTION: {
                         PASSWORD_SECTION_FIELD: {
@@ -5197,32 +5197,32 @@ def test_authmgr_timezone_name_uses_available_tzinfo_name(
 def test_auth_database_url_parser_handles_relative_sqlite_paths(
     tmp_path: Path,
 ) -> None:
-    relative_url = parse_sqlite_database_url("sqlite+aiosqlite:///relative.db")
+    relative_url = parse_sqlite_database_url("sqlite:///relative.db")
 
     assert relative_url is not None
     assert relative_url.path == Path("relative.db")
     assert relative_url.is_absolute is False
-    assert resolve_database_url(
-        "sqlite+aiosqlite:///relative.db", tmp_path
-    ) == sqlite_file_url(tmp_path / "relative.db")
+    assert resolve_database_url("sqlite:///relative.db", tmp_path) == sqlite_file_url(
+        tmp_path / "relative.db"
+    )
 
 
 def test_auth_database_url_parser_handles_posix_absolute_sqlite_paths(
     tmp_path: Path,
 ) -> None:
-    absolute_url = parse_sqlite_database_url("sqlite+aiosqlite:////tmp/auth.db")
+    absolute_url = parse_sqlite_database_url("sqlite:////tmp/auth.db")
 
     assert absolute_url is not None
     assert absolute_url.path.as_posix() == "/tmp/auth.db"
     assert absolute_url.is_absolute is True
     assert (
-        resolve_database_url("sqlite+aiosqlite:////tmp/auth.db", tmp_path)
-        == "sqlite+aiosqlite:////tmp/auth.db"
+        resolve_database_url("sqlite:////tmp/auth.db", tmp_path)
+        == "sqlite:////tmp/auth.db"
     )
 
 
 def test_auth_database_url_parser_handles_windows_absolute_sqlite_path() -> None:
-    sqlite_url = parse_sqlite_database_url("sqlite+aiosqlite:///C:/data/auth.db")
+    sqlite_url = parse_sqlite_database_url("sqlite:///C:/data/auth.db")
 
     assert sqlite_url is not None
     assert sqlite_url.path.as_posix() == "C:/data/auth.db"
@@ -5232,7 +5232,7 @@ def test_auth_database_url_parser_handles_windows_absolute_sqlite_path() -> None
 def test_auth_database_url_resolves_windows_absolute_sqlite_path(
     tmp_path: Path,
 ) -> None:
-    database_url = "sqlite+aiosqlite:///C:/data/auth.db"
+    database_url = "sqlite:///C:/data/auth.db"
 
     assert resolve_database_url(database_url, tmp_path) == database_url
 

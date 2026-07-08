@@ -10,7 +10,13 @@ from wybra.db.capabilities import (
     TortoiseDatabaseCapability,
 )
 from wybra.db.config import module_config
-from wybra.db.urls import resolve_database_url
+from wybra.db.urls import (
+    available_database_url_schemes,
+    resolve_database_url,
+    sqlite_database_path,
+    sqlite_file_url,
+    supported_database_url_schemes,
+)
 from wybra.db.validation import (
     PersistenceValidationSettings,
     validate_persistence,
@@ -41,6 +47,10 @@ __all__ = (
     "module_config",
     "PersistenceValidationSettings",
     "TortoiseDatabaseCapability",
+    "available_database_url_schemes",
     "setup_site",
+    "sqlite_database_path",
+    "sqlite_file_url",
+    "supported_database_url_schemes",
     "validate_persistence",
 )

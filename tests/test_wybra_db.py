@@ -11,16 +11,18 @@ from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.models import Model
 
 import wybra.db.migrate as migrate_module
+import wybra.db.urls as database_urls
 from support_database import sqlite_file_url
 from wybra import SiteCapabilityError
 from wybra.config import MappingConfigSource
+from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability
 from wybra.db.capabilities import (
     DatabaseCapabilityError,
     TortoiseDatabaseCapability,
 )
 from wybra.db.models import Model as WybraModel
-from wybra.db.persistence import Database
+from wybra.db.persistence import Database, create_database
 from wybra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
@@ -31,11 +33,15 @@ from wybra.db.surfaces import (
     model_packages_from_modules,
 )
 from wybra.db.urls import (
+    available_database_url_schemes,
+    is_supported_database_url,
     parse_sqlite_database_url,
     redact_database_url,
     redact_database_urls,
     resolve_database_url,
     safe_database_error_message,
+    supported_database_url_schemes,
+    tortoise_database_url,
 )
 from wybra.db.validation import validate_persistence
 from wybra.site import start
@@ -84,7 +90,7 @@ def _imported_modules(path: Path) -> set[str]:
 def _persistence_settings(
     tmp_path: Path,
     *,
-    database_url: str = "sqlite+aiosqlite:///local.sqlite3",
+    database_url: str = "sqlite:///local.sqlite3",
     migrations_root: Path | None = None,
     modules: tuple[str, ...] = (),
 ) -> _PersistenceSettings:
@@ -154,7 +160,7 @@ async def test_wybra_db_setup_site_resolves_relative_database_url(
                 "app": {
                     "modules": ("wybra.db",),
                     "project_root": tmp_path,
-                    "database_url": "sqlite+aiosqlite:///relative.sqlite3",
+                    "database_url": "sqlite:///relative.sqlite3",
                 }
             }
         ),
@@ -323,7 +329,7 @@ def test_wybra_db_models_exposes_tortoise_model_base() -> None:
 
 
 def test_wybra_db_owns_database_url_helpers(tmp_path: Path) -> None:
-    database_url = resolve_database_url("sqlite+aiosqlite:///local.sqlite3", tmp_path)
+    database_url = resolve_database_url("sqlite:///local.sqlite3", tmp_path)
 
     sqlite_url = parse_sqlite_database_url(database_url)
 
@@ -331,13 +337,13 @@ def test_wybra_db_owns_database_url_helpers(tmp_path: Path) -> None:
     assert sqlite_url.path == tmp_path / "local.sqlite3"
     assert sqlite_url.is_absolute is True
     assert (
-        redact_database_url("postgresql+asyncpg://user:password@host.example/app")
-        == "postgresql+asyncpg://***:***@host.example/app"
+        redact_database_url("postgresql://user:password@host.example/app")
+        == "postgresql://***:***@host.example/app"
     )
 
 
 def test_database_url_parser_handles_windows_absolute_sqlite_path() -> None:
-    sqlite_url = parse_sqlite_database_url("sqlite+aiosqlite:///C:/data/app.sqlite3")
+    sqlite_url = parse_sqlite_database_url("sqlite:///C:/data/app.sqlite3")
 
     assert sqlite_url is not None
     assert sqlite_url.path.as_posix() == "C:/data/app.sqlite3"
@@ -347,9 +353,9 @@ def test_database_url_parser_handles_windows_absolute_sqlite_path() -> None:
 @pytest.mark.parametrize(
     "database_url",
     (
-        "sqlite+aiosqlite:////tmp/absolute.sqlite3",
-        "sqlite+aiosqlite:///C:/data/app.sqlite3",
-        "postgresql+asyncpg://user:password@example.test/app",
+        "sqlite:////tmp/absolute.sqlite3",
+        "sqlite:///C:/data/app.sqlite3",
+        "postgresql://user:password@example.test/app",
     ),
 )
 def test_resolve_database_url_leaves_absolute_and_non_sqlite_urls_unchanged(
@@ -362,9 +368,9 @@ def test_resolve_database_url_leaves_absolute_and_non_sqlite_urls_unchanged(
 @pytest.mark.parametrize(
     ("database_url", "suffix"),
     (
-        ("sqlite+aiosqlite:///app.db", ""),
-        ("sqlite+aiosqlite:///app.db?cache=shared", "?cache=shared"),
-        ("sqlite+aiosqlite:///app.db?mode=rwc#fragment", "?mode=rwc#fragment"),
+        ("sqlite:///app.db", ""),
+        ("sqlite:///app.db?cache=shared", "?cache=shared"),
+        ("sqlite:///app.db?mode=rwc#fragment", "?mode=rwc#fragment"),
     ),
 )
 def test_resolve_database_url_preserves_relative_suffix(
@@ -383,10 +389,10 @@ def test_resolve_database_url_preserves_relative_suffix(
         ("", "Database URL must not be empty."),
         (
             "ftp://example.com/database",
-            "Database URL must use sqlite+aiosqlite:// or postgresql+asyncpg://.",
+            "Database URL must use an available Tortoise database scheme:",
         ),
         (
-            "sqlite+aiosqlite:///:memory:",
+            "sqlite://:memory:",
             "SQLite database URL must not force in-memory storage.",
         ),
     ),
@@ -400,8 +406,97 @@ def test_validate_persistence_reports_database_url_failures(
         _persistence_settings(tmp_path, database_url=database_url)
     )
 
-    assert expected_error in result.errors
+    assert any(expected_error in error for error in result.errors)
     assert not result.is_ok
+
+
+def test_supported_database_url_schemes_cover_tortoise_backends() -> None:
+    assert supported_database_url_schemes() == (
+        "sqlite",
+        "postgresql",
+        "postgres",
+        "asyncpg",
+        "psycopg",
+        "mysql",
+        "mssql",
+        "oracle",
+    )
+
+
+def test_database_url_support_uses_available_backend_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    available_modules = {"aiosqlite", "asyncpg", "asyncodbc", "pyodbc"}
+
+    def find_spec(module_name: str):
+        return object() if module_name in available_modules else None
+
+    monkeypatch.setattr(database_urls.importlib.util, "find_spec", find_spec)
+
+    assert available_database_url_schemes() == (
+        "sqlite",
+        "postgresql",
+        "postgres",
+        "asyncpg",
+        "mssql",
+        "oracle",
+    )
+    assert is_supported_database_url("postgresql://user:password@host.example/app")
+    assert is_supported_database_url("mssql://user:password@host.example/app")
+    assert not is_supported_database_url("mysql://user:password@host.example/app")
+
+
+@pytest.mark.anyio
+async def test_create_database_rejects_unavailable_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    available_modules = {"aiosqlite"}
+
+    def find_spec(module_name: str):
+        return object() if module_name in available_modules else None
+
+    monkeypatch.setattr(database_urls.importlib.util, "find_spec", find_spec)
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Database URL must use an available Tortoise database scheme",
+    ):
+        await create_database(
+            "postgresql://user:password@host.example/app",
+            modules=(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("database_url", "expected"),
+    (
+        (
+            "postgresql://user:password@host.example/app",
+            "asyncpg://user:password@host.example/app",
+        ),
+        (
+            "postgres://user:password@host.example/app",
+            "asyncpg://user:password@host.example/app",
+        ),
+        (
+            "asyncpg://user:password@host.example/app",
+            "asyncpg://user:password@host.example/app",
+        ),
+        (
+            "psycopg://user:password@host.example/app",
+            "psycopg://user:password@host.example/app",
+        ),
+        (
+            "mysql://user:password@host.example/app",
+            "mysql://user:password@host.example/app",
+        ),
+    ),
+)
+def test_tortoise_database_url_normalises_public_scheme(
+    database_url: str,
+    expected: str,
+) -> None:
+    assert tortoise_database_url(database_url) == expected
 
 
 def test_validate_persistence_requires_tortoise_migration_files(
@@ -536,34 +631,34 @@ def _check_passed(result: ValidationResult, description_prefix: str) -> bool:
 
 def test_redact_database_url_masks_sensitive_query_parameters() -> None:
     assert redact_database_url(
-        "postgresql+asyncpg://user:password@host.example/app"
+        "postgresql://user:password@host.example/app"
         "?sslmode=require&password=query-secret&token=abc&application_name=app%40local"
     ) == (
-        "postgresql+asyncpg://***:***@host.example/app"
+        "postgresql://***:***@host.example/app"
         "?sslmode=require&password=%2A%2A%2A&token=%2A%2A%2A"
         "&application_name=app%40local"
     )
     assert redact_database_url(
-        "postgresql+asyncpg://host.example/app?api_key=secret&sslmode=require"
-    ) == ("postgresql+asyncpg://host.example/app?api_key=%2A%2A%2A&sslmode=require")
+        "postgresql://host.example/app?api_key=secret&sslmode=require"
+    ) == ("postgresql://host.example/app?api_key=%2A%2A%2A&sslmode=require")
 
 
 def test_redact_database_urls_masks_bare_postgresql_urls_in_messages() -> None:
     assert redact_database_urls(
         "failed for postgresql://user:secret@host.example/app and "
-        "postgresql+asyncpg://admin:admin-secret@host.example/postgres"
+        "mysql://admin:admin-secret@host.example/app"
     ) == (
         "failed for postgresql://***:***@host.example/app and "
-        "postgresql+asyncpg://***:***@host.example/postgres"
+        "mysql://***:***@host.example/app"
     )
 
 
 def test_safe_database_error_message_redacts_database_urls() -> None:
-    error = RuntimeError("failed for postgresql+asyncpg://user:secret@host.example/app")
+    error = RuntimeError("failed for postgresql://user:secret@host.example/app")
 
     assert (
         safe_database_error_message(error)
-        == "failed for postgresql+asyncpg://***:***@host.example/app"
+        == "failed for postgresql://***:***@host.example/app"
     )
 
 

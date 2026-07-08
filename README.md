@@ -719,7 +719,7 @@ other package-owned project commands, then reads `[auth]` from that file. Use
 
 ```toml
 [app]
-database_url = "sqlite+aiosqlite:///app.sqlite3"
+database_url = "sqlite:///app.sqlite3"
 modules = [
     "wybra.secrets",
     "wybra.assets",
@@ -767,3 +767,26 @@ Database selection precedence for auth configuration is `DATABASE_URL`, then
 ```sh
 uv run wybra-authmgr --config config/app.toml user list
 ```
+
+## Database Backends
+
+Wybra database URLs use Tortoise-native async backend schemes. SQLite is
+available by default because Tortoise includes its `aiosqlite` backend
+dependency. Other backends require the matching Wybra optional dependency before
+their URL scheme is treated as available by validation or startup.
+
+| Database | URL scheme | Install extra |
+| --- | --- | --- |
+| SQLite | `sqlite:///app.sqlite3`, `sqlite://:memory:` | built in |
+| PostgreSQL via asyncpg | `postgresql://user:pass@host/db` | `wybra[postgresql]` |
+| PostgreSQL via Tortoise asyncpg alias | `postgres://...`, `asyncpg://...` | `wybra[postgresql]` |
+| PostgreSQL via psycopg | `psycopg://user:pass@host/db` | `wybra[psycopg]` |
+| MySQL | `mysql://user:pass@host/db` | `wybra[mysql]` |
+| Microsoft SQL Server | `mssql://user:pass@host/db` | `wybra[mssql]` |
+| Oracle | `oracle://user:pass@host/db` | `wybra[oracle]` |
+
+`postgresql://` is the preferred PostgreSQL configuration form. Wybra
+normalises it to Tortoise's asyncpg backend internally because Wybra does not
+support synchronous database interfaces.
+Tortoise can use either `asyncmy` or `aiomysql` for MySQL when installed; Wybra's
+packaged MySQL extra currently installs `aiomysql`.

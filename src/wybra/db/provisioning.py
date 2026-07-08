@@ -10,9 +10,8 @@ from urllib.parse import SplitResult, urlsplit, urlunsplit
 from wybra.db.urls import safe_database_error_message
 
 ADMIN_DATABASE_URL_ENV = "SA_DATABASE_URL"
-POSTGRESQL_ASYNC_SCHEME = "postgresql+asyncpg"
 POSTGRESQL_SYNC_SCHEME = "postgresql"
-POSTGRESQL_SCHEMES = frozenset({POSTGRESQL_ASYNC_SCHEME, POSTGRESQL_SYNC_SCHEME})
+POSTGRESQL_SCHEMES = frozenset({"postgresql", "postgres", "asyncpg", "psycopg"})
 
 
 class DatabaseProvisioningError(RuntimeError):
@@ -69,7 +68,7 @@ def _postgresql_sync_url(database_url: str) -> str:
     parsed = urlsplit(database_url)
     if parsed.scheme not in POSTGRESQL_SCHEMES:
         raise DatabaseProvisioningConfigurationError(
-            "PostgreSQL provisioning requires a postgresql database URL."
+            "PostgreSQL provisioning requires a PostgreSQL database URL."
         )
     if parsed.scheme == POSTGRESQL_SYNC_SCHEME:
         return database_url

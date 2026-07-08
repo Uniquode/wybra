@@ -26,7 +26,11 @@ from wybra.db.provisioning import (
 )
 from wybra.db.surfaces import DataCompositionError
 from wybra.db.tortoise import build_tortoise_config as build_config
-from wybra.db.urls import safe_database_error_message
+from wybra.db.urls import (
+    database_url_support_error,
+    is_supported_database_url,
+    safe_database_error_message,
+)
 from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
     CONFIG_SOURCE_HELP,
@@ -618,6 +622,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def build_migration_context(settings: MigrationSettings) -> MigrationContext:
+    if not is_supported_database_url(settings.database_url):
+        raise MigrationConfigurationError(database_url_support_error())
+
     return MigrationContext(
         settings=settings,
         config=build_tortoise_config(settings),

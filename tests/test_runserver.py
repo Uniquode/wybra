@@ -76,7 +76,7 @@ def test_runserver_command_writes_cli_overrides_to_server_environment(
             "--config",
             "app/app.toml",
             "--database-url",
-            "sqlite+aiosqlite:///runtime.sqlite3",
+            "sqlite:///runtime.sqlite3",
             "--deploy",
             "staging",
             "--",
@@ -104,7 +104,7 @@ def test_runserver_command_writes_cli_overrides_to_server_environment(
     assert observed["environment"] == {
         APP_ROOT_ENV: tmp_path.resolve().as_posix(),
         APP_CONFIG_ENV: "app/app.toml",
-        ENV_DATABASE_URL: "sqlite+aiosqlite:///runtime.sqlite3",
+        ENV_DATABASE_URL: "sqlite:///runtime.sqlite3",
         ENV_APP_ENV: "staging",
     }
 
