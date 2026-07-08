@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Protocol, cast
 
 from wybra.config import ConfigService
+from wybra.core.environment import environment_get
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.config import DATABASE_CONFIG_SECTION
 from wybra.db.urls import (
@@ -282,7 +283,7 @@ class EffectiveDatabaseConfig:
     def resolve(
         self,
         *,
-        environ: Mapping[str, str] | None = None,
+        environ: object | None = None,
         secrets: SecretsCapability | None = None,
         purpose: CredentialPurpose = "runtime",
     ) -> ResolvedDatabaseConnection:
@@ -527,7 +528,7 @@ def _resolve_structured_database_connection(
     structured: StructuredDatabaseConfig,
     *,
     project_root: Path,
-    environ: Mapping[str, str] | None,
+    environ: object | None,
     secrets: SecretsCapability | None,
     purpose: CredentialPurpose,
 ) -> ResolvedDatabaseConnection:
@@ -591,7 +592,7 @@ def _resolve_credentials(
     credential_config: DatabaseCredentialConfig,
     *,
     source: SecretSource | None,
-    environ: Mapping[str, str] | None,
+    environ: object | None,
     secrets: SecretsCapability | None,
     purpose: CredentialPurpose,
 ) -> ResolvedDatabaseCredentials:
@@ -620,7 +621,7 @@ def _resolve_credential_value(
     key: str | None,
     *,
     source: SecretSource | None,
-    environ: Mapping[str, str] | None,
+    environ: object | None,
     secrets: SecretsCapability | None,
     field_name: str,
 ) -> str | None:
@@ -632,7 +633,7 @@ def _resolve_credential_value(
         )
     if source == ENVIRONMENT_SOURCE:
         environment = environ if environ is not None else os.environ
-        value = environment.get(key)
+        value = environment_get(environment, key)
         if value is None or not value.strip():
             raise ConfigurationError(
                 f"Environment variable {key} for {field_name} must be set."
@@ -666,7 +667,7 @@ def _secrets_capability_from_config(
 
 def _config_environ(
     config: ConfigService | Mapping[str, Mapping[str, Any]],
-) -> Mapping[str, str] | None:
+) -> object | None:
     if isinstance(config, ConfigService):
         return config.environ
     # Plain mappings do not carry an isolated environment; environment-source

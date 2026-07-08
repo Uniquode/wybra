@@ -15,6 +15,7 @@ from wybra.config.types import (
     LoadedConfig,
     merge_config_defs,
 )
+from wybra.core.environment import environment_get, environment_is_set
 
 APP_SECTION = "app"
 APP_MODULES_KEY = "modules"
@@ -27,7 +28,7 @@ class ConfigService:
         sources: Iterable[ConfigSource] = (),
         *,
         config_defs: Iterable[ConfigDef] = (),
-        environ: Mapping[str, str] | None = None,
+        environ: object | None = None,
         discover_module_config: bool = True,
     ) -> None:
         self._sources = tuple(sources)
@@ -45,7 +46,7 @@ class ConfigService:
         return self._config.diagnostics
 
     @property
-    def environ(self) -> Mapping[str, str] | None:
+    def environ(self) -> object | None:
         return self._environ
 
     def get_config(self, section: str) -> Mapping[str, Any] | None:
@@ -153,7 +154,7 @@ def _apply_config_defs(
     definitions: tuple[ConfigDef, ...],
     source_values: Mapping[str, Mapping[str, Any]],
     source_index: Mapping[str, str],
-    environ: Mapping[str, str] | None,
+    environ: object | None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
     merged_def = merge_config_defs(definitions)
     values: dict[str, dict[str, Any]] = {
@@ -188,14 +189,19 @@ def _default_values(definition: ConfigDef) -> dict[str, dict[str, Any]]:
 
 def _env_values(
     definition: ConfigDef,
-    environ: Mapping[str, str],
+    environ: object,
 ) -> dict[str, dict[str, str]]:
     values: dict[str, dict[str, str]] = {}
     for section_name, section in definition.sections.items():
         for field_name, env_names in section.env.items():
-            env_name = next((name for name in env_names if name in environ), None)
+            env_name = next(
+                (name for name in env_names if environment_is_set(environ, name)),
+                None,
+            )
             if env_name is not None:
-                values.setdefault(section_name, {})[field_name] = environ[env_name]
+                env_value = environment_get(environ, env_name)
+                if env_value is not None:
+                    values.setdefault(section_name, {})[field_name] = env_value
     return values
 
 

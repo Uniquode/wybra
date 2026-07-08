@@ -8,13 +8,14 @@ import hashlib
 import hmac
 import time
 import zlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from secrets import token_hex
 from typing import Final, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from wybra.core.environment import environment_get
 from wybra.core.exceptions import ConfigurationError
 from wybra.services.secrets import (
     MissingSecretError,
@@ -229,7 +230,7 @@ def plan_secret_key_rotation(
 
 
 def parse_secret_key_ring_from_env(
-    env: Mapping[str, str] | None,
+    env: object | None,
 ) -> SecretKeyRing | None:
     """Create a key ring from environment-style settings.
 
@@ -239,8 +240,12 @@ def parse_secret_key_ring_from_env(
     if env is None:
         return None
 
-    current = _normalise_environment_value(env.get(ENV_WYBRA_SECRET_KEY_CURRENT))
-    previous = _normalise_environment_value(env.get(ENV_WYBRA_SECRET_KEYS_PREVIOUS))
+    current = _normalise_environment_value(
+        environment_get(env, ENV_WYBRA_SECRET_KEY_CURRENT)
+    )
+    previous = _normalise_environment_value(
+        environment_get(env, ENV_WYBRA_SECRET_KEYS_PREVIOUS)
+    )
 
     if current is None and previous is None:
         return None
@@ -472,7 +477,7 @@ class SecretEnvelopeService:
         self._key_ring_loaded = False
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None) -> SecretEnvelopeService:
+    def from_env(cls, env: object | None) -> SecretEnvelopeService:
         """Create the production runtime service from environment-style key settings."""
         return cls(lambda: parse_secret_key_ring_from_env(env))
 

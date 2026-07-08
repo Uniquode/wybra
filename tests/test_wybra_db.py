@@ -54,6 +54,7 @@ from wybra.db.urls import (
 from wybra.db.validation import validate_persistence
 from wybra.services.secrets import SecretValue
 from wybra.site import start
+from wybra.tools.settings import load_project_settings
 from wybra.tools.validation.core import ValidationResult
 
 
@@ -387,6 +388,53 @@ def test_structured_database_config_resolves_environment_credentials(
         "credentials": {
             "database": "uniquode",
             "host": "/var/run/postgresql",
+            "user": "app_user",
+            "password": "app_password",
+        },
+    }
+
+
+def test_project_settings_resolve_environment_database_credentials(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+        [app]
+        modules = ["wybra.db"]
+
+        [app.templates]
+        auto_reload = false
+        cache_size = 400
+
+        [app.assets]
+        url_path = "/static/"
+
+        [app.database]
+        backend = "postgresql"
+        database = "uniquode"
+        credential_source = "environment"
+        user_key = "UNIQUODE_DB_USER"
+        password_key = "UNIQUODE_DB_PASSWORD"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_project_settings(
+        project_root=tmp_path,
+        environ={
+            "APP_CONFIG": config_path.as_posix(),
+            "UNIQUODE_DB_USER": "app_user",
+            "UNIQUODE_DB_PASSWORD": "app_password",
+        },
+        read_dotenv=False,
+    )
+
+    assert settings.database_connection is not None
+    assert settings.database_connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.asyncpg",
+        "credentials": {
+            "database": "uniquode",
             "user": "app_user",
             "password": "app_password",
         },

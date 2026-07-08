@@ -216,7 +216,7 @@ def test_later_source_overrides_earlier_source_and_tracks_origin() -> None:
     assert service.config.sources["app.debug"] == "first"
 
 
-def test_environment_source_parses_explicit_environment_mapping() -> None:
+def test_environment_source_parses_explicit_environment_values() -> None:
     service = ConfigService(
         [
             EnvironmentConfigSource(

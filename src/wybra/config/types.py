@@ -224,15 +224,3 @@ def _freeze_nested_mapping(
             for section, section_values in values.items()
         }
     )
-
-
-def config_environment_names(config_def: ConfigDef) -> tuple[str, ...]:
-    names: list[str] = []
-    seen: set[str] = set()
-    for section in config_def.sections.values():
-        for env_names in section.env.values():
-            for env_name in env_names:
-                if env_name not in seen:
-                    seen.add(env_name)
-                    names.append(env_name)
-    return tuple(names)

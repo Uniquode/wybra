@@ -21,7 +21,7 @@ from wybra.core.composition import (
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.diagnostics import wrapped_error
-from wybra.core.environment import environment_mapping, load_environment
+from wybra.core.environment import load_environment
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.modules import CORE_MODULES
 from wybra.core.runtime import (
@@ -191,11 +191,7 @@ def load_project_settings(
         config = ConfigService(
             [AppConfigSource(app_config)],
             config_defs=config_defs,
-            environ=environment_mapping(
-                env,
-                config_defs,
-                extra_names=(APP_CONFIG_ENV,),
-            ),
+            environ=env,
         )
         return ProjectSettings.load_settings(config, app_config=app_config)
     except (SettingsLoadError, ConfigDefinitionError, ConfigSourceError) as exc:

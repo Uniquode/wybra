@@ -44,7 +44,7 @@ class DefaultSecretsCapability:
         cls,
         settings: SecretsSettings,
         *,
-        environ: Mapping[str, str] | None = None,
+        environ: object | None = None,
     ) -> DefaultSecretsCapability:
         return cls.from_drivers(
             (
@@ -88,7 +88,7 @@ async def setup_site(site: Site) -> None:
     )
 
 
-def _resolved_environ(site: Site) -> Mapping[str, str]:
+def _resolved_environ(site: Site) -> object:
     return site.config.environ if site.config.environ is not None else os.environ
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -180,7 +180,7 @@ def _current_secret_envelope_service(site: Site) -> SecretEnvelopeService | None
     return value if isinstance(value, SecretEnvelopeService) else None
 
 
-def _resolved_environ(site: Site) -> Mapping[str, str]:
+def _resolved_environ(site: Site) -> object:
     return site.config.environ if site.config.environ is not None else os.environ
 
 
