@@ -437,10 +437,19 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
     ambient_config = tmp_path / "ambient.toml"
     selected_config = tmp_path / "selected.toml"
     monkeypatch.setenv("APP_CONFIG", ambient_config.as_posix())
-    observed: dict[str, str | None] = {}
+    observed: dict[str, object] = {}
 
-    def load_project_settings(*, environ=None, project_root=None, read_dotenv=True):
+    def load_project_settings(
+        *,
+        environ=None,
+        project_root=None,
+        read_dotenv=True,
+        database_credential_purpose="runtime",
+        fallback_to_runtime_credentials=False,
+    ):
         observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
+        observed["database_credential_purpose"] = database_credential_purpose
+        observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
         return MigrationTestSettings(
             database_url="sqlite://:memory:",
             project_root=tmp_path,
@@ -464,3 +473,5 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
 
     assert exit_code == 0
     assert observed["app_config"] == selected_config.as_posix()
+    assert observed["database_credential_purpose"] == "service_account"
+    assert observed["fallback_to_runtime_credentials"] is True

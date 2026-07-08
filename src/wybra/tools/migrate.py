@@ -35,12 +35,21 @@ def _build_settings(
         if environment is None:
             return cast(
                 data_migrate.MigrationSettings,
-                load_project_settings(project_root=project_root),
+                load_project_settings(
+                    project_root=project_root,
+                    database_credential_purpose="service_account",
+                    fallback_to_runtime_credentials=True,
+                ),
             )
 
         return cast(
             data_migrate.MigrationSettings,
-            load_project_settings(environ=environment, project_root=project_root),
+            load_project_settings(
+                environ=environment,
+                project_root=project_root,
+                database_credential_purpose="service_account",
+                fallback_to_runtime_credentials=True,
+            ),
         )
     except ProjectToolConfigurationError as exc:
         raise wrapped_error(data_migrate.MigrationConfigurationError, exc) from exc

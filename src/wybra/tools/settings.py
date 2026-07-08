@@ -34,6 +34,7 @@ from wybra.core.settings import (
     load_composition_config_from_environment,
 )
 from wybra.db.settings import (
+    CredentialPurpose,
     EffectiveDatabaseConfig,
     ResolvedDatabaseConnection,
     resolve_database_connection_from_config,
@@ -74,8 +75,17 @@ class ProjectSettings(BaseSettings):
         config: ConfigService,
         *,
         app_config: AppConfig,
+        database_credential_purpose: CredentialPurpose = "runtime",
+        fallback_to_runtime_credentials: bool = False,
     ) -> ProjectSettings:  # ty: ignore[invalid-method-override]
-        return cls(**_project_settings_kwargs(config, app_config))
+        return cls(
+            **_project_settings_kwargs(
+                config,
+                app_config,
+                database_credential_purpose=database_credential_purpose,
+                fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+            )
+        )
 
     def __post_init__(self) -> None:
         project_root = self.project_root.resolve()
@@ -168,6 +178,8 @@ def load_project_settings(
     environ: Mapping[str, str] | None = None,
     project_root: Path | None = None,
     read_dotenv: bool = True,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
 ) -> ProjectSettings:
     resolved_project_root = resolve_project_root(project_root, environ)
     try:
@@ -193,7 +205,12 @@ def load_project_settings(
             [AppConfigSource(app_config)],
             config_defs=config_defs,
         )
-        return ProjectSettings.load_settings(config, app_config=app_config)
+        return ProjectSettings.load_settings(
+            config,
+            app_config=app_config,
+            database_credential_purpose=database_credential_purpose,
+            fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+        )
     except (SettingsLoadError, ConfigDefinitionError, ConfigSourceError) as exc:
         raise wrapped_error(ConfigurationError, exc) from exc
 
@@ -209,6 +226,9 @@ def _project_config_defs(app_config: AppConfig) -> tuple[ConfigDef, ...]:
 def _project_settings_kwargs(
     config: ConfigService,
     app_config: AppConfig,
+    *,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
 ) -> dict[str, Any]:
     app_values = ProjectSettings.section_values(config, "app")
     static_values = ProjectSettings.section_values(config, "app.assets")
@@ -218,6 +238,8 @@ def _project_settings_kwargs(
         config,
         project_root=app_config.project_root,
         configured_database_url=app_config.database_url,
+        purpose=database_credential_purpose,
+        fallback_to_runtime_credentials=fallback_to_runtime_credentials,
     )
     settings_kwargs: dict[str, Any] = {
         "project_root": app_config.project_root,

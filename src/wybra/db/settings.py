@@ -92,6 +92,13 @@ class DatabaseCredentialConfig:
             )
         )
 
+    def has_resolvable_values(self, source: SecretSource | None) -> bool:
+        return (
+            self.user is not None
+            or self.password is not None
+            or (source is not None and self.has_keys)
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedDatabaseCredentials:
@@ -428,6 +435,7 @@ def resolve_database_connection_from_config(
     database_url_override: str | None = None,
     secrets: SecretsCapability | None = None,
     purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
 ) -> ResolvedDatabaseConnection | None:
     effective = effective_database_config_from_config(
         config,
@@ -437,14 +445,43 @@ def resolve_database_connection_from_config(
     )
     if effective is None:
         return None
+    resolved_purpose = _database_credential_purpose(
+        effective,
+        purpose=purpose,
+        fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+    )
     resolved_secrets = secrets
-    if effective.requires_secret_capability_for(purpose) and resolved_secrets is None:
+    if (
+        effective.requires_secret_capability_for(resolved_purpose)
+        and resolved_secrets is None
+    ):
         resolved_secrets = _secrets_capability_from_config(config)
     return effective.resolve(
         environ=_config_environ(config),
         secrets=resolved_secrets,
-        purpose=purpose,
+        purpose=resolved_purpose,
     )
+
+
+def _database_credential_purpose(
+    effective: EffectiveDatabaseConfig,
+    *,
+    purpose: CredentialPurpose,
+    fallback_to_runtime_credentials: bool,
+) -> CredentialPurpose:
+    if (
+        purpose != "service_account"
+        or not fallback_to_runtime_credentials
+        or effective.structured is None
+    ):
+        return purpose
+
+    service_account_credentials = effective.structured.service_account_credentials
+    if service_account_credentials.has_resolvable_values(
+        effective.structured.credential_source
+    ):
+        return purpose
+    return "runtime"
 
 
 def resolve_database_provisioning_connection_from_config(

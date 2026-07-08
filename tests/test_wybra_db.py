@@ -451,6 +451,95 @@ def test_project_settings_resolve_environment_database_credentials(
     }
 
 
+def test_project_settings_resolve_service_account_database_credentials(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+        [app]
+        modules = ["wybra.db"]
+
+        [app.templates]
+        auto_reload = false
+        cache_size = 400
+
+        [app.assets]
+        url_path = "/static/"
+
+        [app.database]
+        backend = "postgresql"
+        database = "uniquode"
+        user = "app_user"
+        password = "app_password"
+        sa_user = "admin_user"
+        sa_password = "admin_password"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_project_settings(
+        project_root=tmp_path,
+        environ={"APP_CONFIG": config_path.as_posix()},
+        read_dotenv=False,
+        database_credential_purpose="service_account",
+    )
+
+    assert settings.database_connection is not None
+    assert settings.database_connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.asyncpg",
+        "credentials": {
+            "database": "uniquode",
+            "user": "admin_user",
+            "password": "admin_password",
+        },
+    }
+
+
+def test_project_settings_service_account_can_fallback_to_runtime_credentials(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+        [app]
+        modules = ["wybra.db"]
+
+        [app.templates]
+        auto_reload = false
+        cache_size = 400
+
+        [app.assets]
+        url_path = "/static/"
+
+        [app.database]
+        backend = "postgresql"
+        database = "uniquode"
+        user = "app_user"
+        password = "app_password"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_project_settings(
+        project_root=tmp_path,
+        environ={"APP_CONFIG": config_path.as_posix()},
+        read_dotenv=False,
+        database_credential_purpose="service_account",
+        fallback_to_runtime_credentials=True,
+    )
+
+    assert settings.database_connection is not None
+    assert settings.database_connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.asyncpg",
+        "credentials": {
+            "database": "uniquode",
+            "user": "app_user",
+            "password": "app_password",
+        },
+    }
+
+
 def test_structured_database_config_resolves_secret_credentials(
     tmp_path: Path,
 ) -> None:
