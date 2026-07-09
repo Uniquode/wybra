@@ -150,12 +150,11 @@ def provider_keychain_secret_references(
 ) -> tuple[tuple[str, str], ...]:
     references: list[tuple[str, str]] = []
     for provider in providers:
-        reference = provider.required_provider_secret_reference()
-        if reference is None:
-            continue
-        source, key, _secret_label = reference
-        if source == KEYCHAIN_SOURCE:
-            references.append((provider.name, key))
+        references.extend(
+            (reference.name, reference.key)
+            for reference in provider.credential_references()
+            if reference.source == KEYCHAIN_SOURCE
+        )
     return tuple(references)
 
 

@@ -17,19 +17,11 @@ def forms_keychain_secret_references(
         discover_module_config=False,
     )
     settings = FormsSettings.load_settings(config)
-    reference = settings.csrf_token_secret_reference
-    if reference is None:
-        return ()
-    source, key = reference
-    if source != KEYCHAIN_SOURCE:
-        return ()
-    previous_reference = settings.csrf_token_secret_previous_reference
-    if previous_reference is None:
-        return (key,)
-    previous_source, previous_key = previous_reference
-    if previous_source != KEYCHAIN_SOURCE:
-        return (key,)
-    return (key, previous_key)
+    return tuple(
+        reference.key
+        for reference in settings.credential_references()
+        if reference.source == KEYCHAIN_SOURCE
+    )
 
 
 __all__ = ("forms_keychain_secret_references",)

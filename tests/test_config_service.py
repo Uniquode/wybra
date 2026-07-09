@@ -18,6 +18,7 @@ from wybra.config import (
     ConfigSourceError,
     ConfigSourceMetadata,
     ConfigSourceResult,
+    CredentialReference,
     EnvironmentConfigSource,
     FileConfigSource,
     MappingConfigSource,
@@ -78,6 +79,19 @@ def test_config_service_loads_required_sources() -> None:
 
     assert config is not None
     assert config["totp_mode"] == "required"
+
+
+@dataclass(frozen=True, slots=True)
+class EmptyCredentialSettings(BaseSettings):
+    module_config = ConfigDef({"empty": ConfigGroup()})
+
+
+def test_base_settings_credential_references_defaults_to_empty_tuple() -> None:
+    references = EmptyCredentialSettings().credential_references()
+
+    assert references == ()
+    assert isinstance(references, tuple)
+    assert all(isinstance(reference, CredentialReference) for reference in references)
 
 
 def test_raw_config_sections_flattens_runtime_module_subsections() -> None:

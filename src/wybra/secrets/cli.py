@@ -14,7 +14,12 @@ import click
 from tortoise.transactions import in_transaction
 
 from wybra.auth.settings import AuthSettings, load_auth_settings
-from wybra.config import AppConfigSource, ConfigService, MappingConfigSource
+from wybra.config import (
+    AppConfigSource,
+    ConfigService,
+    CredentialReference,
+    MappingConfigSource,
+)
 from wybra.core.composition import (
     APP_CONFIG_ENV,
     CompositionError,
@@ -29,7 +34,6 @@ from wybra.forms.rotation import plan_csrf_token_secret_rotation
 from wybra.forms.settings import FormsSettings
 from wybra.secrets.config import KeychainSecretSourceSettings, SecretsSettings
 from wybra.secrets.keys import (
-    KnownSecretKey,
     builtin_keychain_secret_key,
     known_keychain_secret_keys,
     normalise_secret_key_type,
@@ -67,7 +71,7 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 
 class SecretCommandSettings:
     keychain: KeychainSecretSourceSettings
     secrets: SecretsSettings
-    known_keys: tuple[KnownSecretKey, ...]
+    known_keys: tuple[CredentialReference, ...]
     raw_config: Mapping[str, Mapping[str, Any]] | None = None
 
 
@@ -733,7 +737,7 @@ def _non_empty_secret_value(value: str) -> str:
 
 def _known_key_record(
     driver: KeychainSecretSourceDriver,
-    known_key: KnownSecretKey,
+    known_key: CredentialReference,
 ) -> dict[str, Any]:
     service, username = driver.identity(known_key.key)
     try:

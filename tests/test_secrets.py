@@ -110,6 +110,52 @@ class TestSecretValue:
         assert "actual-secret" not in repr(secret)
 
 
+class TestSecretsSettingsCredentialReferences:
+    def test_credential_references_expose_crypto_key_metadata_only(self) -> None:
+        settings = SecretsSettings(
+            crypto=CryptoSecretSourceSettings(
+                source="keychain",
+                current_key="secrets/key/current",
+                previous_keys="secrets/key/previous",
+            )
+        )
+
+        references = settings.credential_references()
+
+        assert [
+            (
+                reference.name,
+                reference.key,
+                reference.owner,
+                reference.source,
+                reference.required,
+                reference.rotation_role,
+            )
+            for reference in references
+        ] == [
+            (
+                "secret",
+                "secrets/key/current",
+                "crypto",
+                "keychain",
+                True,
+                "current",
+            ),
+            (
+                "secret-prev",
+                "secrets/key/previous",
+                "crypto",
+                "keychain",
+                False,
+                "previous",
+            ),
+        ]
+        assert all(not hasattr(reference, "value") for reference in references)
+
+    def test_credential_references_are_empty_without_crypto_source(self) -> None:
+        assert SecretsSettings().credential_references() == ()
+
+
 class TestDefaultSecretsCapability:
     def test_resolves_and_checks_registered_source(self) -> None:
         capability = DefaultSecretsCapability.from_drivers(

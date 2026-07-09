@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar, Final
 
-from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup
+from wybra.config import (
+    BaseSettings,
+    ConfigDef,
+    ConfigField,
+    ConfigGroup,
+    CredentialReference,
+)
 from wybra.services.crypto import (
     ENV_WYBRA_SECRET_KEY,
     SECRET_KEY_CURRENT,
@@ -179,6 +185,35 @@ class SecretsSettings(BaseSettings):
             keychain=KeychainSecretSourceSettings(**keychain_values),
             vault=VaultSecretSourceSettings(**vault_values),
         )
+
+    def credential_references(self) -> tuple[CredentialReference, ...]:
+        source = self.crypto.source
+        if source is None:
+            return ()
+
+        references = [
+            CredentialReference(
+                name="secret",
+                key=self.crypto.current_key,
+                owner="crypto",
+                description="Configured current system secret key.",
+                source=source,
+                required=True,
+                rotation_role="current",
+            )
+        ]
+        if self.crypto.previous_keys is not None:
+            references.append(
+                CredentialReference(
+                    name="secret-prev",
+                    key=self.crypto.previous_keys,
+                    owner="crypto",
+                    description="Configured previous system secret keys for rotation.",
+                    source=source,
+                    rotation_role="previous",
+                )
+            )
+        return tuple(references)
 
 
 def validate_secret_source(value: object) -> str:

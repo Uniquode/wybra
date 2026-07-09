@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from secrets import token_urlsafe
 from typing import Any, ClassVar, Self, cast
 
-from wybra.config import BaseSettings, ConfigDef, ConfigService
+from wybra.config import BaseSettings, ConfigDef, ConfigService, CredentialReference
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.runtime import DeploymentEnvironment, normalise_deployment_environment
 from wybra.forms.config import (
@@ -172,6 +172,37 @@ class FormsSettings(BaseSettings):
         if self.csrf_cookie_secure is None:
             return None
         return bool(self.csrf_cookie_secure)
+
+    def credential_references(self) -> tuple[CredentialReference, ...]:
+        reference = self.csrf_token_secret_reference
+        if reference is None:
+            return ()
+        source, key = reference
+        references = [
+            CredentialReference(
+                name="csrf",
+                key=key,
+                owner="forms",
+                description="Configured current forms CSRF token secret.",
+                source=source,
+                required=True,
+                rotation_role="current",
+            )
+        ]
+        previous_reference = self.csrf_token_secret_previous_reference
+        if previous_reference is not None:
+            previous_source, previous_key = previous_reference
+            references.append(
+                CredentialReference(
+                    name="csrf-prev",
+                    key=previous_key,
+                    owner="forms",
+                    description="Configured previous forms CSRF token secrets.",
+                    source=previous_source,
+                    rotation_role="previous",
+                )
+            )
+        return tuple(references)
 
 
 def _normalise_token_secret(csrf_token_secret: str | None) -> str | None:

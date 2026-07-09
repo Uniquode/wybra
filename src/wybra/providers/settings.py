@@ -4,7 +4,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Final, cast
 
-from wybra.config import BaseSettings, ConfigDef, ConfigGroup, to_bool
+from wybra.config import (
+    BaseSettings,
+    ConfigDef,
+    ConfigGroup,
+    CredentialReference,
+    to_bool,
+)
 from wybra.core.exceptions import ConfigurationError
 from wybra.services.secrets import (
     KEYCHAIN_SOURCE,
@@ -229,6 +235,22 @@ class ProviderSettings:
         source, key = reference
         return source, key, "client secret"
 
+    def credential_references(self) -> tuple[CredentialReference, ...]:
+        reference = self.required_provider_secret_reference()
+        if reference is None:
+            return ()
+        source, key, secret_label = reference
+        return (
+            CredentialReference(
+                name=self.name,
+                key=key,
+                owner="providers",
+                description=f"Provider {self.name} {secret_label}.",
+                source=source,
+                required=True,
+            ),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ProvidersSettings(BaseSettings):
@@ -255,6 +277,13 @@ class ProvidersSettings(BaseSettings):
     @property
     def enabled_providers(self) -> tuple[ProviderSettings, ...]:
         return tuple(provider for provider in self.providers if provider.enabled)
+
+    def credential_references(self) -> tuple[CredentialReference, ...]:
+        return tuple(
+            reference
+            for provider in self.providers
+            for reference in provider.credential_references()
+        )
 
 
 def provider_settings_from_config(

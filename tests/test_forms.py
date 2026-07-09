@@ -2123,6 +2123,48 @@ def test_forms_settings_load_settings_uses_config_service_sources() -> None:
     assert settings.cookie_secure is True
 
 
+def test_forms_settings_exposes_csrf_credential_references() -> None:
+    settings = FormsSettings(csrf_token_secret_source="keychain")
+
+    references = settings.credential_references()
+
+    assert [
+        (
+            reference.name,
+            reference.key,
+            reference.owner,
+            reference.source,
+            reference.required,
+            reference.rotation_role,
+        )
+        for reference in references
+    ] == [
+        (
+            "csrf",
+            CSRF_TOKEN_SECRET_KEY_CURRENT,
+            "forms",
+            "keychain",
+            True,
+            "current",
+        ),
+        (
+            "csrf-prev",
+            CSRF_TOKEN_SECRET_KEY_PREVIOUS,
+            "forms",
+            "keychain",
+            False,
+            "previous",
+        ),
+    ]
+    assert all(not hasattr(reference, "value") for reference in references)
+
+
+def test_forms_settings_credential_references_ignore_inline_fallback_secret() -> None:
+    settings = FormsSettings(csrf_token_secret="inline-csrf-secret")
+
+    assert settings.credential_references() == ()
+
+
 def test_forms_settings_load_settings_rejects_blank_token_secret() -> None:
     with pytest.raises(ConfigSourceError, match="csrf_token_secret"):
         ConfigService(

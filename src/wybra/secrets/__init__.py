@@ -13,7 +13,6 @@ _EXPORTS = {
     "InvalidSecretKeyError": "wybra.services.secrets",
     "KeychainSecretSourceDriver": "wybra.secrets.sources",
     "KeychainSecretSourceSettings": "wybra.secrets.config",
-    "KnownSecretKey": "wybra.secrets.keys",
     "KmsSecretSourceSettings": "wybra.secrets.config",
     "MissingSecretError": "wybra.services.secrets",
     "MissingSecretSourceDependencyError": "wybra.services.secrets",
