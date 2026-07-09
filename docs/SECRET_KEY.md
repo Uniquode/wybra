@@ -81,6 +81,7 @@ uv run wybra-secret --config config/app.toml list
 
 For JSON output, `list --json` returns a `keys` object keyed by logical name,
 such as `csrf`, `csrf-prev`, `secret`, and `secret-prev`.
+Use `list --json --dev` to inspect the built-in development key references.
 
 ## Rotation
 

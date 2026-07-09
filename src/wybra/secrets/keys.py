@@ -109,9 +109,12 @@ def known_keychain_secret_keys(
     *,
     raw_config: Mapping[str, Mapping[str, Any]] | None = None,
     secrets_settings: SecretsSettings | None = None,
+    development: bool = False,
 ) -> tuple[KnownSecretKey, ...]:
     """Return Wybra-known keychain references without enumerating the keychain."""
 
+    if development:
+        return _deduplicate_keys(development_keychain_secret_keys())
     if raw_config is None or secrets_settings is None:
         return _deduplicate_keys(BUILTIN_SECRET_KEYS)
 
@@ -120,6 +123,21 @@ def known_keychain_secret_keys(
     keys.extend(_configured_forms_keys(raw_config))
     keys.extend(_configured_provider_keys(raw_config))
     return _deduplicate_keys(keys)
+
+
+def development_keychain_secret_keys() -> tuple[KnownSecretKey, ...]:
+    """Return built-in development keychain references."""
+    return tuple(
+        KnownSecretKey(
+            name=known_key.name,
+            key=builtin_keychain_secret_key(known_key.name, development=True),
+            owner=known_key.owner,
+            description=known_key.description,
+            source=known_key.source,
+            required=known_key.required,
+        )
+        for known_key in BUILTIN_SECRET_KEYS
+    )
 
 
 def _configured_crypto_keys(
@@ -285,6 +303,7 @@ __all__ = (
     "SECRET_KEY_OWNER_FORMS",
     "SECRET_KEY_OWNER_PROVIDERS",
     "builtin_keychain_secret_key",
+    "development_keychain_secret_keys",
     "known_keychain_secret_keys",
     "normalise_secret_key_type",
 )

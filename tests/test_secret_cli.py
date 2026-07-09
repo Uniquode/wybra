@@ -346,6 +346,34 @@ def test_set_and_get_type_support_development_default_keys(monkeypatch) -> None:
     assert result.output == "google-secret\n"
 
 
+def test_list_json_dev_reports_development_default_keys(monkeypatch) -> None:
+    keyring = FakeKeyring(
+        {
+            ("wybra", "secrets/key/dev/current"): "secret",
+            ("wybra", "auth/providers/github/dev/client-secret"): "github",
+        }
+    )
+    _install_fake_keyring(monkeypatch, keyring)
+
+    result = CliRunner().invoke(
+        secret_cli.secret_command,
+        ["list", "--json", "--dev"],
+    )
+
+    assert result.exit_code == 0, result.output
+    keys = json.loads(result.output)["keys"]
+    assert keys[SECRET_KEY_TYPE_SECRET]["key"] == "secrets/key/dev/current"
+    assert keys[SECRET_KEY_TYPE_SECRET]["exists"] is True
+    assert keys[SECRET_KEY_TYPE_GITHUB]["key"] == (
+        "auth/providers/github/dev/client-secret"
+    )
+    assert keys[SECRET_KEY_TYPE_GITHUB]["exists"] is True
+    assert keys[SECRET_KEY_TYPE_GOOGLE]["key"] == (
+        "auth/providers/google/dev/client-secret"
+    )
+    assert keys[SECRET_KEY_TYPE_GOOGLE]["exists"] is False
+
+
 def test_type_uses_default_key_even_when_config_uses_custom_key(
     monkeypatch,
     tmp_path: Path,

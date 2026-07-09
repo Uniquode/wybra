@@ -214,16 +214,25 @@ def get_command(
 
 
 @secret_command.command(name="list")
+@click.option(
+    "--dev",
+    "development",
+    is_flag=True,
+    help="List built-in development key references.",
+)
 @click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
 @click.pass_context
-def list_command(ctx: click.Context, json_output: bool) -> None:
+def list_command(ctx: click.Context, development: bool, json_output: bool) -> None:
     """List Wybra-known key references and whether they exist."""
 
     settings = _secret_command_settings_from_context(ctx)
     driver = KeychainSecretSourceDriver(settings.keychain)
-    records = [
-        _known_key_record(driver, known_key) for known_key in settings.known_keys
-    ]
+    known_keys = (
+        known_keychain_secret_keys(development=True)
+        if development
+        else settings.known_keys
+    )
+    records = [_known_key_record(driver, known_key) for known_key in known_keys]
     if json_output:
         _write_json({"keys": {str(record["name"]): record for record in records}})
         return
