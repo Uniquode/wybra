@@ -11,15 +11,15 @@ specific paths such as `secrets/key/dev/current` or
 
 Default keychain keys are:
 
-| Key | Description |
-| --- | --- |
-| `secrets/key/current` | Current system secret-envelope key material. |
-| `secrets/key/previous` | Previous system secret-envelope key material used during rotation. |
-| `auth/forms/csrf-token-secret/current` | Current forms CSRF token signing secret. |
-| `auth/forms/csrf-token-secret/previous` | Previous forms CSRF token signing secrets used during rotation. |
-| `auth/providers/google/client-secret` | Google OAuth client secret. |
-| `auth/providers/github/client-secret` | GitHub OAuth client secret. |
-| `auth/providers/apple/private-key` | Apple Sign in private key. |
+| Name | Key | Description |
+| --- | --- | --- |
+| `secret` | `secrets/key/current` | Current system secret-envelope key material. |
+| `secret-prev` | `secrets/key/previous` | Previous system secret-envelope key material used during rotation. |
+| `csrf` | `auth/forms/csrf-token-secret/current` | Current forms CSRF token signing secret. |
+| `csrf-prev` | `auth/forms/csrf-token-secret/previous` | Previous forms CSRF token signing secrets used during rotation. |
+| `google` | `auth/providers/google/client-secret` | Google OAuth client secret. |
+| `github` | `auth/providers/github/client-secret` | GitHub OAuth client secret. |
+| `apple` | `auth/providers/apple/private-key` | Apple Sign in private key. |
 
 Development deployments should override those defaults to development-scoped
 keys such as `secrets/key/dev/current`,

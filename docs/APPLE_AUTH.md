@@ -291,21 +291,21 @@ Store the Apple private key at the default keychain key:
 
 ```sh
 uv run wybra-secret --config config/app.toml set \
-  auth/providers/apple/private-key < AuthKey_APPLE_KEY_ID.p8
+  --type apple < AuthKey_APPLE_KEY_ID.p8
 ```
 
 For the development key example above:
 
 ```sh
 uv run wybra-secret --config config/app.toml set \
-  auth/providers/apple/dev/private-key < AuthKey_APPLE_DEV_KEY_ID.p8
+  --dev --type apple < AuthKey_APPLE_DEV_KEY_ID.p8
 ```
 
 Verify that Wybra can see the configured key references:
 
 ```sh
 uv run wybra-secret --config config/app.toml list --json
-uv run wybra-secret --config config/app.toml get --json auth/providers/apple/private-key
+uv run wybra-secret --config config/app.toml get --json --type apple
 ```
 
 The `list` command reports Wybra-known keys from configuration; it does not
@@ -325,7 +325,7 @@ Then store the current key value:
 
 ```sh
 printf '%s' "$WYBRA_SECRET_KEY" \
-  | uv run wybra-secret --config config/app.toml set secrets/key/current
+  | uv run wybra-secret --config config/app.toml set --type secret
 ```
 
 `previous_keys` points at the keychain value used during key rotation.

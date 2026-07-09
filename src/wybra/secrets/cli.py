@@ -28,7 +28,12 @@ from wybra.db.persistence import close_database, create_database
 from wybra.forms.rotation import plan_csrf_token_secret_rotation
 from wybra.forms.settings import FormsSettings
 from wybra.secrets.config import KeychainSecretSourceSettings, SecretsSettings
-from wybra.secrets.keys import KnownSecretKey, known_keychain_secret_keys
+from wybra.secrets.keys import (
+    KnownSecretKey,
+    builtin_keychain_secret_key,
+    known_keychain_secret_keys,
+    normalise_secret_key_type,
+)
 from wybra.secrets.reencryption import (
     ReencryptSecretsResult,
     reencrypt_persisted_secrets,
@@ -79,6 +84,17 @@ def secret_command(ctx: click.Context, config_source: str | None) -> None:
 
 @secret_command.command(name="set")
 @click.option(
+    "--type",
+    "key_type",
+    help="Use a built-in Wybra key type instead of a raw key.",
+)
+@click.option(
+    "--dev",
+    "development",
+    is_flag=True,
+    help="Use the development variant for a built-in key type.",
+)
+@click.option(
     "--stdin",
     "stdin_source",
     is_flag=True,
@@ -101,6 +117,8 @@ def secret_command(ctx: click.Context, config_source: str | None) -> None:
 @click.pass_context
 def set_command(
     ctx: click.Context,
+    key_type: str | None,
+    development: bool,
     key: str | None,
     value: str | None,
     stdin_source: bool,
@@ -111,35 +129,68 @@ def set_command(
 
     driver = _keychain_driver_from_context(ctx)
     if json_input:
-        if key is not None or value is not None or stdin_source or prompt_source:
+        if (
+            key_type is not None
+            or development
+            or key is not None
+            or value is not None
+            or stdin_source
+            or prompt_source
+        ):
             raise click.UsageError(
-                "--json cannot be combined with KEY, VALUE, --stdin, or --prompt."
+                "--json cannot be combined with --type, --dev, KEY, VALUE, "
+                "--stdin, or --prompt."
             )
         stored = _store_json_values(driver, sys.stdin)
         _write_json({"stored": [_stored_payload(driver, item) for item in stored]})
         return
 
-    if key is None:
-        raise click.UsageError("Missing argument 'KEY'.")
-    secret_value = _secret_value_from_input(
+    resolved_key, resolved_value = _set_key_and_value(
         key=key,
         value=value,
+        key_type=key_type,
+        development=development,
+    )
+    if resolved_key is None:
+        raise click.UsageError("Missing argument 'KEY'.")
+    secret_value = _secret_value_from_input(
+        key=resolved_key,
+        value=resolved_value,
         stdin_source=stdin_source,
         prompt_source=prompt_source,
     )
-    _store_secret(driver, key, secret_value)
-    click.echo(f"Stored {secret_key_value(key)}.")
+    _store_secret(driver, resolved_key, secret_value)
+    click.echo(f"Stored {secret_key_value(resolved_key)}.")
 
 
 @secret_command.command(name="get")
+@click.option(
+    "--type",
+    "key_type",
+    help="Use a built-in Wybra key type instead of a raw key.",
+)
+@click.option(
+    "--dev",
+    "development",
+    is_flag=True,
+    help="Use the development variant for a built-in key type.",
+)
 @click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
-@click.argument("key")
+@click.argument("key", required=False)
 @click.pass_context
-def get_command(ctx: click.Context, key: str, json_output: bool) -> None:
+def get_command(
+    ctx: click.Context,
+    key_type: str | None,
+    development: bool,
+    key: str | None,
+    json_output: bool,
+) -> None:
     """Read one value from the OS keychain."""
 
     driver = _keychain_driver_from_context(ctx)
-    key_value = secret_key_value(key)
+    key_value = secret_key_value(
+        _get_key(key=key, key_type=key_type, development=development)
+    )
     try:
         secret = driver.resolve(key_value).reveal()
     except click.ClickException:
@@ -149,14 +200,15 @@ def get_command(ctx: click.Context, key: str, json_output: bool) -> None:
 
     if json_output:
         service, username = driver.identity(key_value)
-        _write_json(
-            {
-                "key": key_value,
-                "service": service,
-                "username": username,
-                "value": secret,
-            }
-        )
+        payload = {
+            "key": key_value,
+            "service": service,
+            "username": username,
+            "value": secret,
+        }
+        if key_type is not None:
+            payload["name"] = normalise_secret_key_type(key_type)
+        _write_json(payload)
         return
     click.echo(secret)
 
@@ -173,12 +225,13 @@ def list_command(ctx: click.Context, json_output: bool) -> None:
         _known_key_record(driver, known_key) for known_key in settings.known_keys
     ]
     if json_output:
-        _write_json({"keys": records})
+        _write_json({"keys": {str(record["name"]): record for record in records}})
         return
     for record in records:
         state = "present" if record["exists"] else "missing"
         click.echo(
-            f"{state}\t{record['key']}\t{record['owner']}\t{record['description']}"
+            f"{state}\t{record['name']}\t{record['key']}\t"
+            f"{record['owner']}\t{record['description']}"
         )
 
 
@@ -578,6 +631,39 @@ def _validate_csrf_token_secret_rotation(
         raise click.ClickException("Post-rotation CSRF token secret validation failed.")
 
 
+def _set_key_and_value(
+    *,
+    key: str | None,
+    value: str | None,
+    key_type: str | None,
+    development: bool,
+) -> tuple[str | None, str | None]:
+    if key_type is None:
+        if development:
+            raise click.UsageError("--dev requires --type.")
+        return key, value
+    if value is not None:
+        raise click.UsageError("When --type is used, provide at most one VALUE.")
+    return builtin_keychain_secret_key(key_type, development=development), key
+
+
+def _get_key(
+    *,
+    key: str | None,
+    key_type: str | None,
+    development: bool,
+) -> str:
+    if key_type is None:
+        if development:
+            raise click.UsageError("--dev requires --type.")
+        if key is None:
+            raise click.UsageError("Missing argument 'KEY'.")
+        return key
+    if key is not None:
+        raise click.UsageError("KEY cannot be combined with --type.")
+    return builtin_keychain_secret_key(key_type, development=development)
+
+
 def _secret_value_from_input(
     *,
     key: str,
@@ -654,6 +740,7 @@ def _known_key_record(
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
     return {
+        "name": known_key.name,
         "key": known_key.key,
         "owner": known_key.owner,
         "description": known_key.description,

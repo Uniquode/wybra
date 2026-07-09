@@ -70,7 +70,7 @@ Generate and store a new CSRF token secret with:
 
 ```sh
 python -c 'import secrets; print(secrets.token_urlsafe(32))' \
-  | uv run wybra-secret --config config/app.toml set auth/forms/csrf-token-secret/current
+  | uv run wybra-secret --config config/app.toml set --type csrf
 ```
 
 Verify that Wybra can see the key reference:
@@ -78,6 +78,9 @@ Verify that Wybra can see the key reference:
 ```sh
 uv run wybra-secret --config config/app.toml list
 ```
+
+For JSON output, `list --json` returns a `keys` object keyed by logical name,
+such as `csrf`, `csrf-prev`, `secret`, and `secret-prev`.
 
 ## Rotation
 

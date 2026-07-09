@@ -18,6 +18,12 @@ from wybra.auth.models import (
 )
 from wybra.db.persistence import close_database, create_database
 from wybra.forms import CSRF_TOKEN_SECRET_KEY_CURRENT, CSRF_TOKEN_SECRET_KEY_PREVIOUS
+from wybra.secrets.keys import (
+    SECRET_KEY_TYPE_CSRF,
+    SECRET_KEY_TYPE_GITHUB,
+    SECRET_KEY_TYPE_GOOGLE,
+    SECRET_KEY_TYPE_SECRET,
+)
 from wybra.services.crypto import (
     SECRET_KEY_CURRENT,
     SECRET_KEY_PREVIOUS,
@@ -244,7 +250,7 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
 
     result = runner.invoke(
         secret_cli.secret_command,
-        ["set", SECRET_KEY_CURRENT],
+        ["set", "--type", SECRET_KEY_TYPE_SECRET],
         input="secret-value\n",
     )
 
@@ -253,12 +259,13 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
 
     result = runner.invoke(
         secret_cli.secret_command,
-        ["get", "--json", SECRET_KEY_CURRENT],
+        ["get", "--json", "--type", SECRET_KEY_TYPE_SECRET],
     )
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {
         "key": SECRET_KEY_CURRENT,
+        "name": SECRET_KEY_TYPE_SECRET,
         "service": "wybra",
         "username": SECRET_KEY_CURRENT,
         "value": "secret-value",
@@ -267,9 +274,15 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
     result = runner.invoke(secret_cli.secret_command, ["list", "--json"])
 
     assert result.exit_code == 0, result.output
-    records = {item["key"]: item for item in json.loads(result.output)["keys"]}
-    assert records[SECRET_KEY_CURRENT]["exists"] is True
-    assert records[SECRET_KEY_PREVIOUS]["exists"] is False
+    records = json.loads(result.output)["keys"]
+    assert records[SECRET_KEY_TYPE_SECRET]["key"] == SECRET_KEY_CURRENT
+    assert records[SECRET_KEY_TYPE_SECRET]["exists"] is True
+    assert records["secret-prev"]["key"] == SECRET_KEY_PREVIOUS
+    assert records["secret-prev"]["exists"] is False
+    assert records[SECRET_KEY_TYPE_CSRF]["key"] == CSRF_TOKEN_SECRET_KEY_CURRENT
+    assert records[SECRET_KEY_TYPE_GOOGLE]["key"] == (
+        "auth/providers/google/client-secret"
+    )
 
 
 def test_set_supports_json_bulk_input(monkeypatch) -> None:
@@ -310,6 +323,68 @@ def test_set_supports_json_bulk_input(monkeypatch) -> None:
     assert "google-secret" not in result.output
 
 
+def test_set_and_get_type_support_development_default_keys(monkeypatch) -> None:
+    keyring = FakeKeyring()
+    _install_fake_keyring(monkeypatch, keyring)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        secret_cli.secret_command,
+        ["set", "--dev", "--type", SECRET_KEY_TYPE_GOOGLE, "google-secret"],
+    )
+
+    assert result.exit_code == 0, result.output
+    key = "auth/providers/google/dev/client-secret"
+    assert keyring.values[("wybra", key)] == "google-secret"
+
+    result = runner.invoke(
+        secret_cli.secret_command,
+        ["get", "--dev", "--type", SECRET_KEY_TYPE_GOOGLE],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "google-secret\n"
+
+
+def test_type_uses_default_key_even_when_config_uses_custom_key(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    keyring = FakeKeyring()
+    _install_fake_keyring(monkeypatch, keyring)
+    config_path = _app_config(tmp_path / "app.toml")
+
+    result = CliRunner().invoke(
+        secret_cli.secret_command,
+        [
+            "--config",
+            config_path.as_posix(),
+            "set",
+            "--type",
+            SECRET_KEY_TYPE_SECRET,
+            "default-secret",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert keyring.values == {
+        ("uniquode.io", SECRET_KEY_CURRENT): "default-secret",
+    }
+
+
+def test_type_cannot_be_combined_with_raw_key(monkeypatch) -> None:
+    keyring = FakeKeyring()
+    _install_fake_keyring(monkeypatch, keyring)
+
+    result = CliRunner().invoke(
+        secret_cli.secret_command,
+        ["get", "--type", SECRET_KEY_TYPE_SECRET, SECRET_KEY_CURRENT],
+    )
+
+    assert result.exit_code != 0
+    assert "KEY cannot be combined with --type" in result.output
+
+
 def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     monkeypatch,
     tmp_path: Path,
@@ -334,26 +409,31 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     )
 
     assert result.exit_code == 0, result.output
-    records = {item["key"]: item for item in json.loads(result.output)["keys"]}
-    assert records["SYSTEM_SECRET_KEY"]["service"] == "uniquode.io"
-    assert records["SYSTEM_SECRET_KEY"]["username"] == "SYSTEM_SECRET_KEY"
-    assert records["SYSTEM_SECRET_KEY"]["exists"] is True
-    assert records["SYSTEM_SECRET_KEYS_PREVIOUS"]["exists"] is False
-    assert records[CSRF_TOKEN_SECRET_KEY_CURRENT]["owner"] == "forms"
-    assert records[CSRF_TOKEN_SECRET_KEY_CURRENT]["description"] == (
-        "Forms CSRF token secret."
+    records = json.loads(result.output)["keys"]
+    assert records[SECRET_KEY_TYPE_SECRET]["key"] == "SYSTEM_SECRET_KEY"
+    assert records[SECRET_KEY_TYPE_SECRET]["service"] == "uniquode.io"
+    assert records[SECRET_KEY_TYPE_SECRET]["username"] == "SYSTEM_SECRET_KEY"
+    assert records[SECRET_KEY_TYPE_SECRET]["exists"] is True
+    assert records["secret-prev"]["key"] == "SYSTEM_SECRET_KEYS_PREVIOUS"
+    assert records["secret-prev"]["exists"] is False
+    assert records[SECRET_KEY_TYPE_CSRF]["owner"] == "forms"
+    assert records[SECRET_KEY_TYPE_CSRF]["description"] == (
+        "Configured current forms CSRF token secret."
     )
-    assert records[CSRF_TOKEN_SECRET_KEY_CURRENT]["exists"] is True
-    assert records[CSRF_TOKEN_SECRET_KEY_PREVIOUS]["owner"] == "forms"
-    assert records[CSRF_TOKEN_SECRET_KEY_PREVIOUS]["description"] == (
-        "Forms CSRF token secret."
+    assert records[SECRET_KEY_TYPE_CSRF]["key"] == CSRF_TOKEN_SECRET_KEY_CURRENT
+    assert records[SECRET_KEY_TYPE_CSRF]["exists"] is True
+    assert records["csrf-prev"]["owner"] == "forms"
+    assert records["csrf-prev"]["description"] == (
+        "Configured previous forms CSRF token secrets."
     )
-    assert records[CSRF_TOKEN_SECRET_KEY_PREVIOUS]["exists"] is True
-    assert records["auth/providers/google/client-secret"]["exists"] is True
-    assert SECRET_KEY_CURRENT not in records
-    assert SECRET_KEY_PREVIOUS not in records
-    assert "auth/providers/github/client-secret" not in records
-    assert "APPLE_PRIVATE_KEY" not in records
+    assert records["csrf-prev"]["key"] == CSRF_TOKEN_SECRET_KEY_PREVIOUS
+    assert records["csrf-prev"]["exists"] is True
+    assert records[SECRET_KEY_TYPE_GOOGLE]["key"] == (
+        "auth/providers/google/client-secret"
+    )
+    assert records[SECRET_KEY_TYPE_GOOGLE]["exists"] is True
+    assert SECRET_KEY_TYPE_GITHUB not in records
+    assert "apple" not in records
 
 
 def test_list_excludes_crypto_keys_for_non_keychain_config(
@@ -381,7 +461,7 @@ current_key = "SYSTEM_SECRET_KEY"
     )
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"keys": []}
+    assert json.loads(result.output) == {"keys": {}}
 
 
 def test_list_excludes_csrf_fallback_without_keychain_config(
@@ -408,7 +488,7 @@ csrf_token_secret = "inline-csrf-secret"
     )
 
     assert result.exit_code == 0
-    assert json.loads(result.output) == {"keys": []}
+    assert json.loads(result.output) == {"keys": {}}
 
 
 def test_get_honours_app_config_environment(monkeypatch, tmp_path: Path) -> None:
