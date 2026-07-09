@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any, Final
 
-from wybra.config import CredentialReference
+from wybra.config import ConfigService, CredentialReference, MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
 from wybra.forms.config import (
     CSRF_TOKEN_SECRET_KEY_CURRENT,
     CSRF_TOKEN_SECRET_KEY_PREVIOUS,
 )
-from wybra.forms.secrets import forms_keychain_secret_references
+from wybra.forms.settings import FormsSettings
 from wybra.providers.settings import (
     PROVIDERS_CONFIG_SECTION,
     provider_client_secret_key,
@@ -173,30 +173,16 @@ def _configured_provider_keys(
 def _configured_forms_keys(
     raw_config: Mapping[str, Mapping[str, Any]],
 ) -> Iterable[CredentialReference]:
-    names = (SECRET_KEY_TYPE_CSRF, SECRET_KEY_TYPE_CSRF_PREVIOUS)
-    descriptions = (
-        "Configured current forms CSRF token secret.",
-        "Configured previous forms CSRF token secrets.",
+    config = ConfigService(
+        [MappingConfigSource(raw_config)],
+        config_defs=(FormsSettings.module_config,),
+        discover_module_config=False,
     )
-    keys = forms_keychain_secret_references(raw_config)
-    if not keys:
-        return ()
+    settings = FormsSettings.load_settings(config)
     return tuple(
-        CredentialReference(
-            name=name,
-            key=key,
-            owner=SECRET_KEY_OWNER_FORMS,
-            description=description,
-            source=KEYCHAIN_SOURCE,
-            required=name == SECRET_KEY_TYPE_CSRF,
-            rotation_role=("current" if name == SECRET_KEY_TYPE_CSRF else "previous"),
-        )
-        for name, description, key in zip(
-            names,
-            descriptions,
-            keys,
-            strict=True,
-        )
+        reference
+        for reference in settings.credential_references()
+        if reference.source == KEYCHAIN_SOURCE
     )
 
 
