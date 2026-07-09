@@ -8,7 +8,7 @@ import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 import click
 from tortoise.transactions import in_transaction
@@ -266,26 +266,23 @@ def rotate_secret_key_command(
         raise click.ClickException(
             "Secret-key rotation is limited to keychain-backed system secret keys."
         )
-    if crypto.previous_keys is None:
-        raise click.ClickException(
-            "Secret-key rotation requires [secrets.crypto].previous_keys."
-        )
 
     driver = KeychainSecretSourceDriver(settings.keychain)
+    previous_keys = cast(str, crypto.previous_keys)
     current = _resolve_required_secret(driver, crypto.current_key, "current secret key")
-    previous = _resolve_optional_secret(driver, crypto.previous_keys)
+    previous = _resolve_optional_secret(driver, previous_keys)
     try:
         plan = plan_secret_key_rotation(current=current, previous=previous)
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
     if not dry_run:
-        _store_secret(driver, crypto.previous_keys, plan.previous_value)
+        _store_secret(driver, previous_keys, plan.previous_value)
         _store_secret(driver, crypto.current_key, plan.current_value)
         _validate_secret_key_rotation(
             driver,
             crypto.current_key,
-            crypto.previous_keys,
+            previous_keys,
             plan,
         )
 
@@ -293,7 +290,7 @@ def rotate_secret_key_command(
         "target": "secret-key",
         "dry_run": dry_run,
         "current_key": crypto.current_key,
-        "previous_keys": crypto.previous_keys,
+        "previous_keys": previous_keys,
         "old_current_version": plan.retired_version,
         "new_current_version": plan.new_version,
         "previous_key_count": plan.previous_key_count,
@@ -536,14 +533,11 @@ def _secret_envelope_service_from_command_settings(
         raise click.ClickException(
             "Persisted secret re-encryption requires keychain-backed [secrets.crypto]."
         )
-    if crypto.previous_keys is None:
-        raise click.ClickException(
-            "Persisted secret re-encryption requires [secrets.crypto].previous_keys."
-        )
 
     driver = KeychainSecretSourceDriver(settings.keychain)
+    previous_keys = cast(str, crypto.previous_keys)
     current = _resolve_required_secret(driver, crypto.current_key, "current secret key")
-    previous = _resolve_optional_secret(driver, crypto.previous_keys)
+    previous = _resolve_optional_secret(driver, previous_keys)
     return SecretEnvelopeService.from_key_bundle(current, previous)
 
 

@@ -137,6 +137,9 @@ def _source_crypto_key_references(
     The config defaults are keychain references. Environment-backed crypto uses
     the fixed ``WYBRA_SECRET_KEY`` fallback for the current key and only uses
     previous keys when the deployment explicitly names a previous-key variable.
+    Keychain-backed crypto always resolves both current and previous keychain
+    references so rotation and persisted secret re-encryption have stable
+    default targets.
     """
     if source == ENVIRONMENT_SOURCE:
         if current_key == SECRET_KEY_CURRENT:
