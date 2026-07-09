@@ -8,6 +8,10 @@ Wybra supports explicit rotation for two keychain-backed secret families:
 It does not rotate arbitrary keychain values, OAuth provider client secrets, or
 other provider secrets.
 
+Environment variable fallbacks such as `WYBRA_SECRET_KEY` and `CSRF_SECRET_KEY`
+are documented in [`ENV_VARS.md`](ENV_VARS.md). They are fallback values, not
+automatic rotation targets.
+
 ## System Secret Keyring
 
 The system secret keyring is configured under `[secrets.crypto]`. Rotation is
@@ -17,8 +21,8 @@ references are configured:
 ```toml
 [secrets.crypto]
 source = "keychain"
-current_key = "WYBRA_SECRET_KEY_CURRENT"
-previous_keys = "WYBRA_SECRET_KEYS_PREVIOUS"
+current_key = "secrets/key/current"
+previous_keys = "secrets/key/previous"
 ```
 
 Run a dry run first:

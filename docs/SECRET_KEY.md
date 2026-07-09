@@ -5,7 +5,7 @@ be stable in staging and production so tokens continue to validate across app
 reloads and multiple workers.
 
 This key is separate from `[secrets.crypto]` and must not reuse
-`WYBRA_SECRET_KEY_CURRENT`.
+`WYBRA_SECRET_KEY`.
 
 ## Storage Key
 
@@ -50,8 +50,11 @@ modules = [
 csrf_token_secret_source = "keychain"
 ```
 
-`CSRF_SECRET` or inline `csrf_token_secret` may be used as a fallback, but the
+`CSRF_SECRET_KEY` or inline `csrf_token_secret` may be used as a fallback, but the
 keychain value wins when it exists.
+
+See [`ENV_VARS.md`](ENV_VARS.md) for the full environment variable reference,
+including `CSRF_SECRET_KEY`, `CSRF_SECURE`, and `WYBRA_SECRET_KEY`.
 
 The default CSRF token age is 3600 seconds. Override it only when your
 deployment needs a different rotation overlap window:
@@ -67,7 +70,7 @@ Generate and store a new CSRF token secret with:
 
 ```sh
 python -c 'import secrets; print(secrets.token_urlsafe(32))' \
-  | uv run wybra-secret --config config/app.toml set auth/forms/csrf-token-secret/current
+  | uv run wybra-secret --config config/app.toml set --type csrf
 ```
 
 Verify that Wybra can see the key reference:
@@ -75,6 +78,10 @@ Verify that Wybra can see the key reference:
 ```sh
 uv run wybra-secret --config config/app.toml list
 ```
+
+For JSON output, `list --json` returns a `keys` object keyed by logical name,
+such as `csrf`, `csrf-prev`, `secret`, and `secret-prev`.
+Use `list --json --dev` to inspect the built-in development key references.
 
 ## Rotation
 

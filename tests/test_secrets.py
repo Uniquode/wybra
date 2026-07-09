@@ -421,8 +421,8 @@ class TestSecretsSettings:
                         {
                             "secrets.crypto": {
                                 "source": "keychain",
-                                "current_key": "WYBRA_SECRET_KEY_CURRENT",
-                                "previous_keys": "WYBRA_SECRET_KEYS_PREVIOUS",
+                                "current_key": "secrets/key/dev/current",
+                                "previous_keys": "secrets/key/dev/previous",
                             },
                             "secrets.kms": {
                                 "region_name": "ap-southeast-2",
@@ -446,8 +446,8 @@ class TestSecretsSettings:
 
         assert settings.crypto == CryptoSecretSourceSettings(
             source="keychain",
-            current_key="WYBRA_SECRET_KEY_CURRENT",
-            previous_keys="WYBRA_SECRET_KEYS_PREVIOUS",
+            current_key="secrets/key/dev/current",
+            previous_keys="secrets/key/dev/previous",
         )
         assert settings.kms.region_name == "ap-southeast-2"
         assert settings.kms.base_path == "/production/wybra"

@@ -4,8 +4,17 @@ from dataclasses import dataclass
 from typing import ClassVar, Final
 
 from wybra.config import BaseSettings, ConfigDef, ConfigField, ConfigGroup
-from wybra.services.crypto import ENV_WYBRA_SECRET_KEY_CURRENT
-from wybra.services.secrets import SecretSource, normalise_secret_source
+from wybra.services.crypto import (
+    ENV_WYBRA_SECRET_KEY,
+    SECRET_KEY_CURRENT,
+    SECRET_KEY_PREVIOUS,
+)
+from wybra.services.secrets import (
+    ENVIRONMENT_SOURCE,
+    KEYCHAIN_SOURCE,
+    SecretSource,
+    normalise_secret_source,
+)
 
 SECRETS_ENVIRONMENT_SECTION: Final = "secrets.environment"
 SECRETS_CRYPTO_SECTION: Final = "secrets.crypto"
@@ -45,10 +54,14 @@ module_config: Final = ConfigDef(
                 ConfigField(name="source", transform=_optional_secret_source),
                 ConfigField(
                     name="current_key",
-                    default=ENV_WYBRA_SECRET_KEY_CURRENT,
+                    default=SECRET_KEY_CURRENT,
                     transform=_non_blank_string,
                 ),
-                ConfigField(name="previous_keys", transform=_optional_non_blank_string),
+                ConfigField(
+                    name="previous_keys",
+                    default=SECRET_KEY_PREVIOUS,
+                    transform=_optional_non_blank_string,
+                ),
             ),
         ),
         SECRETS_KMS_SECTION: ConfigGroup(
@@ -91,23 +104,51 @@ class KmsSecretSourceSettings:
 @dataclass(frozen=True, slots=True)
 class CryptoSecretSourceSettings:
     source: SecretSource | None = None
-    current_key: str = ENV_WYBRA_SECRET_KEY_CURRENT
-    previous_keys: str | None = None
+    current_key: str = SECRET_KEY_CURRENT
+    previous_keys: str | None = SECRET_KEY_PREVIOUS
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "source", _optional_secret_source(self.source))
-        object.__setattr__(self, "current_key", _non_blank_string(self.current_key))
-        object.__setattr__(
-            self,
-            "previous_keys",
-            _optional_non_blank_string(self.previous_keys),
+        source = _optional_secret_source(self.source)
+        current_key = _non_blank_string(self.current_key)
+        previous_keys = _optional_non_blank_string(self.previous_keys)
+        current_key, previous_keys = _source_crypto_key_references(
+            source,
+            current_key,
+            previous_keys,
         )
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "current_key", current_key)
+        object.__setattr__(self, "previous_keys", previous_keys)
 
 
 @dataclass(frozen=True, slots=True)
 class KeychainSecretSourceSettings:
     appname: str = DEFAULT_KEYCHAIN_APPNAME
     username: str | None = None
+
+
+def _source_crypto_key_references(
+    source: SecretSource | None,
+    current_key: str,
+    previous_keys: str | None,
+) -> tuple[str, str | None]:
+    """Resolve source-specific defaults for system secret-key references.
+
+    The config defaults are keychain references. Environment-backed crypto uses
+    the fixed ``WYBRA_SECRET_KEY`` fallback for the current key and only uses
+    previous keys when the deployment explicitly names a previous-key variable.
+    Keychain-backed crypto always resolves both current and previous keychain
+    references so rotation and persisted secret re-encryption have stable
+    default targets.
+    """
+    if source == ENVIRONMENT_SOURCE:
+        if current_key == SECRET_KEY_CURRENT:
+            current_key = ENV_WYBRA_SECRET_KEY
+        if previous_keys == SECRET_KEY_PREVIOUS:
+            previous_keys = None
+    elif source == KEYCHAIN_SOURCE and previous_keys is None:
+        previous_keys = SECRET_KEY_PREVIOUS
+    return current_key, previous_keys
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +186,8 @@ def validate_secret_source(value: object) -> str:
 
 
 __all__ = (
+    "SECRET_KEY_CURRENT",
+    "SECRET_KEY_PREVIOUS",
     "CryptoSecretSourceSettings",
     "DEFAULT_KEYCHAIN_APPNAME",
     "DEFAULT_VAULT_MOUNT_POINT",

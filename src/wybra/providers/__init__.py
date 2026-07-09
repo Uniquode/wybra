@@ -8,6 +8,8 @@ _EXPORTS = {
     "GITHUB_PROVIDER_NAME": "wybra.providers.github",
     "GOOGLE_PROVIDER_NAME": "wybra.providers.google",
     "PROVIDERS_CONFIG_SECTION": "wybra.providers.settings",
+    "provider_client_secret_key": "wybra.providers.settings",
+    "provider_private_key_secret_key": "wybra.providers.settings",
     "PROVIDER_EMAIL_MATCH_USER_UNRESOLVED_REASON": "wybra.providers.flow",
     "PROVIDER_LINKING_USER_UNAVAILABLE_REASON": "wybra.providers.flow",
     "PROVIDER_OAUTH_LINK_PURPOSE": "wybra.providers.flow",

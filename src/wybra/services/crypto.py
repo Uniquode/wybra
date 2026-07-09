@@ -30,8 +30,9 @@ VERIFIER_PREFIX: Final = "WYBRA:VERIFIER"
 PLAIN_TEXT_VERSION: Final = "__wybra_plaintext__"
 SECRET_KEY_LENGTH: Final = 32
 ENVELOPE_SEPARATOR: Final = "|"
-ENV_WYBRA_SECRET_KEY_CURRENT: Final = "WYBRA_SECRET_KEY_CURRENT"
-ENV_WYBRA_SECRET_KEYS_PREVIOUS: Final = "WYBRA_SECRET_KEYS_PREVIOUS"
+ENV_WYBRA_SECRET_KEY: Final = "WYBRA_SECRET_KEY"
+SECRET_KEY_CURRENT: Final = "secrets/key/current"
+SECRET_KEY_PREVIOUS: Final = "secrets/key/previous"
 
 
 class SecretDataError(ConfigurationError):
@@ -234,30 +235,25 @@ def parse_secret_key_ring_from_env(
 ) -> SecretKeyRing | None:
     """Create a key ring from environment-style settings.
 
-    Returns ``None`` when neither current nor previous key material is configured.
+    Returns ``None`` when no environment-backed key material is configured.
     """
 
     if env is None:
         return None
 
-    current = _normalise_environment_value(
-        environment_get(env, ENV_WYBRA_SECRET_KEY_CURRENT)
-    )
-    previous = _normalise_environment_value(
-        environment_get(env, ENV_WYBRA_SECRET_KEYS_PREVIOUS)
-    )
+    current = _normalise_environment_value(environment_get(env, ENV_WYBRA_SECRET_KEY))
 
-    if current is None and previous is None:
+    if current is None:
         return None
 
-    return parse_secret_key_bundle(current=current, previous=previous)
+    return parse_secret_key_bundle(current=current)
 
 
 def parse_secret_key_ring_from_secrets(
     secrets: SecretKeySecretSource | None,
     *,
     source: SecretSource | str | None,
-    current_key: str = ENV_WYBRA_SECRET_KEY_CURRENT,
+    current_key: str = SECRET_KEY_CURRENT,
     previous_keys: str | None = None,
 ) -> SecretKeyRing | None:
     """Create a key ring from a configured runtime secrets source.
@@ -487,7 +483,7 @@ class SecretEnvelopeService:
         secrets: SecretKeySecretSource | None,
         *,
         source: SecretSource | str | None,
-        current_key: str = ENV_WYBRA_SECRET_KEY_CURRENT,
+        current_key: str = SECRET_KEY_CURRENT,
         previous_keys: str | None = None,
     ) -> SecretEnvelopeService:
         """Create a service from a configured runtime secrets source."""
@@ -647,8 +643,9 @@ __all__ = [
     "ENVELOPE_PREFIX",
     "VERIFIER_PREFIX",
     "PLAIN_TEXT_VERSION",
-    "ENV_WYBRA_SECRET_KEY_CURRENT",
-    "ENV_WYBRA_SECRET_KEYS_PREVIOUS",
+    "ENV_WYBRA_SECRET_KEY",
+    "SECRET_KEY_CURRENT",
+    "SECRET_KEY_PREVIOUS",
     "SecretDataError",
     "SecretEnvelope",
     "SecretMaterialMissingError",

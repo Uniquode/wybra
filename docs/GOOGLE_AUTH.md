@@ -187,11 +187,13 @@ appname = "my-app"
 enabled = true
 client_id = "GOOGLE_CLIENT_ID_FROM_GOOGLE"
 secrets = "keychain"
-client_secret_key = "auth/providers/google/client-secret"
 account_creation_enabled = false
 email_match_linking_enabled = false
 required_claims = ["sub", "email", "email_verified"]
 ```
+
+With `secrets = "keychain"`, Google uses the default keychain key
+`auth/providers/google/client-secret` unless `client_secret_key` is configured.
 
 Use environment-specific keys if a shared operator keychain may contain both
 development and production values:
@@ -212,7 +214,6 @@ required_claims = ["sub", "email", "email_verified"]
 # enabled = true
 # client_id = "GOOGLE_PRODUCTION_CLIENT_ID"
 # secrets = "keychain"
-# client_secret_key = "auth/providers/google/client-secret"
 # account_creation_enabled = false
 # email_match_linking_enabled = true
 # required_claims = ["sub", "email", "email_verified"]
@@ -244,25 +245,25 @@ is active for the account, the user must still complete local TOTP.
 For the keychain source, the keychain item service/name is
 `[secrets.keychain].appname`, and the account/username is the secret key.
 
-Store the Google client secret:
+Store the Google client secret at the default keychain key:
 
 ```sh
 printf '%s' "$GOOGLE_CLIENT_SECRET" \
-  | uv run wybra-secret --config config/app.toml set auth/providers/google/client-secret
+  | uv run wybra-secret --config config/app.toml set --type google
 ```
 
 For the development key example above:
 
 ```sh
 printf '%s' "$GOOGLE_DEV_CLIENT_SECRET" \
-  | uv run wybra-secret --config config/app.toml set auth/providers/google/dev/client-secret
+  | uv run wybra-secret --config config/app.toml set --dev --type google
 ```
 
 Verify that Wybra can see the configured key references:
 
 ```sh
 uv run wybra-secret --config config/app.toml list --json
-uv run wybra-secret --config config/app.toml get --json auth/providers/google/client-secret
+uv run wybra-secret --config config/app.toml get --json --type google
 ```
 
 The `list` command reports Wybra-known keys from configuration; it does not
@@ -274,18 +275,18 @@ key references configured under `[secrets.crypto]`:
 ```toml
 [secrets.crypto]
 source = "keychain"
-current_key = "WYBRA_SECRET_KEY_CURRENT"
-previous_keys = "WYBRA_SECRET_KEYS_PREVIOUS"
+current_key = "secrets/key/current"
+previous_keys = "secrets/key/previous"
 ```
 
 Then store the current key value:
 
 ```sh
-printf '%s' "$WYBRA_SECRET_KEY_CURRENT" \
-  | uv run wybra-secret --config config/app.toml set WYBRA_SECRET_KEY_CURRENT
+printf '%s' "$WYBRA_SECRET_KEY" \
+  | uv run wybra-secret --config config/app.toml set --type secret
 ```
 
-`WYBRA_SECRET_KEYS_PREVIOUS` is optional and is used during key rotation.
+`previous_keys` points at the keychain value used during key rotation.
 Provider token material and TOTP secrets should use stable crypto key material
 in production.
 

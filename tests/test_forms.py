@@ -2167,7 +2167,7 @@ async def test_forms_setup_uses_keychain_csrf_secret_before_fallback() -> None:
             },
         },
         deployment_environment="production",
-        environ={"CSRF_SECRET": "fallback-csrf-secret"},
+        environ={"CSRF_SECRET_KEY": "fallback-csrf-secret"},
     )
     site.provide_capability(
         SecretsCapability,
@@ -2247,7 +2247,7 @@ async def test_forms_setup_falls_back_to_configured_csrf_secret() -> None:
             },
         },
         deployment_environment="production",
-        environ={"CSRF_SECRET": "fallback-csrf-secret"},
+        environ={"CSRF_SECRET_KEY": "fallback-csrf-secret"},
     )
 
     await setup_forms_site(site)
@@ -2278,12 +2278,12 @@ async def test_forms_setup_does_not_use_crypto_keyring_as_csrf_secret() -> None:
         {
             "secrets.crypto": {
                 "source": "environment",
-                "current_key": "WYBRA_SECRET_KEY_CURRENT",
+                "current_key": "WYBRA_SECRET_KEY",
             },
             "wybra.forms": {"csrf_cookie_secure": "true"},
         },
         deployment_environment="production",
-        environ={"WYBRA_SECRET_KEY_CURRENT": "crypto-secret"},
+        environ={"WYBRA_SECRET_KEY": "crypto-secret"},
     )
 
     with pytest.raises(ConfigurationError, match="stable CSRF token secret"):

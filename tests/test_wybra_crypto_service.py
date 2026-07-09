@@ -5,8 +5,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from wybra.services.crypto import (
-    ENV_WYBRA_SECRET_KEY_CURRENT,
-    ENV_WYBRA_SECRET_KEYS_PREVIOUS,
+    ENV_WYBRA_SECRET_KEY,
     ENVELOPE_PREFIX,
     PLAIN_TEXT_VERSION,
     VERIFIER_PREFIX,
@@ -191,23 +190,11 @@ def test_parse_secret_key_ring_from_env_ignores_blank_values() -> None:
     assert (
         parse_secret_key_ring_from_env(
             {
-                ENV_WYBRA_SECRET_KEY_CURRENT: "   ",
+                ENV_WYBRA_SECRET_KEY: "   ",
             }
         )
         is None
     )
-
-
-def test_parse_secret_key_ring_from_env_rejects_previous_keys_without_current() -> None:
-    with pytest.raises(SecretMaterialMissingError):
-        parse_secret_key_ring_from_env(
-            {
-                ENV_WYBRA_SECRET_KEYS_PREVIOUS: _key_entry(
-                    "previous",
-                    _key_bundle_key(),
-                ),
-            }
-        )
 
 
 def test_parse_secret_key_ring_from_secrets_reads_current_and_previous_keys() -> None:
@@ -484,7 +471,7 @@ def test_parse_secret_key_entry_rejects_reserved_plain_text_version() -> None:
 def test_service_refreshes_cached_key_ring() -> None:
     key_v1 = _key_bundle_key()
     key_v2 = _key_bundle_key()
-    env = {ENV_WYBRA_SECRET_KEY_CURRENT: _key_entry("v1", key_v1)}
+    env = {ENV_WYBRA_SECRET_KEY: _key_entry("v1", key_v1)}
 
     service = SecretEnvelopeService.from_env(env)
 
@@ -492,7 +479,7 @@ def test_service_refreshes_cached_key_ring() -> None:
     envelope_prefix_v1 = f"{ENVELOPE_PREFIX}|v1|"
     assert encrypted_v1.startswith(envelope_prefix_v1)
 
-    env[ENV_WYBRA_SECRET_KEY_CURRENT] = _key_entry("v2", key_v2)
+    env[ENV_WYBRA_SECRET_KEY] = _key_entry("v2", key_v2)
 
     encrypted_stale = service.encrypt("token")
     assert encrypted_stale.startswith(envelope_prefix_v1)

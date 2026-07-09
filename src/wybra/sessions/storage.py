@@ -15,8 +15,7 @@ from wybra.core.environment import environment_get
 from wybra.core.runtime import LOCAL_ENVIRONMENT
 from wybra.db import DatabaseCapability
 from wybra.services.crypto import (
-    ENV_WYBRA_SECRET_KEY_CURRENT,
-    ENV_WYBRA_SECRET_KEYS_PREVIOUS,
+    ENV_WYBRA_SECRET_KEY,
     ENVELOPE_PREFIX,
     SecretDataError,
     SecretEnvelopeService,
@@ -536,10 +535,8 @@ def _cookie_secret_service(
 def _has_configured_secret_key(environ: object | None) -> bool:
     if environ is None:
         return False
-    return any(
-        isinstance(value := environment_get(environ, name), str) and bool(value.strip())
-        for name in (ENV_WYBRA_SECRET_KEY_CURRENT, ENV_WYBRA_SECRET_KEYS_PREVIOUS)
-    )
+    value = environment_get(environ, ENV_WYBRA_SECRET_KEY)
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _record_data_from_json(value: object) -> dict[str, Any] | None:

@@ -7,6 +7,7 @@ from typing import Any, ClassVar, Final, cast
 from wybra.config import BaseSettings, ConfigDef, ConfigGroup, to_bool
 from wybra.core.exceptions import ConfigurationError
 from wybra.services.secrets import (
+    KEYCHAIN_SOURCE,
     SecretSource,
     normalise_secret_source,
     secret_key_value,
@@ -49,6 +50,9 @@ APPLE_PROVIDER_OPTION_FIELDS: Final = frozenset(
 PROVIDER_OPTION_FIELDS: Final = (
     BASE_PROVIDER_OPTION_FIELDS | APPLE_PROVIDER_OPTION_FIELDS
 )
+PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX: Final = "client-secret"
+PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX: Final = "private-key"
+PROVIDER_DEVELOPMENT_SEGMENT: Final = "dev"
 
 module_config: Final = ConfigDef({PROVIDERS_CONFIG_SECTION: ConfigGroup()})
 
@@ -91,8 +95,10 @@ class ProviderSettings:
         object.__setattr__(
             self,
             "client_secret_key",
-            _optional_provider_string(
-                self.client_secret_key,
+            _provider_client_secret_key_value(
+                provider_name=self.name,
+                secrets=self.secrets,
+                explicit_key=self.client_secret_key,
                 field_name=PROVIDER_CLIENT_SECRET_KEY_FIELD,
             ),
         )
@@ -115,8 +121,10 @@ class ProviderSettings:
         object.__setattr__(
             self,
             "private_key_secret_key",
-            _optional_provider_string(
-                self.private_key_secret_key,
+            _provider_private_key_secret_key_value(
+                provider_name=self.name,
+                secrets=self.secrets,
+                explicit_key=self.private_key_secret_key,
                 field_name=PROVIDER_PRIVATE_KEY_SECRET_KEY_FIELD,
             ),
         )
@@ -316,6 +324,26 @@ def provider_name_value(value: object) -> str:
     raise ConfigurationError("Provider name must be a non-blank string.")
 
 
+def provider_client_secret_key(provider_name: str, *, development: bool = False) -> str:
+    return _provider_secret_key(
+        provider_name,
+        secret_path_suffix=PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX,
+        development=development,
+    )
+
+
+def provider_private_key_secret_key(
+    provider_name: str,
+    *,
+    development: bool = False,
+) -> str:
+    return _provider_secret_key(
+        provider_name,
+        secret_path_suffix=PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX,
+        development=development,
+    )
+
+
 def _reject_unknown_provider_options(
     provider_name: str,
     provider_config: Mapping[str, Any],
@@ -362,6 +390,83 @@ def _optional_provider_string(value: object, *, field_name: str) -> str | None:
     raise ConfigurationError(f"Provider {field_name} must be a string.")
 
 
+def _provider_client_secret_key_value(
+    *,
+    provider_name: str,
+    secrets: str | None,
+    explicit_key: object,
+    field_name: str,
+) -> str | None:
+    return _provider_secret_key_value(
+        provider_name=provider_name,
+        secrets=secrets,
+        explicit_key=explicit_key,
+        field_name=field_name,
+        secret_path_suffix=PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX,
+    )
+
+
+def _provider_private_key_secret_key_value(
+    *,
+    provider_name: str,
+    secrets: str | None,
+    explicit_key: object,
+    field_name: str,
+) -> str | None:
+    return _provider_secret_key_value(
+        provider_name=provider_name,
+        secrets=secrets,
+        explicit_key=explicit_key,
+        field_name=field_name,
+        secret_path_suffix=PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX,
+    )
+
+
+def _provider_secret_key_value(
+    *,
+    provider_name: str,
+    secrets: str | None,
+    explicit_key: object,
+    field_name: str,
+    secret_path_suffix: str,
+) -> str | None:
+    normalised = _optional_provider_string(explicit_key, field_name=field_name)
+    if normalised is not None:
+        return normalised
+    if secrets != KEYCHAIN_SOURCE or not _provider_secret_key_applies(
+        provider_name,
+        secret_path_suffix,
+    ):
+        return None
+    return _provider_secret_key(
+        provider_name,
+        secret_path_suffix=secret_path_suffix,
+        development=False,
+    )
+
+
+def _provider_secret_key_applies(provider_name: str, secret_path_suffix: str) -> bool:
+    if secret_path_suffix == PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX:
+        return provider_name != APPLE_PROVIDER_NAME
+    if secret_path_suffix == PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX:
+        return provider_name == APPLE_PROVIDER_NAME
+    return False
+
+
+def _provider_secret_key(
+    provider_name: str,
+    *,
+    secret_path_suffix: str,
+    development: bool,
+) -> str:
+    name = provider_name_value(provider_name)
+    path_segments = ["auth", "providers", name]
+    if development:
+        path_segments.append(PROVIDER_DEVELOPMENT_SEGMENT)
+    path_segments.append(secret_path_suffix)
+    return "/".join(path_segments)
+
+
 def _tuple_config_value(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -404,18 +509,23 @@ __all__ = (
     "PROVIDER_ALLOWED_DOMAINS_FIELD",
     "PROVIDER_ALLOWED_EMAILS_FIELD",
     "PROVIDER_CLIENT_ID_FIELD",
+    "PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX",
     "PROVIDER_CLIENT_SECRET_KEY_FIELD",
+    "PROVIDER_DEVELOPMENT_SEGMENT",
     "PROVIDER_EMAIL_MATCH_LINKING_ENABLED_FIELD",
     "PROVIDER_ENABLED_FIELD",
     "PROVIDER_KEY_ID_FIELD",
     "PROVIDER_OPTION_FIELDS",
     "PROVIDER_PRIVATE_KEY_SECRET_KEY_FIELD",
+    "PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX",
     "PROVIDER_REQUIRED_CLAIMS_FIELD",
     "PROVIDER_SECRETS_FIELD",
     "PROVIDER_TEAM_ID_FIELD",
     "ProviderSettings",
     "ProvidersSettings",
     "module_config",
+    "provider_client_secret_key",
+    "provider_private_key_secret_key",
     "provider_name_value",
     "provider_settings_from_config",
 )
