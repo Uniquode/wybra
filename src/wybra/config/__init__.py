@@ -1,3 +1,4 @@
+from wybra.config.credentials import CredentialReference, CredentialRotationRole
 from wybra.config.service import ConfigService, discover_module_config_defs
 from wybra.config.settings import (
     BaseSettings,
@@ -55,6 +56,8 @@ __all__ = (
     "ConfigSourceMetadata",
     "ConfigSourceResult",
     "ConfigTransform",
+    "CredentialReference",
+    "CredentialRotationRole",
     "EnvironmentConfigSource",
     "FileConfigSource",
     "LoadedConfig",

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, cast
 
-from wybra.config import ConfigService
+from wybra.config import ConfigService, CredentialReference
 from wybra.core.environment import environment_get
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.config import DATABASE_CONFIG_SECTION
@@ -235,6 +235,33 @@ class StructuredDatabaseConfig:
             return self.runtime_credentials
         return self.service_account_credentials
 
+    def credential_references(self) -> tuple[CredentialReference, ...]:
+        source = self.credential_source
+        if source is None or self.backend_info.tortoise_scheme == "sqlite":
+            return ()
+        return tuple(
+            _database_credential_references(
+                self.runtime_credentials,
+                source=source,
+                user_name="database-user",
+                password_name="database-password",
+                user_description="Configured runtime database username.",
+                password_description="Configured runtime database password.",
+            )
+            + _database_credential_references(
+                self.service_account_credentials,
+                source=source,
+                user_name="database-admin-user",
+                password_name="database-admin-password",
+                user_description=(
+                    "Configured database administration username for provisioning."
+                ),
+                password_description=(
+                    "Configured database administration password for provisioning."
+                ),
+            )
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class EffectiveDatabaseConfig:
@@ -327,6 +354,11 @@ class EffectiveDatabaseConfig:
             secrets=secrets,
             purpose=purpose,
         )
+
+    def credential_references(self) -> tuple[CredentialReference, ...]:
+        if self.structured is None:
+            return ()
+        return self.structured.credential_references()
 
 
 @dataclass(frozen=True, slots=True)
@@ -677,6 +709,41 @@ def _resolve_credentials(
             field_name=f"{purpose} database password",
         ),
     )
+
+
+def _database_credential_references(
+    credentials: DatabaseCredentialConfig,
+    *,
+    source: SecretSource,
+    user_name: str,
+    password_name: str,
+    user_description: str,
+    password_description: str,
+) -> tuple[CredentialReference, ...]:
+    references: list[CredentialReference] = []
+    if credentials.user_key is not None:
+        references.append(
+            CredentialReference(
+                name=user_name,
+                key=credentials.user_key,
+                owner="database",
+                description=user_description,
+                source=source,
+                required=True,
+            )
+        )
+    if credentials.password_key is not None:
+        references.append(
+            CredentialReference(
+                name=password_name,
+                key=credentials.password_key,
+                owner="database",
+                description=password_description,
+                source=source,
+                required=True,
+            )
+        )
+    return tuple(references)
 
 
 def _resolve_credential_value(

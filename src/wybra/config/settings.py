@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Self
 
 from envex import Env
 
+from wybra.config.credentials import CredentialReference
 from wybra.config.service import ConfigService
 from wybra.config.sources import AppConfigSource, FileConfigSource
 from wybra.config.types import (
@@ -39,6 +40,10 @@ class BaseSettings:
         config: ConfigService | Mapping[str, Any],
     ) -> Self:
         return cls(**cls.settings_kwargs(config))
+
+    def credential_references(self) -> tuple[CredentialReference, ...]:
+        """Return configured credential references owned by these settings."""
+        return ()
 
     @classmethod
     def settings_kwargs(

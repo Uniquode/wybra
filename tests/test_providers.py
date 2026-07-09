@@ -176,6 +176,52 @@ class TestProvidersSettings:
             == "auth/providers/google/dev/client-secret"
         )
 
+    def test_provider_settings_exposes_credential_references(self) -> None:
+        settings = _providers_settings(
+            {
+                GOOGLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "secrets": "keychain",
+                },
+                APPLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "secrets": "keychain",
+                },
+            }
+        )
+
+        references = settings.credential_references()
+
+        assert [
+            (
+                reference.name,
+                reference.key,
+                reference.owner,
+                reference.source,
+                reference.required,
+                reference.description,
+            )
+            for reference in references
+        ] == [
+            (
+                GOOGLE_PROVIDER_NAME,
+                provider_client_secret_key(GOOGLE_PROVIDER_NAME),
+                "providers",
+                "keychain",
+                True,
+                "Provider google client secret.",
+            ),
+            (
+                APPLE_PROVIDER_NAME,
+                provider_private_key_secret_key(APPLE_PROVIDER_NAME),
+                "providers",
+                "keychain",
+                True,
+                "Provider apple private key.",
+            ),
+        ]
+        assert all(not hasattr(reference, "value") for reference in references)
+
     def test_keychain_apple_private_key_defaults_to_provider_key(self) -> None:
         provider = _providers_settings(
             {

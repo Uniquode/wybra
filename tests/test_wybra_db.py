@@ -32,6 +32,7 @@ from wybra.db.persistence import (
     create_database,
 )
 from wybra.db.settings import (
+    StructuredDatabaseConfig,
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
 )
@@ -578,6 +579,82 @@ def test_structured_database_config_resolves_secret_credentials(
     assert connection.credentials["password"] == "app_password"
     assert "app_password" not in repr(connection)
     assert "app_password" not in connection.redacted_description
+
+
+def test_structured_database_config_exposes_credential_references() -> None:
+    config = StructuredDatabaseConfig.from_values(
+        {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "keychain",
+            "user_key": "database/app/user",
+            "password_key": "database/app/password",
+            "sa_user_key": "database/app/admin-user",
+            "sa_password_key": "database/app/admin-password",
+        }
+    )
+
+    references = config.credential_references()
+
+    assert [
+        (
+            reference.name,
+            reference.key,
+            reference.owner,
+            reference.source,
+            reference.required,
+            reference.description,
+        )
+        for reference in references
+    ] == [
+        (
+            "database-user",
+            "database/app/user",
+            "database",
+            "keychain",
+            True,
+            "Configured runtime database username.",
+        ),
+        (
+            "database-password",
+            "database/app/password",
+            "database",
+            "keychain",
+            True,
+            "Configured runtime database password.",
+        ),
+        (
+            "database-admin-user",
+            "database/app/admin-user",
+            "database",
+            "keychain",
+            True,
+            "Configured database administration username for provisioning.",
+        ),
+        (
+            "database-admin-password",
+            "database/app/admin-password",
+            "database",
+            "keychain",
+            True,
+            "Configured database administration password for provisioning.",
+        ),
+    ]
+    assert all(not hasattr(reference, "value") for reference in references)
+
+
+def test_structured_sqlite_config_exposes_no_credential_references() -> None:
+    config = StructuredDatabaseConfig.from_values(
+        {
+            "backend": "sqlite",
+            "database": "local.sqlite3",
+            "credential_source": "keychain",
+            "user_key": "database/app/user",
+            "password_key": "database/app/password",
+        }
+    )
+
+    assert config.credential_references() == ()
 
 
 def test_structured_database_config_rejects_plain_and_key_credentials(
