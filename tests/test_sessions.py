@@ -21,7 +21,7 @@ from wybra.db.surfaces import (
     model_packages_from_modules,
 )
 from wybra.services.crypto import (
-    ENV_WYBRA_SECRET_KEY_CURRENT,
+    ENV_WYBRA_SECRET_KEY,
     SecretEnvelopeService,
     generate_secret_key_entry,
 )
@@ -473,9 +473,7 @@ def test_cookie_session_backend_round_trips_through_middleware() -> None:
                 }
             ),
             environ={
-                ENV_WYBRA_SECRET_KEY_CURRENT: generate_secret_key_entry(
-                    version="current"
-                )
+                ENV_WYBRA_SECRET_KEY: generate_secret_key_entry(version="current")
             },
         )
     )

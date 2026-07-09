@@ -19,6 +19,8 @@ from wybra.auth.models import (
 from wybra.db.persistence import close_database, create_database
 from wybra.forms import CSRF_TOKEN_SECRET_KEY_CURRENT, CSRF_TOKEN_SECRET_KEY_PREVIOUS
 from wybra.services.crypto import (
+    SECRET_KEY_CURRENT,
+    SECRET_KEY_PREVIOUS,
     SecretEnvelopeService,
     generate_secret_key_entry,
     parse_secret_key_bundle,
@@ -71,12 +73,10 @@ previous_keys = "SYSTEM_SECRET_KEYS_PREVIOUS"
 [auth.providers.google]
 enabled = true
 secrets = "keychain"
-client_secret_key = "auth/providers/google/client-secret"
 
 [auth.providers.github]
 enabled = false
 secrets = "keychain"
-client_secret_key = "auth/providers/github/client-secret"
 
 [auth.providers.apple]
 enabled = true
@@ -244,23 +244,23 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
 
     result = runner.invoke(
         secret_cli.secret_command,
-        ["set", "WYBRA_SECRET_KEY_CURRENT"],
+        ["set", SECRET_KEY_CURRENT],
         input="secret-value\n",
     )
 
     assert result.exit_code == 0, result.output
-    assert keyring.values[("wybra", "WYBRA_SECRET_KEY_CURRENT")] == "secret-value"
+    assert keyring.values[("wybra", SECRET_KEY_CURRENT)] == "secret-value"
 
     result = runner.invoke(
         secret_cli.secret_command,
-        ["get", "--json", "WYBRA_SECRET_KEY_CURRENT"],
+        ["get", "--json", SECRET_KEY_CURRENT],
     )
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {
-        "key": "WYBRA_SECRET_KEY_CURRENT",
+        "key": SECRET_KEY_CURRENT,
         "service": "wybra",
-        "username": "WYBRA_SECRET_KEY_CURRENT",
+        "username": SECRET_KEY_CURRENT,
         "value": "secret-value",
     }
 
@@ -268,8 +268,8 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     records = {item["key"]: item for item in json.loads(result.output)["keys"]}
-    assert records["WYBRA_SECRET_KEY_CURRENT"]["exists"] is True
-    assert records["WYBRA_SECRET_KEYS_PREVIOUS"]["exists"] is False
+    assert records[SECRET_KEY_CURRENT]["exists"] is True
+    assert records[SECRET_KEY_PREVIOUS]["exists"] is False
 
 
 def test_set_supports_json_bulk_input(monkeypatch) -> None:
@@ -281,7 +281,7 @@ def test_set_supports_json_bulk_input(monkeypatch) -> None:
         ["set", "--json"],
         input=json.dumps(
             {
-                "WYBRA_SECRET_KEY_CURRENT": "current-secret",
+                SECRET_KEY_CURRENT: "current-secret",
                 "auth/providers/google/client-secret": "google-secret",
             }
         ),
@@ -289,16 +289,16 @@ def test_set_supports_json_bulk_input(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert keyring.values == {
-        ("wybra", "WYBRA_SECRET_KEY_CURRENT"): "current-secret",
+        ("wybra", SECRET_KEY_CURRENT): "current-secret",
         ("wybra", "auth/providers/google/client-secret"): "google-secret",
     }
     output = json.loads(result.output)
     assert output == {
         "stored": [
             {
-                "key": "WYBRA_SECRET_KEY_CURRENT",
+                "key": SECRET_KEY_CURRENT,
                 "service": "wybra",
-                "username": "WYBRA_SECRET_KEY_CURRENT",
+                "username": SECRET_KEY_CURRENT,
             },
             {
                 "key": "auth/providers/google/client-secret",
@@ -350,8 +350,8 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     )
     assert records[CSRF_TOKEN_SECRET_KEY_PREVIOUS]["exists"] is True
     assert records["auth/providers/google/client-secret"]["exists"] is True
-    assert "WYBRA_SECRET_KEY_CURRENT" not in records
-    assert "WYBRA_SECRET_KEYS_PREVIOUS" not in records
+    assert SECRET_KEY_CURRENT not in records
+    assert SECRET_KEY_PREVIOUS not in records
     assert "auth/providers/github/client-secret" not in records
     assert "APPLE_PRIVATE_KEY" not in records
 
@@ -513,7 +513,7 @@ def test_rotate_secret_key_refuses_non_keychain_crypto_source(
     assert keyring.writes == []
 
 
-def test_rotate_secret_key_refuses_missing_previous_keys_reference(
+def test_rotate_secret_key_uses_default_previous_keys_reference(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -527,10 +527,11 @@ def test_rotate_secret_key_refuses_missing_previous_keys_reference(
         ["--config", config_path.as_posix(), "rotate", "secret-key"],
     )
 
-    assert result.exit_code != 0
-    assert "[secrets.crypto].previous_keys" in result.output
-    assert keyring.values == {("uniquode.io", "SYSTEM_SECRET_KEY"): current}
-    assert keyring.writes == []
+    assert result.exit_code == 0, result.output
+    assert keyring.values[("uniquode.io", SECRET_KEY_PREVIOUS)] == current
+    assert keyring.values[("uniquode.io", "SYSTEM_SECRET_KEY")] != current
+    assert keyring.writes[0][:2] == ("uniquode.io", SECRET_KEY_PREVIOUS)
+    assert keyring.writes[1][:2] == ("uniquode.io", "SYSTEM_SECRET_KEY")
 
 
 def test_rotate_csrf_token_secret_updates_previous_before_current(

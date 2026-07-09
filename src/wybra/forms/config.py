@@ -15,7 +15,7 @@ from wybra.config import (
 )
 from wybra.services.secrets import SecretSource, normalise_secret_source
 
-ENV_CSRF_SECRET: Final = "CSRF_SECRET"
+ENV_CSRF_SECRET_KEY: Final = "CSRF_SECRET_KEY"
 ENV_CSRF_SECURE: Final = "CSRF_SECURE"
 FORMS_CONFIG_SECTION: Final = "wybra.forms"
 CSRF_TOKEN_SECRET_KEY_CURRENT: Final = "auth/forms/csrf-token-secret/current"
@@ -59,7 +59,7 @@ module_config: Final = ConfigDef(
                 ),
                 ConfigField(
                     name="csrf_token_secret",
-                    env=ENV_CSRF_SECRET,
+                    env=ENV_CSRF_SECRET_KEY,
                     transform=to_csrf_token_secret,
                 ),
                 ConfigField(
@@ -85,7 +85,7 @@ module_config: Final = ConfigDef(
 
 
 __all__ = (
-    "ENV_CSRF_SECRET",
+    "ENV_CSRF_SECRET_KEY",
     "ENV_CSRF_SECURE",
     "CSRF_TOKEN_SECRET_KEY_CURRENT",
     "CSRF_TOKEN_SECRET_KEY_PREVIOUS",

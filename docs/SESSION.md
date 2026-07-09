@@ -78,14 +78,14 @@ storage_backend = "cookie"
 cookie_payload_max_bytes = 3800
 ```
 
-Cookie storage uses Wybra's secret-envelope key material. Configure
-`WYBRA_SECRET_KEY_CURRENT` and, during rotation, `WYBRA_SECRET_KEYS_PREVIOUS`.
-See [`SECRET_KEY.md`](SECRET_KEY.md) and
-[`SECRET_ROTATION.md`](SECRET_ROTATION.md).
+Cookie storage uses Wybra's secret-envelope key material. For environment-based
+fallback, configure `WYBRA_SECRET_KEY`. For rotation, use keychain-backed
+`[secrets.crypto]` storage. See [`ENV_VARS.md`](ENV_VARS.md),
+[`SECRET_KEY.md`](SECRET_KEY.md), and [`SECRET_ROTATION.md`](SECRET_ROTATION.md).
 
 For local unconfigured deployments, Wybra generates process-local cookie
 encryption material. Local session cookies therefore do not survive application
-restarts unless you configure `WYBRA_SECRET_KEY_CURRENT`.
+restarts unless you configure `WYBRA_SECRET_KEY`.
 
 ## Lifetime And Cookie Settings
 
@@ -109,6 +109,10 @@ cookie_same_site = "lax"
 
 If `cookie_secure` is not configured, Wybra uses insecure cookies only for the
 `local` deployment environment and secure cookies elsewhere.
+
+See [`ENV_VARS.md`](ENV_VARS.md) for session environment overrides such as
+`SESSIONS_STORAGE_BACKEND`, `SESSIONS_COOKIE_SECURE`, and
+`SESSIONS_COOKIE_NAME`.
 
 ## Payload Limits
 

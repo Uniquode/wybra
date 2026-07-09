@@ -13,10 +13,7 @@ from wybra.providers.settings import (
     provider_settings_from_config,
 )
 from wybra.secrets.config import SecretsSettings
-from wybra.services.crypto import (
-    ENV_WYBRA_SECRET_KEY_CURRENT,
-    ENV_WYBRA_SECRET_KEYS_PREVIOUS,
-)
+from wybra.services.crypto import SECRET_KEY_CURRENT, SECRET_KEY_PREVIOUS
 from wybra.services.secrets import KEYCHAIN_SOURCE, SecretSource
 
 SECRET_KEY_OWNER_CRYPTO: Final = "crypto"
@@ -35,13 +32,13 @@ class KnownSecretKey:
 
 BUILTIN_CRYPTO_SECRET_KEYS: Final[tuple[KnownSecretKey, ...]] = (
     KnownSecretKey(
-        key=ENV_WYBRA_SECRET_KEY_CURRENT,
+        key=SECRET_KEY_CURRENT,
         owner=SECRET_KEY_OWNER_CRYPTO,
         description="Current system secret key.",
         required=True,
     ),
     KnownSecretKey(
-        key=ENV_WYBRA_SECRET_KEYS_PREVIOUS,
+        key=SECRET_KEY_PREVIOUS,
         owner=SECRET_KEY_OWNER_CRYPTO,
         description="Previous system secret keys used during key rotation.",
     ),

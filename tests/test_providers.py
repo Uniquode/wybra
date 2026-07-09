@@ -80,6 +80,8 @@ from wybra.providers.settings import (
     PROVIDER_PRIVATE_KEY_SECRET_KEY_FIELD,
     PROVIDER_SECRETS_FIELD,
     PROVIDER_TEAM_ID_FIELD,
+    provider_client_secret_key,
+    provider_private_key_secret_key,
 )
 from wybra.secrets import MissingSecretError, SecretValue
 from wybra.site import start
@@ -155,6 +157,44 @@ class TestProvidersSettings:
 
         assert provider.email_match_linking_enabled is False
 
+    def test_keychain_client_secret_key_defaults_to_provider_key(self) -> None:
+        provider = _providers_settings(
+            {
+                GOOGLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "secrets": "keychain",
+                }
+            }
+        ).provider(GOOGLE_PROVIDER_NAME)
+
+        assert provider.required_client_secret_reference() == (
+            "keychain",
+            provider_client_secret_key(GOOGLE_PROVIDER_NAME),
+        )
+        assert (
+            provider_client_secret_key(GOOGLE_PROVIDER_NAME, development=True)
+            == "auth/providers/google/dev/client-secret"
+        )
+
+    def test_keychain_apple_private_key_defaults_to_provider_key(self) -> None:
+        provider = _providers_settings(
+            {
+                APPLE_PROVIDER_NAME: {
+                    "enabled": True,
+                    "secrets": "keychain",
+                }
+            }
+        ).provider(APPLE_PROVIDER_NAME)
+
+        assert provider.required_private_key_reference() == (
+            "keychain",
+            provider_private_key_secret_key(APPLE_PROVIDER_NAME),
+        )
+        assert (
+            provider_private_key_secret_key(APPLE_PROVIDER_NAME, development=True)
+            == "auth/providers/apple/dev/private-key"
+        )
+
     def test_programmatic_provider_settings_strings_are_trimmed(self) -> None:
         provider = ProviderSettings(
             name=f" {GOOGLE_PROVIDER_NAME} ",
@@ -214,7 +254,6 @@ class TestProvidersSettings:
                     "enabled": True,
                     "client_id": " google-client-id ",
                     "secrets": "keychain",
-                    "client_secret_key": "auth/providers/google/dev/client-secret",
                 }
             }
         ).provider(GOOGLE_PROVIDER_NAME)
@@ -233,6 +272,10 @@ class TestProvidersSettings:
         assert (
             settings.discovery_document_url
             == "https://accounts.google.com/.well-known/openid-configuration"
+        )
+        assert settings.client_secret_reference == (
+            "keychain",
+            "auth/providers/google/client-secret",
         )
 
     def test_google_oauth_settings_require_google_provider(self) -> None:
@@ -267,7 +310,6 @@ class TestProvidersSettings:
                     "enabled": True,
                     "client_id": " github-client-id ",
                     "secrets": "keychain",
-                    "client_secret_key": "auth/providers/github/dev/client-secret",
                 }
             }
         ).provider(GITHUB_PROVIDER_NAME)
@@ -281,6 +323,10 @@ class TestProvidersSettings:
         assert settings.user_api_endpoint == GITHUB_DEFAULT_USER_API_ENDPOINT
         assert settings.emails_api_endpoint == GITHUB_DEFAULT_EMAILS_API_ENDPOINT
         assert settings.api_version == GITHUB_DEFAULT_API_VERSION
+        assert settings.client_secret_reference == (
+            "keychain",
+            "auth/providers/github/client-secret",
+        )
 
     def test_github_oauth_settings_require_github_provider(self) -> None:
         with pytest.raises(
@@ -374,7 +420,6 @@ class TestProvidersSettings:
                     "team_id": " TEAMID1234 ",
                     "key_id": " KEYID1234 ",
                     "secrets": "keychain",
-                    "private_key_secret_key": "auth/providers/apple/private-key",
                 }
             }
         ).provider(APPLE_PROVIDER_NAME)

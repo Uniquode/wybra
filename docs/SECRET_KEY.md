@@ -5,7 +5,7 @@ be stable in staging and production so tokens continue to validate across app
 reloads and multiple workers.
 
 This key is separate from `[secrets.crypto]` and must not reuse
-`WYBRA_SECRET_KEY_CURRENT`.
+`WYBRA_SECRET_KEY`.
 
 ## Storage Key
 
@@ -50,8 +50,11 @@ modules = [
 csrf_token_secret_source = "keychain"
 ```
 
-`CSRF_SECRET` or inline `csrf_token_secret` may be used as a fallback, but the
+`CSRF_SECRET_KEY` or inline `csrf_token_secret` may be used as a fallback, but the
 keychain value wins when it exists.
+
+See [`ENV_VARS.md`](ENV_VARS.md) for the full environment variable reference,
+including `CSRF_SECRET_KEY`, `CSRF_SECURE`, and `WYBRA_SECRET_KEY`.
 
 The default CSRF token age is 3600 seconds. Override it only when your
 deployment needs a different rotation overlap window:

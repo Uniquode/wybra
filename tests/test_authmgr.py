@@ -106,7 +106,7 @@ from wybra.db.urls import (
     parse_sqlite_database_url,
     resolve_database_url,
 )
-from wybra.services.crypto import ENV_WYBRA_SECRET_KEY_CURRENT
+from wybra.services.crypto import ENV_WYBRA_SECRET_KEY
 from wybra.site import Site
 from wybra.tools.app_startup import CONFIG_SOURCE_CONTEXT_KEY
 
@@ -335,7 +335,7 @@ def _authmgr_app_config(
 ) -> None:
     config_path = write_auth_app_toml(tmp_path / "app.toml")
     monkeypatch.setenv("APP_CONFIG", str(config_path))
-    monkeypatch.setenv(ENV_WYBRA_SECRET_KEY_CURRENT, secret_key_entry_for_tests())
+    monkeypatch.setenv(ENV_WYBRA_SECRET_KEY, secret_key_entry_for_tests())
     monkeypatch.delenv("AUTH_CONFIG", raising=False)
 
 
@@ -718,7 +718,7 @@ def test_authmgr_command_secret_service_uses_configured_crypto_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configured_key_name = "AUTHMGR_CONFIGURED_SECRET_KEY"
-    monkeypatch.setenv(ENV_WYBRA_SECRET_KEY_CURRENT, secret_key_entry_for_tests())
+    monkeypatch.setenv(ENV_WYBRA_SECRET_KEY, secret_key_entry_for_tests())
     monkeypatch.setenv(configured_key_name, secret_key_entry_for_tests("configured"))
     config_path = write_auth_app_toml(tmp_path / "app.toml")
     with config_path.open("a", encoding="utf-8") as handle:

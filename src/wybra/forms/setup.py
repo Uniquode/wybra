@@ -48,7 +48,8 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
             return local_fallback
         raise ConfigurationError(
             "Keychain-backed CSRF token secret requires SecretsCapability. "
-            "Add `wybra.secrets` to app modules or configure CSRF_SECRET fallback."
+            "Add `wybra.secrets` to app modules or configure CSRF_SECRET_KEY "
+            "fallback."
         )
 
     try:
@@ -66,7 +67,7 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
         raise ConfigurationError(
             "Keychain-backed CSRF token secret could not be resolved: "
             f"source={reference_source}, key={reference_identifier}. "
-            "Configure CSRF_SECRET fallback or fix the keychain reference."
+            "Configure CSRF_SECRET_KEY fallback or fix the keychain reference."
         ) from exc
 
     if secret.strip():

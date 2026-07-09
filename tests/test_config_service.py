@@ -359,7 +359,7 @@ account_creation_policy = "closed"
 
 [secrets.crypto]
 source = "keychain"
-current_key = "WYBRA_SECRET_KEY_CURRENT"
+current_key = "secrets/key/current"
 
 [secrets.keychain]
 appname = "wybra"
@@ -391,7 +391,7 @@ username = "deployment"
     assert service.get_config("auth") == {"account_creation_policy": "closed"}
     assert service.get_config("secrets.crypto") == {
         "source": "keychain",
-        "current_key": "WYBRA_SECRET_KEY_CURRENT",
+        "current_key": "secrets/key/current",
     }
     assert service.get_config("secrets.keychain") == {
         "appname": "wybra",
