@@ -111,14 +111,11 @@ class CryptoSecretSourceSettings:
         source = _optional_secret_source(self.source)
         current_key = _non_blank_string(self.current_key)
         previous_keys = _optional_non_blank_string(self.previous_keys)
-        if source == ENVIRONMENT_SOURCE:
-            if current_key == SECRET_KEY_CURRENT:
-                current_key = ENV_WYBRA_SECRET_KEY
-            if previous_keys == SECRET_KEY_PREVIOUS:
-                previous_keys = None
-        elif source == KEYCHAIN_SOURCE:
-            if previous_keys is None:
-                previous_keys = SECRET_KEY_PREVIOUS
+        current_key, previous_keys = _source_crypto_key_references(
+            source,
+            current_key,
+            previous_keys,
+        )
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "current_key", current_key)
         object.__setattr__(self, "previous_keys", previous_keys)
@@ -128,6 +125,27 @@ class CryptoSecretSourceSettings:
 class KeychainSecretSourceSettings:
     appname: str = DEFAULT_KEYCHAIN_APPNAME
     username: str | None = None
+
+
+def _source_crypto_key_references(
+    source: SecretSource | None,
+    current_key: str,
+    previous_keys: str | None,
+) -> tuple[str, str | None]:
+    """Resolve source-specific defaults for system secret-key references.
+
+    The config defaults are keychain references. Environment-backed crypto uses
+    the fixed ``WYBRA_SECRET_KEY`` fallback for the current key and only uses
+    previous keys when the deployment explicitly names a previous-key variable.
+    """
+    if source == ENVIRONMENT_SOURCE:
+        if current_key == SECRET_KEY_CURRENT:
+            current_key = ENV_WYBRA_SECRET_KEY
+        if previous_keys == SECRET_KEY_PREVIOUS:
+            previous_keys = None
+    elif source == KEYCHAIN_SOURCE and previous_keys is None:
+        previous_keys = SECRET_KEY_PREVIOUS
+    return current_key, previous_keys
 
 
 @dataclass(frozen=True, slots=True)

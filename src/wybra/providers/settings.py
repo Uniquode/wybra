@@ -15,8 +15,6 @@ from wybra.services.secrets import (
 
 PROVIDERS_CONFIG_SECTION: Final = "auth.providers"
 APPLE_PROVIDER_NAME: Final = "apple"
-GITHUB_PROVIDER_NAME: Final = "github"
-GOOGLE_PROVIDER_NAME: Final = "google"
 PROVIDER_ENABLED_FIELD: Final = "enabled"
 PROVIDER_CLIENT_ID_FIELD: Final = "client_id"
 PROVIDER_SECRETS_FIELD: Final = "secrets"
@@ -97,13 +95,11 @@ class ProviderSettings:
         object.__setattr__(
             self,
             "client_secret_key",
-            _provider_secret_key_value(
+            _provider_client_secret_key_value(
                 provider_name=self.name,
                 secrets=self.secrets,
                 explicit_key=self.client_secret_key,
                 field_name=PROVIDER_CLIENT_SECRET_KEY_FIELD,
-                secret_path_suffix=PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX,
-                applies_to_provider=self.name != APPLE_PROVIDER_NAME,
             ),
         )
         object.__setattr__(
@@ -125,13 +121,11 @@ class ProviderSettings:
         object.__setattr__(
             self,
             "private_key_secret_key",
-            _provider_secret_key_value(
+            _provider_private_key_secret_key_value(
                 provider_name=self.name,
                 secrets=self.secrets,
                 explicit_key=self.private_key_secret_key,
                 field_name=PROVIDER_PRIVATE_KEY_SECRET_KEY_FIELD,
-                secret_path_suffix=PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX,
-                applies_to_provider=self.name == APPLE_PROVIDER_NAME,
             ),
         )
         object.__setattr__(
@@ -396,6 +390,38 @@ def _optional_provider_string(value: object, *, field_name: str) -> str | None:
     raise ConfigurationError(f"Provider {field_name} must be a string.")
 
 
+def _provider_client_secret_key_value(
+    *,
+    provider_name: str,
+    secrets: str | None,
+    explicit_key: object,
+    field_name: str,
+) -> str | None:
+    return _provider_secret_key_value(
+        provider_name=provider_name,
+        secrets=secrets,
+        explicit_key=explicit_key,
+        field_name=field_name,
+        secret_path_suffix=PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX,
+    )
+
+
+def _provider_private_key_secret_key_value(
+    *,
+    provider_name: str,
+    secrets: str | None,
+    explicit_key: object,
+    field_name: str,
+) -> str | None:
+    return _provider_secret_key_value(
+        provider_name=provider_name,
+        secrets=secrets,
+        explicit_key=explicit_key,
+        field_name=field_name,
+        secret_path_suffix=PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX,
+    )
+
+
 def _provider_secret_key_value(
     *,
     provider_name: str,
@@ -403,18 +429,28 @@ def _provider_secret_key_value(
     explicit_key: object,
     field_name: str,
     secret_path_suffix: str,
-    applies_to_provider: bool,
 ) -> str | None:
     normalised = _optional_provider_string(explicit_key, field_name=field_name)
     if normalised is not None:
         return normalised
-    if secrets != KEYCHAIN_SOURCE or not applies_to_provider:
+    if secrets != KEYCHAIN_SOURCE or not _provider_secret_key_applies(
+        provider_name,
+        secret_path_suffix,
+    ):
         return None
     return _provider_secret_key(
         provider_name,
         secret_path_suffix=secret_path_suffix,
         development=False,
     )
+
+
+def _provider_secret_key_applies(provider_name: str, secret_path_suffix: str) -> bool:
+    if secret_path_suffix == PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX:
+        return provider_name != APPLE_PROVIDER_NAME
+    if secret_path_suffix == PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX:
+        return provider_name == APPLE_PROVIDER_NAME
+    return False
 
 
 def _provider_secret_key(
@@ -468,8 +504,6 @@ __all__ = (
     "APPLE_PROVIDER_NAME",
     "APPLE_PROVIDER_OPTION_FIELDS",
     "BASE_PROVIDER_OPTION_FIELDS",
-    "GITHUB_PROVIDER_NAME",
-    "GOOGLE_PROVIDER_NAME",
     "PROVIDERS_CONFIG_SECTION",
     "PROVIDER_ACCOUNT_CREATION_ENABLED_FIELD",
     "PROVIDER_ALLOWED_DOMAINS_FIELD",
