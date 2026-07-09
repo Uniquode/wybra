@@ -26,13 +26,13 @@ dependencies = [
     "qrcode>=8.0",
     "starlette>=1.3.1",
     "tortoise-orm>=1.1.7,<1.2.0",
-    "uvicorn>=0.50.2",
+    "uvicorn>=0.51.0",
     "webauthn>=3.0.0",
 ]
 
 [project.optional-dependencies]
 kms = [
-    "boto3>=1.43.42",
+    "boto3>=1.43.44",
 ]
 keychain = [
     "keyring>=25.7.0",
@@ -47,7 +47,7 @@ postgresql = [
     "asyncpg>=0.31.0",
 ]
 psycopg = [
-    "psycopg[binary,pool]>=3.0.12,<4.0.0",
+    "psycopg[binary,pool]>=3.3.4,<4.0.0",
 ]
 mysql = [
     "aiomysql",
@@ -65,7 +65,7 @@ databases = [
     "asyncodbc>=0.1.1,<1.0.0",
     "asyncpg>=0.31.0",
     "pyodbc",
-    "psycopg[binary,pool]>=3.0.12,<4.0.0",
+    "psycopg[binary,pool]>=3.3.4,<4.0.0",
 ]
 
 [project.scripts]
@@ -78,7 +78,7 @@ wybra-secret = "wybra.secrets.cli:main"
 wybra-validate = "wybra.tools.validate:main"
 
 [build-system]
-requires = ["uv_build>=0.11.27,<0.12.0"]
+requires = ["uv_build>=0.11.28,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -90,7 +90,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",
     "ruff>=0.15.20",
-    "ty>=0.0.56",
+    "ty>=0.0.57",
 ]
 
 [tool.ruff]
