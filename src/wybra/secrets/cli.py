@@ -35,7 +35,7 @@ from wybra.forms.settings import FormsSettings
 from wybra.secrets.config import KeychainSecretSourceSettings, SecretsSettings
 from wybra.secrets.keys import (
     builtin_keychain_secret_key,
-    known_keychain_secret_keys,
+    configured_keychain_credential_references,
     normalise_secret_key_type,
 )
 from wybra.secrets.reencryption import (
@@ -71,7 +71,7 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 
 class SecretCommandSettings:
     keychain: KeychainSecretSourceSettings
     secrets: SecretsSettings
-    known_keys: tuple[CredentialReference, ...]
+    credential_references: tuple[CredentialReference, ...]
     raw_config: Mapping[str, Mapping[str, Any]] | None = None
 
 
@@ -90,7 +90,7 @@ def secret_command(ctx: click.Context, config_source: str | None) -> None:
 @click.option(
     "--type",
     "key_type",
-    help="Use a built-in Wybra key type instead of a raw key.",
+    help="Use a Wybra credential type instead of a raw key.",
 )
 @click.option(
     "--dev",
@@ -131,7 +131,8 @@ def set_command(
 ) -> None:
     """Store one or more values in the OS keychain."""
 
-    driver = _keychain_driver_from_context(ctx)
+    settings = _secret_command_settings_from_context(ctx)
+    driver = KeychainSecretSourceDriver(settings.keychain)
     if json_input:
         if (
             key_type is not None
@@ -150,6 +151,7 @@ def set_command(
         return
 
     resolved_key, resolved_value = _set_key_and_value(
+        settings=settings,
         key=key,
         value=value,
         key_type=key_type,
@@ -171,7 +173,7 @@ def set_command(
 @click.option(
     "--type",
     "key_type",
-    help="Use a built-in Wybra key type instead of a raw key.",
+    help="Use a Wybra credential type instead of a raw key.",
 )
 @click.option(
     "--dev",
@@ -191,9 +193,15 @@ def get_command(
 ) -> None:
     """Read one value from the OS keychain."""
 
-    driver = _keychain_driver_from_context(ctx)
+    settings = _secret_command_settings_from_context(ctx)
+    driver = KeychainSecretSourceDriver(settings.keychain)
     key_value = secret_key_value(
-        _get_key(key=key, key_type=key_type, development=development)
+        _get_key(
+            settings=settings,
+            key=key,
+            key_type=key_type,
+            development=development,
+        )
     )
     try:
         secret = driver.resolve(key_value).reveal()
@@ -227,16 +235,19 @@ def get_command(
 @click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
 @click.pass_context
 def list_command(ctx: click.Context, development: bool, json_output: bool) -> None:
-    """List Wybra-known key references and whether they exist."""
+    """List configured keychain credential references and whether they exist."""
 
     settings = _secret_command_settings_from_context(ctx)
     driver = KeychainSecretSourceDriver(settings.keychain)
-    known_keys = (
-        known_keychain_secret_keys(development=True)
+    credential_references = (
+        configured_keychain_credential_references(development=True)
         if development
-        else settings.known_keys
+        else settings.credential_references
     )
-    records = [_known_key_record(driver, known_key) for known_key in known_keys]
+    records = [
+        _credential_reference_record(driver, reference)
+        for reference in credential_references
+    ]
     if json_output:
         _write_json({"keys": {str(record["name"]): record for record in records}})
         return
@@ -397,12 +408,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     return int(result or 0)
 
 
-def _keychain_driver_from_context(ctx: click.Context) -> KeychainSecretSourceDriver:
-    return KeychainSecretSourceDriver(
-        _secret_command_settings_from_context(ctx).keychain
-    )
-
-
 def _secret_command_settings_from_context(ctx: click.Context) -> SecretCommandSettings:
     root_context = ctx.find_root()
     config_source = _config_source_from_context(root_context)
@@ -411,18 +416,19 @@ def _secret_command_settings_from_context(ctx: click.Context) -> SecretCommandSe
         raw_config = _load_optional_raw_config(config_source)
         if raw_config is None:
             secrets_settings = SecretsSettings()
-            known_keys = known_keychain_secret_keys()
+            credential_references = configured_keychain_credential_references()
         else:
             configure_cli_logging(config=merge_logging_config(raw_config.get("log")))
             secrets_settings = _secrets_settings_from_raw_config(raw_config)
-            known_keys = known_keychain_secret_keys(
+            credential_references = configured_keychain_credential_references(
                 raw_config=raw_config,
                 secrets_settings=secrets_settings,
+                project_root=runtime_project_root(),
             )
         return SecretCommandSettings(
             keychain=secrets_settings.keychain,
             secrets=secrets_settings,
-            known_keys=known_keys,
+            credential_references=credential_references,
             raw_config=raw_config,
         )
     except (CompositionError, ConfigurationError, ProjectToolConfigurationError) as exc:
@@ -640,6 +646,7 @@ def _validate_csrf_token_secret_rotation(
 
 def _set_key_and_value(
     *,
+    settings: SecretCommandSettings,
     key: str | None,
     value: str | None,
     key_type: str | None,
@@ -651,11 +658,12 @@ def _set_key_and_value(
         return key, value
     if value is not None:
         raise click.UsageError("When --type is used, provide at most one VALUE.")
-    return builtin_keychain_secret_key(key_type, development=development), key
+    return _key_for_type(settings, key_type, development=development), key
 
 
 def _get_key(
     *,
+    settings: SecretCommandSettings,
     key: str | None,
     key_type: str | None,
     development: bool,
@@ -668,7 +676,34 @@ def _get_key(
         return key
     if key is not None:
         raise click.UsageError("KEY cannot be combined with --type.")
-    return builtin_keychain_secret_key(key_type, development=development)
+    return _key_for_type(settings, key_type, development=development)
+
+
+def _key_for_type(
+    settings: SecretCommandSettings,
+    key_type: str,
+    *,
+    development: bool,
+) -> str:
+    normalised_type = normalise_secret_key_type(key_type)
+    try:
+        return builtin_keychain_secret_key(normalised_type, development=development)
+    except ConfigurationError:
+        if development:
+            raise click.UsageError(f"Unknown secret type: {normalised_type}.") from None
+
+    if not development:
+        configured_key = next(
+            (
+                reference.key
+                for reference in settings.credential_references
+                if reference.name == normalised_type
+            ),
+            None,
+        )
+        if configured_key is not None:
+            return configured_key
+    raise click.UsageError(f"Unknown secret type: {normalised_type}.")
 
 
 def _secret_value_from_input(
@@ -735,24 +770,25 @@ def _non_empty_secret_value(value: str) -> str:
     return value
 
 
-def _known_key_record(
+def _credential_reference_record(
     driver: KeychainSecretSourceDriver,
-    known_key: CredentialReference,
+    reference: CredentialReference,
 ) -> dict[str, Any]:
-    service, username = driver.identity(known_key.key)
+    service, username = driver.identity(reference.key)
     try:
-        exists = driver.exists(known_key.key)
+        exists = driver.exists(reference.key)
     except click.ClickException:
         raise
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
     return {
-        "name": known_key.name,
-        "key": known_key.key,
-        "owner": known_key.owner,
-        "description": known_key.description,
-        "source": known_key.source,
-        "required": known_key.required,
+        "name": reference.name,
+        "key": reference.key,
+        "owner": reference.owner,
+        "description": reference.description,
+        "source": reference.source,
+        "required": reference.required,
+        "rotation_role": reference.rotation_role,
         "service": service,
         "username": username,
         "exists": exists,

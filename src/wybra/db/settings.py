@@ -207,6 +207,25 @@ class StructuredDatabaseConfig:
             else _optional_secret_source(self.credential_source)
         )
         object.__setattr__(self, "credential_source", credential_source)
+        if credential_source is not None and credential_source != ENVIRONMENT_SOURCE:
+            object.__setattr__(
+                self,
+                "runtime_credentials",
+                _with_default_database_credential_keys(
+                    self.runtime_credentials,
+                    database=self.database,
+                    role="app",
+                ),
+            )
+            object.__setattr__(
+                self,
+                "service_account_credentials",
+                _with_default_database_credential_keys(
+                    self.service_account_credentials,
+                    database=self.database,
+                    role="service-account",
+                ),
+            )
         _validate_database_credential_configuration(
             backend_info,
             self.credential_source,
@@ -251,13 +270,13 @@ class StructuredDatabaseConfig:
             + _database_credential_references(
                 self.service_account_credentials,
                 source=source,
-                user_name="database-admin-user",
-                password_name="database-admin-password",
+                user_name="database-sa-user",
+                password_name="database-sa-password",
                 user_description=(
-                    "Configured database administration username for provisioning."
+                    "Configured database service-account username for provisioning."
                 ),
                 password_description=(
-                    "Configured database administration password for provisioning."
+                    "Configured database service-account password for provisioning."
                 ),
             )
         )
@@ -744,6 +763,30 @@ def _database_credential_references(
             )
         )
     return tuple(references)
+
+
+def _with_default_database_credential_keys(
+    credentials: DatabaseCredentialConfig,
+    *,
+    database: str,
+    role: str,
+) -> DatabaseCredentialConfig:
+    user_key = credentials.user_key
+    password_key = credentials.password_key
+    if credentials.user is None and user_key is None:
+        user_key = _default_database_credential_key(database, role, "user")
+    if credentials.password is None and password_key is None:
+        password_key = _default_database_credential_key(database, role, "password")
+    return DatabaseCredentialConfig(
+        user=credentials.user,
+        password=credentials.password,
+        user_key=user_key,
+        password_key=password_key,
+    )
+
+
+def _default_database_credential_key(database: str, role: str, field_name: str) -> str:
+    return f"database/{database}/{role}/{field_name}"
 
 
 def _resolve_credential_value(

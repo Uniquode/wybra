@@ -145,6 +145,26 @@ csrf_token_secret = "inline-csrf-secret"
     return path
 
 
+def _database_keychain_config(path: Path) -> Path:
+    path.write_text(
+        """
+[app]
+modules = ["wybra.secrets"]
+
+[app.database]
+backend = "postgresql"
+database = "uniquode"
+credential_source = "keychain"
+
+[secrets.keychain]
+appname = "uniquode.io"
+username = "deployment"
+""".strip(),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _reencrypt_app_config(path: Path, database_url: str) -> Path:
     path.write_text(
         f"""
@@ -400,6 +420,47 @@ def test_type_uses_default_key_even_when_config_uses_custom_key(
     }
 
 
+def test_type_uses_configured_database_credential_reference(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    keyring = FakeKeyring()
+    _install_fake_keyring(monkeypatch, keyring)
+    config_path = _database_keychain_config(tmp_path / "app.toml")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        secret_cli.secret_command,
+        [
+            "--config",
+            config_path.as_posix(),
+            "set",
+            "--type",
+            "database-user",
+            "uniquode_user",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert keyring.values == {
+        ("uniquode.io", "database/uniquode/app/user"): "uniquode_user"
+    }
+
+    result = runner.invoke(
+        secret_cli.secret_command,
+        [
+            "--config",
+            config_path.as_posix(),
+            "get",
+            "--type",
+            "database-user",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "uniquode_user\n"
+
+
 def test_type_cannot_be_combined_with_raw_key(monkeypatch) -> None:
     keyring = FakeKeyring()
     _install_fake_keyring(monkeypatch, keyring)
@@ -411,6 +472,20 @@ def test_type_cannot_be_combined_with_raw_key(monkeypatch) -> None:
 
     assert result.exit_code != 0
     assert "KEY cannot be combined with --type" in result.output
+
+
+def test_unknown_type_reports_usage_error_without_traceback(monkeypatch) -> None:
+    keyring = FakeKeyring()
+    _install_fake_keyring(monkeypatch, keyring)
+
+    result = CliRunner().invoke(
+        secret_cli.secret_command,
+        ["set", "--type", "missing", "value"],
+    )
+
+    assert result.exit_code == 2
+    assert "Unknown secret type: missing." in result.output
+    assert "Traceback" not in result.output
 
 
 def test_list_uses_configured_keychain_metadata_and_app_key_refs(
@@ -462,6 +537,65 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     assert records[SECRET_KEY_TYPE_GOOGLE]["exists"] is True
     assert SECRET_KEY_TYPE_GITHUB not in records
     assert "apple" not in records
+
+
+def test_list_includes_configured_database_keychain_references(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    keyring = FakeKeyring(
+        {
+            ("uniquode.io", "database/uniquode/app/user"): "app_user",
+            (
+                "uniquode.io",
+                "database/uniquode/service-account/user",
+            ): "service_user",
+        }
+    )
+    _install_fake_keyring(monkeypatch, keyring)
+    config_path = _database_keychain_config(tmp_path / "app.toml")
+
+    result = CliRunner().invoke(
+        secret_cli.secret_command,
+        ["--config", config_path.as_posix(), "list", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    records = json.loads(result.output)["keys"]
+    assert records["database-user"] == {
+        "description": "Configured runtime database username.",
+        "exists": True,
+        "key": "database/uniquode/app/user",
+        "name": "database-user",
+        "owner": "database",
+        "required": True,
+        "rotation_role": None,
+        "service": "uniquode.io",
+        "source": "keychain",
+        "username": "database/uniquode/app/user",
+    }
+    assert records["database-password"] == {
+        "description": "Configured runtime database password.",
+        "exists": False,
+        "key": "database/uniquode/app/password",
+        "name": "database-password",
+        "owner": "database",
+        "required": True,
+        "rotation_role": None,
+        "service": "uniquode.io",
+        "source": "keychain",
+        "username": "database/uniquode/app/password",
+    }
+    assert records["database-sa-user"]["exists"] is True
+    assert records["database-sa-user"]["key"] == (
+        "database/uniquode/service-account/user"
+    )
+    assert records["database-sa-password"]["exists"] is False
+    assert records["database-sa-password"]["key"] == (
+        "database/uniquode/service-account/password"
+    )
+    assert "app_user" not in result.output
+    assert "service_user" not in result.output
 
 
 def test_list_excludes_crypto_keys_for_non_keychain_config(

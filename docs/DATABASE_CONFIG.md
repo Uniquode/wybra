@@ -65,13 +65,26 @@ host = "db.internal.example"
 port = 5432
 database = "uniquode"
 credential_source = "keychain"
-user_key = "database/uniquode/app/user"
-password_key = "database/uniquode/app/password"
 ```
 
 `credential_source` can use the same sources as the Wybra secrets subsystem,
 including `environment`, `keychain`, `kms`, and `vault` when those sources are
 available and configured.
+
+For non-environment secret sources, Wybra derives default database credential
+keys from the configured database name:
+
+| Credential | Default key |
+| --- | --- |
+| Runtime username | `database/<database>/app/user` |
+| Runtime password | `database/<database>/app/password` |
+| Service-account username | `database/<database>/service-account/user` |
+| Service-account password | `database/<database>/service-account/password` |
+
+For the example above, the runtime keys are
+`database/uniquode/app/user` and `database/uniquode/app/password`.
+Configure `user_key`, `password_key`, `sa_user_key`, or `sa_password_key` only
+when a deployment needs to override those defaults.
 
 ## Environment Credential Source
 
@@ -101,8 +114,6 @@ backend = "postgresql"
 host = "/var/run/postgresql"
 database = "uniquode"
 credential_source = "keychain"
-user_key = "database/uniquode/app/user"
-password_key = "database/uniquode/app/password"
 ```
 
 Wybra passes the socket path to the database backend without converting it into

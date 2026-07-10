@@ -32,6 +32,7 @@ from wybra.db.persistence import (
     create_database,
 )
 from wybra.db.settings import (
+    EffectiveDatabaseConfig,
     StructuredDatabaseConfig,
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
@@ -589,8 +590,8 @@ def test_structured_database_config_exposes_credential_references() -> None:
             "credential_source": "keychain",
             "user_key": "database/app/user",
             "password_key": "database/app/password",
-            "sa_user_key": "database/app/admin-user",
-            "sa_password_key": "database/app/admin-password",
+            "sa_user_key": "database/app/service-account-user",
+            "sa_password_key": "database/app/service-account-password",
         }
     )
 
@@ -624,23 +625,141 @@ def test_structured_database_config_exposes_credential_references() -> None:
             "Configured runtime database password.",
         ),
         (
-            "database-admin-user",
-            "database/app/admin-user",
+            "database-sa-user",
+            "database/app/service-account-user",
             "database",
             "keychain",
             True,
-            "Configured database administration username for provisioning.",
+            "Configured database service-account username for provisioning.",
         ),
         (
-            "database-admin-password",
-            "database/app/admin-password",
+            "database-sa-password",
+            "database/app/service-account-password",
             "database",
             "keychain",
             True,
-            "Configured database administration password for provisioning.",
+            "Configured database service-account password for provisioning.",
         ),
     ]
     assert all(not hasattr(reference, "value") for reference in references)
+
+
+def test_structured_database_config_defaults_keychain_credential_references() -> None:
+    config = StructuredDatabaseConfig.from_values(
+        {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "keychain",
+        }
+    )
+
+    references = config.credential_references()
+
+    assert {reference.name: reference.key for reference in references} == {
+        "database-user": "database/uniquode/app/user",
+        "database-password": "database/uniquode/app/password",
+        "database-sa-user": "database/uniquode/service-account/user",
+        "database-sa-password": ("database/uniquode/service-account/password"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("credential_fields", "expected_keys"),
+    (
+        (
+            {"user_key": "custom/app/user"},
+            {
+                "database-user": "custom/app/user",
+                "database-password": "database/uniquode/app/password",
+                "database-sa-user": ("database/uniquode/service-account/user"),
+                "database-sa-password": ("database/uniquode/service-account/password"),
+            },
+        ),
+        (
+            {"sa_password_key": "custom/service-account/password"},
+            {
+                "database-user": "database/uniquode/app/user",
+                "database-password": "database/uniquode/app/password",
+                "database-sa-user": ("database/uniquode/service-account/user"),
+                "database-sa-password": "custom/service-account/password",
+            },
+        ),
+        (
+            {"user": "plain_user", "password_key": "custom/app/password"},
+            {
+                "database-password": "custom/app/password",
+                "database-sa-user": ("database/uniquode/service-account/user"),
+                "database-sa-password": ("database/uniquode/service-account/password"),
+            },
+        ),
+    ),
+)
+def test_structured_database_config_exposes_partial_credential_references(
+    credential_fields: dict[str, str],
+    expected_keys: dict[str, str],
+) -> None:
+    config = StructuredDatabaseConfig.from_values(
+        {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "keychain",
+            **credential_fields,
+        }
+    )
+
+    assert {
+        reference.name: reference.key for reference in config.credential_references()
+    } == expected_keys
+
+
+def test_structured_database_config_preserves_non_keychain_credential_source() -> None:
+    config = StructuredDatabaseConfig.from_values(
+        {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "environment",
+            "user_key": "WYBRA_DB_USER",
+            "password_key": "WYBRA_DB_PASSWORD",
+        }
+    )
+
+    references = config.credential_references()
+
+    assert [reference.name for reference in references] == [
+        "database-user",
+        "database-password",
+    ]
+    assert {reference.source for reference in references} == {"environment"}
+
+
+def test_effective_database_config_delegates_credential_references(
+    tmp_path: Path,
+) -> None:
+    structured = StructuredDatabaseConfig.from_values(
+        {
+            "backend": "postgresql",
+            "database": "uniquode",
+            "credential_source": "keychain",
+            "user_key": "database/app/user",
+        }
+    )
+    effective = EffectiveDatabaseConfig.from_structured(
+        structured,
+        project_root=tmp_path,
+    )
+
+    assert effective.credential_references() == structured.credential_references()
+
+
+def test_effective_database_url_config_exposes_no_credential_references(
+    tmp_path: Path,
+) -> None:
+    effective = EffectiveDatabaseConfig.from_url(
+        "postgresql://app_user:secret@db.example/uniquode",
+        project_root=tmp_path,
+    )
+
+    assert effective.credential_references() == ()
 
 
 def test_structured_sqlite_config_exposes_no_credential_references() -> None:
@@ -860,8 +979,8 @@ def test_runtime_connection_does_not_require_service_account_secret_source(
             "credential_source": "keychain",
             "user": "app_user",
             "password": "app_password",
-            "sa_user_key": "database/app/admin-user",
-            "sa_password_key": "database/app/admin-password",
+            "sa_user_key": "database/app/service-account-user",
+            "sa_password_key": "database/app/service-account-password",
         }
     }
 
@@ -885,8 +1004,8 @@ def test_service_account_connection_requires_secret_source_for_service_keys(
             "credential_source": "keychain",
             "user": "app_user",
             "password": "app_password",
-            "sa_user_key": "database/app/admin-user",
-            "sa_password_key": "database/app/admin-password",
+            "sa_user_key": "database/app/service-account-user",
+            "sa_password_key": "database/app/service-account-password",
         }
     }
 

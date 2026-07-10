@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any, Final
 
 from wybra.config import ConfigService, CredentialReference, MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
+from wybra.db.config import module_config as database_module_config
+from wybra.db.settings import effective_database_config_from_config
 from wybra.forms.config import (
     CSRF_TOKEN_SECRET_KEY_CURRENT,
     CSRF_TOKEN_SECRET_KEY_PREVIOUS,
@@ -104,50 +107,76 @@ BUILTIN_SECRET_KEYS: Final[tuple[CredentialReference, ...]] = (
 )
 
 
-def known_keychain_secret_keys(
+def configured_keychain_credential_references(
     *,
     raw_config: Mapping[str, Mapping[str, Any]] | None = None,
     secrets_settings: SecretsSettings | None = None,
+    project_root: Path | None = None,
     development: bool = False,
 ) -> tuple[CredentialReference, ...]:
-    """Return Wybra-known keychain references without enumerating the keychain."""
+    """Return configured keychain-backed credential references."""
 
     if development:
-        return _deduplicate_keys(development_keychain_secret_keys())
-    if raw_config is None or secrets_settings is None:
+        return _deduplicate_keys(development_keychain_credential_references())
+    return _deduplicate_keys(
+        reference
+        for reference in configured_credential_references(
+            raw_config=raw_config,
+            secrets_settings=secrets_settings,
+            project_root=project_root,
+        )
+        if reference.source == KEYCHAIN_SOURCE
+    )
+
+
+def configured_credential_references(
+    *,
+    raw_config: Mapping[str, Mapping[str, Any]] | None = None,
+    secrets_settings: SecretsSettings | None = None,
+    project_root: Path | None = None,
+) -> tuple[CredentialReference, ...]:
+    """Return configured credential references without resolving values."""
+    if raw_config is None and secrets_settings is None:
         return _deduplicate_keys(BUILTIN_SECRET_KEYS)
+    if raw_config is None:
+        assert secrets_settings is not None
+        return _deduplicate_keys(secrets_settings.credential_references())
+    if secrets_settings is None:
+        secrets_settings = _configured_secrets_settings(raw_config)
 
     keys: list[CredentialReference] = []
-    keys.extend(_configured_crypto_keys(secrets_settings))
+    keys.extend(secrets_settings.credential_references())
     keys.extend(_configured_forms_keys(raw_config))
     keys.extend(_configured_provider_keys(raw_config))
+    keys.extend(_configured_database_keys(raw_config, project_root=project_root))
     return _deduplicate_keys(keys)
 
 
-def development_keychain_secret_keys() -> tuple[CredentialReference, ...]:
-    """Return built-in development keychain references."""
+def development_keychain_credential_references() -> tuple[CredentialReference, ...]:
+    """Return built-in development keychain credential references."""
     return tuple(
         CredentialReference(
-            name=known_key.name,
-            key=builtin_keychain_secret_key(known_key.name, development=True),
-            owner=known_key.owner,
-            description=known_key.description,
-            source=known_key.source,
-            required=known_key.required,
-            rotation_role=known_key.rotation_role,
+            name=reference.name,
+            key=builtin_keychain_secret_key(reference.name, development=True),
+            owner=reference.owner,
+            description=reference.description,
+            source=reference.source,
+            required=reference.required,
+            rotation_role=reference.rotation_role,
         )
-        for known_key in BUILTIN_SECRET_KEYS
+        for reference in BUILTIN_SECRET_KEYS
     )
 
 
-def _configured_crypto_keys(
-    settings: SecretsSettings,
-) -> Iterable[CredentialReference]:
-    return tuple(
-        reference
-        for reference in settings.credential_references()
-        if reference.source == KEYCHAIN_SOURCE
+def _configured_secrets_settings(
+    raw_config: Mapping[str, Mapping[str, Any]],
+) -> SecretsSettings:
+    config = ConfigService(
+        [MappingConfigSource(raw_config)],
+        config_defs=(SecretsSettings.module_config,),
+        discover_module_config=False,
     )
+    return SecretsSettings.load_settings(config)
 
 
 def _configured_provider_keys(
@@ -166,7 +195,6 @@ def _configured_provider_keys(
         reference
         for provider in providers
         for reference in provider.credential_references()
-        if reference.source == KEYCHAIN_SOURCE
     )
 
 
@@ -179,11 +207,26 @@ def _configured_forms_keys(
         discover_module_config=False,
     )
     settings = FormsSettings.load_settings(config)
-    return tuple(
-        reference
-        for reference in settings.credential_references()
-        if reference.source == KEYCHAIN_SOURCE
+    return settings.credential_references()
+
+
+def _configured_database_keys(
+    raw_config: Mapping[str, Mapping[str, Any]],
+    *,
+    project_root: Path | None,
+) -> Iterable[CredentialReference]:
+    config = ConfigService(
+        [MappingConfigSource(raw_config)],
+        config_defs=(database_module_config,),
+        discover_module_config=False,
     )
+    effective = effective_database_config_from_config(
+        config,
+        project_root=(project_root or Path.cwd()).resolve(),
+    )
+    if effective is None:
+        return ()
+    return effective.credential_references()
 
 
 def builtin_keychain_secret_key(name: str, *, development: bool = False) -> str:
@@ -242,15 +285,7 @@ def _deduplicate_keys(
         if existing is None:
             deduplicated[key.name] = key
             continue
-        deduplicated[key.name] = CredentialReference(
-            name=existing.name,
-            key=existing.key,
-            owner=existing.owner,
-            description=existing.description,
-            source=existing.source,
-            required=existing.required or key.required,
-            rotation_role=existing.rotation_role,
-        )
+        raise ConfigurationError(f"Duplicate credential reference name: {key.name}.")
     return tuple(deduplicated.values())
 
 
@@ -270,7 +305,8 @@ __all__ = (
     "SECRET_KEY_OWNER_FORMS",
     "SECRET_KEY_OWNER_PROVIDERS",
     "builtin_keychain_secret_key",
-    "development_keychain_secret_keys",
-    "known_keychain_secret_keys",
+    "development_keychain_credential_references",
+    "configured_credential_references",
+    "configured_keychain_credential_references",
     "normalise_secret_key_type",
 )
