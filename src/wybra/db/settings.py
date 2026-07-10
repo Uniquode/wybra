@@ -786,7 +786,19 @@ def _with_default_database_credential_keys(
 
 
 def _default_database_credential_key(database: str, role: str, field_name: str) -> str:
+    _validate_default_database_key_segment(database)
     return f"database/{database}/{role}/{field_name}"
+
+
+def _validate_default_database_key_segment(database: str) -> None:
+    if any(
+        character == "/" or character.isspace() or not character.isprintable()
+        for character in database
+    ):
+        raise ConfigurationError(
+            "Database name cannot be used in default credential keys; "
+            "configure explicit database credential keys."
+        )
 
 
 def _resolve_credential_value(

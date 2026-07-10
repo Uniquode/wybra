@@ -663,6 +663,55 @@ def test_structured_database_config_defaults_keychain_credential_references() ->
     }
 
 
+def test_structured_database_config_default_keys_allow_unicode_database_name() -> None:
+    config = StructuredDatabaseConfig.from_values(
+        {
+            "backend": "postgresql",
+            "database": "uniquodé",
+            "credential_source": "keychain",
+        }
+    )
+
+    assert {
+        reference.name: reference.key for reference in config.credential_references()
+    }["database-user"] == "database/uniquodé/app/user"
+
+
+@pytest.mark.parametrize("database", ("tenant/prod", "tenant prod", "tenant\nprod"))
+def test_structured_database_config_rejects_unsafe_default_key_database_segment(
+    database: str,
+) -> None:
+    with pytest.raises(
+        ConfigurationError,
+        match="Database name cannot be used in default credential keys",
+    ):
+        StructuredDatabaseConfig.from_values(
+            {
+                "backend": "postgresql",
+                "database": database,
+                "credential_source": "keychain",
+            }
+        )
+
+
+def test_structured_database_config_allows_unsafe_name_with_explicit_keys() -> None:
+    config = StructuredDatabaseConfig.from_values(
+        {
+            "backend": "postgresql",
+            "database": "tenant/prod",
+            "credential_source": "keychain",
+            "user_key": "database/tenant-prod/app/user",
+            "password_key": "database/tenant-prod/app/password",
+            "sa_user_key": "database/tenant-prod/service-account/user",
+            "sa_password_key": "database/tenant-prod/service-account/password",
+        }
+    )
+
+    assert {
+        reference.name: reference.key for reference in config.credential_references()
+    }["database-user"] == "database/tenant-prod/app/user"
+
+
 @pytest.mark.parametrize(
     ("credential_fields", "expected_keys"),
     (

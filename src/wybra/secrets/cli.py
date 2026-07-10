@@ -425,7 +425,6 @@ def _secret_command_settings_from_context(ctx: click.Context) -> SecretCommandSe
             secrets_settings = _secrets_settings_from_raw_config(raw_config)
             credential_references = configured_keychain_credential_references(
                 raw_config=raw_config,
-                secrets_settings=secrets_settings,
                 project_root=runtime_project_root(),
             )
         return SecretCommandSettings(

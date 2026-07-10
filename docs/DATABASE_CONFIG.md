@@ -86,6 +86,11 @@ For the example above, the runtime keys are
 Configure `user_key`, `password_key`, `sa_user_key`, or `sa_password_key` only
 when a deployment needs to override those defaults.
 
+Default key derivation accepts Unicode database names, but the database name
+must be safe as one key-path segment. If the configured database name contains
+path separators, whitespace, or control characters, configure explicit
+credential keys instead.
+
 ## Environment Credential Source
 
 When `credential_source = "environment"`, the credential keys are environment

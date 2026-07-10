@@ -110,7 +110,6 @@ BUILTIN_SECRET_KEYS: Final[tuple[CredentialReference, ...]] = (
 def configured_keychain_credential_references(
     *,
     raw_config: Mapping[str, Mapping[str, Any]] | None = None,
-    secrets_settings: SecretsSettings | None = None,
     project_root: Path | None = None,
     development: bool = False,
 ) -> tuple[CredentialReference, ...]:
@@ -122,7 +121,6 @@ def configured_keychain_credential_references(
         reference
         for reference in configured_credential_references(
             raw_config=raw_config,
-            secrets_settings=secrets_settings,
             project_root=project_root,
         )
         if reference.source == KEYCHAIN_SOURCE
@@ -132,20 +130,14 @@ def configured_keychain_credential_references(
 def configured_credential_references(
     *,
     raw_config: Mapping[str, Mapping[str, Any]] | None = None,
-    secrets_settings: SecretsSettings | None = None,
     project_root: Path | None = None,
 ) -> tuple[CredentialReference, ...]:
     """Return configured credential references without resolving values."""
-    if raw_config is None and secrets_settings is None:
-        return _deduplicate_keys(BUILTIN_SECRET_KEYS)
     if raw_config is None:
-        assert secrets_settings is not None
-        return _deduplicate_keys(secrets_settings.credential_references())
-    if secrets_settings is None:
-        secrets_settings = _configured_secrets_settings(raw_config)
+        return _deduplicate_keys(BUILTIN_SECRET_KEYS)
 
     keys: list[CredentialReference] = []
-    keys.extend(secrets_settings.credential_references())
+    keys.extend(_configured_secrets_settings(raw_config).credential_references())
     keys.extend(_configured_forms_keys(raw_config))
     keys.extend(_configured_provider_keys(raw_config))
     keys.extend(_configured_database_keys(raw_config, project_root=project_root))
@@ -285,7 +277,12 @@ def _deduplicate_keys(
         if existing is None:
             deduplicated[key.name] = key
             continue
-        raise ConfigurationError(f"Duplicate credential reference name: {key.name}.")
+        # Credential names are a stable operator interface; duplicate names
+        # are a programming/configuration error and must fail fast.
+        raise ConfigurationError(
+            f"Duplicate credential reference name '{key.name}' "
+            f"(owners: {existing.owner!r} and {key.owner!r})."
+        )
     return tuple(deduplicated.values())
 
 

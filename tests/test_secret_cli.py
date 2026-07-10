@@ -7,6 +7,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 import wybra.secrets.cli as secret_cli
+import wybra.secrets.keys as secret_keys
 import wybra.secrets.sources as secret_sources
 from support_database import sqlite_file_url
 from wybra.auth.mfa.storage import TOTP_ACTIVE_STATUS
@@ -16,6 +17,7 @@ from wybra.auth.models import (
     IdentityTotpRecoveryCode,
     User,
 )
+from wybra.config import CredentialReference
 from wybra.db.persistence import close_database, create_database
 from wybra.forms import CSRF_TOKEN_SECRET_KEY_CURRENT, CSRF_TOKEN_SECRET_KEY_PREVIOUS
 from wybra.secrets.keys import (
@@ -482,6 +484,65 @@ def test_unknown_name_reports_usage_error_without_traceback(monkeypatch) -> None
 
     assert result.exit_code == 2
     assert "Unknown secret name: missing." in result.output
+    assert "Traceback" not in result.output
+
+
+def test_development_mode_rejects_configured_non_builtin_names(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    keyring = FakeKeyring()
+    _install_fake_keyring(monkeypatch, keyring)
+    config_path = _database_keychain_config(tmp_path / "app.toml")
+
+    result = CliRunner().invoke(
+        secret_cli.secret_command,
+        [
+            "--config",
+            config_path.as_posix(),
+            "set",
+            "--dev",
+            "database-user",
+            "uniquode_user",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "No development key is available for database-user." in result.output
+    assert "Traceback" not in result.output
+    assert keyring.values == {}
+
+
+def test_duplicate_credential_reference_names_fail_fast_without_traceback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    keyring = FakeKeyring()
+    _install_fake_keyring(monkeypatch, keyring)
+    config_path = _app_config(tmp_path / "app.toml")
+
+    monkeypatch.setattr(
+        secret_keys,
+        "_configured_forms_keys",
+        lambda _raw_config: (
+            CredentialReference(
+                name=SECRET_KEY_TYPE_SECRET,
+                key="duplicate/forms/key",
+                owner="forms",
+                description="Duplicate key",
+                source="keychain",
+            ),
+        ),
+    )
+
+    result = CliRunner().invoke(
+        secret_cli.secret_command,
+        ["--config", config_path.as_posix(), "list"],
+    )
+
+    assert result.exit_code != 0
+    assert "Duplicate credential reference name 'secret'" in result.output
+    assert "owners: 'crypto' and 'forms'" in result.output
     assert "Traceback" not in result.output
 
 
