@@ -92,9 +92,9 @@ _.migrate_command_command
 _.heads_command
 _.sqlmigrate_command
 _.set_command
-_.rotate_secret_key_command
-_.rotate_csrf_token_secret_command
-_.reencrypt_secrets_command
+_.rotate_system_command
+_.rotate_csrf_command
+_.reencrypt_command
 _.upgrade_command
 _.downgrade_command
 _.current_command

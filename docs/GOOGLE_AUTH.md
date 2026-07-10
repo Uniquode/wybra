@@ -249,21 +249,21 @@ Store the Google client secret at the default keychain key:
 
 ```sh
 printf '%s' "$GOOGLE_CLIENT_SECRET" \
-  | uv run wybra-secret --config config/app.toml set --type google
+  | uv run wybra-secret --config config/app.toml set google
 ```
 
 For the development key example above:
 
 ```sh
 printf '%s' "$GOOGLE_DEV_CLIENT_SECRET" \
-  | uv run wybra-secret --config config/app.toml set --dev --type google
+  | uv run wybra-secret --config config/app.toml set --dev google
 ```
 
 Verify that Wybra can see the configured key references:
 
 ```sh
 uv run wybra-secret --config config/app.toml list --json
-uv run wybra-secret --config config/app.toml get --json --type google
+uv run wybra-secret --config config/app.toml get --json google
 ```
 
 The `list` command reports Wybra-known keys from configuration; it does not
@@ -283,7 +283,7 @@ Then store the current key value:
 
 ```sh
 printf '%s' "$WYBRA_SECRET_KEY" \
-  | uv run wybra-secret --config config/app.toml set --type secret
+  | uv run wybra-secret --config config/app.toml set secret
 ```
 
 `previous_keys` points at the keychain value used during key rotation.

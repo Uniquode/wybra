@@ -235,21 +235,21 @@ Store the GitHub client secret at the default keychain key:
 
 ```sh
 printf '%s' "$GITHUB_CLIENT_SECRET" \
-  | uv run wybra-secret --config config/app.toml set --type github
+  | uv run wybra-secret --config config/app.toml set github
 ```
 
 For the development key example above:
 
 ```sh
 printf '%s' "$GITHUB_DEV_CLIENT_SECRET" \
-  | uv run wybra-secret --config config/app.toml set --dev --type github
+  | uv run wybra-secret --config config/app.toml set --dev github
 ```
 
 Verify that Wybra can see the configured key references:
 
 ```sh
 uv run wybra-secret --config config/app.toml list --json
-uv run wybra-secret --config config/app.toml get --json --type github
+uv run wybra-secret --config config/app.toml get --json github
 ```
 
 The `list` command reports Wybra-known keys from configuration; it does not
@@ -269,7 +269,7 @@ Then store the current key value:
 
 ```sh
 printf '%s' "$WYBRA_SECRET_KEY" \
-  | uv run wybra-secret --config config/app.toml set --type secret
+  | uv run wybra-secret --config config/app.toml set secret
 ```
 
 `previous_keys` points at the keychain value used during key rotation.

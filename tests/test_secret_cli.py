@@ -270,7 +270,7 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
 
     result = runner.invoke(
         secret_cli.secret_command,
-        ["set", "--type", SECRET_KEY_TYPE_SECRET],
+        ["set", SECRET_KEY_TYPE_SECRET],
         input="secret-value\n",
     )
 
@@ -279,7 +279,7 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
 
     result = runner.invoke(
         secret_cli.secret_command,
-        ["get", "--json", "--type", SECRET_KEY_TYPE_SECRET],
+        ["get", "--json", SECRET_KEY_TYPE_SECRET],
     )
 
     assert result.exit_code == 0, result.output
@@ -343,14 +343,14 @@ def test_set_supports_json_bulk_input(monkeypatch) -> None:
     assert "google-secret" not in result.output
 
 
-def test_set_and_get_type_support_development_default_keys(monkeypatch) -> None:
+def test_set_and_get_name_support_development_default_keys(monkeypatch) -> None:
     keyring = FakeKeyring()
     _install_fake_keyring(monkeypatch, keyring)
     runner = CliRunner()
 
     result = runner.invoke(
         secret_cli.secret_command,
-        ["set", "--dev", "--type", SECRET_KEY_TYPE_GOOGLE, "google-secret"],
+        ["set", "--dev", SECRET_KEY_TYPE_GOOGLE, "google-secret"],
     )
 
     assert result.exit_code == 0, result.output
@@ -359,7 +359,7 @@ def test_set_and_get_type_support_development_default_keys(monkeypatch) -> None:
 
     result = runner.invoke(
         secret_cli.secret_command,
-        ["get", "--dev", "--type", SECRET_KEY_TYPE_GOOGLE],
+        ["get", "--dev", SECRET_KEY_TYPE_GOOGLE],
     )
 
     assert result.exit_code == 0, result.output
@@ -394,7 +394,7 @@ def test_list_json_dev_reports_development_default_keys(monkeypatch) -> None:
     assert keys[SECRET_KEY_TYPE_GOOGLE]["exists"] is False
 
 
-def test_type_uses_default_key_even_when_config_uses_custom_key(
+def test_name_uses_default_key_even_when_config_uses_custom_key(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -408,7 +408,6 @@ def test_type_uses_default_key_even_when_config_uses_custom_key(
             "--config",
             config_path.as_posix(),
             "set",
-            "--type",
             SECRET_KEY_TYPE_SECRET,
             "default-secret",
         ],
@@ -420,7 +419,7 @@ def test_type_uses_default_key_even_when_config_uses_custom_key(
     }
 
 
-def test_type_uses_configured_database_credential_reference(
+def test_name_uses_configured_database_credential_reference(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -435,7 +434,6 @@ def test_type_uses_configured_database_credential_reference(
             "--config",
             config_path.as_posix(),
             "set",
-            "--type",
             "database-user",
             "uniquode_user",
         ],
@@ -452,7 +450,6 @@ def test_type_uses_configured_database_credential_reference(
             "--config",
             config_path.as_posix(),
             "get",
-            "--type",
             "database-user",
         ],
     )
@@ -461,30 +458,30 @@ def test_type_uses_configured_database_credential_reference(
     assert result.output == "uniquode_user\n"
 
 
-def test_type_cannot_be_combined_with_raw_key(monkeypatch) -> None:
+def test_key_cannot_be_combined_with_name(monkeypatch) -> None:
     keyring = FakeKeyring()
     _install_fake_keyring(monkeypatch, keyring)
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["get", "--type", SECRET_KEY_TYPE_SECRET, SECRET_KEY_CURRENT],
+        ["get", "--key", SECRET_KEY_CURRENT, SECRET_KEY_TYPE_SECRET],
     )
 
     assert result.exit_code != 0
-    assert "KEY cannot be combined with --type" in result.output
+    assert "NAME cannot be combined with --key" in result.output
 
 
-def test_unknown_type_reports_usage_error_without_traceback(monkeypatch) -> None:
+def test_unknown_name_reports_usage_error_without_traceback(monkeypatch) -> None:
     keyring = FakeKeyring()
     _install_fake_keyring(monkeypatch, keyring)
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["set", "--type", "missing", "value"],
+        ["set", "missing", "value"],
     )
 
     assert result.exit_code == 2
-    assert "Unknown secret type: missing." in result.output
+    assert "Unknown secret name: missing." in result.output
     assert "Traceback" not in result.output
 
 
@@ -660,7 +657,7 @@ def test_get_honours_app_config_environment(monkeypatch, tmp_path: Path) -> None
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["get", "SYSTEM_SECRET_KEY"],
+        ["get", "--key", "SYSTEM_SECRET_KEY"],
     )
 
     assert result.exit_code == 0
@@ -684,12 +681,12 @@ def test_rotate_secret_key_updates_previous_before_current(
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["--config", config_path.as_posix(), "rotate", "secret-key", "--json"],
+        ["--config", config_path.as_posix(), "rotate", "system", "--json"],
     )
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["target"] == "secret-key"
+    assert payload["target"] == "system"
     assert payload["old_current_version"] == "current"
     assert payload["new_current_version"] not in {"current", "previous"}
     assert payload["previous_key_count"] == 2
@@ -721,7 +718,7 @@ def test_rotate_secret_key_dry_run_does_not_write(
             "--config",
             config_path.as_posix(),
             "rotate",
-            "secret-key",
+            "system",
             "--dry-run",
             "--json",
         ],
@@ -746,7 +743,7 @@ def test_rotate_secret_key_refuses_non_keychain_crypto_source(
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["--config", config_path.as_posix(), "rotate", "secret-key"],
+        ["--config", config_path.as_posix(), "rotate", "system"],
     )
 
     assert result.exit_code != 0
@@ -766,7 +763,7 @@ def test_rotate_secret_key_uses_default_previous_keys_reference(
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["--config", config_path.as_posix(), "rotate", "secret-key"],
+        ["--config", config_path.as_posix(), "rotate", "system"],
     )
 
     assert result.exit_code == 0, result.output
@@ -798,14 +795,14 @@ def test_rotate_csrf_token_secret_updates_previous_before_current(
             "--config",
             config_path.as_posix(),
             "rotate",
-            "csrf-token-secret",
+            "csrf",
             "--json",
         ],
     )
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["target"] == "csrf-token-secret"
+    assert payload["target"] == "csrf"
     assert payload["previous_secret_count"] == 2
     new_current = keyring.values[("uniquode.io", CSRF_TOKEN_SECRET_KEY_CURRENT)]
     new_previous = keyring.values[("uniquode.io", CSRF_TOKEN_SECRET_KEY_PREVIOUS)]
@@ -830,7 +827,7 @@ def test_rotate_csrf_token_secret_refuses_non_keychain_forms_config(
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["--config", config_path.as_posix(), "rotate", "csrf-token-secret"],
+        ["--config", config_path.as_posix(), "rotate", "csrf"],
     )
 
     assert result.exit_code != 0
@@ -878,7 +875,7 @@ def test_reencrypt_secrets_dry_run_reports_without_writing_database_rows(
         [
             "--config",
             config_path.as_posix(),
-            "reencrypt-secrets",
+            "reencrypt",
             "--dry-run",
             "--json",
         ],
@@ -886,7 +883,7 @@ def test_reencrypt_secrets_dry_run_reports_without_writing_database_rows(
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["target"] == "reencrypt-secrets"
+    assert payload["target"] == "system"
     assert payload["dry_run"] is True
     assert payload["scanned"] == 3
     assert payload["rewritten"] == 3
@@ -946,7 +943,7 @@ def test_reencrypt_secrets_rewrites_previous_version_provider_and_totp_secrets(
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["--config", config_path.as_posix(), "reencrypt-secrets", "--json"],
+        ["--config", config_path.as_posix(), "reencrypt", "--json"],
     )
 
     assert result.exit_code == 0, result.output
@@ -1015,7 +1012,7 @@ def test_reencrypt_secrets_skips_current_and_plaintext_values(
 
     result = CliRunner().invoke(
         secret_cli.secret_command,
-        ["--config", config_path.as_posix(), "reencrypt-secrets", "--json"],
+        ["--config", config_path.as_posix(), "reencrypt", "--json"],
     )
 
     assert result.exit_code == 0, result.output
