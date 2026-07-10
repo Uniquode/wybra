@@ -70,7 +70,7 @@ Generate and store a new CSRF token secret with:
 
 ```sh
 python -c 'import secrets; print(secrets.token_urlsafe(32))' \
-  | uv run wybra-secret --config config/app.toml set --type csrf
+  | uv run wybra-secret --config config/app.toml set csrf
 ```
 
 Verify that Wybra can see the key reference:
@@ -88,13 +88,13 @@ Use `list --json --dev` to inspect the built-in development key references.
 Run a dry run first:
 
 ```sh
-uv run wybra-secret --config config/app.toml rotate csrf-token-secret --dry-run
+uv run wybra-secret --config config/app.toml rotate csrf --dry-run
 ```
 
 Rotate the CSRF token secret with:
 
 ```sh
-uv run wybra-secret --config config/app.toml rotate csrf-token-secret
+uv run wybra-secret --config config/app.toml rotate csrf
 ```
 
 Rotation writes the retired current secret to

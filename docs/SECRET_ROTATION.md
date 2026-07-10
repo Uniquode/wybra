@@ -28,13 +28,13 @@ previous_keys = "secrets/key/previous"
 Run a dry run first:
 
 ```sh
-uv run wybra-secret --config config/app.toml rotate secret-key --dry-run
+uv run wybra-secret --config config/app.toml rotate system --dry-run
 ```
 
 Rotate the keyring with:
 
 ```sh
-uv run wybra-secret --config config/app.toml rotate secret-key
+uv run wybra-secret --config config/app.toml rotate system
 ```
 
 Rotation creates a new current key entry, prepends the retired current key to
@@ -48,12 +48,12 @@ Do not remove previous keys while stored values may still reference them.
 
 ## Re-Encrypt Persisted Secrets
 
-After `rotate secret-key`, you may optionally re-encrypt supported persisted
+After `rotate system`, you may optionally re-encrypt supported persisted
 secret envelopes with the new current key:
 
 ```sh
-uv run wybra-secret --config config/app.toml reencrypt-secrets --dry-run
-uv run wybra-secret --config config/app.toml reencrypt-secrets
+uv run wybra-secret --config config/app.toml reencrypt --dry-run
+uv run wybra-secret --config config/app.toml reencrypt
 ```
 
 This is maintenance, not part of rotation, and it is not required for
@@ -77,7 +77,7 @@ CSRF token secret rotation is documented in
 [`SECRET_KEY.md`](SECRET_KEY.md). The supported command is:
 
 ```sh
-uv run wybra-secret --config config/app.toml rotate csrf-token-secret
+uv run wybra-secret --config config/app.toml rotate csrf
 ```
 
 CSRF rotation uses the current storage key

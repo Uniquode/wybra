@@ -35,7 +35,7 @@ from wybra.forms.settings import FormsSettings
 from wybra.secrets.config import KeychainSecretSourceSettings, SecretsSettings
 from wybra.secrets.keys import (
     builtin_keychain_secret_key,
-    known_keychain_secret_keys,
+    configured_keychain_credential_references,
     normalise_secret_key_type,
 )
 from wybra.secrets.reencryption import (
@@ -71,7 +71,7 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 
 class SecretCommandSettings:
     keychain: KeychainSecretSourceSettings
     secrets: SecretsSettings
-    known_keys: tuple[CredentialReference, ...]
+    credential_references: tuple[CredentialReference, ...]
     raw_config: Mapping[str, Mapping[str, Any]] | None = None
 
 
@@ -88,15 +88,15 @@ def secret_command(ctx: click.Context, config_source: str | None) -> None:
 
 @secret_command.command(name="set")
 @click.option(
-    "--type",
-    "key_type",
-    help="Use a built-in Wybra key type instead of a raw key.",
+    "--key",
+    "raw_key",
+    help="Use a raw keychain key instead of a Wybra credential name.",
 )
 @click.option(
     "--dev",
     "development",
     is_flag=True,
-    help="Use the development variant for a built-in key type.",
+    help="Use the development variant for a built-in credential name.",
 )
 @click.option(
     "--stdin",
@@ -116,14 +116,14 @@ def secret_command(ctx: click.Context, config_source: str | None) -> None:
     is_flag=True,
     help="Read a JSON object of key/value pairs from stdin.",
 )
-@click.argument("key", required=False)
+@click.argument("name", required=False)
 @click.argument("value", required=False)
 @click.pass_context
 def set_command(
     ctx: click.Context,
-    key_type: str | None,
+    raw_key: str | None,
     development: bool,
-    key: str | None,
+    name: str | None,
     value: str | None,
     stdin_source: bool,
     prompt_source: bool,
@@ -131,18 +131,19 @@ def set_command(
 ) -> None:
     """Store one or more values in the OS keychain."""
 
-    driver = _keychain_driver_from_context(ctx)
+    settings = _secret_command_settings_from_context(ctx)
+    driver = KeychainSecretSourceDriver(settings.keychain)
     if json_input:
         if (
-            key_type is not None
+            raw_key is not None
             or development
-            or key is not None
+            or name is not None
             or value is not None
             or stdin_source
             or prompt_source
         ):
             raise click.UsageError(
-                "--json cannot be combined with --type, --dev, KEY, VALUE, "
+                "--json cannot be combined with --key, --dev, NAME, VALUE, "
                 "--stdin, or --prompt."
             )
         stored = _store_json_values(driver, sys.stdin)
@@ -150,13 +151,14 @@ def set_command(
         return
 
     resolved_key, resolved_value = _set_key_and_value(
-        key=key,
+        settings=settings,
+        name=name,
         value=value,
-        key_type=key_type,
+        raw_key=raw_key,
         development=development,
     )
     if resolved_key is None:
-        raise click.UsageError("Missing argument 'KEY'.")
+        raise click.UsageError("Missing argument 'NAME'.")
     secret_value = _secret_value_from_input(
         key=resolved_key,
         value=resolved_value,
@@ -169,31 +171,37 @@ def set_command(
 
 @secret_command.command(name="get")
 @click.option(
-    "--type",
-    "key_type",
-    help="Use a built-in Wybra key type instead of a raw key.",
+    "--key",
+    "raw_key",
+    help="Use a raw keychain key instead of a Wybra credential name.",
 )
 @click.option(
     "--dev",
     "development",
     is_flag=True,
-    help="Use the development variant for a built-in key type.",
+    help="Use the development variant for a built-in credential name.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
-@click.argument("key", required=False)
+@click.argument("name", required=False)
 @click.pass_context
 def get_command(
     ctx: click.Context,
-    key_type: str | None,
+    raw_key: str | None,
     development: bool,
-    key: str | None,
+    name: str | None,
     json_output: bool,
 ) -> None:
     """Read one value from the OS keychain."""
 
-    driver = _keychain_driver_from_context(ctx)
+    settings = _secret_command_settings_from_context(ctx)
+    driver = KeychainSecretSourceDriver(settings.keychain)
     key_value = secret_key_value(
-        _get_key(key=key, key_type=key_type, development=development)
+        _get_key(
+            settings=settings,
+            name=name,
+            raw_key=raw_key,
+            development=development,
+        )
     )
     try:
         secret = driver.resolve(key_value).reveal()
@@ -210,8 +218,8 @@ def get_command(
             "username": username,
             "value": secret,
         }
-        if key_type is not None:
-            payload["name"] = normalise_secret_key_type(key_type)
+        if raw_key is None:
+            payload["name"] = normalise_secret_key_type(cast(str, name))
         _write_json(payload)
         return
     click.echo(secret)
@@ -227,16 +235,19 @@ def get_command(
 @click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
 @click.pass_context
 def list_command(ctx: click.Context, development: bool, json_output: bool) -> None:
-    """List Wybra-known key references and whether they exist."""
+    """List configured keychain credential references and whether they exist."""
 
     settings = _secret_command_settings_from_context(ctx)
     driver = KeychainSecretSourceDriver(settings.keychain)
-    known_keys = (
-        known_keychain_secret_keys(development=True)
+    credential_references = (
+        configured_keychain_credential_references(development=True)
         if development
-        else settings.known_keys
+        else settings.credential_references
     )
-    records = [_known_key_record(driver, known_key) for known_key in known_keys]
+    records = [
+        _credential_reference_record(driver, reference)
+        for reference in credential_references
+    ]
     if json_output:
         _write_json({"keys": {str(record["name"]): record for record in records}})
         return
@@ -253,11 +264,11 @@ def rotate_command() -> None:
     """Rotate supported Wybra keychain-backed secrets."""
 
 
-@rotate_command.command(name="secret-key")
+@rotate_command.command(name="system")
 @click.option("--dry-run", is_flag=True, help="Validate and report without writing.")
 @click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
 @click.pass_context
-def rotate_secret_key_command(
+def rotate_system_command(
     ctx: click.Context,
     dry_run: bool,
     json_output: bool,
@@ -268,7 +279,7 @@ def rotate_secret_key_command(
     crypto = settings.secrets.crypto
     if crypto.source != KEYCHAIN_SOURCE:
         raise click.ClickException(
-            "Secret-key rotation is limited to keychain-backed system secret keys."
+            "System rotation is limited to keychain-backed system secret keys."
         )
 
     driver = KeychainSecretSourceDriver(settings.keychain)
@@ -291,7 +302,7 @@ def rotate_secret_key_command(
         )
 
     payload = {
-        "target": "secret-key",
+        "target": "system",
         "dry_run": dry_run,
         "current_key": crypto.current_key,
         "previous_keys": previous_keys,
@@ -302,11 +313,11 @@ def rotate_secret_key_command(
     _write_rotation_result(payload, json_output=json_output)
 
 
-@rotate_command.command(name="csrf-token-secret")
+@rotate_command.command(name="csrf")
 @click.option("--dry-run", is_flag=True, help="Validate and report without writing.")
 @click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
 @click.pass_context
-def rotate_csrf_token_secret_command(
+def rotate_csrf_command(
     ctx: click.Context,
     dry_run: bool,
     json_output: bool,
@@ -350,7 +361,7 @@ def rotate_csrf_token_secret_command(
         )
 
     payload = {
-        "target": "csrf-token-secret",
+        "target": "csrf",
         "dry_run": dry_run,
         "current_key": current_key,
         "previous_key": previous_key,
@@ -359,24 +370,27 @@ def rotate_csrf_token_secret_command(
     _write_rotation_result(payload, json_output=json_output)
 
 
-@secret_command.command(name="reencrypt-secrets")
+@secret_command.command(name="reencrypt")
 @click.option("--dry-run", is_flag=True, help="Validate and report without writing.")
 @click.option("--json", "json_output", is_flag=True, help="Render JSON output.")
+@click.argument("name", required=False)
 @click.pass_context
-def reencrypt_secrets_command(
+def reencrypt_command(
     ctx: click.Context,
     dry_run: bool,
     json_output: bool,
+    name: str | None,
 ) -> None:
     """Re-encrypt reversible persisted secret envelopes with the current key."""
 
+    target = _reencrypt_target_name(name)
     try:
         result = asyncio.run(_reencrypt_secrets(ctx, dry_run=dry_run))
     except click.ClickException:
         raise
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
-    _write_reencrypt_result(result, json_output=json_output)
+    _write_reencrypt_result(result, target=target, json_output=json_output)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -397,12 +411,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     return int(result or 0)
 
 
-def _keychain_driver_from_context(ctx: click.Context) -> KeychainSecretSourceDriver:
-    return KeychainSecretSourceDriver(
-        _secret_command_settings_from_context(ctx).keychain
-    )
-
-
 def _secret_command_settings_from_context(ctx: click.Context) -> SecretCommandSettings:
     root_context = ctx.find_root()
     config_source = _config_source_from_context(root_context)
@@ -411,18 +419,18 @@ def _secret_command_settings_from_context(ctx: click.Context) -> SecretCommandSe
         raw_config = _load_optional_raw_config(config_source)
         if raw_config is None:
             secrets_settings = SecretsSettings()
-            known_keys = known_keychain_secret_keys()
+            credential_references = configured_keychain_credential_references()
         else:
             configure_cli_logging(config=merge_logging_config(raw_config.get("log")))
             secrets_settings = _secrets_settings_from_raw_config(raw_config)
-            known_keys = known_keychain_secret_keys(
+            credential_references = configured_keychain_credential_references(
                 raw_config=raw_config,
-                secrets_settings=secrets_settings,
+                project_root=runtime_project_root(),
             )
         return SecretCommandSettings(
             keychain=secrets_settings.keychain,
             secrets=secrets_settings,
-            known_keys=known_keys,
+            credential_references=credential_references,
             raw_config=raw_config,
         )
     except (CompositionError, ConfigurationError, ProjectToolConfigurationError) as exc:
@@ -640,35 +648,81 @@ def _validate_csrf_token_secret_rotation(
 
 def _set_key_and_value(
     *,
-    key: str | None,
+    settings: SecretCommandSettings,
+    name: str | None,
     value: str | None,
-    key_type: str | None,
+    raw_key: str | None,
     development: bool,
 ) -> tuple[str | None, str | None]:
-    if key_type is None:
+    if raw_key is not None:
         if development:
-            raise click.UsageError("--dev requires --type.")
-        return key, value
+            raise click.UsageError("--dev cannot be combined with --key.")
+        if value is not None:
+            raise click.UsageError("When --key is used, provide at most one VALUE.")
+        return raw_key, name
+    if name is None:
+        if development:
+            raise click.UsageError("--dev requires NAME.")
+        return None, value
     if value is not None:
-        raise click.UsageError("When --type is used, provide at most one VALUE.")
-    return builtin_keychain_secret_key(key_type, development=development), key
+        return _key_for_name(settings, name, development=development), value
+    return _key_for_name(settings, name, development=development), None
 
 
 def _get_key(
     *,
-    key: str | None,
-    key_type: str | None,
+    settings: SecretCommandSettings,
+    name: str | None,
+    raw_key: str | None,
     development: bool,
 ) -> str:
-    if key_type is None:
+    if raw_key is not None:
         if development:
-            raise click.UsageError("--dev requires --type.")
-        if key is None:
-            raise click.UsageError("Missing argument 'KEY'.")
-        return key
-    if key is not None:
-        raise click.UsageError("KEY cannot be combined with --type.")
-    return builtin_keychain_secret_key(key_type, development=development)
+            raise click.UsageError("--dev cannot be combined with --key.")
+        if name is not None:
+            raise click.UsageError("NAME cannot be combined with --key.")
+        return raw_key
+    if name is None:
+        raise click.UsageError("Missing argument 'NAME'.")
+    return _key_for_name(settings, name, development=development)
+
+
+def _key_for_name(
+    settings: SecretCommandSettings,
+    name: str,
+    *,
+    development: bool,
+) -> str:
+    normalised_name = normalise_secret_key_type(name)
+    try:
+        return builtin_keychain_secret_key(normalised_name, development=development)
+    except ConfigurationError:
+        if development:
+            raise click.UsageError(
+                f"No development key is available for {normalised_name}."
+            ) from None
+
+    if not development:
+        configured_key = next(
+            (
+                reference.key
+                for reference in settings.credential_references
+                if reference.name == normalised_name
+            ),
+            None,
+        )
+        if configured_key is not None:
+            return configured_key
+    raise click.UsageError(f"Unknown secret name: {normalised_name}.")
+
+
+def _reencrypt_target_name(name: str | None) -> str:
+    if name is None:
+        return "system"
+    normalised_name = normalise_secret_key_type(name)
+    if normalised_name == "system":
+        return normalised_name
+    raise click.UsageError(f"Unknown re-encryption target: {normalised_name}.")
 
 
 def _secret_value_from_input(
@@ -735,24 +789,25 @@ def _non_empty_secret_value(value: str) -> str:
     return value
 
 
-def _known_key_record(
+def _credential_reference_record(
     driver: KeychainSecretSourceDriver,
-    known_key: CredentialReference,
+    reference: CredentialReference,
 ) -> dict[str, Any]:
-    service, username = driver.identity(known_key.key)
+    service, username = driver.identity(reference.key)
     try:
-        exists = driver.exists(known_key.key)
+        exists = driver.exists(reference.key)
     except click.ClickException:
         raise
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
     return {
-        "name": known_key.name,
-        "key": known_key.key,
-        "owner": known_key.owner,
-        "description": known_key.description,
-        "source": known_key.source,
-        "required": known_key.required,
+        "name": reference.name,
+        "key": reference.key,
+        "owner": reference.owner,
+        "description": reference.description,
+        "source": reference.source,
+        "required": reference.required,
+        "rotation_role": reference.rotation_role,
         "service": service,
         "username": username,
         "exists": exists,
@@ -786,9 +841,10 @@ def _write_rotation_result(
 def _write_reencrypt_result(
     result: ReencryptSecretsResult,
     *,
+    target: str,
     json_output: bool,
 ) -> None:
-    payload = _reencrypt_result_payload(result)
+    payload = _reencrypt_result_payload(result, target=target)
     if json_output:
         _write_json(payload)
         return
@@ -802,9 +858,13 @@ def _write_reencrypt_result(
     )
 
 
-def _reencrypt_result_payload(result: ReencryptSecretsResult) -> dict[str, Any]:
+def _reencrypt_result_payload(
+    result: ReencryptSecretsResult,
+    *,
+    target: str,
+) -> dict[str, Any]:
     return {
-        "target": "reencrypt-secrets",
+        "target": target,
         "dry_run": result.dry_run,
         "scanned": result.scanned,
         "rewritten": result.rewritten,
