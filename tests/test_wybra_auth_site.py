@@ -112,7 +112,10 @@ async def _close_testclient_tortoise_connections(app) -> None:
     if not isinstance(database, TortoiseDatabaseCapability):
         return
 
-    await close_database_connections(database._database)
+    await close_database_connections(
+        database._database,
+        restore_create_connection=False,
+    )
 
 
 # These async tests intentionally exercise the ASGI app through Starlette's

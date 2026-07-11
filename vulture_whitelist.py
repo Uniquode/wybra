@@ -86,6 +86,7 @@ _.deactivate_command
 _.list_command
 _.password_command
 _.init_command
+_.destroy_command
 _.revision_command
 _.makemigrations_command
 _.migrate_command_command
@@ -262,6 +263,8 @@ _.website
 _.model
 _.settings_path
 _.dispatch
+_.maintenance_tasks
+_.recommended_frequency
 
 # SQLAlchemy TypeDecorator hooks and fields.
 _.impl

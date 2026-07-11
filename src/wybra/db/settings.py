@@ -540,17 +540,8 @@ def resolve_database_provisioning_connection_from_config(
     *,
     project_root: Path,
     configured_database_url: str | None = None,
-    admin_database_url: str | None = None,
     secrets: SecretsCapability | None = None,
 ) -> ResolvedDatabaseConnection:
-    if admin_database_url is not None:
-        connection = EffectiveDatabaseConfig.from_url(
-            admin_database_url,
-            project_root=project_root,
-        ).resolve(environ=_config_environ(config), secrets=secrets)
-        _reject_unsupported_provisioning_backend(connection)
-        return connection
-
     connection = resolve_database_connection_from_config(
         config,
         project_root=project_root,
@@ -559,26 +550,21 @@ def resolve_database_provisioning_connection_from_config(
         purpose="service_account",
     )
     if connection is None:
-        raise ConfigurationError(
-            "Database provisioning requires [app.database] service-account "
-            "credentials or an explicit admin database URL."
-        )
-    _reject_unsupported_provisioning_backend(connection)
+        raise ConfigurationError("Database lifecycle requires database configuration.")
+    if connection.backend.tortoise_scheme == "sqlite":
+        return connection
     if connection.source == "url":
         raise ConfigurationError(
             "Database provisioning does not use application database_url "
-            "configuration. Configure [app.database] service-account credentials "
-            "or supply an explicit admin database URL."
+            "configuration. Configure structured service-account credentials."
         )
     if connection.credentials.get("user") is None:
         raise ConfigurationError(
-            "Database provisioning requires a service-account database user "
-            "or an explicit admin database URL."
+            "Database provisioning requires a service-account database user."
         )
     if connection.credentials.get("password") is None:
         raise ConfigurationError(
-            "Database provisioning requires a service-account database password "
-            "or an explicit admin database URL."
+            "Database provisioning requires a service-account database password."
         )
     return connection
 
@@ -622,15 +608,6 @@ def _validate_database_credential_configuration(
         "password",
         "password_key",
     )
-
-
-def _reject_unsupported_provisioning_backend(
-    connection: ResolvedDatabaseConnection,
-) -> None:
-    if connection.backend.tortoise_scheme == "sqlite":
-        raise ConfigurationError(
-            "Database provisioning is not supported for the sqlite backend."
-        )
 
 
 def _resolve_structured_database_connection(
