@@ -79,6 +79,24 @@ def run_migrate(
         fixture.cleanup()
 
 
+def sqlite_provisioning_context(
+    database_url: str,
+    *,
+    project_root: Path,
+) -> migrate_module.ProvisioningContext:
+    backend = migrate_module.database_backend_for_url(database_url)
+    assert backend is not None
+    return migrate_module.provisioning_context(
+        runtime_connection=migrate_module.ResolvedDatabaseConnection.from_url(
+            database_url,
+            backend=backend,
+        ),
+        provisioning_connection=None,
+        project_root=project_root,
+        modules=("wybra.sessions",),
+    )
+
+
 def _write_test_app_config(config_path: Path, modules: tuple[str, ...]) -> Path:
     modules_toml = ", ".join(f'"{module}"' for module in modules)
     config_path.write_text(
@@ -314,6 +332,227 @@ def test_migrate_lifecycle_reports_provisioning_results(
     migrate_module.initialise_database_lifecycle(context)
 
     assert "database lifecycle: sqlite init skipped: already provisioned" in caplog.text
+
+
+def test_sqlite_provisioning_creates_file_target_and_parent_directory(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "nested" / "database.sqlite3"
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+
+    results = migrate_module.initialise_database(context)
+
+    assert database_path.is_file()
+    assert [(result.status, result.phase) for result in results] == [
+        ("created", "init")
+    ]
+
+
+def test_sqlite_provisioning_is_idempotent_for_existing_file(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    database_path.write_text("", encoding="utf-8")
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+
+    results = migrate_module.initialise_database(context)
+
+    assert database_path.is_file()
+    assert [(result.status, result.phase) for result in results] == [
+        ("skipped", "init")
+    ]
+
+
+def test_sqlite_provisioning_treats_concurrent_file_creation_as_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+    original_touch = Path.touch
+
+    def create_file_then_raise_file_exists(
+        path: Path,
+        mode: int = 0o666,
+        exist_ok: bool = True,
+    ) -> None:
+        if path.resolve() == database_path.resolve():
+            original_touch(path, mode=mode, exist_ok=True)
+            raise FileExistsError(path)
+        original_touch(path, mode=mode, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "touch", create_file_then_raise_file_exists)
+
+    results = migrate_module.initialise_database(context)
+
+    assert database_path.is_file()
+    assert [(result.status, result.phase) for result in results] == [
+        ("skipped", "init")
+    ]
+
+
+def test_sqlite_provisioning_accepts_in_memory_without_credentials(
+    tmp_path: Path,
+) -> None:
+    context = sqlite_provisioning_context("sqlite://:memory:", project_root=tmp_path)
+
+    results = migrate_module.initialise_database(context)
+
+    assert [(result.status, result.phase) for result in results] == [("noop", "init")]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_sqlite_destroy_removes_confirmed_file_and_sidecars(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    database_path.write_text("", encoding="utf-8")
+    sidecars = [
+        database_path.with_name(f"{database_path.name}-wal"),
+        database_path.with_name(f"{database_path.name}-shm"),
+        database_path.with_name(f"{database_path.name}-journal"),
+    ]
+    for sidecar in sidecars:
+        sidecar.write_text("", encoding="utf-8")
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+
+    results = migrate_module.destroy_database(
+        context,
+        migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("removed", "destroy")
+    ]
+    assert not database_path.exists()
+    assert all(not sidecar.exists() for sidecar in sidecars)
+
+
+def test_sqlite_destroy_removes_sidecars_when_main_file_is_absent(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    sidecar = database_path.with_name(f"{database_path.name}-wal")
+    sidecar.write_text("", encoding="utf-8")
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+
+    results = migrate_module.destroy_database(
+        context,
+        migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("removed", "destroy")
+    ]
+    assert not database_path.exists()
+    assert not sidecar.exists()
+
+
+def test_sqlite_destroy_reports_already_absent_file_as_skipped(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+
+    results = migrate_module.destroy_database(
+        context,
+        migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("skipped", "destroy")
+    ]
+
+
+def test_sqlite_destroy_refuses_confirmation_mismatch(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    database_path.write_text("", encoding="utf-8")
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+
+    with pytest.raises(
+        migrate_module.DatabaseProvisioningConfigurationError,
+        match="confirmation does not match",
+    ):
+        migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm="other.sqlite3"),
+        )
+
+    assert database_path.exists()
+
+
+def test_sqlite_destroy_refuses_directory_target(tmp_path: Path) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    database_path.mkdir()
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+
+    with pytest.raises(
+        migrate_module.DatabaseProvisioningConfigurationError,
+        match="target is a directory",
+    ):
+        migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+        )
+
+    assert database_path.is_dir()
+
+
+def test_sqlite_in_memory_destroy_is_noop(tmp_path: Path) -> None:
+    context = sqlite_provisioning_context("sqlite://:memory:", project_root=tmp_path)
+
+    results = migrate_module.destroy_database(
+        context,
+        migrate_module.DestroyDatabaseRequest(confirm=":memory:"),
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("noop", "destroy")
+    ]
+
+
+def test_migrate_destroy_removes_sqlite_file_target(tmp_path: Path) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    database_path.write_text("", encoding="utf-8")
+
+    exit_code = run_migrate(
+        [
+            "--database-url",
+            sqlite_file_url(database_path),
+            "destroy",
+            "--confirm",
+            database_path.name,
+        ]
+    )
+
+    assert exit_code == 0
+    assert not database_path.exists()
 
 
 @pytest.mark.parametrize("argv", [["heads"], ["migrate"], ["downgrade"], ["history"]])
