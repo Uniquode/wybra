@@ -356,10 +356,9 @@ def create_migrate_command(
     @migrate_command.command(
         "migrate",
         help="Apply migrations.",
-        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
     )
     @_database_url_option
-    @click.argument("args", nargs=-1, type=click.UNPROCESSED)
+    @click.argument("args", nargs=-1)
     @click.option(
         "--fake",
         is_flag=True,
@@ -379,6 +378,8 @@ def create_migrate_command(
         dry_run: bool,
     ) -> int:
         if args[:1] == ("run",):
+            if fake or dry_run:
+                raise click.UsageError("migrate run does not support migration flags.")
             task = _maintenance_task_from_args(args)
             return _run_migration(
                 settings_loader,
@@ -692,7 +693,13 @@ def _supported_loader_kwargs(
 ) -> dict[str, object]:
     try:
         signature = inspect.signature(settings_loader)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        if any(values.values()):
+            logger.warning(
+                "migration settings loader signature could not be inspected; "
+                "optional loader arguments ignored: %s",
+                exc,
+            )
         return {}
     if any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD

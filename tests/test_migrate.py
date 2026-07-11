@@ -425,6 +425,75 @@ def test_migrate_run_dispatches_database_maintenance(
     }
 
 
+def test_migrate_rejects_unknown_options(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "database.sqlite3")
+
+    exit_code = run_migrate(
+        [
+            "--database-url",
+            database_url,
+            "migrate",
+            "--dyr-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "No such option" in captured.err
+    assert "--dyr-run" in captured.err
+
+
+@pytest.mark.parametrize("flag", ["--fake", "--dry-run"])
+def test_migrate_run_rejects_migration_flags(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    flag: str,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "database.sqlite3")
+
+    exit_code = run_migrate(
+        [
+            "--database-url",
+            database_url,
+            "migrate",
+            "run",
+            "vacuum",
+            flag,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "migrate run does not support migration flags" in captured.err
+
+
+def test_supported_loader_kwargs_logs_when_introspection_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class SignaturelessLoader:
+        __signature__ = "not a signature"
+
+        def __call__(self, database_url: str | None) -> MigrationTestSettings:
+            if database_url is None:
+                raise migrate_module.MigrationConfigurationError(
+                    "Test database URL is required."
+                )
+            return MigrationTestSettings(database_url=database_url)
+
+    caplog.set_level(logging.WARNING, logger=migrate_module.logger.name)
+
+    result = migrate_module._supported_loader_kwargs(
+        SignaturelessLoader(),
+        {"include_provisioning_connection": True},
+    )
+
+    assert result == {}
+    assert "migration settings loader signature could not be inspected" in caplog.text
+
+
 def test_tortoise_config_uses_configured_module_model_surfaces(tmp_path: Path) -> None:
     app_config_path = _write_test_app_config(
         tmp_path / "app.toml",

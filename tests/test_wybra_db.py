@@ -34,14 +34,23 @@ from wybra.db.persistence import (
 from wybra.db.provisioning import (
     CredentialTransition,
     DatabaseFamily,
+    DatabaseMaintenanceRequest,
     DatabaseProvisioningConfigurationError,
+    DatabaseProvisioningOperationError,
+    DestroyDatabaseRequest,
+    ProvisioningContext,
+    SQLiteProvisioner,
+    UnsupportedFamilyProvisioner,
     database_family_for_backend,
+    destroy_database,
     provisioner_for_family,
     quote_sql_identifier,
     render_sql_template,
+    run_database_maintenance,
 )
 from wybra.db.settings import (
     EffectiveDatabaseConfig,
+    ResolvedDatabaseConnection,
     StructuredDatabaseConfig,
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
@@ -1300,6 +1309,38 @@ async def test_close_database_connections_restores_connection_factory(
 
 
 @pytest.mark.anyio
+async def test_close_database_connections_can_keep_tracking_active(
+    tmp_path: Path,
+) -> None:
+    database = await create_database(
+        sqlite_file_url(tmp_path / "keep-tracking.sqlite3"),
+        modules=("wybra.db",),
+    )
+
+    try:
+        first_connection = database.connection()
+        assert first_connection in database._connections
+
+        await close_database_connections(database, restore_create_connection=False)
+
+        assert database._connections == []
+        assert "_create_connection" in database.context.connections.__dict__
+
+        second_connection = database.connection()
+
+        assert second_connection in database._connections
+        assert second_connection is not first_connection
+
+        await close_database(database)
+
+        assert "_create_connection" not in database.context.connections.__dict__
+        assert database._connections == []
+    finally:
+        if database._connections:
+            await close_database(database)
+
+
+@pytest.mark.anyio
 async def test_create_close_database_cycles_do_not_rewrap_connection_factory(
     tmp_path: Path,
 ) -> None:
@@ -1539,6 +1580,142 @@ def test_database_provisioner_registry_rejects_unsupported_family() -> None:
         match="Unsupported database family",
     ):
         provisioner_for_family(cast(DatabaseFamily, "firebird"), {})
+
+
+def _database_connection(
+    scheme: str,
+    credentials: dict[str, object],
+) -> ResolvedDatabaseConnection:
+    backend = database_urls.database_backend_for_scheme(scheme)
+
+    assert backend is not None
+    return ResolvedDatabaseConnection.from_structured(
+        backend=backend,
+        credentials=credentials,
+    )
+
+
+def _sqlite_provisioning_context() -> ProvisioningContext:
+    return ProvisioningContext(
+        family="sqlite",
+        runtime_connection=_database_connection("sqlite", {"file_path": ":memory:"}),
+        provisioning_connection=_database_connection(
+            "sqlite",
+            {"file_path": ":memory:"},
+        ),
+        project_root=Path.cwd(),
+        modules=(),
+    )
+
+
+def _postgresql_provisioning_context(
+    *,
+    provisioning_connection: ResolvedDatabaseConnection | None,
+) -> ProvisioningContext:
+    return ProvisioningContext(
+        family="postgresql",
+        runtime_connection=_database_connection(
+            "postgresql",
+            {"database": "app", "user": "app", "password": "secret"},
+        ),
+        provisioning_connection=provisioning_connection,
+        project_root=Path.cwd(),
+        modules=(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("credentials", "expected_message"),
+    (
+        (None, "requires service-account credentials"),
+        (
+            {"database": "app", "password": "secret"},
+            "requires a service-account database user",
+        ),
+        (
+            {"database": "app", "user": "app_sa"},
+            "requires a service-account database password",
+        ),
+    ),
+)
+def test_unsupported_database_provisioner_requires_service_account_credentials(
+    credentials: dict[str, object] | None,
+    expected_message: str,
+) -> None:
+    provisioner = UnsupportedFamilyProvisioner("postgresql")
+    context = _postgresql_provisioning_context(
+        provisioning_connection=(
+            None
+            if credentials is None
+            else _database_connection("postgresql", credentials)
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match=expected_message,
+    ):
+        provisioner.initialise(context)
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match=expected_message,
+    ):
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+
+
+def test_unsupported_database_provisioner_rejects_unimplemented_operations() -> None:
+    provisioner = UnsupportedFamilyProvisioner("postgresql")
+    context = _postgresql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "postgresql",
+            {"database": "app", "user": "app_sa", "password": "secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningOperationError,
+        match="postgresql init provisioning is not implemented",
+    ):
+        provisioner.initialise(context)
+    with pytest.raises(
+        DatabaseProvisioningOperationError,
+        match="postgresql destroy is not implemented",
+    ):
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="Unknown postgresql maintenance task",
+    ):
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="vacuum"),
+        )
+
+
+def test_database_lifecycle_guards_reject_blank_requests() -> None:
+    context = _sqlite_provisioning_context()
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="Destroy confirmation must not be blank",
+    ):
+        destroy_database(context, DestroyDatabaseRequest(confirm=" "))
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="Maintenance task name must not be blank",
+    ):
+        run_database_maintenance(context, DatabaseMaintenanceRequest(task=" "))
+
+
+def test_sqlite_provisioner_rejects_unknown_maintenance_task() -> None:
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="Unknown sqlite maintenance task",
+    ):
+        SQLiteProvisioner().run_maintenance(
+            _sqlite_provisioning_context(),
+            DatabaseMaintenanceRequest(task="vacuum"),
+        )
 
 
 def test_database_provisioning_template_quotes_identifiers() -> None:

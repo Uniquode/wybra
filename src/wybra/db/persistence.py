@@ -119,11 +119,16 @@ async def close_database(database: Database) -> None:
         tortoise_context._global_context = None
 
 
-async def close_database_connections(database: Database) -> None:
+async def close_database_connections(
+    database: Database,
+    *,
+    restore_create_connection: bool = True,
+) -> None:
     with database.context:
         await _close_tracked_connections(database)
         _discard_stored_connections(database.context.connections)
-        _restore_create_connection(database)
+        if restore_create_connection:
+            _restore_create_connection(database)
 
 
 def _track_created_connections(

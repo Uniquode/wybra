@@ -28,7 +28,7 @@ class DatabaseProvisioningOperationError(DatabaseProvisioningError):
 @dataclass(frozen=True, slots=True)
 class ProvisioningPhaseResult:
     family: DatabaseFamily
-    phase: str
+    phase: ProvisioningPhase
     status: ProvisioningStatus
     message: str
 
@@ -344,7 +344,9 @@ def render_sql_template(
 
     from jinja2 import Environment, StrictUndefined
 
-    environment = Environment(  # nosec B701 - internal SQL templates are not HTML.
+    # These are SQL templates, NOT HTML templates. HTML autoescaping would not
+    # provide SQL safety here and would produce invalid SQL for quoted values.
+    environment = Environment(  # nosec B701 - SQL templates intentionally disable HTML escaping.
         autoescape=False,
         undefined=StrictUndefined,
     )
@@ -390,6 +392,7 @@ __all__ = (
     "DatabaseProvisioningOperationError",
     "DestroyDatabaseRequest",
     "ProvisioningContext",
+    "ProvisioningPhase",
     "ProvisioningPhaseResult",
     "ProvisioningScript",
     "ProvisioningScriptContext",
