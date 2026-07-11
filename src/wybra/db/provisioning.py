@@ -151,17 +151,13 @@ class SQLiteProvisioner:
             )
         if target.exists():
             _ensure_sqlite_file_target(target)
-            return (
-                ProvisioningPhaseResult(
-                    family=self.family,
-                    phase="init",
-                    status="skipped",
-                    message=f"SQLite database file already exists: {target}",
-                ),
-            )
+            return _sqlite_initialise_skipped_result(self.family, target)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.touch(exist_ok=False)
+        except FileExistsError:
+            _ensure_sqlite_file_target(target)
+            return _sqlite_initialise_skipped_result(self.family, target)
         except OSError as exc:
             raise DatabaseProvisioningOperationError(
                 f"Failed to initialise SQLite database file: {target}"
@@ -416,6 +412,20 @@ def _ensure_family(context: ProvisioningContext, family: DatabaseFamily) -> None
         raise DatabaseProvisioningConfigurationError(
             f"Provisioner {family} cannot handle database family {context.family}."
         )
+
+
+def _sqlite_initialise_skipped_result(
+    family: DatabaseFamily,
+    target: Path,
+) -> tuple[ProvisioningPhaseResult, ...]:
+    return (
+        ProvisioningPhaseResult(
+            family=family,
+            phase="init",
+            status="skipped",
+            message=f"SQLite database file already exists: {target}",
+        ),
+    )
 
 
 def _sqlite_file_target(context: ProvisioningContext) -> Path | None:

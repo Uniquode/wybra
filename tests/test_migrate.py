@@ -369,6 +369,37 @@ def test_sqlite_provisioning_is_idempotent_for_existing_file(
     ]
 
 
+def test_sqlite_provisioning_treats_concurrent_file_creation_as_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "database.sqlite3"
+    context = sqlite_provisioning_context(
+        sqlite_file_url(database_path),
+        project_root=tmp_path,
+    )
+    original_touch = Path.touch
+
+    def create_file_then_raise_file_exists(
+        path: Path,
+        mode: int = 0o666,
+        exist_ok: bool = True,
+    ) -> None:
+        if path.resolve() == database_path.resolve():
+            original_touch(path, mode=mode, exist_ok=True)
+            raise FileExistsError(path)
+        original_touch(path, mode=mode, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "touch", create_file_then_raise_file_exists)
+
+    results = migrate_module.initialise_database(context)
+
+    assert database_path.is_file()
+    assert [(result.status, result.phase) for result in results] == [
+        ("skipped", "init")
+    ]
+
+
 def test_sqlite_provisioning_accepts_in_memory_without_credentials(
     tmp_path: Path,
 ) -> None:
