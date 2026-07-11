@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import click
 from tortoise.cli import cli as tortoise_cli
@@ -18,10 +18,23 @@ from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
 
 from wybra.core.composition import AppConfig
 from wybra.core.logging import LoggingConfigurationError
+from wybra.db.provisioning import (
+    DatabaseMaintenanceRequest,
+    DatabaseProvisioningConfigurationError,
+    DatabaseProvisioningOperationError,
+    DestroyDatabaseRequest,
+    ProvisioningContext,
+    ProvisioningPhaseResult,
+    destroy_database,
+    initialise_database,
+    provisioning_context,
+    run_database_maintenance,
+)
 from wybra.db.settings import ResolvedDatabaseConnection
 from wybra.db.surfaces import DataCompositionError
 from wybra.db.tortoise import build_tortoise_config as build_config
 from wybra.db.urls import (
+    database_backend_for_url,
     database_url_support_error,
     is_supported_database_url,
     safe_database_error_message,
@@ -50,6 +63,7 @@ class MigrationSettings(Protocol):
 
     database_url: str | None
     database_connection: ResolvedDatabaseConnection | None
+    provisioning_connection: ResolvedDatabaseConnection | None
     project_root: Path
     migrations_root: Path | None
     app_config: AppConfig | None
@@ -72,6 +86,7 @@ class MigrationSettingsLoader(Protocol):
         database_url: str | None,
         *,
         config_source: str | None = ...,
+        include_provisioning_connection: bool = ...,
         **_: object,
     ) -> MigrationSettings: ...
 
@@ -90,6 +105,8 @@ class MigrationContext:
 
     settings: MigrationSettings
     config: dict[str, Any]
+    database_connection: ResolvedDatabaseConnection
+    provisioning_connection: ResolvedDatabaseConnection | None = None
 
 
 class MigrationBackend(Protocol):
@@ -275,9 +292,38 @@ def create_migrate_command(
             settings_loader,
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
-            lambda backend, context: backend.initialise(
+            operation=lambda backend, context: initialise_migration_lifecycle(
+                backend,
                 context,
                 app_labels=app_labels,
+            ),
+            include_provisioning_connection=True,
+        )
+
+    @migrate_command.command(
+        "destroy",
+        help="Destroy database objects owned by lifecycle setup.",
+    )
+    @_database_url_option
+    @click.option(
+        "--confirm",
+        required=True,
+        help="Confirm the target database/schema name before destructive work runs.",
+    )
+    @click.pass_context
+    def destroy_command(
+        ctx: click.Context,
+        database_url: str | None,
+        confirm: str,
+    ) -> int:
+        return _run_migration(
+            settings_loader,
+            _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
+            include_provisioning_connection=True,
+            operation=lambda _backend, context: destroy_database_lifecycle(
+                context,
+                DestroyDatabaseRequest(confirm=confirm),
             ),
         )
 
@@ -307,10 +353,13 @@ def create_migrate_command(
             ),
         )
 
-    @migrate_command.command("migrate", help="Apply migrations.")
+    @migrate_command.command(
+        "migrate",
+        help="Apply migrations.",
+        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    )
     @_database_url_option
-    @click.argument("app_label", required=False)
-    @click.argument("migration", required=False)
+    @click.argument("args", nargs=-1, type=click.UNPROCESSED)
     @click.option(
         "--fake",
         is_flag=True,
@@ -325,11 +374,23 @@ def create_migrate_command(
     def migrate_command_command(
         ctx: click.Context,
         database_url: str | None,
-        app_label: str | None,
-        migration: str | None,
+        args: tuple[str, ...],
         fake: bool,
         dry_run: bool,
     ) -> int:
+        if args[:1] == ("run",):
+            task = _maintenance_task_from_args(args)
+            return _run_migration(
+                settings_loader,
+                _database_url_for_command(ctx, database_url),
+                _config_source_for_command(ctx),
+                include_provisioning_connection=True,
+                operation=lambda _backend, context: run_database_maintenance_lifecycle(
+                    context,
+                    DatabaseMaintenanceRequest(task=task),
+                ),
+            )
+        app_label, migration = _migration_target_from_args(args)
         return _run_migration(
             settings_loader,
             _database_url_for_command(ctx, database_url),
@@ -474,6 +535,25 @@ def _database_url_for_command(
     return root_database_url
 
 
+def _migration_target_from_args(args: Sequence[str]) -> tuple[str | None, str | None]:
+    if len(args) > 2:
+        raise click.UsageError(
+            "migrate accepts at most APP_LABEL and MIGRATION arguments."
+        )
+    app_label = args[0] if len(args) >= 1 else None
+    migration = args[1] if len(args) == 2 else None
+    return app_label, migration
+
+
+def _maintenance_task_from_args(args: Sequence[str]) -> str:
+    if len(args) != 2:
+        raise click.UsageError("migrate run requires exactly one TASK argument.")
+    task = args[1].strip()
+    if not task:
+        raise click.UsageError("migrate run TASK must not be blank.")
+    return task
+
+
 def _config_source_for_command(ctx: click.Context) -> str | None:
     return config_source_from_click_context(
         ctx,
@@ -492,6 +572,8 @@ def _run_migration(
     database_url: str | None,
     config_source: str | None,
     operation: Callable[[MigrationBackend, MigrationContext], None],
+    *,
+    include_provisioning_connection: bool = False,
 ) -> int:
     try:
         configure_cli_logging()
@@ -499,6 +581,7 @@ def _run_migration(
             settings_loader,
             database_url,
             config_source,
+            include_provisioning_connection=include_provisioning_connection,
         )
         configure_cli_logging(settings.app_config)
         context = build_migration_context(settings)
@@ -519,6 +602,12 @@ def _run_migration(
     except MigrationStateError as exc:
         logger.error("migration: failed: %s", exc)
         return 1
+    except DatabaseProvisioningConfigurationError as exc:
+        logger.error("configuration: failed: %s", exc)
+        return 1
+    except DatabaseProvisioningOperationError as exc:
+        logger.error("database lifecycle: failed: %s", safe_database_error_message(exc))
+        return 1
     except (TortoiseConfigurationError, tortoise_cli_utils.CLIError) as exc:
         logger.error("migration: failed: %s", safe_database_error_message(exc))
         return 1
@@ -529,15 +618,38 @@ def _load_migration_settings(
     settings_loader: MigrationSettingsLoader,
     database_url: str | None,
     config_source: str | None,
+    *,
+    include_provisioning_connection: bool = False,
 ) -> MigrationSettings:
+    optional_kwargs = {
+        "include_provisioning_connection": include_provisioning_connection,
+    }
     if config_source is None:
-        return settings_loader(database_url)
+        return _call_settings_loader(
+            settings_loader,
+            database_url,
+            _supported_loader_kwargs(settings_loader, optional_kwargs),
+        )
 
     if _loader_accepts_keyword_config_source(settings_loader):
-        return settings_loader(database_url, config_source=config_source)
+        kwargs = _supported_loader_kwargs(settings_loader, optional_kwargs)
+        kwargs["config_source"] = config_source
+        return _call_settings_loader(
+            settings_loader,
+            database_url,
+            kwargs,
+        )
     raise MigrationConfigurationError(
         "Migration settings loader must accept config_source when --config is used."
     )
+
+
+def _call_settings_loader(
+    settings_loader: MigrationSettingsLoader,
+    database_url: str | None,
+    kwargs: dict[str, object],
+) -> MigrationSettings:
+    return cast(Any, settings_loader)(database_url, **kwargs)
 
 
 def _loader_accepts_keyword_config_source(
@@ -574,6 +686,34 @@ def _loader_accepts_keyword_config_source(
     )
 
 
+def _supported_loader_kwargs(
+    settings_loader: MigrationSettingsLoader,
+    values: dict[str, object],
+) -> dict[str, object]:
+    try:
+        signature = inspect.signature(settings_loader)
+    except (TypeError, ValueError):
+        return {}
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return dict(values)
+    return {
+        name: value
+        for name, value in values.items()
+        if any(
+            parameter.name == name
+            and parameter.kind
+            in (
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            for parameter in signature.parameters.values()
+        )
+    }
+
+
 def run_migrate_command(
     migrate_command: click.Group,
     argv: Sequence[str] | None = None,
@@ -597,23 +737,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def build_migration_context(settings: MigrationSettings) -> MigrationContext:
-    database_connection = getattr(settings, "database_connection", None)
-    if database_connection is not None:
-        return MigrationContext(
-            settings=settings,
-            config=build_tortoise_config(settings),
-        )
-
-    if settings.database_url is None or not settings.database_url.strip():
-        raise MigrationConfigurationError("Database URL is required.")
-    if not is_supported_database_url(settings.database_url):
-        raise MigrationConfigurationError(
-            database_url_support_error(settings.database_url)
-        )
+    database_connection = _database_connection_for_settings(settings)
 
     return MigrationContext(
         settings=settings,
         config=build_tortoise_config(settings),
+        database_connection=database_connection,
+        provisioning_connection=getattr(settings, "provisioning_connection", None),
     )
 
 
@@ -627,6 +757,81 @@ def build_tortoise_config(settings: MigrationSettings) -> dict[str, Any]:
     if settings.database_url is None:
         raise MigrationConfigurationError("Database URL is required.")
     return build_config(database_url=settings.database_url, modules=settings.modules)
+
+
+def initialise_migration_lifecycle(
+    backend: MigrationBackend,
+    context: MigrationContext,
+    *,
+    app_labels: tuple[str, ...],
+) -> None:
+    initialise_database_lifecycle(context)
+    backend.initialise(context, app_labels=app_labels)
+
+
+def initialise_database_lifecycle(context: MigrationContext) -> None:
+    _report_provisioning_results(initialise_database(_provisioning_context(context)))
+
+
+def destroy_database_lifecycle(
+    context: MigrationContext,
+    request: DestroyDatabaseRequest,
+) -> None:
+    _report_provisioning_results(
+        destroy_database(_provisioning_context(context), request)
+    )
+
+
+def run_database_maintenance_lifecycle(
+    context: MigrationContext,
+    request: DatabaseMaintenanceRequest,
+) -> None:
+    _report_provisioning_results(
+        run_database_maintenance(_provisioning_context(context), request)
+    )
+
+
+def _report_provisioning_results(
+    results: Sequence[ProvisioningPhaseResult],
+) -> None:
+    for result in results:
+        logger.info(
+            "database lifecycle: %s %s %s: %s",
+            result.family,
+            result.phase,
+            result.status,
+            result.message,
+        )
+
+
+def _provisioning_context(context: MigrationContext) -> ProvisioningContext:
+    return provisioning_context(
+        runtime_connection=context.database_connection,
+        provisioning_connection=context.provisioning_connection,
+        project_root=context.settings.project_root,
+        modules=context.settings.modules,
+    )
+
+
+def _database_connection_for_settings(
+    settings: MigrationSettings,
+) -> ResolvedDatabaseConnection:
+    database_connection = getattr(settings, "database_connection", None)
+    if database_connection is not None:
+        return database_connection
+
+    if settings.database_url is None or not settings.database_url.strip():
+        raise MigrationConfigurationError("Database URL is required.")
+    if not is_supported_database_url(settings.database_url):
+        raise MigrationConfigurationError(
+            database_url_support_error(settings.database_url)
+        )
+    backend = database_backend_for_url(settings.database_url)
+    if backend is None:  # pragma: no cover - is_supported_database_url checked above
+        raise MigrationConfigurationError(
+            database_url_support_error(settings.database_url)
+        )
+    return ResolvedDatabaseConnection.from_url(settings.database_url, backend=backend)
 
 
 def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:

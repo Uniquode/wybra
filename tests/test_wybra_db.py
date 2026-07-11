@@ -31,6 +31,15 @@ from wybra.db.persistence import (
     close_database_connections,
     create_database,
 )
+from wybra.db.provisioning import (
+    CredentialTransition,
+    DatabaseFamily,
+    DatabaseProvisioningConfigurationError,
+    database_family_for_backend,
+    provisioner_for_family,
+    quote_sql_identifier,
+    render_sql_template,
+)
 from wybra.db.settings import (
     EffectiveDatabaseConfig,
     StructuredDatabaseConfig,
@@ -1132,7 +1141,7 @@ def test_provisioning_connection_rejects_runtime_credentials_only(
         )
 
 
-def test_provisioning_connection_rejects_sqlite_backend(
+def test_provisioning_connection_accepts_sqlite_backend(
     tmp_path: Path,
 ) -> None:
     config = ConfigService(
@@ -1140,30 +1149,17 @@ def test_provisioning_connection_rejects_sqlite_backend(
         config_defs=(db_module_config,),
     )
 
-    with pytest.raises(
-        ConfigurationError,
-        match="provisioning is not supported for the sqlite backend",
-    ):
-        resolve_database_provisioning_connection_from_config(
-            config,
-            project_root=tmp_path,
-        )
-
-
-def test_provisioning_connection_accepts_admin_database_url_override(
-    tmp_path: Path,
-) -> None:
-    admin_url = "postgresql://admin:secret@db.example/uniquode"
-    config = ConfigService([MappingConfigSource({})], config_defs=(db_module_config,))
-
     connection = resolve_database_provisioning_connection_from_config(
         config,
         project_root=tmp_path,
-        admin_database_url=admin_url,
     )
 
-    assert connection.source == "url"
-    assert connection.database_url == admin_url
+    assert connection.source == "structured"
+    assert connection.backend.tortoise_scheme == "sqlite"
+    assert (
+        connection.credentials["file_path"]
+        == (tmp_path / "structured.sqlite3").as_posix()
+    )
 
 
 def test_provisioning_connection_rejects_application_database_url(
@@ -1184,7 +1180,7 @@ def test_provisioning_connection_rejects_application_database_url(
 
     with pytest.raises(
         ConfigurationError,
-        match="does not use application database_url configuration",
+        match="does not use application database_url",
     ):
         resolve_database_provisioning_connection_from_config(
             config,
@@ -1512,6 +1508,69 @@ def test_supported_database_url_schemes_cover_tortoise_backends() -> None:
         "mssql",
         "oracle",
     )
+
+
+@pytest.mark.parametrize(
+    ("scheme", "expected_family"),
+    (
+        ("sqlite", "sqlite"),
+        ("postgresql", "postgresql"),
+        ("postgres", "postgresql"),
+        ("asyncpg", "postgresql"),
+        ("psycopg", "postgresql"),
+        ("mysql", "mysql"),
+        ("mssql", "mssql"),
+        ("oracle", "oracle"),
+    ),
+)
+def test_database_provisioning_family_uses_backend_family(
+    scheme: str,
+    expected_family: str,
+) -> None:
+    backend = database_urls.database_backend_for_scheme(scheme)
+
+    assert backend is not None
+    assert database_family_for_backend(backend) == expected_family
+
+
+def test_database_provisioner_registry_rejects_unsupported_family() -> None:
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="Unsupported database family",
+    ):
+        provisioner_for_family(cast(DatabaseFamily, "firebird"), {})
+
+
+def test_database_provisioning_template_quotes_identifiers() -> None:
+    assert quote_sql_identifier('app"db') == '"app""db"'
+    assert (
+        render_sql_template(
+            "create database {{ database|quote_identifier }}",
+            variables={"database": 'app"db'},
+        )
+        == 'create database "app""db"'
+    )
+
+
+def test_database_credential_transition_rejects_blank_values() -> None:
+    transition = CredentialTransition(
+        current=" current ",
+        previous=(" previous ",),
+    )
+
+    assert transition.current == "current"
+    assert transition.previous == ("previous",)
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="Current credential value",
+    ):
+        CredentialTransition(current=" ")
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="Previous credential values",
+    ):
+        CredentialTransition(current="current", previous=(" ",))
 
 
 def test_database_url_support_uses_available_backend_modules(

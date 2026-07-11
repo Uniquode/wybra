@@ -23,6 +23,7 @@ def _build_settings(
     database_url: str | None,
     *,
     config_source: str | None = None,
+    include_provisioning_connection: bool = False,
     **_extra: object,
 ) -> data_migrate.MigrationSettings:
     project_root = runtime_project_root()
@@ -37,8 +38,9 @@ def _build_settings(
                 data_migrate.MigrationSettings,
                 load_project_settings(
                     project_root=project_root,
-                    database_credential_purpose="service_account",
-                    fallback_to_runtime_credentials=True,
+                    database_credential_purpose="runtime",
+                    fallback_to_runtime_credentials=False,
+                    include_provisioning_connection=include_provisioning_connection,
                 ),
             )
 
@@ -47,8 +49,9 @@ def _build_settings(
             load_project_settings(
                 environ=environment,
                 project_root=project_root,
-                database_credential_purpose="service_account",
-                fallback_to_runtime_credentials=True,
+                database_credential_purpose="runtime",
+                fallback_to_runtime_credentials=False,
+                include_provisioning_connection=include_provisioning_connection,
             ),
         )
     except ProjectToolConfigurationError as exc:

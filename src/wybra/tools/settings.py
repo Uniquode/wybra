@@ -38,6 +38,7 @@ from wybra.db.settings import (
     EffectiveDatabaseConfig,
     ResolvedDatabaseConnection,
     resolve_database_connection_from_config,
+    resolve_database_provisioning_connection_from_config,
 )
 from wybra.media.config import MEDIA_URL_MODES
 
@@ -52,6 +53,10 @@ class ProjectSettings(BaseSettings):
     config: ConfigService
     database_url: str | None = None
     database_connection: ResolvedDatabaseConnection | None = field(
+        default=None,
+        repr=False,
+    )
+    provisioning_connection: ResolvedDatabaseConnection | None = field(
         default=None,
         repr=False,
     )
@@ -77,6 +82,7 @@ class ProjectSettings(BaseSettings):
         app_config: AppConfig,
         database_credential_purpose: CredentialPurpose = "runtime",
         fallback_to_runtime_credentials: bool = False,
+        include_provisioning_connection: bool = False,
     ) -> ProjectSettings:  # ty: ignore[invalid-method-override]
         return cls(
             **_project_settings_kwargs(
@@ -84,6 +90,7 @@ class ProjectSettings(BaseSettings):
                 app_config,
                 database_credential_purpose=database_credential_purpose,
                 fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+                include_provisioning_connection=include_provisioning_connection,
             )
         )
 
@@ -180,6 +187,7 @@ def load_project_settings(
     read_dotenv: bool = True,
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
+    include_provisioning_connection: bool = False,
 ) -> ProjectSettings:
     resolved_project_root = resolve_project_root(project_root, environ)
     try:
@@ -210,6 +218,7 @@ def load_project_settings(
             app_config=app_config,
             database_credential_purpose=database_credential_purpose,
             fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+            include_provisioning_connection=include_provisioning_connection,
         )
     except (SettingsLoadError, ConfigDefinitionError, ConfigSourceError) as exc:
         raise wrapped_error(ConfigurationError, exc) from exc
@@ -229,6 +238,7 @@ def _project_settings_kwargs(
     *,
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
+    include_provisioning_connection: bool = False,
 ) -> dict[str, Any]:
     app_values = ProjectSettings.section_values(config, "app")
     static_values = ProjectSettings.section_values(config, "app.assets")
@@ -259,6 +269,13 @@ def _project_settings_kwargs(
         settings_kwargs["database_connection"] = database_connection
         if database_connection.database_url is not None:
             settings_kwargs["database_url"] = database_connection.database_url
+    if include_provisioning_connection:
+        provisioning_connection = resolve_database_provisioning_connection_from_config(
+            config,
+            project_root=app_config.project_root,
+            configured_database_url=app_config.database_url,
+        )
+        settings_kwargs["provisioning_connection"] = provisioning_connection
     settings_kwargs["deployment_environment"] = _deployment_environment(
         app_values,
         app_config,
