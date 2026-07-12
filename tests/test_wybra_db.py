@@ -49,6 +49,7 @@ from wybra.db.provisioning import (
     provisioner_for_family,
     run_database_maintenance,
 )
+from wybra.db.provisioning.mariadb import MariaDBProvisioner
 from wybra.db.provisioning.mssql import SQLServerProvisioner, quote_mssql_identifier
 from wybra.db.provisioning.mysql import MySQLProvisioner, quote_mysql_identifier
 from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
@@ -564,6 +565,44 @@ def test_structured_database_config_resolves_environment_credentials(
         "credentials": {
             "database": "uniquode",
             "host": "/var/run/postgresql",
+            "user": "app_user",
+            "password": "app_password",
+        },
+    }
+
+
+def test_structured_mariadb_config_uses_tortoise_mysql_backend(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "mariadb",
+                        "host": "db.example",
+                        "database": "uniquode",
+                        "user": "app_user",
+                        "password": "app_password",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+    )
+
+    assert connection is not None
+    assert connection.backend.scheme == "mariadb"
+    assert connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.mysql",
+        "credentials": {
+            "database": "uniquode",
+            "host": "db.example",
             "user": "app_user",
             "password": "app_password",
         },
@@ -1743,6 +1782,7 @@ def test_supported_database_url_schemes_cover_tortoise_backends() -> None:
         "asyncpg",
         "psycopg",
         "mysql",
+        "mariadb",
         "mssql",
         "oracle",
     )
@@ -1757,6 +1797,7 @@ def test_supported_database_url_schemes_cover_tortoise_backends() -> None:
         ("asyncpg", "postgresql"),
         ("psycopg", "postgresql"),
         ("mysql", "mysql"),
+        ("mariadb", "mariadb"),
         ("mssql", "mssql"),
         ("oracle", "oracle"),
     ),
@@ -1832,6 +1873,24 @@ def _mysql_provisioning_context(
         family="mysql",
         runtime_connection=_database_connection(
             "mysql",
+            runtime_credentials
+            or {"database": "app", "user": "app", "password": "secret"},
+        ),
+        provisioning_connection=provisioning_connection,
+        project_root=Path.cwd(),
+        modules=(),
+    )
+
+
+def _mariadb_provisioning_context(
+    *,
+    provisioning_connection: ResolvedDatabaseConnection | None,
+    runtime_credentials: dict[str, object] | None = None,
+) -> ProvisioningContext:
+    return ProvisioningContext(
+        family="mariadb",
+        runtime_connection=_database_connection(
+            "mariadb",
             runtime_credentials
             or {"database": "app", "user": "app", "password": "secret"},
         ),
@@ -2427,6 +2486,10 @@ def test_mysql_provisioner_is_registered_for_mysql_family() -> None:
     assert isinstance(provisioner_for_family("mysql"), MySQLProvisioner)
 
 
+def test_mariadb_provisioner_is_registered_for_mariadb_family() -> None:
+    assert isinstance(provisioner_for_family("mariadb"), MariaDBProvisioner)
+
+
 def test_mysql_provisioner_initialises_database_user_and_grants() -> None:
     connection = _RecordingMySQLConnection(
         [
@@ -2787,6 +2850,173 @@ def test_mysql_provisioner_reports_missing_driver(
     with pytest.raises(
         DatabaseProvisioningConfigurationError,
         match=r"wybra\[mysql\]",
+    ):
+        asyncio.run(provisioner.initialise(context))
+
+
+def test_mariadb_provisioner_initialises_with_mysql_compatible_sql() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            0,  # database exists
+            0,  # user exists
+            0,  # migration recorder table exists
+        ]
+    )
+    connector = _RecordingMySQLConnector(connection)
+    provisioner = MariaDBProvisioner(connector=connector)
+    context = _mariadb_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mariadb",
+            {
+                "database": "app",
+                "host": "db.example",
+                "user": "app_sa",
+                "password": "admin_secret",
+            },
+        ),
+    )
+
+    results = asyncio.run(provisioner.initialise(context))
+
+    assert connector.credentials == [
+        {
+            "host": "db.example",
+            "user": "app_sa",
+            "password": "admin_secret",
+        }
+    ]
+    assert {result.family for result in results} == {"mariadb"}
+    assert any(result.message == "Created MariaDB database: app" for result in results)
+    assert any(
+        result.message == "Created MariaDB application user: app" for result in results
+    )
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    queried_sql = "\n".join(query for query, _args in connection.queries)
+    assert "CREATE DATABASE `app`" in executed_sql
+    assert "CREATE USER 'app'@'%%' IDENTIFIED BY %s" in executed_sql
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (
+        executed_sql
+    )
+    assert "FROM mysql.user" in queried_sql
+    assert "secret" not in executed_sql
+    assert "secret" not in " ".join(result.message for result in results)
+    assert connection.closed
+
+
+def test_mariadb_destroy_uses_mariadb_labels_and_mysql_compatible_safety() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            99,  # current connection id
+        ],
+        fetch_rows=[
+            (
+                ("GRANT USAGE ON *.* TO 'app'@'%'",),
+                ("GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'",),
+            ),
+            ((101,),),
+        ],
+    )
+    provisioner = MariaDBProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mariadb_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mariadb",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    assert [(result.family, result.status, result.phase) for result in results] == [
+        ("mariadb", "removed", "destroy"),
+        ("mariadb", "removed", "destroy"),
+    ]
+    assert any("Removed MariaDB database: app" in result.message for result in results)
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "KILL 101" in executed_sql
+    assert "DROP DATABASE `app`" in executed_sql
+    assert "DROP USER 'app'@'%'" in executed_sql
+
+
+def test_mariadb_destroy_reports_unclassified_role_grants_as_unsupported() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            99,  # current connection id
+        ],
+        fetch_rows=[
+            (("GRANT app_role TO 'app'@'%'",),),
+            ((101,),),
+        ],
+    )
+    provisioner = MariaDBProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mariadb_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mariadb",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    assert [(result.family, result.status, result.phase) for result in results] == [
+        ("mariadb", "removed", "destroy"),
+        ("mariadb", "unsupported", "destroy"),
+    ]
+    assert any(
+        result.message
+        == (
+            "Skipped MariaDB application user removal because grant scope could "
+            "not be classified safely."
+        )
+        for result in results
+    )
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "DROP DATABASE `app`" in executed_sql
+    assert "DROP USER" not in executed_sql
+
+
+def test_mariadb_provisioner_uses_mariadb_label_for_count_errors() -> None:
+    connection = _RecordingMySQLConnection(["not-count"])
+    provisioner = MariaDBProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mariadb_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mariadb",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningOperationError,
+        match="MariaDB count result was invalid.",
+    ):
+        asyncio.run(provisioner.initialise(context))
+
+
+def test_mariadb_provisioner_reports_missing_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def import_module(_module_name: str) -> object:
+        raise ImportError("missing")
+
+    monkeypatch.setattr(mysql_provisioning.importlib, "import_module", import_module)
+    provisioner = MariaDBProvisioner()
+    context = _mariadb_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mariadb",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match=r"wybra\[mariadb\]",
     ):
         asyncio.run(provisioner.initialise(context))
 
@@ -3208,6 +3438,7 @@ def test_database_url_support_uses_available_backend_modules(
     assert is_supported_database_url("postgresql://user:password@host.example/app")
     assert is_supported_database_url("mssql://user:password@host.example/app")
     assert not is_supported_database_url("mysql://user:password@host.example/app")
+    assert not is_supported_database_url("mariadb://user:password@host.example/app")
 
 
 def test_database_url_support_error_names_missing_backend_extra(
@@ -3224,6 +3455,10 @@ def test_database_url_support_error_names_missing_backend_extra(
         "postgresql://user:password@host.example/app"
     ) == (
         "Database URL scheme postgresql:// requires the wybra[postgresql] "
+        "optional dependency."
+    )
+    assert database_url_support_error("mariadb://user:password@host.example/app") == (
+        "Database URL scheme mariadb:// requires the wybra[mariadb] "
         "optional dependency."
     )
 
@@ -3270,6 +3505,10 @@ async def test_create_database_rejects_unavailable_backend(
         ),
         (
             "mysql://user:password@host.example/app",
+            "mysql://user:password@host.example/app",
+        ),
+        (
+            "mariadb://user:password@host.example/app",
             "mysql://user:password@host.example/app",
         ),
         (

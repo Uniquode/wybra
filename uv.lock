@@ -1430,6 +1430,9 @@ keychain = [
 kms = [
     { name = "boto3" },
 ]
+mariadb = [
+    { name = "aiomysql" },
+]
 mssql = [
     { name = "asyncodbc" },
     { name = "pyodbc" },
@@ -1463,6 +1466,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiomysql", marker = "extra == 'databases'" },
+    { name = "aiomysql", marker = "extra == 'mariadb'" },
     { name = "aiomysql", marker = "extra == 'mysql'" },
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "anyio", specifier = ">=4.14.0" },
@@ -1499,7 +1503,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.50.2" },
     { name = "webauthn", specifier = ">=3.0.0" },
 ]
-provides-extras = ["kms", "keychain", "vault", "cache", "postgresql", "psycopg", "mysql", "mssql", "oracle", "databases"]
+provides-extras = ["kms", "keychain", "vault", "cache", "postgresql", "psycopg", "mysql", "mariadb", "mssql", "oracle", "databases"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -74,6 +74,12 @@ DATABASE_BACKENDS = (
         install_extra="mysql",
     ),
     DatabaseBackend(
+        scheme="mariadb",
+        tortoise_scheme="mysql",
+        required_module_groups=(("asyncmy",), ("aiomysql",)),
+        install_extra="mariadb",
+    ),
+    DatabaseBackend(
         scheme="mssql",
         tortoise_scheme="mssql",
         required_module_groups=(("asyncodbc", "pyodbc"),),

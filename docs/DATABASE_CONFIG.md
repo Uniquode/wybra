@@ -154,4 +154,5 @@ a TCP host name.
 
 SQLite support is available by default. Other database backends require the
 matching Wybra optional dependency, such as `wybra[postgresql]`,
-`wybra[psycopg]`, `wybra[mysql]`, `wybra[mssql]`, or `wybra[oracle]`.
+`wybra[psycopg]`, `wybra[mysql]`, `wybra[mariadb]`, `wybra[mssql]`, or
+`wybra[oracle]`.
