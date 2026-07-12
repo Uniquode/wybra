@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Protocol
+from typing import Protocol, cast
 
 from wybra.db.provisioning.core import (
     DatabaseFamily,
@@ -398,13 +399,14 @@ class PostgreSQLProvisioner:
 
 async def _connect_asyncpg(credentials: Mapping[str, object]) -> PostgreSQLConnection:
     try:
-        import asyncpg
+        asyncpg = importlib.import_module("asyncpg")
     except ImportError as exc:  # pragma: no cover - depends on installed extras
         raise DatabaseProvisioningConfigurationError(
             "PostgreSQL provisioning requires the asyncpg database extra."
         ) from exc
 
-    return await asyncpg.connect(**dict(credentials))
+    connect = cast(Callable[..., Awaitable[PostgreSQLConnection]], asyncpg.connect)
+    return await connect(**dict(credentials))
 
 
 def _run_sync[ResultT](
