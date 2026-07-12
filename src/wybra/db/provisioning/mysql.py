@@ -106,7 +106,7 @@ class MySQLProvisioner:
                     (
                         f"Created MySQL application user: {app_user}"
                         if user_created
-                        else f"MySQL application user already exists: {app_user}"
+                        else f"Refreshed MySQL application user password: {app_user}"
                     ),
                 )
             )
@@ -690,6 +690,8 @@ def quote_mysql_identifier(identifier: str) -> str:
 
 
 def _account_name(user: str, *, escape_percent: bool = False) -> str:
+    # MySQL drivers use %-formatting only when parameters are supplied.
+    # Escape @'%' for parameterised account SQL, but keep it literal elsewhere.
     host = (
         _MYSQL_ACCOUNT_HOST.replace("%", "%%")
         if escape_percent
@@ -703,6 +705,8 @@ def _mysql_string_literal(value: str) -> str:
 
 
 def _normalise_count(value: object) -> int:
+    if value is None:
+        return 0
     return _normalise_integer(
         value,
         message="MySQL migration recorder count was invalid.",
@@ -711,7 +715,7 @@ def _normalise_count(value: object) -> int:
 
 def _normalise_integer(value: object, *, message: str) -> int:
     if value is None:
-        return 0
+        raise DatabaseProvisioningOperationError(message)
     if isinstance(value, bool):
         raise DatabaseProvisioningOperationError(message)
     if isinstance(value, int):

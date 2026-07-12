@@ -1915,6 +1915,9 @@ def test_mysql_provisioner_initialises_database_user_and_grants() -> None:
     assert _simulate_pymysql_format(*connection.executed[1]) == (
         "CREATE USER 'app'@'%' IDENTIFIED BY <param>"
     )
+    grant_query, grant_args = connection.executed[2]
+    assert grant_args == ()
+    assert "TO 'app'@'%'" in grant_query
     assert connection.closed
 
 
@@ -1943,6 +1946,10 @@ def test_mysql_provisioner_reuses_existing_objects_and_reports_migrations() -> N
         "skipped",
         "noop",
     ]
+    assert any(
+        result.message == "Refreshed MySQL application user password: app"
+        for result in results
+    )
     assert any("contains 2 record" in result.message for result in results)
     executed_sql = "\n".join(query for query, _args in connection.executed)
     assert "CREATE DATABASE" not in executed_sql
@@ -2011,6 +2018,9 @@ def test_mysql_destroy_removes_configured_database_and_safe_user() -> None:
     assert "KILL 101" in executed_sql
     assert "DROP DATABASE `app`" in executed_sql
     assert "DROP USER 'app'@'%'" in executed_sql
+    show_grants_query, show_grants_args = connection.queries[2]
+    assert show_grants_query == "SHOW GRANTS FOR 'app'@'%'"
+    assert show_grants_args == ()
 
 
 def test_mysql_destroy_skips_service_account_runtime_user() -> None:
@@ -2073,6 +2083,37 @@ def test_mysql_destroy_skips_user_with_external_grants() -> None:
     assert "DROP DATABASE `app`" in executed_sql
     assert "DROP USER" not in executed_sql
     assert any("grants outside app" in result.message for result in results)
+
+
+def test_mysql_destroy_rejects_missing_connection_id() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            None,  # current connection id
+        ],
+        fetch_rows=[
+            (
+                ("GRANT USAGE ON *.* TO 'app'@'%'",),
+                ("GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'",),
+            ),
+        ],
+    )
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningOperationError,
+        match="Failed to terminate MySQL sessions",
+    ):
+        asyncio.run(provisioner.destroy(context, DestroyDatabaseRequest(confirm="app")))
+
+    assert connection.closed
 
 
 def test_mysql_maintenance_tasks_execute_privilege_repair_and_state() -> None:
