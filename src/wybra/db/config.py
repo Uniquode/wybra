@@ -22,6 +22,7 @@ module_config: Final = ConfigDef(
                 ConfigField(name="host"),
                 ConfigField(name="port"),
                 ConfigField(name="database"),
+                ConfigField(name="sa_database"),
                 ConfigField(name="options"),
                 ConfigField(name="credential_source"),
                 ConfigField(name="user"),

@@ -9,6 +9,7 @@ from wybra.core.diagnostics import wrapped_error
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import migrate as data_migrate
 from wybra.db.config import ENV_DATABASE_URL
+from wybra.db.settings import CredentialPurpose
 from wybra.tools.app_startup import normalise_cli_config_source
 from wybra.tools.project import (
     ProjectToolConfigurationError,
@@ -23,6 +24,8 @@ def _build_settings(
     database_url: str | None,
     *,
     config_source: str | None = None,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
     **_extra: object,
 ) -> data_migrate.MigrationSettings:
@@ -38,8 +41,8 @@ def _build_settings(
                 data_migrate.MigrationSettings,
                 load_project_settings(
                     project_root=project_root,
-                    database_credential_purpose="runtime",
-                    fallback_to_runtime_credentials=False,
+                    database_credential_purpose=database_credential_purpose,
+                    fallback_to_runtime_credentials=fallback_to_runtime_credentials,
                     include_provisioning_connection=include_provisioning_connection,
                 ),
             )
@@ -49,8 +52,8 @@ def _build_settings(
             load_project_settings(
                 environ=environment,
                 project_root=project_root,
-                database_credential_purpose="runtime",
-                fallback_to_runtime_credentials=False,
+                database_credential_purpose=database_credential_purpose,
+                fallback_to_runtime_credentials=fallback_to_runtime_credentials,
                 include_provisioning_connection=include_provisioning_connection,
             ),
         )

@@ -110,6 +110,7 @@ class ResolvedDatabaseCredentials:
 class StructuredDatabaseConfig:
     backend: str
     database: str
+    sa_database: str | None = None
     host: str | None = None
     port: int | None = None
     options: Mapping[str, Any] = field(default_factory=dict)
@@ -162,6 +163,7 @@ class StructuredDatabaseConfig:
         return cls(
             backend=cast(str, backend),
             database=cast(str, values.get("database")),
+            sa_database=cast(str | None, values.get("sa_database")),
             host=cast(str | None, values.get("host")),
             port=cast(int | None, values.get("port")),
             options=cast(Mapping[str, Any], values.get("options") or {}),
@@ -184,6 +186,24 @@ class StructuredDatabaseConfig:
             "database",
             _required_non_blank_string(self.database, "database"),
         )
+        sa_database = (
+            _optional_non_blank_string(self.sa_database, "sa_database")
+            if backend_info.tortoise_scheme != "sqlite"
+            else None
+        )
+        if sa_database is None and backend_info.tortoise_scheme in {
+            "asyncpg",
+            "psycopg",
+        }:
+            sa_database = "postgres"
+        if (
+            backend_info.tortoise_scheme in {"asyncpg", "psycopg"}
+            and sa_database == self.database
+        ):
+            raise ConfigurationError(
+                "sa_database must differ from the target database."
+            )
+        object.__setattr__(self, "sa_database", sa_database)
         host = (
             None
             if backend_info.tortoise_scheme == "sqlite"
@@ -386,6 +406,7 @@ class ResolvedDatabaseConnection:
     backend: DatabaseBackend
     database_url: str | None = field(default=None, repr=False)
     credentials: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    sa_database: str | None = None
 
     @classmethod
     def from_url(
@@ -402,11 +423,13 @@ class ResolvedDatabaseConnection:
         *,
         backend: DatabaseBackend,
         credentials: Mapping[str, Any],
+        sa_database: str | None = None,
     ) -> ResolvedDatabaseConnection:
         return cls(
             source="structured",
             backend=backend,
             credentials=MappingProxyType(dict(credentials)),
+            sa_database=sa_database,
         )
 
     @property
@@ -642,6 +665,7 @@ def _resolve_structured_database_connection(
     return ResolvedDatabaseConnection.from_structured(
         backend=backend,
         credentials=credentials,
+        sa_database=structured.sa_database if purpose == "service_account" else None,
     )
 
 
@@ -887,6 +911,7 @@ def _structured_database_fields() -> frozenset[str]:
             "host",
             "port",
             "database",
+            "sa_database",
             "options",
             "credential_source",
             "user",

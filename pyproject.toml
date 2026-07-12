@@ -6,7 +6,11 @@ readme = "README.md"
 authors = [
     { name = "David Nugent" }
 ]
-requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+]
+requires-python = ">=3.14"
 dependencies = [
     "aiosqlite>=0.22.1",
     "anyio>=4.14.0",
@@ -96,7 +100,7 @@ dev = [
 [tool.ruff]
 line-length = 88
 src = ["src", "tests"]
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

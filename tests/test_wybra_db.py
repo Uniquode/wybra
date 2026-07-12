@@ -2,6 +2,7 @@ import ast
 import asyncio
 import importlib
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -44,10 +45,9 @@ from wybra.db.provisioning import (
     database_family_for_backend,
     destroy_database,
     provisioner_for_family,
-    quote_sql_identifier,
-    render_sql_template,
     run_database_maintenance,
 )
+from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
 from wybra.db.settings import (
     EffectiveDatabaseConfig,
     ResolvedDatabaseConnection,
@@ -55,6 +55,7 @@ from wybra.db.settings import (
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
 )
+from wybra.db.sql import ident, param, quote_sql_identifier, render_sql, trusted_sql
 from wybra.db.surfaces import (
     DataCompositionError,
     discover_migration_version_locations,
@@ -116,6 +117,42 @@ class _RecordingSecretsCapability:
 
     def exists(self, source: str, key: str) -> bool:
         return (source, key) in self.values
+
+
+class _RecordingPostgreSQLConnection:
+    def __init__(self, fetch_values: list[object]) -> None:
+        self.fetch_values = fetch_values
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.queries: list[tuple[str, tuple[object, ...]]] = []
+        self.closed = False
+
+    async def execute(self, query: str, *args: object) -> object:
+        self.executed.append((query, args))
+        return "OK"
+
+    async def fetchval(self, query: str, *args: object) -> object:
+        self.queries.append((query, args))
+        if not self.fetch_values:
+            raise AssertionError(f"No fake PostgreSQL response for query: {query}")
+        return self.fetch_values.pop(0)
+
+    async def close(self) -> object:
+        self.closed = True
+
+
+class _RecordingPostgreSQLConnector:
+    def __init__(self, *connections: _RecordingPostgreSQLConnection) -> None:
+        self.connections = list(connections)
+        self.credentials: list[dict[str, object]] = []
+
+    async def __call__(
+        self,
+        credentials: Mapping[str, object],
+    ) -> _RecordingPostgreSQLConnection:
+        self.credentials.append(dict(credentials))
+        if not self.connections:
+            raise AssertionError("Unexpected PostgreSQL connection attempt.")
+        return self.connections.pop(0)
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -514,6 +551,57 @@ def test_project_settings_resolve_service_account_database_credentials(
             "password": "admin_password",
         },
     }
+    assert settings.database_connection.sa_database == "postgres"
+
+
+def test_project_settings_resolve_service_account_database_override(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "app.toml"
+    config_path.write_text(
+        """
+        [app]
+        modules = ["wybra.db"]
+
+        [app.templates]
+        auto_reload = false
+        cache_size = 400
+
+        [app.assets]
+        url_path = "/static/"
+
+        [app.database]
+        backend = "postgresql"
+        database = "uniquode"
+        sa_database = "cluster_admin"
+        user = "app_user"
+        password = "app_password"
+        sa_user = "admin_user"
+        sa_password = "admin_password"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_project_settings(
+        project_root=tmp_path,
+        environ={"APP_CONFIG": config_path.as_posix()},
+        read_dotenv=False,
+        database_credential_purpose="service_account",
+    )
+
+    assert settings.database_connection is not None
+    assert settings.database_connection.credentials["database"] == "uniquode"
+    assert settings.database_connection.sa_database == "cluster_admin"
+
+
+def test_structured_postgresql_config_rejects_target_as_service_database() -> None:
+    with pytest.raises(ConfigurationError, match="sa_database must differ"):
+        StructuredDatabaseConfig.from_values(
+            {
+                "backend": "postgresql",
+                "database": "postgres",
+            }
+        )
 
 
 def test_project_settings_service_account_can_fallback_to_runtime_credentials(
@@ -1611,12 +1699,32 @@ def _sqlite_provisioning_context() -> ProvisioningContext:
 def _postgresql_provisioning_context(
     *,
     provisioning_connection: ResolvedDatabaseConnection | None,
+    runtime_credentials: dict[str, object] | None = None,
 ) -> ProvisioningContext:
     return ProvisioningContext(
         family="postgresql",
         runtime_connection=_database_connection(
             "postgresql",
-            {"database": "app", "user": "app", "password": "secret"},
+            runtime_credentials
+            or {"database": "app", "user": "app", "password": "secret"},
+        ),
+        provisioning_connection=provisioning_connection,
+        project_root=Path.cwd(),
+        modules=(),
+    )
+
+
+def _mysql_provisioning_context(
+    *,
+    provisioning_connection: ResolvedDatabaseConnection | None,
+    runtime_credentials: dict[str, object] | None = None,
+) -> ProvisioningContext:
+    return ProvisioningContext(
+        family="mysql",
+        runtime_connection=_database_connection(
+            "mysql",
+            runtime_credentials
+            or {"database": "app", "user": "app", "password": "secret"},
         ),
         provisioning_connection=provisioning_connection,
         project_root=Path.cwd(),
@@ -1642,12 +1750,10 @@ def test_unsupported_database_provisioner_requires_service_account_credentials(
     credentials: dict[str, object] | None,
     expected_message: str,
 ) -> None:
-    provisioner = UnsupportedFamilyProvisioner("postgresql")
-    context = _postgresql_provisioning_context(
+    provisioner = UnsupportedFamilyProvisioner("mysql")
+    context = _mysql_provisioning_context(
         provisioning_connection=(
-            None
-            if credentials is None
-            else _database_connection("postgresql", credentials)
+            None if credentials is None else _database_connection("mysql", credentials)
         ),
     )
 
@@ -1655,41 +1761,330 @@ def test_unsupported_database_provisioner_requires_service_account_credentials(
         DatabaseProvisioningConfigurationError,
         match=expected_message,
     ):
-        provisioner.initialise(context)
+        asyncio.run(provisioner.initialise(context))
     with pytest.raises(
         DatabaseProvisioningConfigurationError,
         match=expected_message,
     ):
-        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        asyncio.run(provisioner.destroy(context, DestroyDatabaseRequest(confirm="app")))
 
 
 def test_unsupported_database_provisioner_rejects_unimplemented_operations() -> None:
-    provisioner = UnsupportedFamilyProvisioner("postgresql")
-    context = _postgresql_provisioning_context(
+    provisioner = UnsupportedFamilyProvisioner("mysql")
+    context = ProvisioningContext(
+        family="mysql",
+        runtime_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app", "password": "secret"},
+        ),
         provisioning_connection=_database_connection(
-            "postgresql",
+            "mysql",
             {"database": "app", "user": "app_sa", "password": "secret"},
         ),
+        project_root=Path.cwd(),
+        modules=(),
     )
 
     with pytest.raises(
         DatabaseProvisioningOperationError,
-        match="postgresql init provisioning is not implemented",
+        match="mysql init provisioning is not implemented",
     ):
-        provisioner.initialise(context)
+        asyncio.run(provisioner.initialise(context))
     with pytest.raises(
         DatabaseProvisioningOperationError,
-        match="postgresql destroy is not implemented",
+        match="mysql destroy is not implemented",
     ):
-        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        asyncio.run(provisioner.destroy(context, DestroyDatabaseRequest(confirm="app")))
     with pytest.raises(
         DatabaseProvisioningConfigurationError,
-        match="Unknown postgresql maintenance task",
+        match="Unknown mysql maintenance task",
     ):
+        asyncio.run(
+            provisioner.run_maintenance(
+                context,
+                DatabaseMaintenanceRequest(task="vacuum"),
+            )
+        )
+
+
+def test_postgresql_provisioner_initialises_database_role_schema_and_grants() -> None:
+    maintenance = _RecordingPostgreSQLConnection(
+        [
+            False,  # database exists
+            False,  # role exists
+        ]
+    )
+    target = _RecordingPostgreSQLConnection(
+        [
+            False,  # schema exists
+            False,  # migration recorder table exists
+        ]
+    )
+    connector = _RecordingPostgreSQLConnector(maintenance, target)
+    provisioner = PostgreSQLProvisioner(connector=connector)
+    provisioning_connection = _database_connection(
+        "postgresql",
+        {"database": "app", "user": "app_sa", "password": "admin_secret"},
+    )
+    provisioning_connection = ResolvedDatabaseConnection.from_structured(
+        backend=provisioning_connection.backend,
+        credentials=provisioning_connection.credentials,
+        sa_database="cluster_admin",
+    )
+    context = _postgresql_provisioning_context(
+        provisioning_connection=provisioning_connection,
+    )
+
+    results = asyncio.run(provisioner.initialise(context))
+
+    assert connector.credentials[0]["database"] == "cluster_admin"
+    assert connector.credentials[1]["database"] == "app"
+    assert [(result.status, result.phase) for result in results] == [
+        ("created", "init"),
+        ("created", "init"),
+        ("created", "init"),
+        ("skipped", "init"),
+        ("noop", "init"),
+    ]
+    executed_sql = "\n".join(query for query, _args in maintenance.executed)
+    executed_sql += "\n" + "\n".join(query for query, _args in target.executed)
+    assert 'CREATE DATABASE "app" OWNER "app_sa"' in executed_sql
+    assert 'CREATE ROLE "app" LOGIN PASSWORD' in executed_sql
+    assert 'CREATE SCHEMA "public" AUTHORIZATION "app_sa"' in executed_sql
+    assert 'GRANT CONNECT ON DATABASE "app" TO "app"' in executed_sql
+    assert "admin_secret" not in " ".join(result.message for result in results)
+    assert maintenance.closed
+    assert target.closed
+
+
+def test_postgresql_provisioner_reuses_existing_objects_and_reports_migrations() -> (
+    None
+):
+    maintenance = _RecordingPostgreSQLConnection(
+        [
+            True,  # database exists
+            "app_sa",  # database owner
+            True,  # role exists
+        ]
+    )
+    target = _RecordingPostgreSQLConnection(
+        [
+            True,  # schema exists
+            "app_sa",  # schema owner
+            True,  # migration recorder table exists
+            2,  # migration count
+        ]
+    )
+    connector = _RecordingPostgreSQLConnector(maintenance, target)
+    provisioner = PostgreSQLProvisioner(connector=connector)
+    context = _postgresql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "postgresql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(provisioner.initialise(context))
+
+    assert [result.status for result in results] == [
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+        "noop",
+    ]
+    assert any("contains 2 record" in result.message for result in results)
+    executed_sql = "\n".join(query for query, _args in maintenance.executed)
+    executed_sql += "\n" + "\n".join(query for query, _args in target.executed)
+    assert "CREATE DATABASE" not in executed_sql
+    assert "CREATE SCHEMA" not in executed_sql
+    assert 'ALTER ROLE "app" WITH PASSWORD' in executed_sql
+    assert 'GRANT USAGE ON SCHEMA "public" TO "app"' in executed_sql
+
+
+def test_postgresql_destroy_requires_confirmed_database_and_sa_database() -> None:
+    provisioner = PostgreSQLProvisioner(
+        connector=_RecordingPostgreSQLConnector(_RecordingPostgreSQLConnection([]))
+    )
+    context = _postgresql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "postgresql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="confirmation does not match",
+    ):
+        asyncio.run(
+            provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
+        )
+
+    service_connection = context.provisioning_connection
+    assert service_connection is not None
+    context = _postgresql_provisioning_context(
+        provisioning_connection=ResolvedDatabaseConnection.from_structured(
+            backend=service_connection.backend,
+            credentials=service_connection.credentials,
+            sa_database="app",
+        ),
+    )
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="different service-account database",
+    ):
+        asyncio.run(provisioner.destroy(context, DestroyDatabaseRequest(confirm="app")))
+
+
+def test_postgresql_init_requires_distinct_service_account_database() -> None:
+    provisioner = PostgreSQLProvisioner(
+        connector=_RecordingPostgreSQLConnector(_RecordingPostgreSQLConnection([]))
+    )
+    service_connection = _database_connection(
+        "postgresql",
+        {"database": "app", "user": "app_sa", "password": "admin_secret"},
+    )
+    context = _postgresql_provisioning_context(
+        provisioning_connection=ResolvedDatabaseConnection.from_structured(
+            backend=service_connection.backend,
+            credentials=service_connection.credentials,
+            sa_database="app",
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="different service-account database",
+    ):
+        asyncio.run(provisioner.initialise(context))
+
+
+def test_postgresql_destroy_removes_configured_database_and_role() -> None:
+    maintenance = _RecordingPostgreSQLConnection(
+        [
+            True,  # database exists
+            True,  # role exists
+            False,  # role has dependencies outside target database
+        ]
+    )
+    connector = _RecordingPostgreSQLConnector(maintenance)
+    provisioner = PostgreSQLProvisioner(connector=connector)
+    context = _postgresql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "postgresql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("removed", "destroy"),
+        ("removed", "destroy"),
+    ]
+    executed_sql = "\n".join(query for query, _args in maintenance.executed)
+    assert "pg_terminate_backend" in executed_sql
+    assert 'DROP DATABASE "app"' in executed_sql
+    assert 'DROP ROLE "app"' in executed_sql
+
+
+def test_postgresql_destroy_skips_service_account_runtime_role() -> None:
+    maintenance = _RecordingPostgreSQLConnection(
+        [
+            True,  # database exists
+            True,  # role exists
+        ]
+    )
+    connector = _RecordingPostgreSQLConnector(maintenance)
+    provisioner = PostgreSQLProvisioner(connector=connector)
+    context = _postgresql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "postgresql",
+            {"database": "app", "user": "app", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    executed_sql = "\n".join(query for query, _args in maintenance.executed)
+    assert 'DROP DATABASE "app"' in executed_sql
+    assert "DROP ROLE" not in executed_sql
+    assert any("roles are the same" in result.message for result in results)
+
+
+def test_postgresql_destroy_skips_role_with_external_dependencies() -> None:
+    maintenance = _RecordingPostgreSQLConnection(
+        [
+            True,  # database exists
+            True,  # role exists
+            True,  # role has dependencies outside target database
+        ]
+    )
+    connector = _RecordingPostgreSQLConnector(maintenance)
+    provisioner = PostgreSQLProvisioner(connector=connector)
+    context = _postgresql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "postgresql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    executed_sql = "\n".join(query for query, _args in maintenance.executed)
+    assert 'DROP DATABASE "app"' in executed_sql
+    assert "DROP ROLE" not in executed_sql
+    assert any("dependencies outside app" in result.message for result in results)
+
+
+def test_postgresql_maintenance_tasks_execute_privilege_repair_and_state() -> None:
+    repair_connection = _RecordingPostgreSQLConnection([])
+    state_connection = _RecordingPostgreSQLConnection(
+        [
+            True,  # migration recorder table exists
+            0,  # migration count
+        ]
+    )
+    connector = _RecordingPostgreSQLConnector(repair_connection, state_connection)
+    provisioner = PostgreSQLProvisioner(connector=connector)
+    context = _postgresql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "postgresql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    assert [task.name for task in provisioner.maintenance_tasks(context)] == [
+        "repair-privileges",
+        "migration-state",
+        "analyse",
+        "validate-extensions",
+    ]
+    repair_result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="vacuum"),
+            DatabaseMaintenanceRequest(task="repair-privileges"),
         )
+    )
+    state_result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="migration-state"),
+        )
+    )
+
+    assert repair_result[0].status == "skipped"
+    assert 'GRANT CONNECT ON DATABASE "app" TO "app"' in "\n".join(
+        query for query, _args in repair_connection.executed
+    )
+    assert state_result[0].message == "Tortoise migration recorder table is empty."
 
 
 def test_database_lifecycle_guards_reject_blank_requests() -> None:
@@ -1699,12 +2094,17 @@ def test_database_lifecycle_guards_reject_blank_requests() -> None:
         DatabaseProvisioningConfigurationError,
         match="Destroy confirmation must not be blank",
     ):
-        destroy_database(context, DestroyDatabaseRequest(confirm=" "))
+        asyncio.run(destroy_database(context, DestroyDatabaseRequest(confirm=" ")))
     with pytest.raises(
         DatabaseProvisioningConfigurationError,
         match="Maintenance task name must not be blank",
     ):
-        run_database_maintenance(context, DatabaseMaintenanceRequest(task=" "))
+        asyncio.run(
+            run_database_maintenance(
+                context,
+                DatabaseMaintenanceRequest(task=" "),
+            )
+        )
 
 
 def test_sqlite_provisioner_rejects_unknown_maintenance_task() -> None:
@@ -1712,21 +2112,58 @@ def test_sqlite_provisioner_rejects_unknown_maintenance_task() -> None:
         DatabaseProvisioningConfigurationError,
         match="Unknown sqlite maintenance task",
     ):
-        SQLiteProvisioner().run_maintenance(
-            _sqlite_provisioning_context(),
-            DatabaseMaintenanceRequest(task="vacuum"),
+        asyncio.run(
+            SQLiteProvisioner().run_maintenance(
+                _sqlite_provisioning_context(),
+                DatabaseMaintenanceRequest(task="vacuum"),
+            )
         )
 
 
-def test_database_provisioning_template_quotes_identifiers() -> None:
+def test_database_provisioning_sql_renderer_quotes_identifiers() -> None:
+    database = 'app"db'
+
     assert quote_sql_identifier('app"db') == '"app""db"'
-    assert (
-        render_sql_template(
-            "create database {{ database|quote_identifier }}",
-            variables={"database": 'app"db'},
-        )
-        == 'create database "app""db"'
+
+    rendered = render_sql(
+        t"create database {ident(database)} owner {ident('owner')}",
+        dialect="postgresql",
     )
+
+    assert rendered.statement == 'create database "app""db" owner "owner"'
+    assert rendered.parameters == ()
+
+
+def test_database_provisioning_sql_renderer_binds_parameters_by_dialect() -> None:
+    sqlite = render_sql(
+        t"select * from {ident('app_table')} where name = {param('secret')}",
+        dialect="sqlite",
+    )
+    postgresql = render_sql(
+        t"select {param('first')}, {param('second')}",
+        dialect="postgresql",
+    )
+
+    assert sqlite.statement == 'select * from "app_table" where name = ?'
+    assert sqlite.parameters == ("secret",)
+    assert postgresql.statement == "select $1, $2"
+    assert postgresql.parameters == ("first", "second")
+
+
+def test_database_provisioning_sql_renderer_requires_typed_interpolations() -> None:
+    unsafe_value = "database"
+
+    with pytest.raises(TypeError, match=r"ident\(\), param\(\), or trusted_sql"):
+        render_sql(t"select * from {unsafe_value}", dialect="sqlite")
+
+
+def test_database_provisioning_sql_renderer_allows_trusted_sql() -> None:
+    rendered = render_sql(
+        t"select * from users order by {trusted_sql('created_at desc')}",
+        dialect="sqlite",
+    )
+
+    assert rendered.statement == "select * from users order by created_at desc"
 
 
 def test_database_credential_transition_rejects_blank_values() -> None:
@@ -2058,7 +2495,7 @@ def test_run_migration_dispatches_through_tortoise_backend_boundary(
     calls: list[migrate_module.MigrationContext] = []
 
     class RecordingMigrationBackend:
-        def heads(
+        async def heads(
             self,
             context: migrate_module.MigrationContext,
             _app_labels: tuple[str, ...],

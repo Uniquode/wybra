@@ -165,7 +165,7 @@ class FileSessionStorage:
         cleanup_data: dict[str, Any] | None = None
         try:
             record = _record_from_json(await path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, SessionStorageError):
+        except FileNotFoundError, OSError, SessionStorageError:
             record = None
         if record is not None:
             cleanup_data = dict(record.data)
@@ -195,7 +195,7 @@ class FileSessionStorage:
         async for path in self.directory.glob("s1_*.json"):
             try:
                 record = _record_from_json(await path.read_text(encoding="utf-8"))
-            except (OSError, SessionStorageError):
+            except OSError, SessionStorageError:
                 continue
             if record.expired(now):
                 await path.unlink(missing_ok=True)

@@ -222,7 +222,7 @@ def _filesystem_template_names(settings: TemplateValidationSettings) -> tuple[st
 def _package_template_names(source: PackageResourceSource) -> tuple[str, ...]:
     try:
         root = resources.files(source.package).joinpath(source.directory)
-    except (ModuleNotFoundError, TypeError):
+    except ModuleNotFoundError, TypeError:
         return ()
     if not root.is_dir():
         return ()

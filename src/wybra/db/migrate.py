@@ -6,7 +6,7 @@ import logging
 import sys
 import types
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -30,7 +30,7 @@ from wybra.db.provisioning import (
     provisioning_context,
     run_database_maintenance,
 )
-from wybra.db.settings import ResolvedDatabaseConnection
+from wybra.db.settings import CredentialPurpose, ResolvedDatabaseConnection
 from wybra.db.surfaces import DataCompositionError
 from wybra.db.tortoise import build_tortoise_config as build_config
 from wybra.db.urls import (
@@ -86,6 +86,8 @@ class MigrationSettingsLoader(Protocol):
         database_url: str | None,
         *,
         config_source: str | None = ...,
+        database_credential_purpose: CredentialPurpose = ...,
+        fallback_to_runtime_credentials: bool = ...,
         include_provisioning_connection: bool = ...,
         **_: object,
     ) -> MigrationSettings: ...
@@ -112,40 +114,44 @@ class MigrationContext:
 class MigrationBackend(Protocol):
     """Backend boundary for migration lifecycle operations."""
 
-    def initialise(
+    async def initialise(
         self,
         context: MigrationContext,
         *,
         app_labels: tuple[str, ...],
     ) -> None: ...
 
-    def makemigrations(
+    async def makemigrations(
         self,
         context: MigrationContext,
         request: MakeMigrationsRequest,
     ) -> None: ...
 
-    def migrate(
+    async def migrate(
         self,
         context: MigrationContext,
         request: MigrationTargetRequest,
     ) -> None: ...
 
-    def downgrade(
+    async def downgrade(
         self,
         context: MigrationContext,
         request: MigrationTargetRequest,
     ) -> None: ...
 
-    def history(
+    async def history(
         self,
         context: MigrationContext,
         app_labels: tuple[str, ...],
     ) -> None: ...
 
-    def heads(self, context: MigrationContext, app_labels: tuple[str, ...]) -> None: ...
+    async def heads(
+        self,
+        context: MigrationContext,
+        app_labels: tuple[str, ...],
+    ) -> None: ...
 
-    def sqlmigrate(
+    async def sqlmigrate(
         self,
         context: MigrationContext,
         request: SqlMigrateRequest,
@@ -177,15 +183,15 @@ class SqlMigrateRequest:
 class TortoiseMigrationBackend:
     """Tortoise-backed migration backend."""
 
-    def initialise(
+    async def initialise(
         self,
         context: MigrationContext,
         *,
         app_labels: tuple[str, ...],
     ) -> None:
-        _run_tortoise_cli(context, ["init", *app_labels])
+        await _run_tortoise_cli(context, ["init", *app_labels])
 
-    def makemigrations(
+    async def makemigrations(
         self,
         context: MigrationContext,
         request: MakeMigrationsRequest,
@@ -195,29 +201,37 @@ class TortoiseMigrationBackend:
             args.append("--empty")
         if request.name is not None:
             args.extend(("-n", request.name))
-        _run_tortoise_cli(context, args)
+        await _run_tortoise_cli(context, args)
 
-    def migrate(
+    async def migrate(
         self,
         context: MigrationContext,
         request: MigrationTargetRequest,
     ) -> None:
-        _run_tortoise_cli(context, _target_args("migrate", request))
+        await _run_tortoise_cli(context, _target_args("migrate", request))
 
-    def downgrade(
+    async def downgrade(
         self,
         context: MigrationContext,
         request: MigrationTargetRequest,
     ) -> None:
-        _run_tortoise_cli(context, _target_args("downgrade", request))
+        await _run_tortoise_cli(context, _target_args("downgrade", request))
 
-    def history(self, context: MigrationContext, app_labels: tuple[str, ...]) -> None:
-        _run_tortoise_cli(context, ["history", *app_labels])
+    async def history(
+        self,
+        context: MigrationContext,
+        app_labels: tuple[str, ...],
+    ) -> None:
+        await _run_tortoise_cli(context, ["history", *app_labels])
 
-    def heads(self, context: MigrationContext, app_labels: tuple[str, ...]) -> None:
-        _run_tortoise_cli(context, ["heads", *app_labels])
+    async def heads(
+        self,
+        context: MigrationContext,
+        app_labels: tuple[str, ...],
+    ) -> None:
+        await _run_tortoise_cli(context, ["heads", *app_labels])
 
-    def sqlmigrate(
+    async def sqlmigrate(
         self,
         context: MigrationContext,
         request: SqlMigrateRequest,
@@ -229,7 +243,7 @@ class TortoiseMigrationBackend:
             args.append(request.migration_name)
         if request.backward:
             args.append("--backward")
-        _run_tortoise_cli(context, args)
+        await _run_tortoise_cli(context, args)
 
 
 def _target_args(command_name: str, request: MigrationTargetRequest) -> list[str]:
@@ -405,6 +419,7 @@ def create_migrate_command(
                     dry_run=dry_run,
                 ),
             ),
+            database_credential_purpose="service_account",
         )
 
     @migrate_command.command("downgrade", help="Unapply migrations.")
@@ -443,6 +458,7 @@ def create_migrate_command(
                     dry_run=dry_run,
                 ),
             ),
+            database_credential_purpose="service_account",
         )
 
     @migrate_command.command("history", help="Show migration history.")
@@ -572,8 +588,33 @@ def _run_migration(
     settings_loader: MigrationSettingsLoader,
     database_url: str | None,
     config_source: str | None,
-    operation: Callable[[MigrationBackend, MigrationContext], None],
+    operation: Callable[[MigrationBackend, MigrationContext], Awaitable[None]],
     *,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
+    include_provisioning_connection: bool = False,
+) -> int:
+    return asyncio.run(
+        _run_migration_async(
+            settings_loader,
+            database_url,
+            config_source,
+            operation,
+            database_credential_purpose=database_credential_purpose,
+            fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+            include_provisioning_connection=include_provisioning_connection,
+        )
+    )
+
+
+async def _run_migration_async(
+    settings_loader: MigrationSettingsLoader,
+    database_url: str | None,
+    config_source: str | None,
+    operation: Callable[[MigrationBackend, MigrationContext], Awaitable[None]],
+    *,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
 ) -> int:
     try:
@@ -582,6 +623,8 @@ def _run_migration(
             settings_loader,
             database_url,
             config_source,
+            database_credential_purpose=database_credential_purpose,
+            fallback_to_runtime_credentials=fallback_to_runtime_credentials,
             include_provisioning_connection=include_provisioning_connection,
         )
         configure_cli_logging(settings.app_config)
@@ -596,7 +639,7 @@ def _run_migration(
         return 1
 
     try:
-        operation(backend, context)
+        await operation(backend, context)
     except MigrationConfigurationError as exc:
         logger.error("configuration: failed: %s", exc)
         return 1
@@ -620,9 +663,13 @@ def _load_migration_settings(
     database_url: str | None,
     config_source: str | None,
     *,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
 ) -> MigrationSettings:
     optional_kwargs = {
+        "database_credential_purpose": database_credential_purpose,
+        "fallback_to_runtime_credentials": fallback_to_runtime_credentials,
         "include_provisioning_connection": include_provisioning_connection,
     }
     if config_source is None:
@@ -666,7 +713,7 @@ def _loader_accepts_keyword_config_source(
     """
     try:
         signature = inspect.signature(settings_loader)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
 
     has_explicit_config_source = any(
@@ -766,35 +813,37 @@ def build_tortoise_config(settings: MigrationSettings) -> dict[str, Any]:
     return build_config(database_url=settings.database_url, modules=settings.modules)
 
 
-def initialise_migration_lifecycle(
+async def initialise_migration_lifecycle(
     backend: MigrationBackend,
     context: MigrationContext,
     *,
     app_labels: tuple[str, ...],
 ) -> None:
-    initialise_database_lifecycle(context)
-    backend.initialise(context, app_labels=app_labels)
+    await initialise_database_lifecycle(context)
+    await backend.initialise(context, app_labels=app_labels)
 
 
-def initialise_database_lifecycle(context: MigrationContext) -> None:
-    _report_provisioning_results(initialise_database(_provisioning_context(context)))
+async def initialise_database_lifecycle(context: MigrationContext) -> None:
+    _report_provisioning_results(
+        await initialise_database(_provisioning_context(context))
+    )
 
 
-def destroy_database_lifecycle(
+async def destroy_database_lifecycle(
     context: MigrationContext,
     request: DestroyDatabaseRequest,
 ) -> None:
     _report_provisioning_results(
-        destroy_database(_provisioning_context(context), request)
+        await destroy_database(_provisioning_context(context), request)
     )
 
 
-def run_database_maintenance_lifecycle(
+async def run_database_maintenance_lifecycle(
     context: MigrationContext,
     request: DatabaseMaintenanceRequest,
 ) -> None:
     _report_provisioning_results(
-        run_database_maintenance(_provisioning_context(context), request)
+        await run_database_maintenance(_provisioning_context(context), request)
     )
 
 
@@ -841,17 +890,15 @@ def _database_connection_for_settings(
     return ResolvedDatabaseConnection.from_url(settings.database_url, backend=backend)
 
 
-def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
+async def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
     config_module = _register_tortoise_config_module(context.config)
     try:
-        exit_code = asyncio.run(
-            tortoise_cli.run_cli_async(
-                [
-                    "--config",
-                    f"{config_module}.{TORTOISE_CONFIG_VARIABLE}",
-                    *args,
-                ]
-            )
+        exit_code = await tortoise_cli.run_cli_async(
+            [
+                "--config",
+                f"{config_module}.{TORTOISE_CONFIG_VARIABLE}",
+                *args,
+            ]
         )
     finally:
         sys.modules.pop(config_module, None)

@@ -175,7 +175,7 @@ def _resource_sources_from_modules(
 def _resource_directory_exists(module_name: str, directory: str) -> bool:
     try:
         return resources.files(module_name).joinpath(directory).is_dir()
-    except (ModuleNotFoundError, TypeError):
+    except ModuleNotFoundError, TypeError:
         return False
 
 

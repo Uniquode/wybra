@@ -91,6 +91,32 @@ must be safe as one key-path segment. If the configured database name contains
 path separators, whitespace, or control characters, configure explicit
 credential keys instead.
 
+Service-account credentials are used for database lifecycle work such as
+`wybra-migrate init`, `wybra-migrate destroy`, and schema-changing migration
+commands. Runtime credentials are for application access and should not need
+broad DDL permissions.
+
+PostgreSQL lifecycle work first connects to a service-account database because
+the target application database may not exist yet. Wybra defaults that
+maintenance database to `postgres`. Override it only when the service account
+cannot connect to that database. The service-account database must be different
+from the target application database:
+
+```toml
+[app.database]
+backend = "postgresql"
+database = "uniquode"
+sa_database = "postgres"
+credential_source = "keychain"
+```
+
+PostgreSQL migrations are executed through the service-account connection so
+created schema objects remain owned by the service account. Provisioning and
+maintenance then apply grants and default privileges for the runtime
+application role. Use an application-dedicated runtime role; Wybra will not
+drop a runtime role when it is also the service-account role or when it has
+dependencies outside the configured target database.
+
 ## Environment Credential Source
 
 When `credential_source = "environment"`, the credential keys are environment

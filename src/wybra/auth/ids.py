@@ -9,7 +9,7 @@ def parse_uuid(value: str | UUID) -> UUID | None:
 
     try:
         return UUID(str(value))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

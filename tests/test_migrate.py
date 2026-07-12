@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sys
 import tempfile
@@ -205,7 +206,7 @@ def test_migrate_commands_delegate_to_tortoise_cli(
     database_url = sqlite_file_url(tmp_path / "database.sqlite3")
     observed: dict[str, object] = {}
 
-    def record_tortoise_cli(
+    async def record_tortoise_cli(
         context: migrate_module.MigrationContext,
         args: list[str],
     ) -> None:
@@ -236,7 +237,7 @@ def test_migrate_init_uses_normalised_postgresql_tortoise_config(
     database_url = "postgresql://app:secret@db.example/app"
     observed: dict[str, object] = {}
 
-    def record_tortoise_cli(
+    async def record_tortoise_cli(
         context: migrate_module.MigrationContext,
         args: list[str],
     ) -> None:
@@ -275,12 +276,12 @@ def test_migrate_init_runs_provisioning_before_tortoise(
     database_url = sqlite_file_url(tmp_path / "database.sqlite3")
     observed: list[str] = []
 
-    def record_initialise_database(
+    async def record_initialise_database(
         _context: migrate_module.MigrationContext,
     ) -> None:
         observed.append("provision")
 
-    def record_tortoise_cli(
+    async def record_tortoise_cli(
         _context: migrate_module.MigrationContext,
         args: list[str],
     ) -> None:
@@ -310,7 +311,7 @@ def test_migrate_lifecycle_reports_provisioning_results(
     )
     context = migrate_module.build_migration_context(settings)
 
-    def record_initialise_database(
+    async def record_initialise_database(
         _context: migrate_module.ProvisioningContext,
     ) -> tuple[migrate_module.ProvisioningPhaseResult, ...]:
         return (
@@ -329,7 +330,7 @@ def test_migrate_lifecycle_reports_provisioning_results(
     )
     caplog.set_level(logging.INFO, logger=migrate_module.logger.name)
 
-    migrate_module.initialise_database_lifecycle(context)
+    asyncio.run(migrate_module.initialise_database_lifecycle(context))
 
     assert "database lifecycle: sqlite init skipped: already provisioned" in caplog.text
 
@@ -343,7 +344,7 @@ def test_sqlite_provisioning_creates_file_target_and_parent_directory(
         project_root=tmp_path,
     )
 
-    results = migrate_module.initialise_database(context)
+    results = asyncio.run(migrate_module.initialise_database(context))
 
     assert database_path.is_file()
     assert [(result.status, result.phase) for result in results] == [
@@ -361,7 +362,7 @@ def test_sqlite_provisioning_is_idempotent_for_existing_file(
         project_root=tmp_path,
     )
 
-    results = migrate_module.initialise_database(context)
+    results = asyncio.run(migrate_module.initialise_database(context))
 
     assert database_path.is_file()
     assert [(result.status, result.phase) for result in results] == [
@@ -392,7 +393,7 @@ def test_sqlite_provisioning_treats_concurrent_file_creation_as_skipped(
 
     monkeypatch.setattr(Path, "touch", create_file_then_raise_file_exists)
 
-    results = migrate_module.initialise_database(context)
+    results = asyncio.run(migrate_module.initialise_database(context))
 
     assert database_path.is_file()
     assert [(result.status, result.phase) for result in results] == [
@@ -405,7 +406,7 @@ def test_sqlite_provisioning_accepts_in_memory_without_credentials(
 ) -> None:
     context = sqlite_provisioning_context("sqlite://:memory:", project_root=tmp_path)
 
-    results = migrate_module.initialise_database(context)
+    results = asyncio.run(migrate_module.initialise_database(context))
 
     assert [(result.status, result.phase) for result in results] == [("noop", "init")]
     assert list(tmp_path.iterdir()) == []
@@ -428,9 +429,11 @@ def test_sqlite_destroy_removes_confirmed_file_and_sidecars(
         project_root=tmp_path,
     )
 
-    results = migrate_module.destroy_database(
-        context,
-        migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+    results = asyncio.run(
+        migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+        )
     )
 
     assert [(result.status, result.phase) for result in results] == [
@@ -451,9 +454,11 @@ def test_sqlite_destroy_removes_sidecars_when_main_file_is_absent(
         project_root=tmp_path,
     )
 
-    results = migrate_module.destroy_database(
-        context,
-        migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+    results = asyncio.run(
+        migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+        )
     )
 
     assert [(result.status, result.phase) for result in results] == [
@@ -472,9 +477,11 @@ def test_sqlite_destroy_reports_already_absent_file_as_skipped(
         project_root=tmp_path,
     )
 
-    results = migrate_module.destroy_database(
-        context,
-        migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+    results = asyncio.run(
+        migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+        )
     )
 
     assert [(result.status, result.phase) for result in results] == [
@@ -496,9 +503,11 @@ def test_sqlite_destroy_refuses_confirmation_mismatch(
         migrate_module.DatabaseProvisioningConfigurationError,
         match="confirmation does not match",
     ):
-        migrate_module.destroy_database(
-            context,
-            migrate_module.DestroyDatabaseRequest(confirm="other.sqlite3"),
+        asyncio.run(
+            migrate_module.destroy_database(
+                context,
+                migrate_module.DestroyDatabaseRequest(confirm="other.sqlite3"),
+            )
         )
 
     assert database_path.exists()
@@ -516,9 +525,11 @@ def test_sqlite_destroy_refuses_directory_target(tmp_path: Path) -> None:
         migrate_module.DatabaseProvisioningConfigurationError,
         match="target is a directory",
     ):
-        migrate_module.destroy_database(
-            context,
-            migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+        asyncio.run(
+            migrate_module.destroy_database(
+                context,
+                migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
+            )
         )
 
     assert database_path.is_dir()
@@ -527,9 +538,11 @@ def test_sqlite_destroy_refuses_directory_target(tmp_path: Path) -> None:
 def test_sqlite_in_memory_destroy_is_noop(tmp_path: Path) -> None:
     context = sqlite_provisioning_context("sqlite://:memory:", project_root=tmp_path)
 
-    results = migrate_module.destroy_database(
-        context,
-        migrate_module.DestroyDatabaseRequest(confirm=":memory:"),
+    results = asyncio.run(
+        migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=":memory:"),
+        )
     )
 
     assert [(result.status, result.phase) for result in results] == [
@@ -563,10 +576,10 @@ def test_ordinary_migration_commands_do_not_run_provisioning(
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "database.sqlite3")
 
-    def fail_lifecycle(*_args, **_kwargs):
+    async def fail_lifecycle(*_args, **_kwargs):
         raise AssertionError("database lifecycle should not run")
 
-    def record_tortoise_cli(
+    async def record_tortoise_cli(
         _context: migrate_module.MigrationContext,
         _args: list[str],
     ) -> None:
@@ -601,7 +614,7 @@ def test_migrate_destroy_dispatches_database_lifecycle(
     database_url = sqlite_file_url(tmp_path / "database.sqlite3")
     observed: dict[str, object] = {}
 
-    def record_destroy(
+    async def record_destroy(
         context: migrate_module.MigrationContext,
         request: migrate_module.DestroyDatabaseRequest,
     ) -> None:
@@ -634,7 +647,7 @@ def test_migrate_run_dispatches_database_maintenance(
     database_url = sqlite_file_url(tmp_path / "database.sqlite3")
     observed: dict[str, object] = {}
 
-    def record_maintenance(
+    async def record_maintenance(
         context: migrate_module.MigrationContext,
         request: migrate_module.DatabaseMaintenanceRequest,
     ) -> None:
@@ -786,7 +799,7 @@ def test_run_tortoise_cli_uses_transient_config_module_and_removes_it(
 
     monkeypatch.setattr(migrate_module.tortoise_cli, "run_cli_async", record_cli)
 
-    migrate_module._run_tortoise_cli(context, ["heads"])
+    asyncio.run(migrate_module._run_tortoise_cli(context, ["heads"]))
 
     assert observed["argv"] == [
         "--config",
@@ -814,7 +827,7 @@ def test_run_tortoise_cli_reports_non_zero_exit(
     monkeypatch.setattr(migrate_module.tortoise_cli, "run_cli_async", fail_cli)
 
     with pytest.raises(migrate_module.MigrationStateError, match="exit_code=2"):
-        migrate_module._run_tortoise_cli(context, ["heads"])
+        asyncio.run(migrate_module._run_tortoise_cli(context, ["heads"]))
 
 
 def test_load_migration_settings_passes_keyword_only_config_source(
@@ -874,6 +887,8 @@ def test_load_migration_settings_passes_config_source_to_kwargs_loader(
         "database_url": "sqlite:///app.sqlite3",
         "kwargs": {
             "config_source": "app.toml",
+            "database_credential_purpose": "runtime",
+            "fallback_to_runtime_credentials": False,
             "include_provisioning_connection": False,
         },
     }
@@ -951,7 +966,7 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
             project_root=tmp_path,
         )
 
-    def record_tortoise_cli(
+    async def record_tortoise_cli(
         _context: migrate_module.MigrationContext,
         _args: list[str],
     ) -> None:
@@ -999,10 +1014,10 @@ def test_wybra_migrate_init_requests_provisioning_connection(
             project_root=tmp_path,
         )
 
-    def record_lifecycle(_context: migrate_module.MigrationContext) -> None:
+    async def record_lifecycle(_context: migrate_module.MigrationContext) -> None:
         return None
 
-    def record_tortoise_cli(
+    async def record_tortoise_cli(
         _context: migrate_module.MigrationContext,
         _args: list[str],
     ) -> None:
@@ -1028,3 +1043,92 @@ def test_wybra_migrate_init_requests_provisioning_connection(
     assert observed["database_credential_purpose"] == "runtime"
     assert observed["fallback_to_runtime_credentials"] is False
     assert observed["include_provisioning_connection"] is True
+
+
+def test_wybra_migrate_migrate_uses_service_account_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected_config = tmp_path / "selected.toml"
+    observed: dict[str, object] = {}
+
+    def load_project_settings(
+        *,
+        environ=None,
+        project_root=None,
+        read_dotenv=True,
+        database_credential_purpose="runtime",
+        fallback_to_runtime_credentials=False,
+        include_provisioning_connection=False,
+    ):
+        observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
+        observed["database_credential_purpose"] = database_credential_purpose
+        observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
+        observed["include_provisioning_connection"] = include_provisioning_connection
+        return MigrationTestSettings(
+            database_url="sqlite://:memory:",
+            project_root=tmp_path,
+        )
+
+    async def record_tortoise_cli(
+        _context: migrate_module.MigrationContext,
+        _args: list[str],
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(tools_migrate, "runtime_project_root", lambda: tmp_path)
+    monkeypatch.setattr(tools_migrate, "load_project_settings", load_project_settings)
+    monkeypatch.setattr(
+        tools_migrate.data_migrate,
+        "_run_tortoise_cli",
+        record_tortoise_cli,
+    )
+
+    exit_code = tools_migrate.main(["--config", selected_config.as_posix(), "migrate"])
+
+    assert exit_code == 0
+    assert observed["app_config"] == selected_config.as_posix()
+    assert observed["database_credential_purpose"] == "service_account"
+    assert observed["fallback_to_runtime_credentials"] is False
+    assert observed["include_provisioning_connection"] is False
+
+
+def test_wybra_migrate_migrate_url_does_not_request_provisioning_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = "postgresql://app:secret@db.example/app"
+    observed: dict[str, object] = {}
+
+    def load_settings(
+        database_url: str | None,
+        *,
+        database_credential_purpose="runtime",
+        fallback_to_runtime_credentials=False,
+        include_provisioning_connection=False,
+    ) -> MigrationTestSettings:
+        observed["database_url"] = database_url
+        observed["database_credential_purpose"] = database_credential_purpose
+        observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
+        observed["include_provisioning_connection"] = include_provisioning_connection
+        return MigrationTestSettings(database_url=database_url or "sqlite://:memory:")
+
+    async def record_tortoise_cli(
+        _context: migrate_module.MigrationContext,
+        _args: list[str],
+    ) -> None:
+        return None
+
+    command = migrate_module.create_migrate_command(load_settings)
+    monkeypatch.setattr(migrate_module, "is_supported_database_url", lambda _url: True)
+    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", record_tortoise_cli)
+
+    exit_code = migrate_module.run_migrate_command(
+        command,
+        ["--database-url", database_url, "migrate"],
+    )
+
+    assert exit_code == 0
+    assert observed["database_url"] == database_url
+    assert observed["database_credential_purpose"] == "service_account"
+    assert observed["fallback_to_runtime_credentials"] is False
+    assert observed["include_provisioning_connection"] is False
