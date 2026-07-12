@@ -222,6 +222,7 @@ def _require_service_account_connection(
 
 
 def _default_provisioners() -> Mapping[DatabaseFamily, DatabaseProvisioner]:
+    from wybra.db.provisioning.mysql import MySQLProvisioner
     from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
     from wybra.db.provisioning.sqlite import SQLiteProvisioner
     from wybra.db.provisioning.unsupported import UnsupportedFamilyProvisioner
@@ -229,7 +230,7 @@ def _default_provisioners() -> Mapping[DatabaseFamily, DatabaseProvisioner]:
     return {
         "sqlite": SQLiteProvisioner(),
         "postgresql": PostgreSQLProvisioner(),
-        "mysql": UnsupportedFamilyProvisioner("mysql"),
+        "mysql": MySQLProvisioner(),
         "mssql": UnsupportedFamilyProvisioner("mssql"),
         "oracle": UnsupportedFamilyProvisioner("oracle"),
     }
