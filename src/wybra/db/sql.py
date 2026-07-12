@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from string.templatelib import Interpolation, Template
 from typing import Literal
 
-SqlDialect = Literal["postgresql", "sqlite"]
+SqlDialect = Literal["mysql", "postgresql", "sqlite"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +110,8 @@ def _render_interpolation(
 
 
 def _parameter_marker(dialect: SqlDialect, index: int) -> str:
+    if dialect == "mysql":
+        return "%s"
     if dialect == "sqlite":
         return "?"
     if dialect == "postgresql":

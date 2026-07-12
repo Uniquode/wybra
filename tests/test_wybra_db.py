@@ -13,6 +13,7 @@ from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.models import Model
 
 import wybra.db.migrate as migrate_module
+import wybra.db.provisioning.mysql as mysql_provisioning
 import wybra.db.urls as database_urls
 from support_database import sqlite_file_url
 from wybra import SiteCapabilityError
@@ -47,6 +48,7 @@ from wybra.db.provisioning import (
     provisioner_for_family,
     run_database_maintenance,
 )
+from wybra.db.provisioning.mysql import MySQLProvisioner, quote_mysql_identifier
 from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
 from wybra.db.settings import (
     EffectiveDatabaseConfig,
@@ -153,6 +155,59 @@ class _RecordingPostgreSQLConnector:
         if not self.connections:
             raise AssertionError("Unexpected PostgreSQL connection attempt.")
         return self.connections.pop(0)
+
+
+class _RecordingMySQLConnection:
+    def __init__(
+        self,
+        fetch_values: list[object],
+        fetch_rows: list[tuple[tuple[object, ...], ...]] | None = None,
+    ) -> None:
+        self.fetch_values = fetch_values
+        self.fetch_rows = fetch_rows or []
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.queries: list[tuple[str, tuple[object, ...]]] = []
+        self.closed = False
+
+    async def execute(self, query: str, *args: object) -> object:
+        self.executed.append((query, args))
+        return "OK"
+
+    async def fetchval(self, query: str, *args: object) -> object:
+        self.queries.append((query, args))
+        if not self.fetch_values:
+            raise AssertionError(f"No fake MySQL response for query: {query}")
+        return self.fetch_values.pop(0)
+
+    async def fetchall(
+        self, query: str, *args: object
+    ) -> tuple[tuple[object, ...], ...]:
+        self.queries.append((query, args))
+        if not self.fetch_rows:
+            raise AssertionError(f"No fake MySQL rows for query: {query}")
+        return self.fetch_rows.pop(0)
+
+    async def close(self) -> object:
+        self.closed = True
+
+
+class _RecordingMySQLConnector:
+    def __init__(self, *connections: _RecordingMySQLConnection) -> None:
+        self.connections = list(connections)
+        self.credentials: list[dict[str, object]] = []
+
+    async def __call__(
+        self,
+        credentials: Mapping[str, object],
+    ) -> _RecordingMySQLConnection:
+        self.credentials.append(dict(credentials))
+        if not self.connections:
+            raise AssertionError("Unexpected MySQL connection attempt.")
+        return self.connections.pop(0)
+
+
+def _simulate_pymysql_format(query: str, args: tuple[object, ...]) -> str:
+    return query % tuple("<param>" for _arg in args)
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -1807,6 +1862,282 @@ def test_unsupported_database_provisioner_rejects_unimplemented_operations() -> 
         )
 
 
+def test_mysql_provisioner_is_registered_for_mysql_family() -> None:
+    assert isinstance(provisioner_for_family("mysql"), MySQLProvisioner)
+
+
+def test_mysql_provisioner_initialises_database_user_and_grants() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            0,  # database exists
+            0,  # user exists
+            0,  # migration recorder table exists
+        ]
+    )
+    connector = _RecordingMySQLConnector(connection)
+    provisioner = MySQLProvisioner(connector=connector)
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {
+                "database": "app",
+                "host": "db.example",
+                "user": "app_sa",
+                "password": "admin_secret",
+            },
+        ),
+    )
+
+    results = asyncio.run(provisioner.initialise(context))
+
+    assert connector.credentials == [
+        {
+            "host": "db.example",
+            "user": "app_sa",
+            "password": "admin_secret",
+        }
+    ]
+    assert [(result.status, result.phase) for result in results] == [
+        ("created", "init"),
+        ("created", "init"),
+        ("skipped", "init"),
+        ("noop", "init"),
+    ]
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "CREATE DATABASE `app`" in executed_sql
+    assert "CREATE USER 'app'@'%%' IDENTIFIED BY %s" in executed_sql
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (
+        executed_sql
+    )
+    assert "secret" not in executed_sql
+    assert "secret" not in " ".join(result.message for result in results)
+    assert connection.executed[1][1] == ("secret",)
+    assert _simulate_pymysql_format(*connection.executed[1]) == (
+        "CREATE USER 'app'@'%' IDENTIFIED BY <param>"
+    )
+    assert connection.closed
+
+
+def test_mysql_provisioner_reuses_existing_objects_and_reports_migrations() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            1,  # migration recorder table exists
+            "2",  # migration count
+        ]
+    )
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(provisioner.initialise(context))
+
+    assert [result.status for result in results] == [
+        "skipped",
+        "skipped",
+        "skipped",
+        "noop",
+    ]
+    assert any("contains 2 record" in result.message for result in results)
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "CREATE DATABASE" not in executed_sql
+    assert "CREATE USER" not in executed_sql
+    assert "ALTER USER 'app'@'%%' IDENTIFIED BY %s" in executed_sql
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (
+        executed_sql
+    )
+    assert _simulate_pymysql_format(*connection.executed[0]) == (
+        "ALTER USER 'app'@'%' IDENTIFIED BY <param>"
+    )
+
+
+def test_mysql_destroy_requires_confirmed_database() -> None:
+    provisioner = MySQLProvisioner(
+        connector=_RecordingMySQLConnector(_RecordingMySQLConnection([]))
+    )
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="confirmation does not match",
+    ):
+        asyncio.run(
+            provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
+        )
+
+
+def test_mysql_destroy_removes_configured_database_and_safe_user() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            99,  # current connection id
+        ],
+        fetch_rows=[
+            (
+                ("GRANT USAGE ON *.* TO 'app'@'%'",),
+                ("GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'",),
+            ),
+            ((101,),),
+        ],
+    )
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("removed", "destroy"),
+        ("removed", "destroy"),
+    ]
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "KILL 101" in executed_sql
+    assert "DROP DATABASE `app`" in executed_sql
+    assert "DROP USER 'app'@'%'" in executed_sql
+
+
+def test_mysql_destroy_skips_service_account_runtime_user() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            99,  # current connection id
+        ],
+        fetch_rows=[((101,),)],
+    )
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "KILL 101" in executed_sql
+    assert "DROP DATABASE `app`" in executed_sql
+    assert "DROP USER" not in executed_sql
+    assert any("users are the same" in result.message for result in results)
+
+
+def test_mysql_destroy_skips_user_with_external_grants() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            99,  # current connection id
+        ],
+        fetch_rows=[
+            (
+                ("GRANT USAGE ON *.* TO 'app'@'%'",),
+                ("GRANT SELECT ON `other_app`.* TO 'app'@'%'",),
+            ),
+            ((101,),),
+        ],
+    )
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "KILL 101" in executed_sql
+    assert "DROP DATABASE `app`" in executed_sql
+    assert "DROP USER" not in executed_sql
+    assert any("grants outside app" in result.message for result in results)
+
+
+def test_mysql_maintenance_tasks_execute_privilege_repair_and_state() -> None:
+    repair_connection = _RecordingMySQLConnection([])
+    state_connection = _RecordingMySQLConnection(
+        [
+            1,  # migration recorder table exists
+            0,  # migration count
+        ]
+    )
+    connector = _RecordingMySQLConnector(repair_connection, state_connection)
+    provisioner = MySQLProvisioner(connector=connector)
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    assert [task.name for task in provisioner.maintenance_tasks(context)] == [
+        "repair-privileges",
+        "migration-state",
+    ]
+    repair_result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="repair-privileges"),
+        )
+    )
+    state_result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="migration-state"),
+        )
+    )
+
+    assert repair_result[0].status == "skipped"
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (
+        "\n".join(query for query, _args in repair_connection.executed)
+    )
+    assert state_result[0].message == "Tortoise migration recorder table is empty."
+
+
+def test_mysql_provisioner_reports_missing_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def import_module(_module_name: str) -> object:
+        raise ImportError("missing")
+
+    monkeypatch.setattr(mysql_provisioning.importlib, "import_module", import_module)
+    provisioner = MySQLProvisioner()
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match=r"wybra\[mysql\]",
+    ):
+        asyncio.run(provisioner.initialise(context))
+
+
 def test_postgresql_provisioner_initialises_database_role_schema_and_grants() -> None:
     maintenance = _RecordingPostgreSQLConnection(
         [
@@ -2124,6 +2455,7 @@ def test_database_provisioning_sql_renderer_quotes_identifiers() -> None:
     database = 'app"db'
 
     assert quote_sql_identifier('app"db') == '"app""db"'
+    assert quote_mysql_identifier("app`db") == "`app``db`"
 
     rendered = render_sql(
         t"create database {ident(database)} owner {ident('owner')}",
@@ -2143,11 +2475,18 @@ def test_database_provisioning_sql_renderer_binds_parameters_by_dialect() -> Non
         t"select {param('first')}, {param('second')}",
         dialect="postgresql",
     )
+    mysql = render_sql(
+        t"select {param('first')}, {param('second')}",
+        dialect="mysql",
+        quote_identifier=quote_mysql_identifier,
+    )
 
     assert sqlite.statement == 'select * from "app_table" where name = ?'
     assert sqlite.parameters == ("secret",)
     assert postgresql.statement == "select $1, $2"
     assert postgresql.parameters == ("first", "second")
+    assert mysql.statement == "select %s, %s"
+    assert mysql.parameters == ("first", "second")
 
 
 def test_database_provisioning_sql_renderer_requires_typed_interpolations() -> None:

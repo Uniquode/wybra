@@ -18,6 +18,7 @@ from wybra.db.provisioning.core import (
     provisioning_context,
     run_database_maintenance,
 )
+from wybra.db.provisioning.mysql import MySQLProvisioner
 from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
 from wybra.db.provisioning.sqlite import SQLiteProvisioner
 from wybra.db.provisioning.unsupported import UnsupportedFamilyProvisioner
@@ -33,6 +34,7 @@ __all__ = (
     "DatabaseProvisioningError",
     "DatabaseProvisioningOperationError",
     "DestroyDatabaseRequest",
+    "MySQLProvisioner",
     "PostgreSQLProvisioner",
     "ProvisioningContext",
     "ProvisioningPhase",
