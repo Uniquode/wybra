@@ -2010,7 +2010,7 @@ def _invalid_password_message(exc: InvalidPasswordException) -> str:
 def _valid_timezone(value: str) -> bool:
     try:
         ZoneInfo(value)
-    except (ValueError, ZoneInfoNotFoundError):
+    except ValueError, ZoneInfoNotFoundError:
         return False
 
     return True

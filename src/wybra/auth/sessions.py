@@ -466,7 +466,7 @@ async def request_password_reset(request: Request, email: str) -> None:
 
         try:
             await manager.forgot_password(user, request)
-        except (InvalidResetPasswordToken, UserInactive, InvalidPasswordException):
+        except InvalidResetPasswordToken, UserInactive, InvalidPasswordException:
             logger.warning(
                 "Password reset request was rejected by the identity backend.",
                 exc_info=True,
@@ -488,7 +488,7 @@ async def reset_password(request: Request, token: str, password: str) -> bool:
 
         try:
             user = await manager.reset_password(token, password, request)
-        except (InvalidResetPasswordToken, UserInactive, InvalidPasswordException):
+        except InvalidResetPasswordToken, UserInactive, InvalidPasswordException:
             return False
 
         await scope.session_tokens.delete_for_user(user)
@@ -522,7 +522,7 @@ async def request_verification(request: Request, email: str) -> None:
 
         try:
             await manager.request_verify(user, request)
-        except (UserInactive, UserAlreadyVerified):
+        except UserInactive, UserAlreadyVerified:
             logger.warning(
                 "Verification request was rejected by the identity backend.",
                 exc_info=True,

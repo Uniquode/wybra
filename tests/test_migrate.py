@@ -874,6 +874,8 @@ def test_load_migration_settings_passes_config_source_to_kwargs_loader(
         "database_url": "sqlite:///app.sqlite3",
         "kwargs": {
             "config_source": "app.toml",
+            "database_credential_purpose": "runtime",
+            "fallback_to_runtime_credentials": False,
             "include_provisioning_connection": False,
         },
     }
@@ -1028,3 +1030,92 @@ def test_wybra_migrate_init_requests_provisioning_connection(
     assert observed["database_credential_purpose"] == "runtime"
     assert observed["fallback_to_runtime_credentials"] is False
     assert observed["include_provisioning_connection"] is True
+
+
+def test_wybra_migrate_migrate_uses_service_account_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected_config = tmp_path / "selected.toml"
+    observed: dict[str, object] = {}
+
+    def load_project_settings(
+        *,
+        environ=None,
+        project_root=None,
+        read_dotenv=True,
+        database_credential_purpose="runtime",
+        fallback_to_runtime_credentials=False,
+        include_provisioning_connection=False,
+    ):
+        observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
+        observed["database_credential_purpose"] = database_credential_purpose
+        observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
+        observed["include_provisioning_connection"] = include_provisioning_connection
+        return MigrationTestSettings(
+            database_url="sqlite://:memory:",
+            project_root=tmp_path,
+        )
+
+    def record_tortoise_cli(
+        _context: migrate_module.MigrationContext,
+        _args: list[str],
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(tools_migrate, "runtime_project_root", lambda: tmp_path)
+    monkeypatch.setattr(tools_migrate, "load_project_settings", load_project_settings)
+    monkeypatch.setattr(
+        tools_migrate.data_migrate,
+        "_run_tortoise_cli",
+        record_tortoise_cli,
+    )
+
+    exit_code = tools_migrate.main(["--config", selected_config.as_posix(), "migrate"])
+
+    assert exit_code == 0
+    assert observed["app_config"] == selected_config.as_posix()
+    assert observed["database_credential_purpose"] == "service_account"
+    assert observed["fallback_to_runtime_credentials"] is False
+    assert observed["include_provisioning_connection"] is False
+
+
+def test_wybra_migrate_migrate_url_does_not_request_provisioning_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = "postgresql://app:secret@db.example/app"
+    observed: dict[str, object] = {}
+
+    def load_settings(
+        database_url: str | None,
+        *,
+        database_credential_purpose="runtime",
+        fallback_to_runtime_credentials=False,
+        include_provisioning_connection=False,
+    ) -> MigrationTestSettings:
+        observed["database_url"] = database_url
+        observed["database_credential_purpose"] = database_credential_purpose
+        observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
+        observed["include_provisioning_connection"] = include_provisioning_connection
+        return MigrationTestSettings(database_url=database_url or "sqlite://:memory:")
+
+    def record_tortoise_cli(
+        _context: migrate_module.MigrationContext,
+        _args: list[str],
+    ) -> None:
+        return None
+
+    command = migrate_module.create_migrate_command(load_settings)
+    monkeypatch.setattr(migrate_module, "is_supported_database_url", lambda _url: True)
+    monkeypatch.setattr(migrate_module, "_run_tortoise_cli", record_tortoise_cli)
+
+    exit_code = migrate_module.run_migrate_command(
+        command,
+        ["--database-url", database_url, "migrate"],
+    )
+
+    assert exit_code == 0
+    assert observed["database_url"] == database_url
+    assert observed["database_credential_purpose"] == "service_account"
+    assert observed["fallback_to_runtime_credentials"] is False
+    assert observed["include_provisioning_connection"] is False

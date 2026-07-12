@@ -30,7 +30,7 @@ from wybra.db.provisioning import (
     provisioning_context,
     run_database_maintenance,
 )
-from wybra.db.settings import ResolvedDatabaseConnection
+from wybra.db.settings import CredentialPurpose, ResolvedDatabaseConnection
 from wybra.db.surfaces import DataCompositionError
 from wybra.db.tortoise import build_tortoise_config as build_config
 from wybra.db.urls import (
@@ -86,6 +86,8 @@ class MigrationSettingsLoader(Protocol):
         database_url: str | None,
         *,
         config_source: str | None = ...,
+        database_credential_purpose: CredentialPurpose = ...,
+        fallback_to_runtime_credentials: bool = ...,
         include_provisioning_connection: bool = ...,
         **_: object,
     ) -> MigrationSettings: ...
@@ -405,6 +407,7 @@ def create_migrate_command(
                     dry_run=dry_run,
                 ),
             ),
+            database_credential_purpose="service_account",
         )
 
     @migrate_command.command("downgrade", help="Unapply migrations.")
@@ -443,6 +446,7 @@ def create_migrate_command(
                     dry_run=dry_run,
                 ),
             ),
+            database_credential_purpose="service_account",
         )
 
     @migrate_command.command("history", help="Show migration history.")
@@ -574,6 +578,8 @@ def _run_migration(
     config_source: str | None,
     operation: Callable[[MigrationBackend, MigrationContext], None],
     *,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
 ) -> int:
     try:
@@ -582,6 +588,8 @@ def _run_migration(
             settings_loader,
             database_url,
             config_source,
+            database_credential_purpose=database_credential_purpose,
+            fallback_to_runtime_credentials=fallback_to_runtime_credentials,
             include_provisioning_connection=include_provisioning_connection,
         )
         configure_cli_logging(settings.app_config)
@@ -620,9 +628,13 @@ def _load_migration_settings(
     database_url: str | None,
     config_source: str | None,
     *,
+    database_credential_purpose: CredentialPurpose = "runtime",
+    fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
 ) -> MigrationSettings:
     optional_kwargs = {
+        "database_credential_purpose": database_credential_purpose,
+        "fallback_to_runtime_credentials": fallback_to_runtime_credentials,
         "include_provisioning_connection": include_provisioning_connection,
     }
     if config_source is None:
@@ -666,7 +678,7 @@ def _loader_accepts_keyword_config_source(
     """
     try:
         signature = inspect.signature(settings_loader)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
 
     has_explicit_config_source = any(

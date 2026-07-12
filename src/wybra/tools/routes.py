@@ -255,7 +255,7 @@ def _accepts_app_argument(factory: Callable[..., object], app: Any) -> bool:
     """
     try:
         signature = inspect.signature(factory)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
     try:
         signature.bind(app)

@@ -196,7 +196,7 @@ class SiteProfileCapability:
                     alt="Profile picture",
                     fallback_text=None,
                 )
-            except (MediaError, SiteCapabilityError):
+            except MediaError, SiteCapabilityError:
                 logger.warning(
                     "Profile image resolution via media capability failed; "
                     "using fallback profile initial.",

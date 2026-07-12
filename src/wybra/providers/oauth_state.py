@@ -47,7 +47,7 @@ def decode_signed_oauth_state[StateT](
 
     try:
         raw_payload = json.loads(urlsafe_b64decode(payload).decode("utf-8"))
-    except (BinasciiError, UnicodeDecodeError, json.JSONDecodeError):
+    except BinasciiError, UnicodeDecodeError, json.JSONDecodeError:
         return None
     if not isinstance(raw_payload, dict):
         return None
