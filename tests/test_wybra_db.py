@@ -1921,6 +1921,38 @@ def test_mysql_provisioner_initialises_database_user_and_grants() -> None:
     assert connection.closed
 
 
+def test_mysql_provisioner_escapes_percent_usernames_in_parameterised_sql() -> None:
+    connection = _RecordingMySQLConnection(
+        [
+            0,  # database exists
+            0,  # user exists
+            0,  # migration recorder table exists
+        ]
+    )
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+        runtime_credentials={
+            "database": "app",
+            "user": "app%ops",
+            "password": "secret",
+        },
+    )
+
+    asyncio.run(provisioner.initialise(context))
+
+    assert connection.executed[1][0] == ("CREATE USER 'app%%ops'@'%%' IDENTIFIED BY %s")
+    assert _simulate_pymysql_format(*connection.executed[1]) == (
+        "CREATE USER 'app%ops'@'%' IDENTIFIED BY <param>"
+    )
+    grant_query, grant_args = connection.executed[2]
+    assert grant_args == ()
+    assert "TO 'app%ops'@'%'" in grant_query
+
+
 def test_mysql_provisioner_reuses_existing_objects_and_reports_migrations() -> None:
     connection = _RecordingMySQLConnection(
         [
@@ -1961,6 +1993,25 @@ def test_mysql_provisioner_reuses_existing_objects_and_reports_migrations() -> N
     assert _simulate_pymysql_format(*connection.executed[0]) == (
         "ALTER USER 'app'@'%' IDENTIFIED BY <param>"
     )
+
+
+def test_mysql_provisioner_rejects_invalid_count_result() -> None:
+    connection = _RecordingMySQLConnection(["not-count"])
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningOperationError,
+        match="MySQL count result was invalid.",
+    ):
+        asyncio.run(provisioner.initialise(context))
+
+    assert connection.closed
 
 
 def test_mysql_destroy_requires_confirmed_database() -> None:
