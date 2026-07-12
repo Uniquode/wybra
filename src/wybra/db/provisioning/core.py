@@ -9,7 +9,7 @@ from wybra.db.settings import ResolvedDatabaseConnection
 from wybra.db.urls import DatabaseBackend
 
 DatabaseFamily = Literal["sqlite", "postgresql", "mysql", "mssql", "oracle"]
-ProvisioningStatus = Literal["created", "removed", "skipped", "noop"]
+ProvisioningStatus = Literal["created", "removed", "skipped", "updated", "noop"]
 ProvisioningPhase = Literal["init", "destroy", "maintenance"]
 
 
@@ -222,6 +222,7 @@ def _require_service_account_connection(
 
 
 def _default_provisioners() -> Mapping[DatabaseFamily, DatabaseProvisioner]:
+    from wybra.db.provisioning.mssql import SQLServerProvisioner
     from wybra.db.provisioning.mysql import MySQLProvisioner
     from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
     from wybra.db.provisioning.sqlite import SQLiteProvisioner
@@ -231,7 +232,7 @@ def _default_provisioners() -> Mapping[DatabaseFamily, DatabaseProvisioner]:
         "sqlite": SQLiteProvisioner(),
         "postgresql": PostgreSQLProvisioner(),
         "mysql": MySQLProvisioner(),
-        "mssql": UnsupportedFamilyProvisioner("mssql"),
+        "mssql": SQLServerProvisioner(),
         "oracle": UnsupportedFamilyProvisioner("oracle"),
     }
 

@@ -13,6 +13,7 @@ from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.models import Model
 
 import wybra.db.migrate as migrate_module
+import wybra.db.provisioning.mssql as mssql_provisioning
 import wybra.db.provisioning.mysql as mysql_provisioning
 import wybra.db.urls as database_urls
 from support_database import sqlite_file_url
@@ -48,6 +49,7 @@ from wybra.db.provisioning import (
     provisioner_for_family,
     run_database_maintenance,
 )
+from wybra.db.provisioning.mssql import SQLServerProvisioner, quote_mssql_identifier
 from wybra.db.provisioning.mysql import MySQLProvisioner, quote_mysql_identifier
 from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
 from wybra.db.settings import (
@@ -204,6 +206,58 @@ class _RecordingMySQLConnector:
         if not self.connections:
             raise AssertionError("Unexpected MySQL connection attempt.")
         return self.connections.pop(0)
+
+
+class _RecordingSQLServerConnection:
+    def __init__(self, fetch_values: list[object]) -> None:
+        self.fetch_values = fetch_values
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.queries: list[tuple[str, tuple[object, ...]]] = []
+        self.closed = False
+
+    async def execute(self, query: str, *args: object) -> object:
+        self.executed.append((query, args))
+        return "OK"
+
+    async def fetchval(self, query: str, *args: object) -> object:
+        self.queries.append((query, args))
+        if not self.fetch_values:
+            raise AssertionError(f"No fake SQL Server response for query: {query}")
+        return self.fetch_values.pop(0)
+
+    async def close(self) -> object:
+        self.closed = True
+
+
+class _RecordingSQLServerConnector:
+    def __init__(self, *connections: _RecordingSQLServerConnection) -> None:
+        self.connections = list(connections)
+        self.credentials: list[dict[str, object]] = []
+
+    async def __call__(
+        self,
+        credentials: Mapping[str, object],
+    ) -> _RecordingSQLServerConnection:
+        self.credentials.append(dict(credentials))
+        if not self.connections:
+            raise AssertionError("Unexpected SQL Server connection attempt.")
+        return self.connections.pop(0)
+
+
+def _recorded_mssql_statements(
+    *connections: _RecordingSQLServerConnection,
+) -> str:
+    return "\n".join(
+        query for connection in connections for query, _args in connection.executed
+    )
+
+
+def _recorded_mssql_queries(
+    *connections: _RecordingSQLServerConnection,
+) -> str:
+    return "\n".join(
+        query for connection in connections for query, _args in connection.queries
+    )
 
 
 def _simulate_pymysql_format(query: str, args: tuple[object, ...]) -> str:
@@ -1787,6 +1841,30 @@ def _mysql_provisioning_context(
     )
 
 
+def _mssql_provisioning_context(
+    *,
+    provisioning_connection: ResolvedDatabaseConnection | None,
+    runtime_credentials: dict[str, object] | None = None,
+) -> ProvisioningContext:
+    return ProvisioningContext(
+        family="mssql",
+        runtime_connection=_database_connection(
+            "mssql",
+            runtime_credentials
+            or {
+                "database": "app",
+                "schema": "app_schema",
+                "role": "app_role",
+                "user": "app",
+                "password": "secret",
+            },
+        ),
+        provisioning_connection=provisioning_connection,
+        project_root=Path.cwd(),
+        modules=(),
+    )
+
+
 @pytest.mark.parametrize(
     ("credentials", "expected_message"),
     (
@@ -1860,6 +1938,489 @@ def test_unsupported_database_provisioner_rejects_unimplemented_operations() -> 
                 DatabaseMaintenanceRequest(task="vacuum"),
             )
         )
+
+
+def test_mssql_provisioner_is_registered_for_mssql_family() -> None:
+    assert isinstance(provisioner_for_family("mssql"), SQLServerProvisioner)
+
+
+def test_mssql_provisioner_initialises_database_principals_and_grants() -> None:
+    maintenance = _RecordingSQLServerConnection(
+        [
+            0,  # database exists
+            0,  # login exists
+        ]
+    )
+    target = _RecordingSQLServerConnection(
+        [
+            0,  # schema exists
+            0,  # database user exists
+            0,  # role exists
+            0,  # role membership exists
+            0,  # migration recorder table exists
+        ]
+    )
+    connector = _RecordingSQLServerConnector(maintenance, target)
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {
+                "database": "app",
+                "host": "db.example",
+                "user": "app_sa",
+                "password": "admin_secret",
+            },
+        ),
+    )
+
+    results = asyncio.run(provisioner.initialise(context))
+
+    assert connector.credentials == [
+        {
+            "database": "master",
+            "host": "db.example",
+            "user": "app_sa",
+            "password": "admin_secret",
+        },
+        {
+            "database": "app",
+            "host": "db.example",
+            "user": "app_sa",
+            "password": "admin_secret",
+        },
+    ]
+    assert [(result.status, result.phase) for result in results] == [
+        ("created", "init"),
+        ("created", "init"),
+        ("created", "init"),
+        ("created", "init"),
+        ("created", "init"),
+        ("updated", "init"),
+        ("noop", "init"),
+    ]
+    executed_sql = _recorded_mssql_statements(maintenance, target)
+    assert "CREATE DATABASE [app]" in executed_sql
+    assert "CREATE LOGIN [app] WITH PASSWORD = ?" in executed_sql
+    assert "CREATE SCHEMA [app_schema]" in executed_sql
+    assert (
+        "CREATE USER [app] FOR LOGIN [app] WITH DEFAULT_SCHEMA = [app_schema]"
+        in executed_sql
+    )
+    assert "CREATE ROLE [app_role]" in executed_sql
+    assert "ALTER ROLE [app_role] ADD MEMBER [app]" in executed_sql
+    assert (
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[app_schema] TO [app_role]"
+    ) in executed_sql
+    assert "secret" not in executed_sql
+    assert "secret" not in " ".join(result.message for result in results)
+    assert maintenance.executed[1][1] == ("secret",)
+    assert maintenance.closed
+    assert target.closed
+
+
+def test_mssql_provisioner_reuses_existing_objects_and_reports_migrations() -> None:
+    maintenance = _RecordingSQLServerConnection(
+        [
+            1,  # database exists
+            1,  # login exists
+        ]
+    )
+    target = _RecordingSQLServerConnection(
+        [
+            1,  # schema exists
+            1,  # database user exists
+            1,  # role exists
+            1,  # role membership exists
+            1,  # migration recorder table exists
+            "2",  # migration count
+        ]
+    )
+    connector = _RecordingSQLServerConnector(maintenance, target)
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(provisioner.initialise(context))
+
+    assert [result.status for result in results] == [
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+        "updated",
+        "noop",
+    ]
+    assert any("contains 2 record" in result.message for result in results)
+    executed_sql = _recorded_mssql_statements(maintenance, target)
+    assert "CREATE DATABASE" not in executed_sql
+    assert "CREATE LOGIN" not in executed_sql
+    assert "CREATE SCHEMA" not in executed_sql
+    assert "CREATE USER" not in executed_sql
+    assert "CREATE ROLE" not in executed_sql
+    assert "ALTER LOGIN [app] WITH PASSWORD = ?" not in executed_sql
+    assert "ALTER USER [app] WITH LOGIN = [app]" in executed_sql
+    assert "ALTER ROLE [app_role] ADD MEMBER [app]" not in executed_sql
+
+
+def test_mssql_init_reports_external_login_prerequisite_without_password() -> None:
+    maintenance = _RecordingSQLServerConnection(
+        [
+            1,  # externally managed login exists
+            0,  # database exists
+        ]
+    )
+    target = _RecordingSQLServerConnection(
+        [
+            0,  # schema exists
+            0,  # database user exists
+            0,  # role exists
+            0,  # role membership exists
+            0,  # migration recorder table exists
+        ]
+    )
+    connector = _RecordingSQLServerConnector(maintenance, target)
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+        runtime_credentials={
+            "database": "app",
+            "schema": "app_schema",
+            "role": "app_role",
+            "user": "app",
+        },
+    )
+
+    results = asyncio.run(provisioner.initialise(context))
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("created", "init"),
+        ("noop", "init"),
+        ("created", "init"),
+        ("created", "init"),
+        ("created", "init"),
+        ("updated", "init"),
+        ("noop", "init"),
+    ]
+    assert any("externally managed" in result.message for result in results)
+    assert connector.credentials == [
+        {"database": "master", "user": "app_sa", "password": "admin_secret"},
+        {"database": "app", "user": "app_sa", "password": "admin_secret"},
+    ]
+    executed_sql = _recorded_mssql_statements(target)
+    assert (
+        "CREATE USER [app] FOR LOGIN [app] WITH DEFAULT_SCHEMA = [app_schema]"
+        in executed_sql
+    )
+    assert maintenance.closed
+    assert target.closed
+
+
+def test_mssql_init_requires_existing_external_login_before_database_changes() -> None:
+    maintenance = _RecordingSQLServerConnection(
+        [
+            0,  # externally managed login exists
+        ]
+    )
+    connector = _RecordingSQLServerConnector(maintenance)
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+        runtime_credentials={
+            "database": "app",
+            "schema": "app_schema",
+            "role": "app_role",
+            "user": "app",
+        },
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="application login must exist",
+    ):
+        asyncio.run(provisioner.initialise(context))
+
+    executed_sql = _recorded_mssql_statements(maintenance)
+    assert "CREATE DATABASE" not in executed_sql
+    assert maintenance.closed
+
+
+def test_mssql_destroy_requires_confirmed_database_and_service_database() -> None:
+    provisioner = SQLServerProvisioner(
+        connector=_RecordingSQLServerConnector(_RecordingSQLServerConnection([]))
+    )
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="confirmation does not match",
+    ):
+        asyncio.run(
+            provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
+        )
+
+    service_connection = context.provisioning_connection
+    assert service_connection is not None
+    context = _mssql_provisioning_context(
+        provisioning_connection=ResolvedDatabaseConnection.from_structured(
+            backend=service_connection.backend,
+            credentials=service_connection.credentials,
+            sa_database="app",
+        ),
+    )
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="target database must differ",
+    ):
+        asyncio.run(provisioner.destroy(context, DestroyDatabaseRequest(confirm="app")))
+
+
+def test_mssql_destroy_removes_configured_database_and_safe_login() -> None:
+    maintenance = _RecordingSQLServerConnection(
+        [
+            1,  # database exists
+            1,  # login exists
+            0,  # login has server role memberships
+            0,  # login has non-baseline server permissions
+        ]
+    )
+    connector = _RecordingSQLServerConnector(maintenance)
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("removed", "destroy"),
+        ("removed", "destroy"),
+    ]
+    executed_sql = _recorded_mssql_statements(maintenance)
+    assert "ALTER DATABASE [app] SET SINGLE_USER WITH ROLLBACK IMMEDIATE" in (
+        executed_sql
+    )
+    assert "DROP DATABASE [app]" in executed_sql
+    assert "DROP LOGIN [app]" in executed_sql
+    queried_sql = _recorded_mssql_queries(maintenance)
+    assert "permission_name <> ?" in queried_sql
+    assert any(args == ("app", "CONNECT SQL") for _query, args in maintenance.queries)
+
+
+def test_mssql_destroy_skips_service_account_runtime_login() -> None:
+    maintenance = _RecordingSQLServerConnection(
+        [
+            1,  # database exists
+            1,  # login exists
+        ]
+    )
+    connector = _RecordingSQLServerConnector(maintenance)
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    executed_sql = _recorded_mssql_statements(maintenance)
+    assert "DROP DATABASE [app]" in executed_sql
+    assert "DROP LOGIN" not in executed_sql
+    assert any("users are the same" in result.message for result in results)
+
+
+def test_mssql_destroy_skips_login_with_external_dependencies() -> None:
+    maintenance = _RecordingSQLServerConnection(
+        [
+            1,  # database exists
+            1,  # login exists
+            0,  # login has server role memberships
+            1,  # login has non-baseline server permissions
+        ]
+    )
+    connector = _RecordingSQLServerConnector(maintenance)
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    executed_sql = _recorded_mssql_statements(maintenance)
+    assert "DROP DATABASE [app]" in executed_sql
+    assert "DROP LOGIN" not in executed_sql
+    assert any("dependencies were detected" in result.message for result in results)
+
+
+def test_mssql_maintenance_tasks_execute_privilege_repair_and_state() -> None:
+    repair_connection = _RecordingSQLServerConnection([0])
+    state_connection = _RecordingSQLServerConnection(
+        [
+            1,  # migration recorder table exists
+            0,  # migration count
+        ]
+    )
+    prerequisite_connection = _RecordingSQLServerConnection([1])
+    connector = _RecordingSQLServerConnector(
+        repair_connection,
+        state_connection,
+        prerequisite_connection,
+    )
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    assert [task.name for task in provisioner.maintenance_tasks(context)] == [
+        "repair-privileges",
+        "migration-state",
+        "validate-prerequisites",
+    ]
+    repair_result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="repair-privileges"),
+        )
+    )
+    state_result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="migration-state"),
+        )
+    )
+    prerequisite_result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="validate-prerequisites"),
+        )
+    )
+
+    assert repair_result[0].status == "updated"
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[app_schema]" in (
+        _recorded_mssql_statements(repair_connection)
+    )
+    assert state_result[0].message == "Tortoise migration recorder table is empty."
+    assert prerequisite_result[0].phase == "maintenance"
+    assert "managed application login exists" in prerequisite_result[0].message
+
+
+def test_mssql_validate_prerequisites_reports_missing_external_login() -> None:
+    prerequisite_connection = _RecordingSQLServerConnection([0])
+    connector = _RecordingSQLServerConnector(prerequisite_connection)
+    provisioner = SQLServerProvisioner(connector=connector)
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+        runtime_credentials={
+            "database": "app",
+            "schema": "app_schema",
+            "role": "app_role",
+            "user": "app",
+        },
+    )
+
+    result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="validate-prerequisites"),
+        )
+    )
+
+    assert result[0].phase == "maintenance"
+    assert "externally managed" in result[0].message
+
+
+def test_mssql_driver_credentials_escape_dsn_values() -> None:
+    credentials = mssql_provisioning._driver_credentials(
+        {
+            "driver": "Driver}18",
+            "host": "db.example;Encrypt=no",
+            "port": "1433",
+            "database": "app;other=value",
+            "user": "app;UID=other",
+            "password": "secret}value;Trusted_Connection=yes",
+            " Encrypt ": "yes",
+        }
+    )
+
+    assert credentials["autocommit"] is True
+    assert credentials["dsn"] == (
+        "DRIVER={Driver}}18};SERVER={db.example;Encrypt=no,1433};"
+        "DATABASE={app;other=value};UID={app;UID=other};"
+        "PWD={secret}}value;Trusted_Connection=yes};Encrypt={yes}"
+    )
+
+
+def test_mssql_driver_credentials_reject_unsupported_odbc_attributes() -> None:
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="Unsupported SQL Server ODBC attribute",
+    ):
+        mssql_provisioning._driver_credentials(
+            {
+                "database": "app",
+                "user": "app",
+                "password": "secret",
+                "Trusted_Connection": "yes",
+            }
+        )
+
+
+def test_mssql_provisioner_reports_missing_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def import_module(_module_name: str) -> object:
+        raise ImportError("missing")
+
+    monkeypatch.setattr(mssql_provisioning.importlib, "import_module", import_module)
+    provisioner = SQLServerProvisioner()
+    context = _mssql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mssql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match=r"wybra\[mssql\]",
+    ):
+        asyncio.run(provisioner.initialise(context))
 
 
 def test_mysql_provisioner_is_registered_for_mysql_family() -> None:
@@ -2548,6 +3109,7 @@ def test_database_provisioning_sql_renderer_quotes_identifiers() -> None:
 
     assert quote_sql_identifier('app"db') == '"app""db"'
     assert quote_mysql_identifier("app`db") == "`app``db`"
+    assert quote_mssql_identifier("app]db") == "[app]]db]"
 
     rendered = render_sql(
         t"create database {ident(database)} owner {ident('owner')}",
@@ -2572,6 +3134,11 @@ def test_database_provisioning_sql_renderer_binds_parameters_by_dialect() -> Non
         dialect="mysql",
         quote_identifier=quote_mysql_identifier,
     )
+    mssql = render_sql(
+        t"select {param('first')}, {param('second')}",
+        dialect="mssql",
+        quote_identifier=quote_mssql_identifier,
+    )
 
     assert sqlite.statement == 'select * from "app_table" where name = ?'
     assert sqlite.parameters == ("secret",)
@@ -2579,6 +3146,8 @@ def test_database_provisioning_sql_renderer_binds_parameters_by_dialect() -> Non
     assert postgresql.parameters == ("first", "second")
     assert mysql.statement == "select %s, %s"
     assert mysql.parameters == ("first", "second")
+    assert mssql.statement == "select ?, ?"
+    assert mssql.parameters == ("first", "second")
 
 
 def test_database_provisioning_sql_renderer_requires_typed_interpolations() -> None:
