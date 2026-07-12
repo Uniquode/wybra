@@ -9,7 +9,7 @@ from wybra.db.settings import ResolvedDatabaseConnection
 from wybra.db.urls import DatabaseBackend
 
 DatabaseFamily = Literal["sqlite", "postgresql", "mysql", "mssql", "oracle"]
-ProvisioningStatus = Literal["created", "removed", "skipped", "noop"]
+ProvisioningStatus = Literal["created", "removed", "skipped", "updated", "noop"]
 ProvisioningPhase = Literal["init", "destroy", "maintenance"]
 
 

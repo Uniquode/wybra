@@ -1996,7 +1996,7 @@ def test_mssql_provisioner_initialises_database_principals_and_grants() -> None:
         ("created", "init"),
         ("created", "init"),
         ("created", "init"),
-        ("skipped", "init"),
+        ("updated", "init"),
         ("noop", "init"),
     ]
     executed_sql = _recorded_mssql_statements(maintenance, target)
@@ -2053,7 +2053,7 @@ def test_mssql_provisioner_reuses_existing_objects_and_reports_migrations() -> N
         "skipped",
         "skipped",
         "skipped",
-        "skipped",
+        "updated",
         "noop",
     ]
     assert any("contains 2 record" in result.message for result in results)
@@ -2107,7 +2107,7 @@ def test_mssql_init_reports_external_login_prerequisite_without_password() -> No
         ("created", "init"),
         ("created", "init"),
         ("created", "init"),
-        ("skipped", "init"),
+        ("updated", "init"),
         ("noop", "init"),
     ]
     assert any("externally managed" in result.message for result in results)
@@ -2328,7 +2328,7 @@ def test_mssql_maintenance_tasks_execute_privilege_repair_and_state() -> None:
         )
     )
 
-    assert repair_result[0].status == "skipped"
+    assert repair_result[0].status == "updated"
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[app_schema]" in (
         _recorded_mssql_statements(repair_connection)
     )
@@ -2374,7 +2374,7 @@ def test_mssql_driver_credentials_escape_dsn_values() -> None:
             "database": "app;other=value",
             "user": "app;UID=other",
             "password": "secret}value;Trusted_Connection=yes",
-            "Encrypt": "yes",
+            " Encrypt ": "yes",
         }
     )
 

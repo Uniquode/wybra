@@ -25,20 +25,18 @@ _DEFAULT_SCHEMA = "dbo"
 _DEFAULT_ROLE = "wybra_app"
 _MIGRATION_RECORDER_TABLE = "tortoise_migrations"
 _BASELINE_SERVER_PERMISSION = "CONNECT SQL"
-_ALLOWED_ODBC_ATTRIBUTE_KEYS = frozenset(
-    {
-        "applicationintent",
-        "authentication",
-        "connectiontimeout",
-        "encrypt",
-        "logintimeout",
-        "marsconnection",
-        "multisubnetfailover",
-        "timeout",
-        "transparentnetworkipresolution",
-        "trustservercertificate",
-    }
-)
+_ALLOWED_ODBC_ATTRIBUTE_KEYS = {
+    "applicationintent": "ApplicationIntent",
+    "authentication": "Authentication",
+    "connectiontimeout": "ConnectionTimeout",
+    "encrypt": "Encrypt",
+    "logintimeout": "LoginTimeout",
+    "marsconnection": "MARSConnection",
+    "multisubnetfailover": "MultiSubnetFailover",
+    "timeout": "Timeout",
+    "transparentnetworkipresolution": "TransparentNetworkIPResolution",
+    "trustservercertificate": "TrustServerCertificate",
+}
 _MSSQL_MAINTENANCE_TASKS = (
     DatabaseMaintenanceTask(
         name="repair-privileges",
@@ -203,7 +201,7 @@ class SQLServerProvisioner:
             results.append(
                 _result(
                     "init",
-                    "skipped",
+                    "updated",
                     f"Repaired SQL Server runtime privileges for role: {role}",
                 )
             )
@@ -373,7 +371,7 @@ class SQLServerProvisioner:
                 return (
                     _result(
                         "maintenance",
-                        "skipped",
+                        "updated",
                         f"Repaired SQL Server runtime privileges for role: {role}",
                     ),
                 )
@@ -528,8 +526,8 @@ def _driver_credentials(credentials: Mapping[str, object]) -> dict[str, object]:
     for key, value in credentials.items():
         if key in {"database", "driver", "host", "password", "port", "user"}:
             continue
-        _ensure_allowed_odbc_attribute(key)
-        connection_parts.append(f"{key}={_odbc_value(value)}")
+        attribute = _normalise_odbc_attribute(key)
+        connection_parts.append(f"{attribute}={_odbc_value(value)}")
 
     return {
         "dsn": ";".join(connection_parts),
@@ -537,16 +535,17 @@ def _driver_credentials(credentials: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _ensure_allowed_odbc_attribute(key: object) -> None:
+def _normalise_odbc_attribute(key: object) -> str:
     if not isinstance(key, str) or not key.strip():
         raise DatabaseProvisioningConfigurationError(
             "SQL Server ODBC attribute names must be non-blank strings."
         )
-    normalised = key.replace("_", "").replace(" ", "").casefold()
+    normalised = key.strip().replace("_", "").replace(" ", "").casefold()
     if normalised not in _ALLOWED_ODBC_ATTRIBUTE_KEYS:
         raise DatabaseProvisioningConfigurationError(
             f"Unsupported SQL Server ODBC attribute: {key}."
         )
+    return _ALLOWED_ODBC_ATTRIBUTE_KEYS[normalised]
 
 
 def _odbc_value(value: object) -> str:
