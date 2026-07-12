@@ -19,7 +19,7 @@ class UnsupportedFamilyProvisioner:
     def __init__(self, family: DatabaseFamily) -> None:
         self.family = family
 
-    def initialise(
+    async def initialise(
         self,
         context: ProvisioningContext,
     ) -> tuple[ProvisioningPhaseResult, ...]:
@@ -29,7 +29,7 @@ class UnsupportedFamilyProvisioner:
             f"Database family {self.family} init provisioning is not implemented."
         )
 
-    def destroy(
+    async def destroy(
         self,
         context: ProvisioningContext,
         request: DestroyDatabaseRequest,
@@ -48,7 +48,7 @@ class UnsupportedFamilyProvisioner:
         _ensure_family(context, self.family)
         return ()
 
-    def run_maintenance(
+    async def run_maintenance(
         self,
         context: ProvisioningContext,
         request: DatabaseMaintenanceRequest,

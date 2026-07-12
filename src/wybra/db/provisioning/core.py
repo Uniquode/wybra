@@ -83,12 +83,12 @@ class ProvisioningContext:
 class DatabaseProvisioner(Protocol):
     family: DatabaseFamily
 
-    def initialise(
+    async def initialise(
         self,
         context: ProvisioningContext,
     ) -> tuple[ProvisioningPhaseResult, ...]: ...
 
-    def destroy(
+    async def destroy(
         self,
         context: ProvisioningContext,
         request: DestroyDatabaseRequest,
@@ -99,7 +99,7 @@ class DatabaseProvisioner(Protocol):
         context: ProvisioningContext,
     ) -> tuple[DatabaseMaintenanceTask, ...]: ...
 
-    def run_maintenance(
+    async def run_maintenance(
         self,
         context: ProvisioningContext,
         request: DatabaseMaintenanceRequest,
@@ -162,13 +162,13 @@ def provisioning_context(
     )
 
 
-def initialise_database(
+async def initialise_database(
     context: ProvisioningContext,
 ) -> tuple[ProvisioningPhaseResult, ...]:
-    return provisioner_for_family(context.family).initialise(context)
+    return await provisioner_for_family(context.family).initialise(context)
 
 
-def destroy_database(
+async def destroy_database(
     context: ProvisioningContext,
     request: DestroyDatabaseRequest,
 ) -> tuple[ProvisioningPhaseResult, ...]:
@@ -176,10 +176,10 @@ def destroy_database(
         raise DatabaseProvisioningConfigurationError(
             "Destroy confirmation must not be blank."
         )
-    return provisioner_for_family(context.family).destroy(context, request)
+    return await provisioner_for_family(context.family).destroy(context, request)
 
 
-def run_database_maintenance(
+async def run_database_maintenance(
     context: ProvisioningContext,
     request: DatabaseMaintenanceRequest,
 ) -> tuple[ProvisioningPhaseResult, ...]:
@@ -187,7 +187,10 @@ def run_database_maintenance(
         raise DatabaseProvisioningConfigurationError(
             "Maintenance task name must not be blank."
         )
-    return provisioner_for_family(context.family).run_maintenance(context, request)
+    return await provisioner_for_family(context.family).run_maintenance(
+        context,
+        request,
+    )
 
 
 def _ensure_family(context: ProvisioningContext, family: DatabaseFamily) -> None:

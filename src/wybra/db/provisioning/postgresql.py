@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol, cast
@@ -65,12 +64,12 @@ class PostgreSQLProvisioner:
     def __init__(self, connector: PostgreSQLConnector | None = None) -> None:
         self._connector = connector or _connect_asyncpg
 
-    def initialise(
+    async def initialise(
         self,
         context: ProvisioningContext,
     ) -> tuple[ProvisioningPhaseResult, ...]:
         _ensure_postgresql_context(context)
-        return _run_sync(lambda: self._initialise(context))
+        return await self._initialise(context)
 
     async def _initialise(
         self,
@@ -176,13 +175,13 @@ class PostgreSQLProvisioner:
         finally:
             await target.close()
 
-    def destroy(
+    async def destroy(
         self,
         context: ProvisioningContext,
         request: DestroyDatabaseRequest,
     ) -> tuple[ProvisioningPhaseResult, ...]:
         _ensure_postgresql_context(context)
-        return _run_sync(lambda: self._destroy(context, request))
+        return await self._destroy(context, request)
 
     async def _destroy(
         self,
@@ -293,13 +292,13 @@ class PostgreSQLProvisioner:
         _ensure_postgresql_context(context)
         return _POSTGRESQL_MAINTENANCE_TASKS
 
-    def run_maintenance(
+    async def run_maintenance(
         self,
         context: ProvisioningContext,
         request: DatabaseMaintenanceRequest,
     ) -> tuple[ProvisioningPhaseResult, ...]:
         _ensure_postgresql_context(context)
-        return _run_sync(lambda: self._run_maintenance(context, request))
+        return await self._run_maintenance(context, request)
 
     async def _run_maintenance(
         self,
@@ -407,18 +406,6 @@ async def _connect_asyncpg(credentials: Mapping[str, object]) -> PostgreSQLConne
 
     connect = cast(Callable[..., Awaitable[PostgreSQLConnection]], asyncpg.connect)
     return await connect(**dict(credentials))
-
-
-def _run_sync[ResultT](
-    operation: Callable[[], Awaitable[ResultT]],
-) -> ResultT:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(operation())
-    raise DatabaseProvisioningOperationError(
-        "PostgreSQL lifecycle operations must run from a synchronous command."
-    )
 
 
 async def _database_exists(connection: PostgreSQLConnection, database: str) -> bool:

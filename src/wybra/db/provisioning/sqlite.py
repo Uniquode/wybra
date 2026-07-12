@@ -22,7 +22,7 @@ _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 class SQLiteProvisioner:
     family: DatabaseFamily = "sqlite"
 
-    def initialise(
+    async def initialise(
         self,
         context: ProvisioningContext,
     ) -> tuple[ProvisioningPhaseResult, ...]:
@@ -59,7 +59,7 @@ class SQLiteProvisioner:
             ),
         )
 
-    def destroy(
+    async def destroy(
         self,
         context: ProvisioningContext,
         request: DestroyDatabaseRequest,
@@ -107,7 +107,7 @@ class SQLiteProvisioner:
         _ensure_family(context, self.family)
         return ()
 
-    def run_maintenance(
+    async def run_maintenance(
         self,
         context: ProvisioningContext,
         request: DatabaseMaintenanceRequest,

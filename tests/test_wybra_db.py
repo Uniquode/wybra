@@ -1761,12 +1761,12 @@ def test_unsupported_database_provisioner_requires_service_account_credentials(
         DatabaseProvisioningConfigurationError,
         match=expected_message,
     ):
-        provisioner.initialise(context)
+        asyncio.run(provisioner.initialise(context))
     with pytest.raises(
         DatabaseProvisioningConfigurationError,
         match=expected_message,
     ):
-        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        asyncio.run(provisioner.destroy(context, DestroyDatabaseRequest(confirm="app")))
 
 
 def test_unsupported_database_provisioner_rejects_unimplemented_operations() -> None:
@@ -1789,19 +1789,21 @@ def test_unsupported_database_provisioner_rejects_unimplemented_operations() -> 
         DatabaseProvisioningOperationError,
         match="mysql init provisioning is not implemented",
     ):
-        provisioner.initialise(context)
+        asyncio.run(provisioner.initialise(context))
     with pytest.raises(
         DatabaseProvisioningOperationError,
         match="mysql destroy is not implemented",
     ):
-        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        asyncio.run(provisioner.destroy(context, DestroyDatabaseRequest(confirm="app")))
     with pytest.raises(
         DatabaseProvisioningConfigurationError,
         match="Unknown mysql maintenance task",
     ):
-        provisioner.run_maintenance(
-            context,
-            DatabaseMaintenanceRequest(task="vacuum"),
+        asyncio.run(
+            provisioner.run_maintenance(
+                context,
+                DatabaseMaintenanceRequest(task="vacuum"),
+            )
         )
 
 
@@ -1833,7 +1835,7 @@ def test_postgresql_provisioner_initialises_database_role_schema_and_grants() ->
         provisioning_connection=provisioning_connection,
     )
 
-    results = provisioner.initialise(context)
+    results = asyncio.run(provisioner.initialise(context))
 
     assert connector.credentials[0]["database"] == "cluster_admin"
     assert connector.credentials[1]["database"] == "app"
@@ -1882,7 +1884,7 @@ def test_postgresql_provisioner_reuses_existing_objects_and_reports_migrations()
         ),
     )
 
-    results = provisioner.initialise(context)
+    results = asyncio.run(provisioner.initialise(context))
 
     assert [result.status for result in results] == [
         "skipped",
@@ -1915,7 +1917,9 @@ def test_postgresql_destroy_requires_confirmed_database_and_sa_database() -> Non
         DatabaseProvisioningConfigurationError,
         match="confirmation does not match",
     ):
-        provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
+        asyncio.run(
+            provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
+        )
 
     service_connection = context.provisioning_connection
     assert service_connection is not None
@@ -1930,7 +1934,7 @@ def test_postgresql_destroy_requires_confirmed_database_and_sa_database() -> Non
         DatabaseProvisioningConfigurationError,
         match="different service-account database",
     ):
-        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        asyncio.run(provisioner.destroy(context, DestroyDatabaseRequest(confirm="app")))
 
 
 def test_postgresql_init_requires_distinct_service_account_database() -> None:
@@ -1953,7 +1957,7 @@ def test_postgresql_init_requires_distinct_service_account_database() -> None:
         DatabaseProvisioningConfigurationError,
         match="different service-account database",
     ):
-        provisioner.initialise(context)
+        asyncio.run(provisioner.initialise(context))
 
 
 def test_postgresql_destroy_removes_configured_database_and_role() -> None:
@@ -1973,7 +1977,9 @@ def test_postgresql_destroy_removes_configured_database_and_role() -> None:
         ),
     )
 
-    results = provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
 
     assert [(result.status, result.phase) for result in results] == [
         ("removed", "destroy"),
@@ -2001,7 +2007,9 @@ def test_postgresql_destroy_skips_service_account_runtime_role() -> None:
         ),
     )
 
-    results = provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
 
     executed_sql = "\n".join(query for query, _args in maintenance.executed)
     assert 'DROP DATABASE "app"' in executed_sql
@@ -2026,7 +2034,9 @@ def test_postgresql_destroy_skips_role_with_external_dependencies() -> None:
         ),
     )
 
-    results = provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
 
     executed_sql = "\n".join(query for query, _args in maintenance.executed)
     assert 'DROP DATABASE "app"' in executed_sql
@@ -2057,13 +2067,17 @@ def test_postgresql_maintenance_tasks_execute_privilege_repair_and_state() -> No
         "analyse",
         "validate-extensions",
     ]
-    repair_result = provisioner.run_maintenance(
-        context,
-        DatabaseMaintenanceRequest(task="repair-privileges"),
+    repair_result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="repair-privileges"),
+        )
     )
-    state_result = provisioner.run_maintenance(
-        context,
-        DatabaseMaintenanceRequest(task="migration-state"),
+    state_result = asyncio.run(
+        provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="migration-state"),
+        )
     )
 
     assert repair_result[0].status == "skipped"
@@ -2080,12 +2094,17 @@ def test_database_lifecycle_guards_reject_blank_requests() -> None:
         DatabaseProvisioningConfigurationError,
         match="Destroy confirmation must not be blank",
     ):
-        destroy_database(context, DestroyDatabaseRequest(confirm=" "))
+        asyncio.run(destroy_database(context, DestroyDatabaseRequest(confirm=" ")))
     with pytest.raises(
         DatabaseProvisioningConfigurationError,
         match="Maintenance task name must not be blank",
     ):
-        run_database_maintenance(context, DatabaseMaintenanceRequest(task=" "))
+        asyncio.run(
+            run_database_maintenance(
+                context,
+                DatabaseMaintenanceRequest(task=" "),
+            )
+        )
 
 
 def test_sqlite_provisioner_rejects_unknown_maintenance_task() -> None:
@@ -2093,9 +2112,11 @@ def test_sqlite_provisioner_rejects_unknown_maintenance_task() -> None:
         DatabaseProvisioningConfigurationError,
         match="Unknown sqlite maintenance task",
     ):
-        SQLiteProvisioner().run_maintenance(
-            _sqlite_provisioning_context(),
-            DatabaseMaintenanceRequest(task="vacuum"),
+        asyncio.run(
+            SQLiteProvisioner().run_maintenance(
+                _sqlite_provisioning_context(),
+                DatabaseMaintenanceRequest(task="vacuum"),
+            )
         )
 
 
@@ -2474,7 +2495,7 @@ def test_run_migration_dispatches_through_tortoise_backend_boundary(
     calls: list[migrate_module.MigrationContext] = []
 
     class RecordingMigrationBackend:
-        def heads(
+        async def heads(
             self,
             context: migrate_module.MigrationContext,
             _app_labels: tuple[str, ...],
