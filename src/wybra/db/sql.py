@@ -5,7 +5,12 @@ from dataclasses import dataclass, field
 from string.templatelib import Interpolation, Template
 from typing import Literal
 
-SqlDialect = Literal["mysql", "postgresql", "sqlite"]
+SqlDialect = Literal["mssql", "mysql", "postgresql", "sqlite"]
+_SIMPLE_PARAMETER_MARKERS: dict[SqlDialect, str] = {
+    "mssql": "?",
+    "mysql": "%s",
+    "sqlite": "?",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,12 +115,10 @@ def _render_interpolation(
 
 
 def _parameter_marker(dialect: SqlDialect, index: int) -> str:
-    if dialect == "mysql":
-        return "%s"
-    if dialect == "sqlite":
-        return "?"
     if dialect == "postgresql":
         return f"${index}"
+    if dialect in _SIMPLE_PARAMETER_MARKERS:
+        return _SIMPLE_PARAMETER_MARKERS[dialect]
     raise ValueError(f"Unsupported SQL dialect: {dialect}.")
 
 
