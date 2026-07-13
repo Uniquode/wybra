@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, cast
@@ -227,7 +227,10 @@ class AwsClientSettings:
             ),
         )
         external_id_source = (
-            _optional_secret_source(self.external_id_source)
+            _optional_secret_source(
+                self.external_id_source,
+                name="external_id_source",
+            )
             if self.external_id_source is not None
             else None
         )
@@ -381,7 +384,10 @@ class AwsClientSettings:
                 self.external_id_source, self.external_id_key
             ).reveal()
         except SecretsError as exc:
-            raise ConfigurationError("Failed to resolve AWS external_id.") from exc
+            raise ConfigurationError(
+                "Failed to resolve AWS external_id: "
+                f"source={self.external_id_source} key={self.external_id_key}."
+            ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -1102,29 +1108,15 @@ def _resolve_aws_managed_database_settings(
     external_id = aws.client.resolved_external_id(environ=environ, secrets=secrets)
     if external_id is None or aws.client.external_id_key is None:
         return aws
-    client = AwsClientSettings(
-        region=aws.client.region,
-        profile=aws.client.profile,
-        account_id=aws.client.account_id,
-        partition=aws.client.partition,
-        role_arn=aws.client.role_arn,
-        role_session_name=aws.client.role_session_name,
+    # Service-account settings carry the resolved value only; source/key remain
+    # on the original runtime settings where they are still useful diagnostics.
+    client = replace(
+        aws.client,
         external_id=external_id,
-        sso_region=aws.client.sso_region,
-        sso_account_id=aws.client.sso_account_id,
-        sso_role_name=aws.client.sso_role_name,
-        sso_start_url=aws.client.sso_start_url,
-        section_name=aws.client.section_name,
+        external_id_source=None,
+        external_id_key=None,
     )
-    return AwsManagedDatabaseSettings(
-        managed=aws.managed,
-        client=client,
-        db_instance_identifier=aws.db_instance_identifier,
-        cluster_identifier=aws.cluster_identifier,
-        engine=aws.engine,
-        endpoint=aws.endpoint,
-        port=aws.port,
-    )
+    return replace(aws, client=client)
 
 
 def _structured_backend_credentials(
@@ -1454,10 +1446,14 @@ def _normalise_options(value: object) -> Mapping[str, Any]:
     return options
 
 
-def _optional_secret_source(value: object) -> SecretSource | None:
+def _optional_secret_source(
+    value: object,
+    *,
+    name: str = "credential_source",
+) -> SecretSource | None:
     if value is None:
         return None
-    return normalise_secret_source(value, name="credential_source")
+    return normalise_secret_source(value, name=name)
 
 
 def _optional_aws_string(

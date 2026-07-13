@@ -207,7 +207,7 @@ engines remain unsupported until Wybra has first-class Oracle database support.
 
 AWS access keys and session tokens should not be stored in Wybra config. Use
 the normal AWS credential chain, such as environment, instance profile, shared
-AWS config, SSO, or an assumed role. ARNs, account ids, profile names, regions,
+AWS config, SSO, or an assumed role. ARNs, account IDs, profile names, regions,
 RDS identifiers, cluster identifiers, endpoints, and ports are treated as
 non-secret identifiers.
 

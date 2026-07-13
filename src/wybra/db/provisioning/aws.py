@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from wybra.db.provisioning.core import (
     DatabaseFamily,
@@ -11,20 +11,31 @@ from wybra.db.provisioning.core import (
     DatabaseProvisioningOperationError,
     ProvisioningContext,
 )
-from wybra.db.settings import AwsClientSettings, AwsManagedDatabaseSettings
+from wybra.db.settings import (
+    AwsClientSettings,
+    AwsManagedDatabaseSettings,
+    AwsManagedTarget,
+)
 
 _DEFAULT_ROLE_SESSION_NAME = "wybra-database-provisioning"
 
 
 @dataclass(frozen=True, slots=True)
 class AwsManagedDatabaseMetadata:
-    managed: str
+    managed: AwsManagedTarget
     identifier: str
     engine: str
     endpoint: str | None
     port: int | None
     arn: str | None = None
     region: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "managed",
+            _normalise_managed_target(self.managed),
+        )
 
     @property
     def account_id(self) -> str | None:
@@ -54,12 +65,12 @@ class Boto3RdsMetadataClient:
         self,
         target: AwsManagedDatabaseSettings,
     ) -> AwsManagedDatabaseMetadata:
-        client = self._rds_client(target.client)
         try:
             if target.managed == "rds":
-                assert target.db_instance_identifier is not None
+                identifier = _required_db_instance_identifier(target)
+                client = self._rds_client(target.client)
                 response = client.describe_db_instances(
-                    DBInstanceIdentifier=target.db_instance_identifier,
+                    DBInstanceIdentifier=identifier,
                 )
                 instances = response.get("DBInstances") or ()
                 if not instances:
@@ -70,9 +81,10 @@ class Boto3RdsMetadataClient:
                     instances[0], region=target.client.region
                 )
 
-            assert target.cluster_identifier is not None
+            identifier = _required_cluster_identifier(target)
+            client = self._rds_client(target.client)
             response = client.describe_db_clusters(
-                DBClusterIdentifier=target.cluster_identifier,
+                DBClusterIdentifier=identifier,
             )
             clusters = response.get("DBClusters") or ()
             if not clusters:
@@ -108,7 +120,7 @@ class Boto3RdsMetadataClient:
                 settings.role_session_name or _DEFAULT_ROLE_SESSION_NAME
             ),
         }
-        external_id = settings.resolved_external_id()
+        external_id = settings.external_id
         if external_id is not None:
             assume_role_args["ExternalId"] = external_id
         credentials = sts.assume_role(**assume_role_args)["Credentials"]
@@ -136,6 +148,36 @@ def validate_aws_managed_database_context(
         )
     _validate_metadata_matches_target(target, metadata, context)
     return context
+
+
+def _normalise_managed_target(value: object) -> AwsManagedTarget:
+    if isinstance(value, str):
+        target = value.strip().lower()
+        if target in {"rds", "aurora"}:
+            return cast(AwsManagedTarget, target)
+    raise DatabaseProvisioningConfigurationError(
+        "AWS managed database metadata target must be rds or aurora."
+    )
+
+
+def _required_db_instance_identifier(
+    target: AwsManagedDatabaseSettings,
+) -> str:
+    if target.db_instance_identifier is not None:
+        return target.db_instance_identifier
+    raise DatabaseProvisioningConfigurationError(
+        "AWS RDS target requires db_instance_identifier."
+    )
+
+
+def _required_cluster_identifier(
+    target: AwsManagedDatabaseSettings,
+) -> str:
+    if target.cluster_identifier is not None:
+        return target.cluster_identifier
+    raise DatabaseProvisioningConfigurationError(
+        "AWS Aurora target requires cluster_identifier."
+    )
 
 
 def database_family_for_aws_engine(engine: str) -> DatabaseFamily:

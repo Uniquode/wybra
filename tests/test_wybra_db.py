@@ -5,7 +5,7 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
@@ -58,6 +58,7 @@ from wybra.db.provisioning.mssql import SQLServerProvisioner, quote_mssql_identi
 from wybra.db.provisioning.mysql import MySQLProvisioner, quote_mysql_identifier
 from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
 from wybra.db.settings import (
+    AwsClientSettings,
     AwsManagedDatabaseSettings,
     EffectiveDatabaseConfig,
     ResolvedDatabaseConnection,
@@ -88,7 +89,7 @@ from wybra.db.urls import (
     tortoise_database_url,
 )
 from wybra.db.validation import validate_persistence
-from wybra.services.secrets import SecretValue
+from wybra.services.secrets import MissingSecretError, SecretValue
 from wybra.site import start
 from wybra.tools.settings import load_project_settings
 from wybra.tools.validation.core import ValidationResult
@@ -140,6 +141,75 @@ class _RecordingAwsRdsMetadataClient:
     ) -> AwsManagedDatabaseMetadata:
         self.targets.append(target)
         return self.metadata
+
+
+class _FailingSecretsCapability:
+    def resolve(self, source: str, key: str) -> SecretValue:
+        raise MissingSecretError(source=source, key=key)
+
+    def exists(self, source: str, key: str) -> bool:
+        return False
+
+
+class _FakeBoto3Module:
+    def __init__(self) -> None:
+        self.session = self
+        self.assume_role_calls: list[dict[str, str]] = []
+
+    def Session(self, **kwargs: str) -> _FakeBoto3Session:
+        return _FakeBoto3Session(self, kwargs)
+
+
+class _FakeBoto3Session:
+    def __init__(
+        self,
+        module: _FakeBoto3Module,
+        kwargs: dict[str, str],
+    ) -> None:
+        self.module = module
+        self.kwargs = kwargs
+
+    def client(self, service_name: str, *, region_name: str | None = None) -> object:
+        if service_name == "sts":
+            return _FakeStsClient(self.module)
+        if service_name == "rds":
+            return _FakeRdsClient()
+        raise AssertionError(f"Unexpected fake boto3 service: {service_name}.")
+
+
+class _FakeStsClient:
+    def __init__(self, module: _FakeBoto3Module) -> None:
+        self.module = module
+
+    def assume_role(self, **kwargs: str) -> dict[str, dict[str, str]]:
+        self.module.assume_role_calls.append(kwargs)
+        return {
+            "Credentials": {
+                "AccessKeyId": "access-key",
+                "SecretAccessKey": "secret-key",
+                "SessionToken": "session-token",
+            }
+        }
+
+
+class _FakeRdsClient:
+    def describe_db_instances(
+        self,
+        *,
+        DBInstanceIdentifier: str,
+    ) -> dict[str, object]:
+        return {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": DBInstanceIdentifier,
+                    "Engine": "postgres",
+                    "Endpoint": {
+                        "Address": "uniquode.rds.amazonaws.com",
+                        "Port": 5432,
+                    },
+                }
+            ]
+        }
 
 
 class _RecordingPostgreSQLConnection:
@@ -740,8 +810,53 @@ def test_database_aws_external_id_key_is_resolved_for_service_account_only(
     assert service_account_connection is not None
     assert service_account_connection.aws is not None
     assert service_account_connection.aws.client.external_id == "resolved-external-id"
+    assert service_account_connection.aws.client.external_id_source is None
     assert service_account_connection.aws.client.external_id_key is None
     assert service_account_connection.credentials["user"] == "service_user"
+
+
+def test_database_aws_external_id_key_resolution_reports_source_and_key(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.aws": {
+                        "region": "ap-southeast-2",
+                        "role_arn": "arn:aws:iam::123456789012:role/wybra",
+                        "external_id_source": "keychain",
+                        "external_id_key": "aws/rds/external-id",
+                    },
+                    "app.database": {
+                        "backend": "postgresql",
+                        "database": "uniquode",
+                        "user": "app_user",
+                        "password": "app_password",
+                        "sa_user": "service_user",
+                        "sa_password": "service_password",
+                    },
+                    "app.database.aws": {
+                        "managed": "aurora",
+                        "cluster_identifier": "uniquode-cluster",
+                        "engine": "aurora-postgresql",
+                    },
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"source=keychain key=aws/rds/external-id",
+    ):
+        resolve_database_connection_from_config(
+            config,
+            project_root=tmp_path,
+            secrets=_FailingSecretsCapability(),
+            purpose="service_account",
+        )
 
 
 def test_shared_aws_config_error_names_app_aws_section(tmp_path: Path) -> None:
@@ -2088,7 +2203,7 @@ def test_aws_managed_database_context_validates_target_metadata(
     runtime_connection, provisioning_connection = _aws_postgresql_connections(tmp_path)
     metadata_client = _RecordingAwsRdsMetadataClient(
         AwsManagedDatabaseMetadata(
-            managed="rds",
+            managed=cast(Any, "RDS"),
             identifier="uniquode-postgresql",
             engine="postgres",
             endpoint="uniquode.rds.amazonaws.com",
@@ -2110,6 +2225,31 @@ def test_aws_managed_database_context_validates_target_metadata(
     target = metadata_client.targets[0]
     assert target.db_instance_identifier == "uniquode-postgresql"
     assert target.client.region == "ap-southeast-2"
+
+
+def test_boto3_rds_metadata_client_does_not_resolve_external_id_key() -> None:
+    boto3 = _FakeBoto3Module()
+    client = Boto3RdsMetadataClient(import_module=lambda _name: boto3)
+    metadata = client.describe(
+        AwsManagedDatabaseSettings(
+            managed="rds",
+            client=AwsClientSettings(
+                region="ap-southeast-2",
+                role_arn="arn:aws:iam::123456789012:role/wybra",
+                external_id_source="keychain",
+                external_id_key="aws/rds/external-id",
+            ),
+            db_instance_identifier="uniquode-postgresql",
+        )
+    )
+
+    assert metadata.identifier == "uniquode-postgresql"
+    assert boto3.assume_role_calls == [
+        {
+            "RoleArn": "arn:aws:iam::123456789012:role/wybra",
+            "RoleSessionName": "wybra-database-provisioning",
+        }
+    ]
 
 
 @pytest.mark.parametrize(
