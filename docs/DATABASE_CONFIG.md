@@ -150,9 +150,87 @@ credential_source = "keychain"
 Wybra passes the socket path to the database backend without converting it into
 a TCP host name.
 
+## AWS RDS And Aurora
+
+AWS RDS and Aurora are managed-database overlays, not separate database
+families. Configure the underlying database backend as usual, then add AWS
+metadata so Wybra can validate the managed target before delegating database,
+schema, user, grant, migration, destroy, and maintenance work to the matching
+family provisioner.
+
+Install the AWS optional dependency where managed-target validation is needed:
+
+```sh
+uv add "wybra[aws]"
+```
+
+Shared AWS defaults belong under `[app.aws]`. Database-specific AWS settings
+belong under `[app.database.aws]` and override the shared values only for the
+database target:
+
+```toml
+[app.aws]
+region = "ap-southeast-2"
+profile = "production"
+role_arn = "arn:aws:iam::123456789012:role/wybra-database-provisioning"
+sso_region = "us-east-1"
+
+[app.database]
+backend = "postgresql"
+host = "uniquode.abc123.ap-southeast-2.rds.amazonaws.com"
+port = 5432
+database = "uniquode"
+credential_source = "keychain"
+
+[app.database.aws]
+managed = "rds"
+db_instance_identifier = "uniquode-postgresql"
+engine = "postgres"
+endpoint = "uniquode.abc123.ap-southeast-2.rds.amazonaws.com"
+port = 5432
+```
+
+For Aurora, use `managed = "aurora"` and `cluster_identifier`:
+
+```toml
+[app.database.aws]
+managed = "aurora"
+cluster_identifier = "uniquode-cluster"
+engine = "aurora-postgresql"
+```
+
+Wybra validates the observed managed target through the AWS SDK. It checks the
+engine family, identifier, account or partition when configured, and the
+endpoint and port when those values are configured. Supported AWS engines map
+to the existing PostgreSQL, MySQL, MariaDB, or SQL Server provisioners. Oracle
+engines remain unsupported until Wybra has first-class Oracle database support.
+
+AWS access keys and session tokens should not be stored in Wybra config. Use
+the normal AWS credential chain, such as environment, instance profile, shared
+AWS config, SSO, or an assumed role. ARNs, account IDs, profile names, regions,
+RDS identifiers, cluster identifiers, endpoints, and ports are treated as
+non-secret identifiers.
+
+If an assumed role requires an external id, configure either `external_id` or
+`external_id_key`. Use `external_id_key` when the value should be resolved from
+a secret source:
+
+```toml
+[app.aws]
+role_arn = "arn:aws:iam::123456789012:role/wybra-database-provisioning"
+external_id_source = "keychain"
+external_id_key = "aws/rds/external-id"
+```
+
+Wybra does not create, modify, or delete RDS instances, Aurora clusters, VPCs,
+subnet groups, security groups, KMS keys, backups, deletion protection, or any
+other AWS infrastructure in this change. Provision those resources with your
+cloud infrastructure tooling before running Wybra database lifecycle commands.
+
 ## Backend Dependencies
 
 SQLite support is available by default. Other database backends require the
 matching Wybra optional dependency, such as `wybra[postgresql]`,
 `wybra[psycopg]`, `wybra[mysql]`, `wybra[mariadb]`, `wybra[mssql]`, or
-`wybra[oracle]`.
+`wybra[oracle]`. AWS RDS and Aurora metadata validation additionally requires
+`wybra[aws]`.

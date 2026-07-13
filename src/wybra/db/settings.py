@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, cast
@@ -11,7 +11,11 @@ from typing import Any, Literal, Protocol, cast
 from wybra.config import ConfigService, CredentialReference
 from wybra.core.environment import environment_get
 from wybra.core.exceptions import ConfigurationError
-from wybra.db.config import DATABASE_CONFIG_SECTION
+from wybra.db.config import (
+    AWS_CONFIG_SECTION,
+    DATABASE_AWS_CONFIG_SECTION,
+    DATABASE_CONFIG_SECTION,
+)
 from wybra.db.urls import (
     DatabaseBackend,
     database_backend_for_scheme,
@@ -33,6 +37,7 @@ DATABASE_URL_FIELD = "database_url"
 DATABASE_URL_SOURCE_ENVIRONMENT = "environment"
 DatabaseConfigSource = Literal["url", "structured"]
 CredentialPurpose = Literal["runtime", "service_account"]
+AwsManagedTarget = Literal["rds", "aurora"]
 RESERVED_OPTION_KEYS = frozenset(
     {
         "database",
@@ -43,7 +48,6 @@ RESERVED_OPTION_KEYS = frozenset(
         "user",
     }
 )
-
 logger = logging.getLogger(__name__)
 
 
@@ -107,6 +111,392 @@ class ResolvedDatabaseCredentials:
 
 
 @dataclass(frozen=True, slots=True)
+class AwsClientSettings:
+    region: str | None = None
+    profile: str | None = None
+    account_id: str | None = None
+    partition: str = "aws"
+    role_arn: str | None = None
+    role_session_name: str | None = None
+    external_id: str | None = field(default=None, repr=False)
+    external_id_source: SecretSource | None = None
+    external_id_key: str | None = field(default=None, repr=False)
+    sso_region: str | None = None
+    sso_account_id: str | None = None
+    sso_role_name: str | None = None
+    sso_start_url: str | None = None
+    section_name: str = field(default=AWS_CONFIG_SECTION, compare=False, repr=False)
+
+    @classmethod
+    def from_values(
+        cls,
+        values: Mapping[str, Any],
+        *,
+        section_name: str,
+    ) -> AwsClientSettings:
+        unknown_fields = sorted(set(values) - _aws_client_fields())
+        if unknown_fields:
+            raise ConfigurationError(
+                f"Unknown option(s) in [{section_name}] configuration: "
+                + ", ".join(unknown_fields)
+                + "."
+            )
+        return cls(
+            region=cast(str | None, values.get("region")),
+            profile=cast(str | None, values.get("profile")),
+            account_id=cast(str | None, values.get("account_id")),
+            partition=cast(str | None, values.get("partition")) or "aws",
+            role_arn=cast(str | None, values.get("role_arn")),
+            role_session_name=cast(str | None, values.get("role_session_name")),
+            external_id=cast(str | None, values.get("external_id")),
+            external_id_source=cast(
+                SecretSource | None,
+                values.get("external_id_source"),
+            ),
+            external_id_key=cast(str | None, values.get("external_id_key")),
+            sso_region=cast(str | None, values.get("sso_region")),
+            sso_account_id=cast(str | None, values.get("sso_account_id")),
+            sso_role_name=cast(str | None, values.get("sso_role_name")),
+            sso_start_url=cast(str | None, values.get("sso_start_url")),
+            section_name=section_name,
+        )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "region",
+            _optional_aws_string(
+                self.region,
+                "region",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "profile",
+            _optional_aws_string(
+                self.profile,
+                "profile",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "account_id",
+            _optional_aws_string(
+                self.account_id,
+                "account_id",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "partition",
+            _optional_aws_string(
+                self.partition,
+                "partition",
+                section_name=self.section_name,
+            )
+            or "aws",
+        )
+        object.__setattr__(
+            self,
+            "role_arn",
+            _optional_aws_string(
+                self.role_arn,
+                "role_arn",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "role_session_name",
+            _optional_aws_string(
+                self.role_session_name,
+                "role_session_name",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "external_id",
+            _optional_aws_string(
+                self.external_id,
+                "external_id",
+                section_name=self.section_name,
+            ),
+        )
+        external_id_source = (
+            _optional_secret_source(
+                self.external_id_source,
+                name="external_id_source",
+            )
+            if self.external_id_source is not None
+            else None
+        )
+        object.__setattr__(self, "external_id_source", external_id_source)
+        object.__setattr__(
+            self,
+            "external_id_key",
+            _optional_aws_string(
+                self.external_id_key,
+                "external_id_key",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "sso_region",
+            _optional_aws_string(
+                self.sso_region,
+                "sso_region",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "sso_account_id",
+            _optional_aws_string(
+                self.sso_account_id,
+                "sso_account_id",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "sso_role_name",
+            _optional_aws_string(
+                self.sso_role_name,
+                "sso_role_name",
+                section_name=self.section_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "sso_start_url",
+            _optional_aws_string(
+                self.sso_start_url,
+                "sso_start_url",
+                section_name=self.section_name,
+            ),
+        )
+        if self.external_id is not None and self.external_id_key is not None:
+            raise ConfigurationError(
+                "external_id and external_id_key are mutually exclusive."
+            )
+        if self.external_id_key is not None and self.external_id_source is None:
+            raise ConfigurationError(
+                "external_id_source is required when external_id_key is configured."
+            )
+
+    @property
+    def configured(self) -> bool:
+        return (
+            any(
+                value is not None
+                for value in (
+                    self.region,
+                    self.profile,
+                    self.account_id,
+                    self.role_arn,
+                    self.role_session_name,
+                    self.external_id,
+                    self.external_id_source,
+                    self.external_id_key,
+                    self.sso_region,
+                    self.sso_account_id,
+                    self.sso_role_name,
+                    self.sso_start_url,
+                )
+            )
+            or self.partition != "aws"
+        )
+
+    def with_overrides(self, overrides: Mapping[str, Any]) -> AwsClientSettings:
+        return AwsClientSettings(
+            region=_aws_override(overrides, "region", self.region),
+            profile=_aws_override(overrides, "profile", self.profile),
+            account_id=_aws_override(overrides, "account_id", self.account_id),
+            partition=_aws_override(overrides, "partition", self.partition) or "aws",
+            role_arn=_aws_override(overrides, "role_arn", self.role_arn),
+            role_session_name=_aws_override(
+                overrides,
+                "role_session_name",
+                self.role_session_name,
+            ),
+            external_id=_aws_override(overrides, "external_id", self.external_id),
+            external_id_source=_aws_override(
+                overrides,
+                "external_id_source",
+                self.external_id_source,
+            ),
+            external_id_key=_aws_override(
+                overrides,
+                "external_id_key",
+                self.external_id_key,
+            ),
+            sso_region=_aws_override(overrides, "sso_region", self.sso_region),
+            sso_account_id=_aws_override(
+                overrides,
+                "sso_account_id",
+                self.sso_account_id,
+            ),
+            sso_role_name=_aws_override(
+                overrides,
+                "sso_role_name",
+                self.sso_role_name,
+            ),
+            sso_start_url=_aws_override(
+                overrides,
+                "sso_start_url",
+                self.sso_start_url,
+            ),
+            section_name=DATABASE_AWS_CONFIG_SECTION,
+        )
+
+    def resolved_external_id(
+        self,
+        *,
+        environ: object | None = None,
+        secrets: SecretsCapability | None = None,
+    ) -> str | None:
+        if self.external_id is not None:
+            return self.external_id
+        if self.external_id_key is None:
+            return None
+        if self.external_id_source is None:
+            raise ConfigurationError("external_id_source is required.")
+        if self.external_id_source == ENVIRONMENT_SOURCE:
+            return _resolve_credential_value(
+                None,
+                self.external_id_key,
+                source=self.external_id_source,
+                environ=environ,
+                secrets=None,
+                field_name="AWS external_id",
+            )
+        if secrets is None:
+            raise ConfigurationError(
+                "SecretsCapability is required to resolve AWS external_id."
+            )
+        try:
+            return secrets.resolve(
+                self.external_id_source, self.external_id_key
+            ).reveal()
+        except SecretsError as exc:
+            raise ConfigurationError(
+                "Failed to resolve AWS external_id: "
+                f"source={self.external_id_source} key={self.external_id_key}."
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class AwsManagedDatabaseSettings:
+    managed: AwsManagedTarget
+    client: AwsClientSettings
+    db_instance_identifier: str | None = None
+    cluster_identifier: str | None = None
+    engine: str | None = None
+    endpoint: str | None = None
+    port: int | None = None
+
+    @classmethod
+    def from_values(
+        cls,
+        values: Mapping[str, Any],
+        *,
+        shared: AwsClientSettings,
+    ) -> AwsManagedDatabaseSettings | None:
+        if not _aws_database_configured(values):
+            return None
+        unknown_fields = sorted(set(values) - _aws_database_fields())
+        if unknown_fields:
+            raise ConfigurationError(
+                f"Unknown option(s) in [{DATABASE_AWS_CONFIG_SECTION}] "
+                "configuration: " + ", ".join(unknown_fields) + "."
+            )
+        managed = _required_aws_managed_target(values.get("managed"))
+        client = shared.with_overrides(values)
+        return cls(
+            managed=managed,
+            client=client,
+            db_instance_identifier=cast(
+                str | None,
+                values.get("db_instance_identifier"),
+            ),
+            cluster_identifier=cast(str | None, values.get("cluster_identifier")),
+            engine=cast(str | None, values.get("engine")),
+            endpoint=cast(str | None, values.get("endpoint")),
+            port=cast(int | None, values.get("port")),
+        )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "db_instance_identifier",
+            _optional_aws_string(
+                self.db_instance_identifier,
+                "db_instance_identifier",
+                section_name=DATABASE_AWS_CONFIG_SECTION,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "cluster_identifier",
+            _optional_aws_string(
+                self.cluster_identifier,
+                "cluster_identifier",
+                section_name=DATABASE_AWS_CONFIG_SECTION,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "engine",
+            _optional_aws_string(
+                self.engine,
+                "engine",
+                section_name=DATABASE_AWS_CONFIG_SECTION,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "endpoint",
+            _optional_aws_string(
+                self.endpoint,
+                "endpoint",
+                section_name=DATABASE_AWS_CONFIG_SECTION,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "port",
+            _optional_positive_int(
+                self.port,
+                "port",
+                section_name=DATABASE_AWS_CONFIG_SECTION,
+            ),
+        )
+        if self.managed == "rds":
+            if self.db_instance_identifier is None:
+                raise ConfigurationError(
+                    "db_instance_identifier is required for AWS RDS targets."
+                )
+            if self.cluster_identifier is not None:
+                raise ConfigurationError(
+                    "cluster_identifier is not valid for AWS RDS targets."
+                )
+        if self.managed == "aurora":
+            if self.cluster_identifier is None:
+                raise ConfigurationError(
+                    "cluster_identifier is required for AWS Aurora targets."
+                )
+            if self.db_instance_identifier is not None:
+                raise ConfigurationError(
+                    "db_instance_identifier is not valid for AWS Aurora targets."
+                )
+
+
+@dataclass(frozen=True, slots=True)
 class StructuredDatabaseConfig:
     backend: str
     database: str
@@ -123,11 +513,15 @@ class StructuredDatabaseConfig:
         default_factory=DatabaseCredentialConfig,
         repr=False,
     )
+    aws: AwsManagedDatabaseSettings | None = None
 
     @classmethod
     def from_values(
         cls,
         values: Mapping[str, Any],
+        *,
+        shared_aws_values: Mapping[str, Any] | None = None,
+        database_aws_values: Mapping[str, Any] | None = None,
     ) -> StructuredDatabaseConfig:
         unknown_fields = sorted(set(values) - _structured_database_fields())
         if unknown_fields:
@@ -160,6 +554,15 @@ class StructuredDatabaseConfig:
             )
         )
 
+        shared_aws = AwsClientSettings.from_values(
+            shared_aws_values or {},
+            section_name=AWS_CONFIG_SECTION,
+        )
+        database_aws = AwsManagedDatabaseSettings.from_values(
+            database_aws_values or {},
+            shared=shared_aws,
+        )
+
         return cls(
             backend=cast(str, backend),
             database=cast(str, values.get("database")),
@@ -173,6 +576,7 @@ class StructuredDatabaseConfig:
             ),
             runtime_credentials=runtime_credentials,
             service_account_credentials=service_account_credentials,
+            aws=database_aws,
         )
 
     def __post_init__(self) -> None:
@@ -261,13 +665,19 @@ class StructuredDatabaseConfig:
         return backend
 
     def requires_secret_capability_for(self, purpose: CredentialPurpose) -> bool:
-        if self.backend_info.tortoise_scheme == "sqlite":
-            return False
-        return (
-            self.credential_source is not None
+        requires_database_secret = (
+            self.backend_info.tortoise_scheme != "sqlite"
+            and self.credential_source is not None
             and self.credential_source != ENVIRONMENT_SOURCE
             and self.credential_config(purpose).has_keys
         )
+        requires_aws_secret = (
+            purpose == "service_account"
+            and self.aws is not None
+            and self.aws.client.external_id_key is not None
+            and self.aws.client.external_id_source != ENVIRONMENT_SOURCE
+        )
+        return requires_database_secret or requires_aws_secret
 
     def credential_config(self, purpose: CredentialPurpose) -> DatabaseCredentialConfig:
         if purpose == "runtime":
@@ -407,6 +817,7 @@ class ResolvedDatabaseConnection:
     database_url: str | None = field(default=None, repr=False)
     credentials: Mapping[str, Any] = field(default_factory=dict, repr=False)
     sa_database: str | None = None
+    aws: AwsManagedDatabaseSettings | None = None
 
     @classmethod
     def from_url(
@@ -424,12 +835,14 @@ class ResolvedDatabaseConnection:
         backend: DatabaseBackend,
         credentials: Mapping[str, Any],
         sa_database: str | None = None,
+        aws: AwsManagedDatabaseSettings | None = None,
     ) -> ResolvedDatabaseConnection:
         return cls(
             source="structured",
             backend=backend,
             credentials=MappingProxyType(dict(credentials)),
             sa_database=sa_database,
+            aws=aws,
         )
 
     @property
@@ -467,6 +880,8 @@ def effective_database_config_from_config(
 
     app_values = _section_values(config, APP_CONFIG_SECTION)
     structured_values = _section_values(config, DATABASE_CONFIG_SECTION)
+    shared_aws_values = _section_values(config, AWS_CONFIG_SECTION)
+    database_aws_values = _section_values(config, DATABASE_AWS_CONFIG_SECTION)
     database_url = _configured_database_url(
         app_values.get(DATABASE_URL_FIELD),
         configured_database_url,
@@ -491,7 +906,11 @@ def effective_database_config_from_config(
                 "[app].database_url to avoid dead database configuration."
             )
         return EffectiveDatabaseConfig.from_structured(
-            StructuredDatabaseConfig.from_values(structured_values),
+            StructuredDatabaseConfig.from_values(
+                structured_values,
+                shared_aws_values=shared_aws_values,
+                database_aws_values=database_aws_values,
+            ),
             project_root=project_root,
         )
 
@@ -646,10 +1065,17 @@ def _resolve_structured_database_connection(
         structured,
         project_root=project_root,
     )
+    aws = _resolve_aws_managed_database_settings(
+        structured.aws,
+        environ=environ,
+        secrets=secrets,
+        purpose=purpose,
+    )
     if backend.tortoise_scheme == "sqlite":
         return ResolvedDatabaseConnection.from_structured(
             backend=backend,
             credentials=credentials,
+            aws=aws,
         )
     resolved_credentials = _resolve_credentials(
         structured.credential_config(purpose),
@@ -666,7 +1092,31 @@ def _resolve_structured_database_connection(
         backend=backend,
         credentials=credentials,
         sa_database=structured.sa_database if purpose == "service_account" else None,
+        aws=aws,
     )
+
+
+def _resolve_aws_managed_database_settings(
+    aws: AwsManagedDatabaseSettings | None,
+    *,
+    environ: object | None,
+    secrets: SecretsCapability | None,
+    purpose: CredentialPurpose,
+) -> AwsManagedDatabaseSettings | None:
+    if aws is None or purpose != "service_account":
+        return aws
+    external_id = aws.client.resolved_external_id(environ=environ, secrets=secrets)
+    if external_id is None or aws.client.external_id_key is None:
+        return aws
+    # Service-account settings carry the resolved value only; source/key remain
+    # on the original runtime settings where they are still useful diagnostics.
+    client = replace(
+        aws.client,
+        external_id=external_id,
+        external_id_source=None,
+        external_id_key=None,
+    )
+    return replace(aws, client=client)
 
 
 def _structured_backend_credentials(
@@ -926,6 +1376,61 @@ def _structured_database_fields() -> frozenset[str]:
     )
 
 
+def _aws_client_fields() -> frozenset[str]:
+    return frozenset(
+        {
+            "region",
+            "profile",
+            "account_id",
+            "partition",
+            "role_arn",
+            "role_session_name",
+            "external_id",
+            "external_id_source",
+            "external_id_key",
+            "sso_region",
+            "sso_account_id",
+            "sso_role_name",
+            "sso_start_url",
+        }
+    )
+
+
+def _aws_database_fields() -> frozenset[str]:
+    return frozenset(
+        {
+            "managed",
+            "db_instance_identifier",
+            "cluster_identifier",
+            "engine",
+            "endpoint",
+            "port",
+            *_aws_client_fields(),
+        }
+    )
+
+
+def _aws_database_configured(values: Mapping[str, Any]) -> bool:
+    return any(value is not None for value in values.values())
+
+
+def _aws_override[AwsOverrideT](
+    values: Mapping[str, Any],
+    field_name: str,
+    default: AwsOverrideT,
+) -> AwsOverrideT:
+    value = values.get(field_name)
+    return default if value is None else cast(AwsOverrideT, value)
+
+
+def _required_aws_managed_target(value: object) -> AwsManagedTarget:
+    if isinstance(value, str):
+        target = value.strip().lower()
+        if target in {"rds", "aurora"}:
+            return cast(AwsManagedTarget, target)
+    raise ConfigurationError("AWS database managed target must be rds or aurora.")
+
+
 def _normalise_options(value: object) -> Mapping[str, Any]:
     if value is None:
         return {}
@@ -941,10 +1446,29 @@ def _normalise_options(value: object) -> Mapping[str, Any]:
     return options
 
 
-def _optional_secret_source(value: object) -> SecretSource | None:
+def _optional_secret_source(
+    value: object,
+    *,
+    name: str = "credential_source",
+) -> SecretSource | None:
     if value is None:
         return None
-    return normalise_secret_source(value, name="credential_source")
+    return normalise_secret_source(value, name=name)
+
+
+def _optional_aws_string(
+    value: object,
+    field_name: str,
+    *,
+    section_name: str,
+) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise ConfigurationError(
+        f"[{section_name}].{field_name} must be a non-blank string."
+    )
 
 
 def _required_non_blank_string(value: object, field_name: str) -> str:
@@ -961,12 +1485,17 @@ def _optional_non_blank_string(value: object, field_name: str) -> str | None:
     raise ConfigurationError(f"[app.database].{field_name} must be a non-blank string.")
 
 
-def _optional_positive_int(value: object, field_name: str) -> int | None:
+def _optional_positive_int(
+    value: object,
+    field_name: str,
+    *,
+    section_name: str = DATABASE_CONFIG_SECTION,
+) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool):
         raise ConfigurationError(
-            f"[app.database].{field_name} must be a positive integer."
+            f"[{section_name}].{field_name} must be a positive integer."
         )
     if isinstance(value, int):
         parsed = value
@@ -975,15 +1504,15 @@ def _optional_positive_int(value: object, field_name: str) -> int | None:
             parsed = int(value)
         except ValueError as exc:
             raise ConfigurationError(
-                f"[app.database].{field_name} must be a positive integer."
+                f"[{section_name}].{field_name} must be a positive integer."
             ) from exc
     else:
         raise ConfigurationError(
-            f"[app.database].{field_name} must be a positive integer."
+            f"[{section_name}].{field_name} must be a positive integer."
         )
     if parsed <= 0:
         raise ConfigurationError(
-            f"[app.database].{field_name} must be a positive integer."
+            f"[{section_name}].{field_name} must be a positive integer."
         )
     return parsed
 
@@ -1004,6 +1533,9 @@ def _reject_plain_and_key(
 
 __all__ = (
     "CredentialPurpose",
+    "AwsClientSettings",
+    "AwsManagedDatabaseSettings",
+    "AwsManagedTarget",
     "DatabaseConfigProtocol",
     "DatabaseConfigSource",
     "DatabaseCredentialConfig",
