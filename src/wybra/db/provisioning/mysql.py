@@ -441,9 +441,9 @@ class MySQLProvisioner:
             rows = await _fetchall(
                 connection,
                 render_sql(
-                    t"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST "
-                    t"WHERE DB = {param(database)} "
-                    t"AND ID <> {param(current_connection_id)}",
+                    t"SELECT PROCESSLIST_ID FROM performance_schema.threads "
+                    t"WHERE PROCESSLIST_DB = {param(database)} "
+                    t"AND PROCESSLIST_ID <> {param(current_connection_id)}",
                     dialect="mysql",
                     quote_identifier=quote_mysql_identifier,
                 ),
@@ -456,6 +456,8 @@ class MySQLProvisioner:
                     row[0],
                     message=f"{self.label} process id was invalid.",
                 )
+                if process_id == current_connection_id:
+                    continue
                 await _execute(
                     connection,
                     render_sql(

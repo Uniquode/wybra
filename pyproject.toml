@@ -96,16 +96,22 @@ module-name = ["wybra"]
 
 [dependency-groups]
 dev = [
+    "aiomysql>=0.3.2",
+    "asyncodbc>=0.1.1",
+    "asyncpg>=0.31.0",
     "httpx2>=2.5.0",
     "pre-commit>=4.6.0",
+    "psycopg[binary,pool]>=3.0.12,<4.0.0",
+    "pyodbc>=5.3.0",
     "pytest>=9.1.1",
     "ruff>=0.15.20",
+    "testcontainers[mssql,mysql]>=4.14.2",
     "ty>=0.0.56",
 ]
 
 [tool.ruff]
 line-length = 88
-src = ["src", "tests"]
+src = ["src", "tests", "tests_integration", "tests_support"]
 target-version = "py314"
 
 [tool.ruff.lint]
@@ -119,4 +125,4 @@ include = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
