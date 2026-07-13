@@ -4,7 +4,7 @@ import importlib
 import inspect
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from wybra.db.provisioning.core import (
     DatabaseFamily,
@@ -34,6 +34,7 @@ _MYSQL_MAINTENANCE_TASKS = (
         description="Report Tortoise migration recorder state.",
     ),
 )
+GrantScope = Literal["target", "external", "unsupported"]
 
 
 class MySQLConnection(Protocol):
@@ -56,57 +57,66 @@ MySQLConnector = Callable[
 
 class MySQLProvisioner:
     family: DatabaseFamily = "mysql"
+    label = "MySQL"
+    install_extra = "mysql"
 
     def __init__(self, connector: MySQLConnector | None = None) -> None:
-        self._connector = connector or _connect_driver_mysql
+        self._connector = connector or self._connect_driver
 
     async def initialise(
         self,
         context: ProvisioningContext,
     ) -> tuple[ProvisioningPhaseResult, ...]:
-        _ensure_mysql_context(context)
+        _ensure_mysql_compatible_context(context, self.family)
         runtime_connection = context.runtime_connection
         service_connection = _service_account_connection(context, phase="init")
-        target_database = _target_database(runtime_connection)
+        target_database = _target_database(runtime_connection, label=self.label)
         app_user = _required_credential(
             runtime_connection,
             "user",
-            "MySQL init requires a runtime application database user.",
+            f"{self.label} init requires a runtime application database user.",
         )
         app_password = _required_credential(
             runtime_connection,
             "password",
-            "MySQL init requires a runtime application database password.",
+            f"{self.label} init requires a runtime application database password.",
         )
 
         maintenance = await self._connect(service_connection)
         try:
             results: list[ProvisioningPhaseResult] = []
-            database_created = await _ensure_database(maintenance, target_database)
+            database_created = await _ensure_database(
+                maintenance,
+                target_database,
+                label=self.label,
+            )
             results.append(
                 _result(
+                    self.family,
                     "init",
                     "created" if database_created else "skipped",
                     (
-                        f"Created MySQL database: {target_database}"
+                        f"Created {self.label} database: {target_database}"
                         if database_created
-                        else f"MySQL database already exists: {target_database}"
+                        else f"{self.label} database already exists: {target_database}"
                     ),
                 )
             )
-            user_created = await _ensure_application_user(
+            user_created = await self._ensure_application_user(
                 maintenance,
                 app_user=app_user,
                 app_password=app_password,
             )
             results.append(
                 _result(
+                    self.family,
                     "init",
                     "created" if user_created else "skipped",
                     (
-                        f"Created MySQL application user: {app_user}"
+                        f"Created {self.label} application user: {app_user}"
                         if user_created
-                        else f"Refreshed MySQL application user password: {app_user}"
+                        else f"Refreshed {self.label} application user password: "
+                        f"{app_user}"
                     ),
                 )
             )
@@ -114,15 +124,24 @@ class MySQLProvisioner:
                 maintenance,
                 database=target_database,
                 app_user=app_user,
+                label=self.label,
             )
             results.append(
                 _result(
+                    self.family,
                     "init",
                     "skipped",
-                    f"Repaired MySQL runtime privileges for user: {app_user}",
+                    f"Repaired {self.label} runtime privileges for user: {app_user}",
                 )
             )
-            results.append(await _migration_state_result(maintenance, target_database))
+            results.append(
+                await _migration_state_result(
+                    maintenance,
+                    target_database,
+                    family=self.family,
+                    label=self.label,
+                )
+            )
             return tuple(results)
         finally:
             await maintenance.close()
@@ -132,38 +151,40 @@ class MySQLProvisioner:
         context: ProvisioningContext,
         request: DestroyDatabaseRequest,
     ) -> tuple[ProvisioningPhaseResult, ...]:
-        _ensure_mysql_context(context)
+        _ensure_mysql_compatible_context(context, self.family)
         runtime_connection = context.runtime_connection
         service_connection = _service_account_connection(context, phase="destroy")
-        target_database = _target_database(runtime_connection)
+        target_database = _target_database(runtime_connection, label=self.label)
         service_user = _required_credential(
             service_connection,
             "user",
-            "MySQL destroy requires a service-account database user.",
+            f"{self.label} destroy requires a service-account database user.",
         )
         app_user = _required_credential(
             runtime_connection,
             "user",
-            "MySQL destroy requires a runtime application database user.",
+            f"{self.label} destroy requires a runtime application database user.",
         )
-        _ensure_destroy_confirmed(target_database, request)
+        _ensure_destroy_confirmed(target_database, request, label=self.label)
 
         maintenance = await self._connect(service_connection)
         try:
             results: list[ProvisioningPhaseResult] = []
-            database_exists = await _database_exists(maintenance, target_database)
-            user_exists = await _user_exists(maintenance, app_user)
-            user_has_external_grants = (
-                user_exists
-                and app_user != service_user
-                and await _user_has_external_grants(
+            database_exists = await _database_exists(
+                maintenance,
+                target_database,
+                label=self.label,
+            )
+            user_exists = await self._user_exists(maintenance, app_user)
+            grant_scope: GrantScope = "target"
+            if user_exists and app_user != service_user:
+                grant_scope = await self._user_grant_scope(
                     maintenance,
                     app_user=app_user,
                     target_database=target_database,
                 )
-            )
             if database_exists:
-                await _terminate_database_sessions(maintenance, target_database)
+                await self._terminate_database_sessions(maintenance, target_database)
                 await _execute(
                     maintenance,
                     render_sql(
@@ -171,46 +192,64 @@ class MySQLProvisioner:
                         dialect="mysql",
                         quote_identifier=quote_mysql_identifier,
                     ),
+                    label=self.label,
                 )
                 results.append(
                     _result(
+                        self.family,
                         "destroy",
                         "removed",
-                        f"Removed MySQL database: {target_database}",
+                        f"Removed {self.label} database: {target_database}",
                     )
                 )
             else:
                 results.append(
                     _result(
+                        self.family,
                         "destroy",
                         "skipped",
-                        f"MySQL database already absent: {target_database}",
+                        f"{self.label} database already absent: {target_database}",
                     )
                 )
 
             if not user_exists:
                 results.append(
                     _result(
+                        self.family,
                         "destroy",
                         "skipped",
-                        f"MySQL application user already absent: {app_user}",
+                        f"{self.label} application user already absent: {app_user}",
                     )
                 )
             elif app_user == service_user:
                 results.append(
                     _result(
+                        self.family,
                         "destroy",
                         "skipped",
-                        "Skipped MySQL application user removal because runtime "
+                        f"Skipped {self.label} application user removal because "
+                        "runtime "
                         "and service-account users are the same.",
                     )
                 )
-            elif user_has_external_grants:
+            elif grant_scope == "unsupported":
                 results.append(
                     _result(
+                        self.family,
+                        "destroy",
+                        "unsupported",
+                        f"Skipped {self.label} application user removal because "
+                        "grant scope could not be classified safely.",
+                    )
+                )
+            elif grant_scope == "external":
+                results.append(
+                    _result(
+                        self.family,
                         "destroy",
                         "skipped",
-                        "Skipped MySQL application user removal because the user "
+                        f"Skipped {self.label} application user removal because "
+                        "the user "
                         f"has grants outside {target_database}.",
                     )
                 )
@@ -222,12 +261,14 @@ class MySQLProvisioner:
                         dialect="mysql",
                         quote_identifier=quote_mysql_identifier,
                     ),
+                    label=self.label,
                 )
                 results.append(
                     _result(
+                        self.family,
                         "destroy",
                         "removed",
-                        f"Removed MySQL application user: {app_user}",
+                        f"Removed {self.label} application user: {app_user}",
                     )
                 )
             return tuple(results)
@@ -238,7 +279,7 @@ class MySQLProvisioner:
         self,
         context: ProvisioningContext,
     ) -> tuple[DatabaseMaintenanceTask, ...]:
-        _ensure_mysql_context(context)
+        _ensure_mysql_compatible_context(context, self.family)
         return _MYSQL_MAINTENANCE_TASKS
 
     async def run_maintenance(
@@ -246,13 +287,13 @@ class MySQLProvisioner:
         context: ProvisioningContext,
         request: DatabaseMaintenanceRequest,
     ) -> tuple[ProvisioningPhaseResult, ...]:
-        _ensure_mysql_context(context)
+        _ensure_mysql_compatible_context(context, self.family)
         task = request.task.strip()
         if task not in {
             maintenance_task.name for maintenance_task in _MYSQL_MAINTENANCE_TASKS
         }:
             raise DatabaseProvisioningConfigurationError(
-                f"Unknown mysql maintenance task: {request.task}."
+                f"Unknown {self.family} maintenance task: {request.task}."
             )
 
         runtime_connection = context.runtime_connection
@@ -260,11 +301,11 @@ class MySQLProvisioner:
             context,
             phase=f"maintenance:{task}",
         )
-        target_database = _target_database(runtime_connection)
+        target_database = _target_database(runtime_connection, label=self.label)
         app_user = _required_credential(
             runtime_connection,
             "user",
-            "MySQL maintenance requires a runtime application database user.",
+            f"{self.label} maintenance requires a runtime application database user.",
         )
 
         maintenance = await self._connect(service_connection)
@@ -274,12 +315,15 @@ class MySQLProvisioner:
                     maintenance,
                     database=target_database,
                     app_user=app_user,
+                    label=self.label,
                 )
                 return (
                     _result(
+                        self.family,
                         "maintenance",
                         "skipped",
-                        f"Repaired MySQL runtime privileges for user: {app_user}",
+                        f"Repaired {self.label} runtime privileges for user: "
+                        f"{app_user}",
                     ),
                 )
             return (
@@ -287,6 +331,8 @@ class MySQLProvisioner:
                     maintenance,
                     target_database,
                     phase="maintenance",
+                    family=self.family,
+                    label=self.label,
                 ),
             )
         finally:
@@ -308,8 +354,156 @@ class MySQLProvisioner:
             raise
         except Exception as exc:
             raise DatabaseProvisioningOperationError(
-                "Failed to connect to MySQL server for database lifecycle."
+                f"Failed to connect to {self.label} server for database lifecycle."
             ) from exc
+
+    async def _connect_driver(
+        self,
+        credentials: Mapping[str, object],
+    ) -> MySQLConnection:
+        return await _connect_driver_mysql(
+            credentials,
+            label=self.label,
+            install_extra=self.install_extra,
+            import_module=importlib.import_module,
+        )
+
+    async def _ensure_application_user(
+        self,
+        connection: MySQLConnection,
+        *,
+        app_user: str,
+        app_password: str,
+    ) -> bool:
+        account = _account_name(app_user, escape_percent=True)
+        if await self._user_exists(connection, app_user):
+            await _execute(
+                connection,
+                render_sql(
+                    t"ALTER USER {trusted_sql(account)} "
+                    t"IDENTIFIED BY {param(app_password)}",
+                    dialect="mysql",
+                    quote_identifier=quote_mysql_identifier,
+                ),
+                label=self.label,
+            )
+            return False
+
+        await _execute(
+            connection,
+            render_sql(
+                t"CREATE USER {trusted_sql(account)} IDENTIFIED BY "
+                t"{param(app_password)}",
+                dialect="mysql",
+                quote_identifier=quote_mysql_identifier,
+            ),
+            label=self.label,
+        )
+        return True
+
+    async def _user_exists(self, connection: MySQLConnection, app_user: str) -> bool:
+        count = await _fetchval(
+            connection,
+            self._user_exists_statement(app_user),
+            label=self.label,
+        )
+        return _normalise_count(count, label=self.label) > 0
+
+    def _user_exists_statement(self, app_user: str) -> RenderedSql:
+        return render_sql(
+            t"SELECT COUNT(*) FROM mysql.user "
+            t"WHERE User = {param(app_user)} AND Host = {param(_MYSQL_ACCOUNT_HOST)}",
+            dialect="mysql",
+            quote_identifier=quote_mysql_identifier,
+        )
+
+    async def _terminate_database_sessions(
+        self,
+        connection: MySQLConnection,
+        database: str,
+    ) -> None:
+        try:
+            current_connection_id = _normalise_integer(
+                await _fetchval(
+                    connection,
+                    render_sql(
+                        t"SELECT CONNECTION_ID()",
+                        dialect="mysql",
+                        quote_identifier=quote_mysql_identifier,
+                    ),
+                    label=self.label,
+                ),
+                message=f"{self.label} connection id was invalid.",
+            )
+            rows = await _fetchall(
+                connection,
+                render_sql(
+                    t"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST "
+                    t"WHERE DB = {param(database)} "
+                    t"AND ID <> {param(current_connection_id)}",
+                    dialect="mysql",
+                    quote_identifier=quote_mysql_identifier,
+                ),
+                label=self.label,
+            )
+            for row in rows:
+                if not row:
+                    continue
+                process_id = _normalise_integer(
+                    row[0],
+                    message=f"{self.label} process id was invalid.",
+                )
+                await _execute(
+                    connection,
+                    render_sql(
+                        t"KILL {trusted_sql(str(process_id))}",
+                        dialect="mysql",
+                        quote_identifier=quote_mysql_identifier,
+                    ),
+                    label=self.label,
+                )
+        except DatabaseProvisioningOperationError as exc:
+            raise DatabaseProvisioningOperationError(
+                f"Failed to terminate {self.label} sessions for target database."
+            ) from exc
+
+    async def _user_grant_scope(
+        self,
+        connection: MySQLConnection,
+        *,
+        app_user: str,
+        target_database: str,
+    ) -> GrantScope:
+        rows = await _fetchall(
+            connection,
+            render_sql(
+                t"SHOW GRANTS FOR {trusted_sql(_account_name(app_user))}",
+                dialect="mysql",
+                quote_identifier=quote_mysql_identifier,
+            ),
+            label=self.label,
+        )
+        grants = tuple(str(row[0]) for row in rows if row)
+        grant_scope: GrantScope = "target"
+        for grant in grants:
+            scope = self._grant_scope(grant, target_database=target_database)
+            if scope == "unsupported":
+                return "unsupported"
+            if scope == "external":
+                grant_scope = "external"
+        return grant_scope
+
+    def _grant_scope(
+        self,
+        grant: str,
+        *,
+        target_database: str,
+    ) -> GrantScope:
+        return _grant_scope_from_show_grants(
+            grant,
+            target_database=target_database,
+            unsupported_without_scope=False,
+        )
 
 
 class _DriverMySQLConnection:
@@ -350,11 +544,17 @@ class _DriverMySQLConnection:
         return None
 
 
-async def _connect_driver_mysql(credentials: Mapping[str, object]) -> MySQLConnection:
+async def _connect_driver_mysql(
+    credentials: Mapping[str, object],
+    *,
+    label: str = "MySQL",
+    install_extra: str = "mysql",
+    import_module: Callable[[str], Any] = importlib.import_module,
+) -> MySQLConnection:
     import_errors: list[ImportError] = []
     for module_name in ("asyncmy", "aiomysql"):
         try:
-            mysql = importlib.import_module(module_name)
+            mysql = import_module(module_name)
         except ImportError as exc:  # pragma: no cover - depends on installed extras
             import_errors.append(exc)
             continue
@@ -365,7 +565,7 @@ async def _connect_driver_mysql(credentials: Mapping[str, object]) -> MySQLConne
 
     cause = import_errors[-1] if import_errors else None
     raise DatabaseProvisioningConfigurationError(
-        "MySQL provisioning requires the wybra[mysql] optional dependency."
+        f"{label} provisioning requires the wybra[{install_extra}] optional dependency."
     ) from cause
 
 
@@ -379,8 +579,13 @@ def _driver_credentials(credentials: Mapping[str, object]) -> dict[str, object]:
     return driver_credentials
 
 
-async def _ensure_database(connection: MySQLConnection, database: str) -> bool:
-    database_exists = await _database_exists(connection, database)
+async def _ensure_database(
+    connection: MySQLConnection,
+    database: str,
+    *,
+    label: str = "MySQL",
+) -> bool:
+    database_exists = await _database_exists(connection, database, label=label)
     if database_exists:
         return False
     await _execute(
@@ -390,11 +595,17 @@ async def _ensure_database(connection: MySQLConnection, database: str) -> bool:
             dialect="mysql",
             quote_identifier=quote_mysql_identifier,
         ),
+        label=label,
     )
     return True
 
 
-async def _database_exists(connection: MySQLConnection, database: str) -> bool:
+async def _database_exists(
+    connection: MySQLConnection,
+    database: str,
+    *,
+    label: str = "MySQL",
+) -> bool:
     count = await _fetchval(
         connection,
         render_sql(
@@ -403,51 +614,9 @@ async def _database_exists(connection: MySQLConnection, database: str) -> bool:
             dialect="mysql",
             quote_identifier=quote_mysql_identifier,
         ),
+        label=label,
     )
-    return _normalise_count(count) > 0
-
-
-async def _ensure_application_user(
-    connection: MySQLConnection,
-    *,
-    app_user: str,
-    app_password: str,
-) -> bool:
-    account = _account_name(app_user, escape_percent=True)
-    if await _user_exists(connection, app_user):
-        await _execute(
-            connection,
-            render_sql(
-                t"ALTER USER {trusted_sql(account)} "
-                t"IDENTIFIED BY {param(app_password)}",
-                dialect="mysql",
-                quote_identifier=quote_mysql_identifier,
-            ),
-        )
-        return False
-
-    await _execute(
-        connection,
-        render_sql(
-            t"CREATE USER {trusted_sql(account)} IDENTIFIED BY {param(app_password)}",
-            dialect="mysql",
-            quote_identifier=quote_mysql_identifier,
-        ),
-    )
-    return True
-
-
-async def _user_exists(connection: MySQLConnection, app_user: str) -> bool:
-    count = await _fetchval(
-        connection,
-        render_sql(
-            t"SELECT COUNT(*) FROM mysql.user "
-            t"WHERE User = {param(app_user)} AND Host = {param(_MYSQL_ACCOUNT_HOST)}",
-            dialect="mysql",
-            quote_identifier=quote_mysql_identifier,
-        ),
-    )
-    return _normalise_count(count) > 0
+    return _normalise_count(count, label=label) > 0
 
 
 async def _repair_privileges(
@@ -455,6 +624,7 @@ async def _repair_privileges(
     *,
     database: str,
     app_user: str,
+    label: str = "MySQL",
 ) -> None:
     await _execute(
         connection,
@@ -464,54 +634,8 @@ async def _repair_privileges(
             dialect="mysql",
             quote_identifier=quote_mysql_identifier,
         ),
+        label=label,
     )
-
-
-async def _terminate_database_sessions(
-    connection: MySQLConnection,
-    database: str,
-) -> None:
-    try:
-        current_connection_id = _normalise_integer(
-            await _fetchval(
-                connection,
-                render_sql(
-                    t"SELECT CONNECTION_ID()",
-                    dialect="mysql",
-                    quote_identifier=quote_mysql_identifier,
-                ),
-            ),
-            message="MySQL connection id was invalid.",
-        )
-        rows = await _fetchall(
-            connection,
-            render_sql(
-                t"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST "
-                t"WHERE DB = {param(database)} "
-                t"AND ID <> {param(current_connection_id)}",
-                dialect="mysql",
-                quote_identifier=quote_mysql_identifier,
-            ),
-        )
-        for row in rows:
-            if not row:
-                continue
-            process_id = _normalise_integer(
-                row[0],
-                message="MySQL process id was invalid.",
-            )
-            await _execute(
-                connection,
-                render_sql(
-                    t"KILL {trusted_sql(str(process_id))}",
-                    dialect="mysql",
-                    quote_identifier=quote_mysql_identifier,
-                ),
-            )
-    except DatabaseProvisioningOperationError as exc:
-        raise DatabaseProvisioningOperationError(
-            "Failed to terminate MySQL sessions for target database."
-        ) from exc
 
 
 async def _migration_state_result(
@@ -519,6 +643,8 @@ async def _migration_state_result(
     database: str,
     *,
     phase: ProvisioningPhase = "init",
+    family: DatabaseFamily = "mysql",
+    label: str = "MySQL",
 ) -> ProvisioningPhaseResult:
     table_count = await _fetchval(
         connection,
@@ -529,9 +655,11 @@ async def _migration_state_result(
             dialect="mysql",
             quote_identifier=quote_mysql_identifier,
         ),
+        label=label,
     )
-    if _normalise_count(table_count) == 0:
+    if _normalise_count(table_count, label=label) == 0:
         return _result(
+            family,
             phase,
             "noop",
             "Tortoise migration recorder table is absent.",
@@ -546,88 +674,95 @@ async def _migration_state_result(
                 dialect="mysql",
                 quote_identifier=quote_mysql_identifier,
             ),
-        )
+            label=label,
+        ),
+        label=label,
     )
     if migration_count == 0:
         return _result(
+            family,
             phase,
             "noop",
             "Tortoise migration recorder table is empty.",
         )
     return _result(
+        family,
         phase,
         "noop",
         f"Tortoise migration recorder contains {migration_count} record(s).",
     )
 
 
-async def _user_has_external_grants(
-    connection: MySQLConnection,
+def _grant_scope_from_show_grants(
+    grant: str,
     *,
-    app_user: str,
     target_database: str,
-) -> bool:
-    rows = await _fetchall(
-        connection,
-        render_sql(
-            t"SHOW GRANTS FOR {trusted_sql(_account_name(app_user))}",
-            dialect="mysql",
-            quote_identifier=quote_mysql_identifier,
-        ),
-    )
-    grants = tuple(str(row[0]) for row in rows if row)
-    return any(
-        _grant_has_external_scope(grant, target_database=target_database)
-        for grant in grants
-    )
-
-
-def _grant_has_external_scope(grant: str, *, target_database: str) -> bool:
+    unsupported_without_scope: bool,
+) -> GrantScope:
     scope_match = re.search(r"\bON\s+(.+?)\s+TO\b", grant, flags=re.IGNORECASE)
     if scope_match is None:
-        return True
+        return "unsupported" if unsupported_without_scope else "external"
 
     scope = scope_match.group(1).strip()
     if scope == "*.*":
-        return not grant.upper().startswith("GRANT USAGE ON *.*")
+        return (
+            "target" if grant.upper().startswith("GRANT USAGE ON *.*") else "external"
+        )
 
-    return not scope.startswith(f"{quote_mysql_identifier(target_database)}.")
+    if scope.startswith(f"{quote_mysql_identifier(target_database)}."):
+        return "target"
+    return "external"
 
 
-async def _execute(connection: MySQLConnection, statement: RenderedSql) -> object:
+async def _execute(
+    connection: MySQLConnection,
+    statement: RenderedSql,
+    *,
+    label: str = "MySQL",
+) -> object:
     try:
         return await connection.execute(statement.statement, *statement.parameters)
     except Exception as exc:
         raise DatabaseProvisioningOperationError(
-            "MySQL provisioning statement failed."
+            f"{label} provisioning statement failed."
         ) from exc
 
 
-async def _fetchval(connection: MySQLConnection, statement: RenderedSql) -> object:
+async def _fetchval(
+    connection: MySQLConnection,
+    statement: RenderedSql,
+    *,
+    label: str = "MySQL",
+) -> object:
     try:
         return await connection.fetchval(statement.statement, *statement.parameters)
     except Exception as exc:
         raise DatabaseProvisioningOperationError(
-            "MySQL provisioning query failed."
+            f"{label} provisioning query failed."
         ) from exc
 
 
 async def _fetchall(
     connection: MySQLConnection,
     statement: RenderedSql,
+    *,
+    label: str = "MySQL",
 ) -> tuple[tuple[object, ...], ...]:
     try:
         return await connection.fetchall(statement.statement, *statement.parameters)
     except Exception as exc:
         raise DatabaseProvisioningOperationError(
-            "MySQL provisioning query failed."
+            f"{label} provisioning query failed."
         ) from exc
 
 
-def _ensure_mysql_context(context: ProvisioningContext) -> None:
-    if context.family != "mysql":
+def _ensure_mysql_compatible_context(
+    context: ProvisioningContext,
+    family: DatabaseFamily,
+) -> None:
+    if context.family != family:
         raise DatabaseProvisioningConfigurationError(
-            f"Provisioner mysql cannot handle database family {context.family}."
+            f"Provisioner {family} cannot handle database family {context.family}."
         )
 
 
@@ -654,11 +789,15 @@ def _service_account_connection(
     return connection
 
 
-def _target_database(connection: ResolvedDatabaseConnection) -> str:
+def _target_database(
+    connection: ResolvedDatabaseConnection,
+    *,
+    label: str = "MySQL",
+) -> str:
     return _required_credential(
         connection,
         "database",
-        "MySQL lifecycle requires a target database.",
+        f"{label} lifecycle requires a target database.",
     )
 
 
@@ -676,10 +815,12 @@ def _required_credential(
 def _ensure_destroy_confirmed(
     target_database: str,
     request: DestroyDatabaseRequest,
+    *,
+    label: str = "MySQL",
 ) -> None:
     if request.confirm.strip() != target_database:
         raise DatabaseProvisioningConfigurationError(
-            "MySQL destroy confirmation does not match the configured database."
+            f"{label} destroy confirmation does not match the configured database."
         )
 
 
@@ -705,12 +846,12 @@ def _mysql_string_literal(value: str, *, escape_percent: bool = False) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
 
 
-def _normalise_count(value: object) -> int:
+def _normalise_count(value: object, *, label: str = "MySQL") -> int:
     if value is None:
         return 0
     return _normalise_integer(
         value,
-        message="MySQL count result was invalid.",
+        message=f"{label} count result was invalid.",
     )
 
 
@@ -736,12 +877,13 @@ def _normalise_row(row: object) -> tuple[object, ...]:
 
 
 def _result(
+    family: DatabaseFamily,
     phase: ProvisioningPhase,
     status: ProvisioningStatus,
     message: str,
 ) -> ProvisioningPhaseResult:
     return ProvisioningPhaseResult(
-        family="mysql",
+        family=family,
         phase=phase,
         status=status,
         message=message,

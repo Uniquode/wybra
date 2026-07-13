@@ -8,8 +8,15 @@ from typing import Literal, Protocol
 from wybra.db.settings import ResolvedDatabaseConnection
 from wybra.db.urls import DatabaseBackend
 
-DatabaseFamily = Literal["sqlite", "postgresql", "mysql", "mssql", "oracle"]
-ProvisioningStatus = Literal["created", "removed", "skipped", "updated", "noop"]
+DatabaseFamily = Literal["sqlite", "postgresql", "mysql", "mariadb", "mssql", "oracle"]
+ProvisioningStatus = Literal[
+    "created",
+    "removed",
+    "skipped",
+    "updated",
+    "noop",
+    "unsupported",
+]
 ProvisioningPhase = Literal["init", "destroy", "maintenance"]
 
 
@@ -118,6 +125,8 @@ def database_family_for_backend(backend: DatabaseBackend) -> DatabaseFamily:
         "psycopg",
     }:
         return "postgresql"
+    if backend.scheme == "mariadb":
+        return "mariadb"
     if backend.tortoise_scheme == "mysql":
         return "mysql"
     if backend.tortoise_scheme == "mssql":
@@ -222,6 +231,7 @@ def _require_service_account_connection(
 
 
 def _default_provisioners() -> Mapping[DatabaseFamily, DatabaseProvisioner]:
+    from wybra.db.provisioning.mariadb import MariaDBProvisioner
     from wybra.db.provisioning.mssql import SQLServerProvisioner
     from wybra.db.provisioning.mysql import MySQLProvisioner
     from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
@@ -232,6 +242,7 @@ def _default_provisioners() -> Mapping[DatabaseFamily, DatabaseProvisioner]:
         "sqlite": SQLiteProvisioner(),
         "postgresql": PostgreSQLProvisioner(),
         "mysql": MySQLProvisioner(),
+        "mariadb": MariaDBProvisioner(),
         "mssql": SQLServerProvisioner(),
         "oracle": UnsupportedFamilyProvisioner("oracle"),
     }
