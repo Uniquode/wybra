@@ -285,7 +285,7 @@ private key secret source, and provider policy options.
 ## Secret Store Setup
 
 For the keychain source, the keychain item service/name is
-`[secrets.keychain].appname`, and the account/username is the secret key.
+`[secrets.keychain].appname`, and the account is the secret key.
 
 Store the Apple private key at the default keychain key:
 

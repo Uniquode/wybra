@@ -86,6 +86,10 @@ For the example above, the runtime keys are
 Configure `user_key`, `password_key`, `sa_user_key`, or `sa_password_key` only
 when a deployment needs to override those defaults.
 
+These configured keys are exposed through Wybra's credential-reference
+contract. See [`CREDENTIAL_REFERENCES.md`](CREDENTIAL_REFERENCES.md) for the
+module-author metadata shape used by `wybra-secret` and related tooling.
+
 Default key derivation accepts Unicode database names, but the database name
 must be safe as one key-path segment. If the configured database name contains
 path separators, whitespace, or control characters, configure explicit
@@ -95,6 +99,31 @@ Service-account credentials are used for database lifecycle work such as
 `wybra-migrate init`, `wybra-migrate destroy`, and schema-changing migration
 commands. Runtime credentials are for application access and should not need
 broad DDL permissions.
+
+## Maintenance Tasks
+
+List maintenance tasks for the configured database with:
+
+```sh
+wybra-migrate tasks
+```
+
+Run a maintenance task with:
+
+```sh
+wybra-migrate run repair-privs
+```
+
+Maintenance task execution uses service-account credentials because these
+tasks inspect or repair database-level state. Current task names are:
+
+| Task | Backend | Description |
+| --- | --- | --- |
+| `repair-privs` | PostgreSQL, MySQL, MariaDB, SQL Server | Reapply runtime application privileges. |
+| `migrations` | PostgreSQL, MySQL, MariaDB, SQL Server | Report the Tortoise migration recorder state. |
+| `analyse` | PostgreSQL | Refresh planner statistics after large data changes. |
+| `extensions` | PostgreSQL | Validate PostgreSQL extension prerequisites. |
+| `prerequisites` | SQL Server | Report SQL Server external setup prerequisites. |
 
 PostgreSQL lifecycle work first connects to a service-account database because
 the target application database may not exist yet. Wybra defaults that

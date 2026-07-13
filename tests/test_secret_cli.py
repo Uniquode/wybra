@@ -289,7 +289,7 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
         "key": SECRET_KEY_CURRENT,
         "name": SECRET_KEY_TYPE_SECRET,
         "service": "wybra",
-        "username": SECRET_KEY_CURRENT,
+        "account": SECRET_KEY_CURRENT,
         "value": "secret-value",
     }
 
@@ -333,12 +333,12 @@ def test_set_supports_json_bulk_input(monkeypatch) -> None:
             {
                 "key": SECRET_KEY_CURRENT,
                 "service": "wybra",
-                "username": SECRET_KEY_CURRENT,
+                "account": SECRET_KEY_CURRENT,
             },
             {
                 "key": "auth/providers/google/client-secret",
                 "service": "wybra",
-                "username": "auth/providers/google/client-secret",
+                "account": "auth/providers/google/client-secret",
             },
         ]
     }
@@ -573,7 +573,7 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     records = json.loads(result.output)["keys"]
     assert records[SECRET_KEY_TYPE_SECRET]["key"] == "SYSTEM_SECRET_KEY"
     assert records[SECRET_KEY_TYPE_SECRET]["service"] == "uniquode.io"
-    assert records[SECRET_KEY_TYPE_SECRET]["username"] == "SYSTEM_SECRET_KEY"
+    assert records[SECRET_KEY_TYPE_SECRET]["account"] == "SYSTEM_SECRET_KEY"
     assert records[SECRET_KEY_TYPE_SECRET]["exists"] is True
     assert records["secret-prev"]["key"] == "SYSTEM_SECRET_KEYS_PREVIOUS"
     assert records["secret-prev"]["exists"] is False
@@ -630,7 +630,7 @@ def test_list_includes_configured_database_keychain_references(
         "rotation_role": None,
         "service": "uniquode.io",
         "source": "keychain",
-        "username": "database/uniquode/app/user",
+        "account": "database/uniquode/app/user",
     }
     assert records["database-password"] == {
         "description": "Configured runtime database password.",
@@ -642,7 +642,7 @@ def test_list_includes_configured_database_keychain_references(
         "rotation_role": None,
         "service": "uniquode.io",
         "source": "keychain",
-        "username": "database/uniquode/app/password",
+        "account": "database/uniquode/app/password",
     }
     assert records["database-sa-user"]["exists"] is True
     assert records["database-sa-user"]["key"] == (

@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal, Protocol, cast
 
 from wybra.db.provisioning.core import (
+    REPAIR_PRIVILEGES_TASK,
+    TORTOISE_MIGRATIONS_TASK,
     DatabaseFamily,
     DatabaseMaintenanceRequest,
     DatabaseMaintenanceTask,
@@ -25,14 +27,11 @@ _MIGRATION_RECORDER_TABLE = "tortoise_migrations"
 _MYSQL_ACCOUNT_HOST = "%"
 _MYSQL_MAINTENANCE_TASKS = (
     DatabaseMaintenanceTask(
-        name="repair-privileges",
+        name=REPAIR_PRIVILEGES_TASK.name,
         description="Reapply runtime user database grants.",
         recommended_frequency="after migrations or user changes",
     ),
-    DatabaseMaintenanceTask(
-        name="migration-state",
-        description="Report Tortoise migration recorder state.",
-    ),
+    TORTOISE_MIGRATIONS_TASK,
 )
 GrantScope = Literal["target", "external", "unsupported"]
 
@@ -310,7 +309,7 @@ class MySQLProvisioner:
 
         maintenance = await self._connect(service_connection)
         try:
-            if task == "repair-privileges":
+            if task == REPAIR_PRIVILEGES_TASK.name:
                 await _repair_privileges(
                     maintenance,
                     database=target_database,
@@ -326,14 +325,18 @@ class MySQLProvisioner:
                         f"{app_user}",
                     ),
                 )
-            return (
-                await _migration_state_result(
-                    maintenance,
-                    target_database,
-                    phase="maintenance",
-                    family=self.family,
-                    label=self.label,
-                ),
+            if task == TORTOISE_MIGRATIONS_TASK.name:
+                return (
+                    await _migration_state_result(
+                        maintenance,
+                        target_database,
+                        phase="maintenance",
+                        family=self.family,
+                        label=self.label,
+                    ),
+                )
+            raise DatabaseProvisioningConfigurationError(
+                f"Unknown {self.family} maintenance task: {request.task}."
             )
         finally:
             await maintenance.close()

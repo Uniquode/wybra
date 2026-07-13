@@ -13,6 +13,7 @@ from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.models import Model
 
 import wybra.db.migrate as migrate_module
+import wybra.db.provisioning.core as provisioning_core
 import wybra.db.provisioning.mssql as mssql_provisioning
 import wybra.db.provisioning.mysql as mysql_provisioning
 import wybra.db.urls as database_urls
@@ -63,6 +64,7 @@ from wybra.db.settings import (
     EffectiveDatabaseConfig,
     ResolvedDatabaseConnection,
     StructuredDatabaseConfig,
+    database_connection_metadata_from_config,
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
 )
@@ -755,6 +757,53 @@ def test_structured_database_config_applies_database_aws_overrides(
     assert connection.aws.client.sso_region == "us-east-1"
     assert connection.aws.endpoint == "rds-postgresql.example.aws"
     assert connection.aws.port == 5432
+
+
+def test_structured_database_metadata_preserves_database_aws_settings(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.aws": {
+                        "region": "ap-southeast-2",
+                        "profile": "shared-profile",
+                    },
+                    "app.database": {
+                        "backend": "postgresql",
+                        "host": "rds-postgresql.example.aws",
+                        "database": "uniquode",
+                    },
+                    "app.database.aws": {
+                        "managed": "rds",
+                        "region": "ap-south-1",
+                        "db_instance_identifier": "uniquode-postgresql",
+                        "engine": "postgres",
+                        "endpoint": "rds-postgresql.example.aws",
+                        "port": 5432,
+                    },
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = database_connection_metadata_from_config(
+        config,
+        project_root=tmp_path,
+    )
+
+    assert connection is not None
+    assert connection.aws is not None
+    assert connection.aws.managed == "rds"
+    assert connection.aws.db_instance_identifier == "uniquode-postgresql"
+    assert connection.aws.client.region == "ap-south-1"
+    assert connection.aws.client.profile == "shared-profile"
+    assert connection.aws.endpoint == "rds-postgresql.example.aws"
+    assert connection.aws.port == 5432
+    assert "user" not in connection.credentials
+    assert "password" not in connection.credentials
 
 
 def test_database_aws_external_id_key_is_resolved_for_service_account_only(
@@ -2880,26 +2929,26 @@ def test_mssql_maintenance_tasks_execute_privilege_repair_and_state() -> None:
     )
 
     assert [task.name for task in provisioner.maintenance_tasks(context)] == [
-        "repair-privileges",
-        "migration-state",
-        "validate-prerequisites",
+        "repair-privs",
+        "migrations",
+        "prerequisites",
     ]
     repair_result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="repair-privileges"),
+            DatabaseMaintenanceRequest(task="repair-privs"),
         )
     )
     state_result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="migration-state"),
+            DatabaseMaintenanceRequest(task="migrations"),
         )
     )
     prerequisite_result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="validate-prerequisites"),
+            DatabaseMaintenanceRequest(task="prerequisites"),
         )
     )
 
@@ -2932,7 +2981,7 @@ def test_mssql_validate_prerequisites_reports_missing_external_login() -> None:
     result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="validate-prerequisites"),
+            DatabaseMaintenanceRequest(task="prerequisites"),
         )
     )
 
@@ -3325,19 +3374,19 @@ def test_mysql_maintenance_tasks_execute_privilege_repair_and_state() -> None:
     )
 
     assert [task.name for task in provisioner.maintenance_tasks(context)] == [
-        "repair-privileges",
-        "migration-state",
+        "repair-privs",
+        "migrations",
     ]
     repair_result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="repair-privileges"),
+            DatabaseMaintenanceRequest(task="repair-privs"),
         )
     )
     state_result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="migration-state"),
+            DatabaseMaintenanceRequest(task="migrations"),
         )
     )
 
@@ -3792,21 +3841,21 @@ def test_postgresql_maintenance_tasks_execute_privilege_repair_and_state() -> No
     )
 
     assert [task.name for task in provisioner.maintenance_tasks(context)] == [
-        "repair-privileges",
-        "migration-state",
+        "repair-privs",
+        "migrations",
         "analyse",
-        "validate-extensions",
+        "extensions",
     ]
     repair_result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="repair-privileges"),
+            DatabaseMaintenanceRequest(task="repair-privs"),
         )
     )
     state_result = asyncio.run(
         provisioner.run_maintenance(
             context,
-            DatabaseMaintenanceRequest(task="migration-state"),
+            DatabaseMaintenanceRequest(task="migrations"),
         )
     )
 
@@ -3835,6 +3884,79 @@ def test_database_lifecycle_guards_reject_blank_requests() -> None:
                 DatabaseMaintenanceRequest(task=" "),
             )
         )
+
+
+def test_database_maintenance_requires_confirmation_for_protected_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _sqlite_provisioning_context()
+    ran: list[str] = []
+
+    class ConfirmingProvisioner:
+        family: DatabaseFamily = "sqlite"
+
+        async def initialise(
+            self,
+            _context: ProvisioningContext,
+        ) -> tuple[Any, ...]:
+            return ()
+
+        async def destroy(
+            self,
+            _context: ProvisioningContext,
+            _request: DestroyDatabaseRequest,
+        ) -> tuple[Any, ...]:
+            return ()
+
+        def maintenance_tasks(
+            self,
+            _context: ProvisioningContext,
+        ) -> tuple[provisioning_core.DatabaseMaintenanceTask, ...]:
+            return (
+                provisioning_core.DatabaseMaintenanceTask(
+                    name="protected",
+                    description="Run protected maintenance.",
+                    requires_confirmation=True,
+                ),
+            )
+
+        async def run_maintenance(
+            self,
+            _context: ProvisioningContext,
+            request: DatabaseMaintenanceRequest,
+        ) -> tuple[Any, ...]:
+            ran.append(request.task)
+            return ()
+
+        def quote_identifier(self, identifier: str) -> str:
+            return identifier
+
+    monkeypatch.setattr(
+        provisioning_core,
+        "DEFAULT_PROVISIONERS",
+        {"sqlite": ConfirmingProvisioner()},
+    )
+
+    with pytest.raises(
+        DatabaseProvisioningConfigurationError,
+        match="requires confirmation",
+    ):
+        asyncio.run(
+            run_database_maintenance(
+                context,
+                DatabaseMaintenanceRequest(task="protected"),
+            )
+        )
+
+    result = asyncio.run(
+        run_database_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="protected", confirm="protected"),
+        )
+    )
+
+    assert result == ()
+    assert ran == ["protected"]
 
 
 def test_sqlite_provisioner_rejects_unknown_maintenance_task() -> None:

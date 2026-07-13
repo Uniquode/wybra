@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol, cast
 
 from wybra.db.provisioning.core import (
+    REPAIR_PRIVILEGES_TASK,
+    TORTOISE_MIGRATIONS_TASK,
     DatabaseFamily,
     DatabaseMaintenanceRequest,
     DatabaseMaintenanceTask,
@@ -24,21 +26,18 @@ _DEFAULT_SERVICE_ACCOUNT_DATABASE = "postgres"
 _MIGRATION_RECORDER_TABLE = "tortoise_migrations"
 _POSTGRESQL_MAINTENANCE_TASKS = (
     DatabaseMaintenanceTask(
-        name="repair-privileges",
+        name=REPAIR_PRIVILEGES_TASK.name,
         description="Reapply runtime role grants and default privileges.",
         recommended_frequency="after migrations or role changes",
     ),
-    DatabaseMaintenanceTask(
-        name="migration-state",
-        description="Report Tortoise migration recorder state.",
-    ),
+    TORTOISE_MIGRATIONS_TASK,
     DatabaseMaintenanceTask(
         name="analyse",
         description="Refresh PostgreSQL planner statistics.",
         recommended_frequency="after large data changes",
     ),
     DatabaseMaintenanceTask(
-        name="validate-extensions",
+        name="extensions",
         description="Validate PostgreSQL extension prerequisites.",
     ),
 )
@@ -333,7 +332,7 @@ class PostgreSQLProvisioner:
 
         target = await self._connect(service_connection, database=target_database)
         try:
-            if task == "repair-privileges":
+            if task == REPAIR_PRIVILEGES_TASK.name:
                 await _repair_privileges(
                     target,
                     database=target_database,
@@ -348,7 +347,7 @@ class PostgreSQLProvisioner:
                         f"Repaired PostgreSQL runtime privileges for role: {app_user}",
                     ),
                 )
-            if task == "migration-state":
+            if task == TORTOISE_MIGRATIONS_TASK.name:
                 return (
                     await _migration_state_result(
                         target,

@@ -6,6 +6,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol, cast
 
 from wybra.db.provisioning.core import (
+    REPAIR_PRIVILEGES_TASK,
+    TORTOISE_MIGRATIONS_TASK,
     DatabaseFamily,
     DatabaseMaintenanceRequest,
     DatabaseMaintenanceTask,
@@ -39,16 +41,13 @@ _ALLOWED_ODBC_ATTRIBUTE_KEYS = {
 }
 _MSSQL_MAINTENANCE_TASKS = (
     DatabaseMaintenanceTask(
-        name="repair-privileges",
+        name=REPAIR_PRIVILEGES_TASK.name,
         description="Reapply runtime user database role grants.",
         recommended_frequency="after migrations or principal changes",
     ),
+    TORTOISE_MIGRATIONS_TASK,
     DatabaseMaintenanceTask(
-        name="migration-state",
-        description="Report Tortoise migration recorder state.",
-    ),
-    DatabaseMaintenanceTask(
-        name="validate-prerequisites",
+        name="prerequisites",
         description="Report SQL Server external setup prerequisites.",
     ),
 )
@@ -352,7 +351,7 @@ class SQLServerProvisioner:
         schema = _schema_name(runtime_connection)
         role = _role_name(runtime_connection)
 
-        if task == "validate-prerequisites":
+        if task == "prerequisites":
             return await self._validate_prerequisites(
                 service_connection,
                 app_user=app_user,
@@ -361,7 +360,7 @@ class SQLServerProvisioner:
 
         target = await self._connect(service_connection, database=target_database)
         try:
-            if task == "repair-privileges":
+            if task == REPAIR_PRIVILEGES_TASK.name:
                 await _repair_privileges(
                     target,
                     schema=schema,
@@ -375,12 +374,16 @@ class SQLServerProvisioner:
                         f"Repaired SQL Server runtime privileges for role: {role}",
                     ),
                 )
-            return (
-                await _migration_state_result(
-                    target,
-                    schema,
-                    phase="maintenance",
-                ),
+            if task == TORTOISE_MIGRATIONS_TASK.name:
+                return (
+                    await _migration_state_result(
+                        target,
+                        schema,
+                        phase="maintenance",
+                    ),
+                )
+            raise DatabaseProvisioningConfigurationError(
+                f"Unknown mssql maintenance task: {request.task}."
             )
         finally:
             await target.close()

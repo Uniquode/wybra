@@ -87,6 +87,8 @@ _.list_command
 _.password_command
 _.init_command
 _.destroy_command
+_.tasks_command
+_.run_command
 _.revision_command
 _.makemigrations_command
 _.migrate_command_command

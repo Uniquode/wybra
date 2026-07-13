@@ -137,6 +137,8 @@ def test_migrate_help_exposes_native_tortoise_commands(capsys) -> None:
     for command_name in (
         "init",
         "destroy",
+        "tasks",
+        "run",
         "makemigrations",
         "migrate",
         "downgrade",
@@ -568,7 +570,10 @@ def test_migrate_destroy_removes_sqlite_file_target(tmp_path: Path) -> None:
     assert not database_path.exists()
 
 
-@pytest.mark.parametrize("argv", [["heads"], ["migrate"], ["downgrade"], ["history"]])
+@pytest.mark.parametrize(
+    "argv",
+    [["heads"], ["migrate"], ["migrate", "run", "vacuum"], ["downgrade"], ["history"]],
+)
 def test_ordinary_migration_commands_do_not_run_provisioning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -640,6 +645,86 @@ def test_migrate_destroy_dispatches_database_lifecycle(
     }
 
 
+def test_migrate_tasks_lists_database_maintenance_tasks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "database.sqlite3")
+
+    def available_tasks(
+        _context: migrate_module.ProvisioningContext,
+    ) -> tuple[migrate_module.DatabaseMaintenanceTask, ...]:
+        return (
+            migrate_module.DatabaseMaintenanceTask(
+                name="repair-privs",
+                description="Reapply runtime privileges.",
+                recommended_frequency="after migrations",
+            ),
+        )
+
+    monkeypatch.setattr(migrate_module, "database_maintenance_tasks", available_tasks)
+
+    exit_code = run_migrate(["--database-url", database_url, "tasks"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "repair-privs: Reapply runtime privileges." in captured.out
+    assert "credentials: service_account" in captured.out
+    assert "recommended: after migrations" in captured.out
+
+
+def test_migrate_tasks_does_not_resolve_database_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = "postgresql://app:secret@db.example/app"
+    observed: dict[str, object] = {}
+
+    def load_settings(
+        database_url: str | None,
+        *,
+        database_credential_purpose="runtime",
+        fallback_to_runtime_credentials=False,
+        include_provisioning_connection=False,
+        resolve_database_credentials=True,
+    ) -> MigrationTestSettings:
+        observed["database_url"] = database_url
+        observed["database_credential_purpose"] = database_credential_purpose
+        observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
+        observed["include_provisioning_connection"] = include_provisioning_connection
+        observed["resolve_database_credentials"] = resolve_database_credentials
+        return MigrationTestSettings(database_url=database_url or "sqlite://:memory:")
+
+    def available_tasks(
+        _context: migrate_module.ProvisioningContext,
+    ) -> tuple[migrate_module.DatabaseMaintenanceTask, ...]:
+        return (
+            migrate_module.DatabaseMaintenanceTask(
+                name="migrations",
+                description="Report migration state.",
+            ),
+        )
+
+    command = migrate_module.create_migrate_command(load_settings)
+    monkeypatch.setattr(migrate_module, "is_supported_database_url", lambda _url: True)
+    monkeypatch.setattr(migrate_module, "database_maintenance_tasks", available_tasks)
+
+    exit_code = migrate_module.run_migrate_command(
+        command,
+        ["--database-url", database_url, "tasks"],
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "migrations: Report migration state." in captured.out
+    assert observed["database_url"] == database_url
+    assert observed["database_credential_purpose"] == "runtime"
+    assert observed["fallback_to_runtime_credentials"] is False
+    assert observed["include_provisioning_connection"] is False
+    assert observed["resolve_database_credentials"] is False
+
+
 def test_migrate_run_dispatches_database_maintenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -664,7 +749,6 @@ def test_migrate_run_dispatches_database_maintenance(
         [
             "--database-url",
             database_url,
-            "migrate",
             "run",
             "vacuum",
         ]
@@ -675,6 +759,41 @@ def test_migrate_run_dispatches_database_maintenance(
         "task": "vacuum",
         "database": "database URL: sqlite://<redacted>",
     }
+
+
+def test_migrate_run_passes_maintenance_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "database.sqlite3")
+    observed: dict[str, object] = {}
+
+    async def record_maintenance(
+        _context: migrate_module.MigrationContext,
+        request: migrate_module.DatabaseMaintenanceRequest,
+    ) -> None:
+        observed["task"] = request.task
+        observed["confirm"] = request.confirm
+
+    monkeypatch.setattr(
+        migrate_module,
+        "run_database_maintenance_lifecycle",
+        record_maintenance,
+    )
+
+    exit_code = run_migrate(
+        [
+            "--database-url",
+            database_url,
+            "run",
+            "--confirm",
+            "repair-privs",
+            "repair-privs",
+        ]
+    )
+
+    assert exit_code == 0
+    assert observed == {"task": "repair-privs", "confirm": "repair-privs"}
 
 
 def test_migrate_rejects_unknown_options(
@@ -698,11 +817,9 @@ def test_migrate_rejects_unknown_options(
     assert "--dyr-run" in captured.err
 
 
-@pytest.mark.parametrize("flag", ["--fake", "--dry-run"])
 def test_migrate_run_rejects_migration_flags(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    flag: str,
 ) -> None:
     database_url = sqlite_file_url(tmp_path / "database.sqlite3")
 
@@ -710,16 +827,84 @@ def test_migrate_run_rejects_migration_flags(
         [
             "--database-url",
             database_url,
-            "migrate",
             "run",
+            "--fake",
             "vacuum",
-            flag,
         ]
     )
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert "migrate run does not support migration flags" in captured.err
+    assert "No such option" in captured.err
+    assert "--fake" in captured.err
+
+
+def test_migrate_run_requests_provisioning_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = "postgresql://app:secret@db.example/app"
+    observed: dict[str, object] = {}
+
+    def load_settings(
+        database_url: str | None,
+        *,
+        database_credential_purpose="runtime",
+        fallback_to_runtime_credentials=False,
+        include_provisioning_connection=False,
+        resolve_database_credentials=True,
+    ) -> MigrationTestSettings:
+        observed["database_url"] = database_url
+        observed["database_credential_purpose"] = database_credential_purpose
+        observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
+        observed["include_provisioning_connection"] = include_provisioning_connection
+        observed["resolve_database_credentials"] = resolve_database_credentials
+        return MigrationTestSettings(database_url=database_url or "sqlite://:memory:")
+
+    async def record_maintenance(
+        _context: migrate_module.MigrationContext,
+        _request: migrate_module.DatabaseMaintenanceRequest,
+    ) -> None:
+        return None
+
+    command = migrate_module.create_migrate_command(load_settings)
+    monkeypatch.setattr(migrate_module, "is_supported_database_url", lambda _url: True)
+    monkeypatch.setattr(
+        migrate_module,
+        "run_database_maintenance_lifecycle",
+        record_maintenance,
+    )
+
+    exit_code = migrate_module.run_migrate_command(
+        command,
+        ["--database-url", database_url, "run", "repair-privs"],
+    )
+
+    assert exit_code == 0
+    assert observed["database_url"] == database_url
+    assert observed["database_credential_purpose"] == "runtime"
+    assert observed["fallback_to_runtime_credentials"] is False
+    assert observed["include_provisioning_connection"] is True
+    assert observed["resolve_database_credentials"] is True
+
+
+def test_migrate_run_rejects_blank_task(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = sqlite_file_url(tmp_path / "database.sqlite3")
+
+    exit_code = run_migrate(
+        [
+            "--database-url",
+            database_url,
+            "run",
+            " ",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "run TASK must not be blank" in captured.err
 
 
 def test_supported_loader_kwargs_logs_when_introspection_fails(
@@ -890,6 +1075,7 @@ def test_load_migration_settings_passes_config_source_to_kwargs_loader(
             "database_credential_purpose": "runtime",
             "fallback_to_runtime_credentials": False,
             "include_provisioning_connection": False,
+            "resolve_database_credentials": True,
         },
     }
 
@@ -956,11 +1142,13 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
         database_credential_purpose="runtime",
         fallback_to_runtime_credentials=False,
         include_provisioning_connection=False,
+        resolve_database_credentials=True,
     ):
         observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
         observed["database_credential_purpose"] = database_credential_purpose
         observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
         observed["include_provisioning_connection"] = include_provisioning_connection
+        observed["resolve_database_credentials"] = resolve_database_credentials
         return MigrationTestSettings(
             database_url="sqlite://:memory:",
             project_root=tmp_path,
@@ -987,6 +1175,7 @@ def test_wybra_migrate_config_option_overrides_app_config_env(
     assert observed["database_credential_purpose"] == "runtime"
     assert observed["fallback_to_runtime_credentials"] is False
     assert observed["include_provisioning_connection"] is False
+    assert observed["resolve_database_credentials"] is True
 
 
 def test_wybra_migrate_init_requests_provisioning_connection(
@@ -1004,11 +1193,13 @@ def test_wybra_migrate_init_requests_provisioning_connection(
         database_credential_purpose="runtime",
         fallback_to_runtime_credentials=False,
         include_provisioning_connection=False,
+        resolve_database_credentials=True,
     ):
         observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
         observed["database_credential_purpose"] = database_credential_purpose
         observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
         observed["include_provisioning_connection"] = include_provisioning_connection
+        observed["resolve_database_credentials"] = resolve_database_credentials
         return MigrationTestSettings(
             database_url="sqlite://:memory:",
             project_root=tmp_path,
@@ -1043,6 +1234,7 @@ def test_wybra_migrate_init_requests_provisioning_connection(
     assert observed["database_credential_purpose"] == "runtime"
     assert observed["fallback_to_runtime_credentials"] is False
     assert observed["include_provisioning_connection"] is True
+    assert observed["resolve_database_credentials"] is True
 
 
 def test_wybra_migrate_migrate_uses_service_account_connection(
@@ -1060,11 +1252,13 @@ def test_wybra_migrate_migrate_uses_service_account_connection(
         database_credential_purpose="runtime",
         fallback_to_runtime_credentials=False,
         include_provisioning_connection=False,
+        resolve_database_credentials=True,
     ):
         observed["app_config"] = None if environ is None else environ.get("APP_CONFIG")
         observed["database_credential_purpose"] = database_credential_purpose
         observed["fallback_to_runtime_credentials"] = fallback_to_runtime_credentials
         observed["include_provisioning_connection"] = include_provisioning_connection
+        observed["resolve_database_credentials"] = resolve_database_credentials
         return MigrationTestSettings(
             database_url="sqlite://:memory:",
             project_root=tmp_path,
@@ -1091,6 +1285,7 @@ def test_wybra_migrate_migrate_uses_service_account_connection(
     assert observed["database_credential_purpose"] == "service_account"
     assert observed["fallback_to_runtime_credentials"] is False
     assert observed["include_provisioning_connection"] is False
+    assert observed["resolve_database_credentials"] is True
 
 
 def test_wybra_migrate_migrate_url_does_not_request_provisioning_connection(

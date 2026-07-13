@@ -37,6 +37,7 @@ from wybra.db.settings import (
     CredentialPurpose,
     EffectiveDatabaseConfig,
     ResolvedDatabaseConnection,
+    database_connection_metadata_from_config,
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
 )
@@ -83,6 +84,7 @@ class ProjectSettings(BaseSettings):
         database_credential_purpose: CredentialPurpose = "runtime",
         fallback_to_runtime_credentials: bool = False,
         include_provisioning_connection: bool = False,
+        resolve_database_credentials: bool = True,
     ) -> ProjectSettings:  # ty: ignore[invalid-method-override]
         return cls(
             **_project_settings_kwargs(
@@ -91,6 +93,7 @@ class ProjectSettings(BaseSettings):
                 database_credential_purpose=database_credential_purpose,
                 fallback_to_runtime_credentials=fallback_to_runtime_credentials,
                 include_provisioning_connection=include_provisioning_connection,
+                resolve_database_credentials=resolve_database_credentials,
             )
         )
 
@@ -188,6 +191,7 @@ def load_project_settings(
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
+    resolve_database_credentials: bool = True,
 ) -> ProjectSettings:
     resolved_project_root = resolve_project_root(project_root, environ)
     try:
@@ -219,6 +223,7 @@ def load_project_settings(
             database_credential_purpose=database_credential_purpose,
             fallback_to_runtime_credentials=fallback_to_runtime_credentials,
             include_provisioning_connection=include_provisioning_connection,
+            resolve_database_credentials=resolve_database_credentials,
         )
     except (SettingsLoadError, ConfigDefinitionError, ConfigSourceError) as exc:
         raise wrapped_error(ConfigurationError, exc) from exc
@@ -239,18 +244,26 @@ def _project_settings_kwargs(
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
+    resolve_database_credentials: bool = True,
 ) -> dict[str, Any]:
     app_values = ProjectSettings.section_values(config, "app")
     static_values = ProjectSettings.section_values(config, "app.assets")
     template_values = ProjectSettings.section_values(config, "app.templates")
     media_values = ProjectSettings.section_values(config, "wybra.media")
-    database_connection = resolve_database_connection_from_config(
-        config,
-        project_root=app_config.project_root,
-        configured_database_url=app_config.database_url,
-        purpose=database_credential_purpose,
-        fallback_to_runtime_credentials=fallback_to_runtime_credentials,
-    )
+    if resolve_database_credentials:
+        database_connection = resolve_database_connection_from_config(
+            config,
+            project_root=app_config.project_root,
+            configured_database_url=app_config.database_url,
+            purpose=database_credential_purpose,
+            fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+        )
+    else:
+        database_connection = database_connection_metadata_from_config(
+            config,
+            project_root=app_config.project_root,
+            configured_database_url=app_config.database_url,
+        )
     settings_kwargs: dict[str, Any] = {
         "project_root": app_config.project_root,
         "app_config": app_config,
