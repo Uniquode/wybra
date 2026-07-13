@@ -20,11 +20,13 @@ from wybra.core.composition import AppConfig
 from wybra.core.logging import LoggingConfigurationError
 from wybra.db.provisioning import (
     DatabaseMaintenanceRequest,
+    DatabaseMaintenanceTask,
     DatabaseProvisioningConfigurationError,
     DatabaseProvisioningOperationError,
     DestroyDatabaseRequest,
     ProvisioningContext,
     ProvisioningPhaseResult,
+    database_maintenance_tasks,
     destroy_database,
     initialise_database,
     provisioning_context,
@@ -89,6 +91,7 @@ class MigrationSettingsLoader(Protocol):
         database_credential_purpose: CredentialPurpose = ...,
         fallback_to_runtime_credentials: bool = ...,
         include_provisioning_connection: bool = ...,
+        resolve_database_credentials: bool = ...,
         **_: object,
     ) -> MigrationSettings: ...
 
@@ -342,6 +345,55 @@ def create_migrate_command(
         )
 
     @migrate_command.command(
+        "tasks",
+        help="List database maintenance tasks.",
+    )
+    @_database_url_option
+    @click.pass_context
+    def tasks_command(
+        ctx: click.Context,
+        database_url: str | None,
+    ) -> int:
+        return _run_migration(
+            settings_loader,
+            _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
+            operation=list_database_maintenance_tasks_lifecycle,
+            resolve_database_credentials=False,
+        )
+
+    @migrate_command.command(
+        "run",
+        help="Run a database maintenance task.",
+    )
+    @_database_url_option
+    @click.option(
+        "--confirm",
+        help="Confirm the maintenance task name before protected work runs.",
+    )
+    @click.argument("task")
+    @click.pass_context
+    def run_command(
+        ctx: click.Context,
+        database_url: str | None,
+        confirm: str | None,
+        task: str,
+    ) -> int:
+        return _run_migration(
+            settings_loader,
+            _database_url_for_command(ctx, database_url),
+            _config_source_for_command(ctx),
+            include_provisioning_connection=True,
+            operation=lambda _backend, context: run_database_maintenance_lifecycle(
+                context,
+                DatabaseMaintenanceRequest(
+                    task=_maintenance_task_from_argument(task),
+                    confirm=confirm,
+                ),
+            ),
+        )
+
+    @migrate_command.command(
         "makemigrations",
         help="Create migrations from model changes.",
     )
@@ -391,20 +443,6 @@ def create_migrate_command(
         fake: bool,
         dry_run: bool,
     ) -> int:
-        if args[:1] == ("run",):
-            if fake or dry_run:
-                raise click.UsageError("migrate run does not support migration flags.")
-            task = _maintenance_task_from_args(args)
-            return _run_migration(
-                settings_loader,
-                _database_url_for_command(ctx, database_url),
-                _config_source_for_command(ctx),
-                include_provisioning_connection=True,
-                operation=lambda _backend, context: run_database_maintenance_lifecycle(
-                    context,
-                    DatabaseMaintenanceRequest(task=task),
-                ),
-            )
         app_label, migration = _migration_target_from_args(args)
         return _run_migration(
             settings_loader,
@@ -562,12 +600,10 @@ def _migration_target_from_args(args: Sequence[str]) -> tuple[str | None, str | 
     return app_label, migration
 
 
-def _maintenance_task_from_args(args: Sequence[str]) -> str:
-    if len(args) != 2:
-        raise click.UsageError("migrate run requires exactly one TASK argument.")
-    task = args[1].strip()
+def _maintenance_task_from_argument(task_argument: str) -> str:
+    task = task_argument.strip()
     if not task:
-        raise click.UsageError("migrate run TASK must not be blank.")
+        raise click.UsageError("run TASK must not be blank.")
     return task
 
 
@@ -593,6 +629,7 @@ def _run_migration(
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
+    resolve_database_credentials: bool = True,
 ) -> int:
     return asyncio.run(
         _run_migration_async(
@@ -603,6 +640,7 @@ def _run_migration(
             database_credential_purpose=database_credential_purpose,
             fallback_to_runtime_credentials=fallback_to_runtime_credentials,
             include_provisioning_connection=include_provisioning_connection,
+            resolve_database_credentials=resolve_database_credentials,
         )
     )
 
@@ -616,6 +654,7 @@ async def _run_migration_async(
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
+    resolve_database_credentials: bool = True,
 ) -> int:
     try:
         configure_cli_logging()
@@ -626,6 +665,7 @@ async def _run_migration_async(
             database_credential_purpose=database_credential_purpose,
             fallback_to_runtime_credentials=fallback_to_runtime_credentials,
             include_provisioning_connection=include_provisioning_connection,
+            resolve_database_credentials=resolve_database_credentials,
         )
         configure_cli_logging(settings.app_config)
         context = build_migration_context(settings)
@@ -666,11 +706,13 @@ def _load_migration_settings(
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
+    resolve_database_credentials: bool = True,
 ) -> MigrationSettings:
     optional_kwargs = {
         "database_credential_purpose": database_credential_purpose,
         "fallback_to_runtime_credentials": fallback_to_runtime_credentials,
         "include_provisioning_connection": include_provisioning_connection,
+        "resolve_database_credentials": resolve_database_credentials,
     }
     if config_source is None:
         return _call_settings_loader(
@@ -838,6 +880,17 @@ async def destroy_database_lifecycle(
     )
 
 
+async def list_database_maintenance_tasks_lifecycle(
+    _backend: MigrationBackend,
+    context: MigrationContext,
+) -> None:
+    provisioning_context = _provisioning_context(context)
+    _report_database_maintenance_tasks(
+        provisioning_context.family,
+        database_maintenance_tasks(provisioning_context),
+    )
+
+
 async def run_database_maintenance_lifecycle(
     context: MigrationContext,
     request: DatabaseMaintenanceRequest,
@@ -845,6 +898,23 @@ async def run_database_maintenance_lifecycle(
     _report_provisioning_results(
         await run_database_maintenance(_provisioning_context(context), request)
     )
+
+
+def _report_database_maintenance_tasks(
+    family: str,
+    tasks: Sequence[DatabaseMaintenanceTask],
+) -> None:
+    if not tasks:
+        click.echo(f"No database maintenance tasks are available for {family}.")
+        return
+
+    for task in tasks:
+        click.echo(f"{task.name}: {task.description}")
+        click.echo(f"  credentials: {task.credential_scope}")
+        if task.recommended_frequency is not None:
+            click.echo(f"  recommended: {task.recommended_frequency}")
+        if task.requires_confirmation:
+            click.echo("  confirmation: required")
 
 
 def _report_provisioning_results(

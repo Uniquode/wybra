@@ -37,12 +37,14 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
                 app_config=None,
                 database_url=settings.database_url,
                 deployment_environment=_deployment_environment(settings),
+                resolve_database_credentials=False,
             )
         else:
             load_runtime_auth_settings(
                 app_config=settings.app_config,
                 database_url=settings.database_url,
                 deployment_environment=_deployment_environment(settings),
+                resolve_database_credentials=False,
             )
     except ConfigurationError as exc:
         record_check(

@@ -211,11 +211,11 @@ def get_command(
         raise click.ClickException(str(exc)) from exc
 
     if json_output:
-        service, username = driver.identity(key_value)
+        service, account = driver.identity(key_value)
         payload = {
             "key": key_value,
             "service": service,
-            "username": username,
+            "account": account,
             "value": secret,
         }
         if raw_key is None:
@@ -793,7 +793,7 @@ def _credential_reference_record(
     driver: KeychainSecretSourceDriver,
     reference: CredentialReference,
 ) -> dict[str, Any]:
-    service, username = driver.identity(reference.key)
+    service, account = driver.identity(reference.key)
     try:
         exists = driver.exists(reference.key)
     except click.ClickException:
@@ -809,7 +809,7 @@ def _credential_reference_record(
         "required": reference.required,
         "rotation_role": reference.rotation_role,
         "service": service,
-        "username": username,
+        "account": account,
         "exists": exists,
     }
 
@@ -818,8 +818,8 @@ def _stored_payload(
     driver: KeychainSecretSourceDriver,
     key: str,
 ) -> dict[str, str]:
-    service, username = driver.identity(key)
-    return {"key": key, "service": service, "username": username}
+    service, account = driver.identity(key)
+    return {"key": key, "service": service, "account": account}
 
 
 def _write_json(payload: Mapping[str, Any]) -> None:

@@ -116,7 +116,10 @@ def _merge_validation_targets(
 def _build_settings(overrides: ValidationOverrides) -> Any:
     project_root = runtime_project_root()
     try:
-        defaults = load_project_settings(project_root=project_root)
+        defaults = load_project_settings(
+            project_root=project_root,
+            resolve_database_credentials=False,
+        )
         database_connection = defaults.database_connection
         if overrides.database_url is not None:
             database_connection = EffectiveDatabaseConfig.from_url(

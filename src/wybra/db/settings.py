@@ -804,6 +804,32 @@ class EffectiveDatabaseConfig:
             purpose=purpose,
         )
 
+    def connection_metadata(self) -> ResolvedDatabaseConnection:
+        if self.source == "url":
+            assert self.database_url is not None
+            backend = database_backend_for_url(self.database_url)
+            if backend is None:
+                raise ConfigurationError(database_url_support_error(self.database_url))
+            return ResolvedDatabaseConnection.from_url(
+                self.database_url,
+                backend=backend,
+            )
+
+        assert self.structured is not None
+        return ResolvedDatabaseConnection.from_structured(
+            backend=self.structured.backend_info,
+            credentials=_structured_backend_credentials(
+                self.structured,
+                project_root=self.project_root,
+            ),
+            aws=_resolve_aws_managed_database_settings(
+                self.structured.aws,
+                environ=None,
+                secrets=None,
+                purpose="runtime",
+            ),
+        )
+
     def credential_references(self) -> tuple[CredentialReference, ...]:
         if self.structured is None:
             return ()
@@ -954,6 +980,24 @@ def resolve_database_connection_from_config(
         secrets=resolved_secrets,
         purpose=resolved_purpose,
     )
+
+
+def database_connection_metadata_from_config(
+    config: ConfigService | Mapping[str, Mapping[str, Any]],
+    *,
+    project_root: Path,
+    configured_database_url: str | None = None,
+    database_url_override: str | None = None,
+) -> ResolvedDatabaseConnection | None:
+    effective = effective_database_config_from_config(
+        config,
+        project_root=project_root,
+        configured_database_url=configured_database_url,
+        database_url_override=database_url_override,
+    )
+    if effective is None:
+        return None
+    return effective.connection_metadata()
 
 
 def _database_credential_purpose(
@@ -1543,6 +1587,7 @@ __all__ = (
     "ResolvedDatabaseConnection",
     "ResolvedDatabaseCredentials",
     "StructuredDatabaseConfig",
+    "database_connection_metadata_from_config",
     "effective_database_config_from_config",
     "resolve_database_connection_from_config",
     "resolve_database_provisioning_connection_from_config",

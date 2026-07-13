@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from wybra.db.provisioning.aws import AwsRdsMetadataClient
 
 DatabaseFamily = Literal["sqlite", "postgresql", "mysql", "mariadb", "mssql", "oracle"]
+MaintenanceCredentialScope = Literal["runtime", "service_account"]
 ProvisioningStatus = Literal[
     "created",
     "removed",
@@ -51,13 +52,55 @@ class DestroyDatabaseRequest:
 @dataclass(frozen=True, slots=True)
 class DatabaseMaintenanceRequest:
     task: str
+    confirm: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class DatabaseMaintenanceTask:
     name: str
     description: str
+    credential_scope: MaintenanceCredentialScope = "service_account"
+    requires_confirmation: bool = False
     recommended_frequency: str | None = None
+
+    def __post_init__(self) -> None:
+        name = self.name.strip()
+        description = self.description.strip()
+        if not name:
+            raise DatabaseProvisioningConfigurationError(
+                "Maintenance task name must not be blank."
+            )
+        if not description:
+            raise DatabaseProvisioningConfigurationError(
+                "Maintenance task description must not be blank."
+            )
+        if self.credential_scope not in {"runtime", "service_account"}:
+            raise DatabaseProvisioningConfigurationError(
+                "Maintenance task credential scope is invalid."
+            )
+        recommended_frequency = (
+            self.recommended_frequency.strip()
+            if self.recommended_frequency is not None
+            else None
+        )
+        if recommended_frequency == "":
+            raise DatabaseProvisioningConfigurationError(
+                "Maintenance task recommended frequency must not be blank."
+            )
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "recommended_frequency", recommended_frequency)
+
+
+REPAIR_PRIVILEGES_TASK = DatabaseMaintenanceTask(
+    name="repair-privs",
+    description="Reapply runtime database privileges.",
+    recommended_frequency="after migrations or credential changes",
+)
+TORTOISE_MIGRATIONS_TASK = DatabaseMaintenanceTask(
+    name="migrations",
+    description="Report Tortoise migration recorder state.",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,14 +251,38 @@ async def run_database_maintenance(
     context: ProvisioningContext,
     request: DatabaseMaintenanceRequest,
 ) -> tuple[ProvisioningPhaseResult, ...]:
-    if not request.task.strip():
+    task_name = request.task.strip()
+    if not task_name:
         raise DatabaseProvisioningConfigurationError(
             "Maintenance task name must not be blank."
         )
+    task = next(
+        (
+            available_task
+            for available_task in database_maintenance_tasks(context)
+            if available_task.name == task_name
+        ),
+        None,
+    )
+    if task is not None and task.requires_confirmation and request.confirm != task.name:
+        raise DatabaseProvisioningConfigurationError(
+            "Maintenance task requires confirmation."
+        )
+    normalised_request = (
+        request
+        if request.task == task_name
+        else DatabaseMaintenanceRequest(task=task_name, confirm=request.confirm)
+    )
     return await provisioner_for_family(context.family).run_maintenance(
         context,
-        request,
+        normalised_request,
     )
+
+
+def database_maintenance_tasks(
+    context: ProvisioningContext,
+) -> tuple[DatabaseMaintenanceTask, ...]:
+    return provisioner_for_family(context.family).maintenance_tasks(context)
 
 
 def _ensure_family(context: ProvisioningContext, family: DatabaseFamily) -> None:
@@ -270,6 +337,7 @@ DEFAULT_PROVISIONERS: Mapping[DatabaseFamily, DatabaseProvisioner] = (
 
 
 __all__ = (
+    "CredentialTransition",
     "DatabaseFamily",
     "DatabaseMaintenanceRequest",
     "DatabaseMaintenanceTask",
@@ -278,11 +346,14 @@ __all__ = (
     "DatabaseProvisioningError",
     "DatabaseProvisioningOperationError",
     "DestroyDatabaseRequest",
+    "MaintenanceCredentialScope",
     "ProvisioningContext",
     "ProvisioningPhase",
     "ProvisioningPhaseResult",
-    "CredentialTransition",
+    "REPAIR_PRIVILEGES_TASK",
+    "TORTOISE_MIGRATIONS_TASK",
     "database_family_for_backend",
+    "database_maintenance_tasks",
     "destroy_database",
     "initialise_database",
     "provisioner_for_family",

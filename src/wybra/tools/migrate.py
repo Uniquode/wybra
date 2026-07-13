@@ -27,6 +27,7 @@ def _build_settings(
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
+    resolve_database_credentials: bool = True,
     **_extra: object,
 ) -> data_migrate.MigrationSettings:
     project_root = runtime_project_root()
@@ -44,6 +45,7 @@ def _build_settings(
                     database_credential_purpose=database_credential_purpose,
                     fallback_to_runtime_credentials=fallback_to_runtime_credentials,
                     include_provisioning_connection=include_provisioning_connection,
+                    resolve_database_credentials=resolve_database_credentials,
                 ),
             )
 
@@ -55,6 +57,7 @@ def _build_settings(
                 database_credential_purpose=database_credential_purpose,
                 fallback_to_runtime_credentials=fallback_to_runtime_credentials,
                 include_provisioning_connection=include_provisioning_connection,
+                resolve_database_credentials=resolve_database_credentials,
             ),
         )
     except ProjectToolConfigurationError as exc:

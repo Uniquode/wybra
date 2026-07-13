@@ -32,6 +32,7 @@ from wybra.db.config import DATABASE_CONFIG_SECTION
 from wybra.db.settings import (
     EffectiveDatabaseConfig,
     ResolvedDatabaseConnection,
+    database_connection_metadata_from_config,
     resolve_database_connection_from_config,
 )
 from wybra.db.urls import parse_sqlite_database_url
@@ -286,6 +287,7 @@ def load_auth_settings(
     app_config: AppConfig,
     deployment_environment: DeploymentEnvironment | str | None = LOCAL_ENVIRONMENT,
     database_url_override: str | None = None,
+    resolve_database_credentials: bool = True,
 ) -> AuthSettings:
     """Compose auth settings from app config and module config."""
 
@@ -299,12 +301,20 @@ def load_auth_settings(
         _section_values(config, AUTH_CONFIG_SECTION),
     )
     _reject_unknown_auth_options(auth_config)
-    database_connection = resolve_database_connection_from_config(
-        config,
-        project_root=app_config.project_root,
-        configured_database_url=app_config.database_url,
-        database_url_override=database_url_override,
-    )
+    if resolve_database_credentials:
+        database_connection = resolve_database_connection_from_config(
+            config,
+            project_root=app_config.project_root,
+            configured_database_url=app_config.database_url,
+            database_url_override=database_url_override,
+        )
+    else:
+        database_connection = database_connection_metadata_from_config(
+            config,
+            project_root=app_config.project_root,
+            configured_database_url=app_config.database_url,
+            database_url_override=database_url_override,
+        )
     if database_connection is None:
         raise ConfigurationError(
             "Application database must be configured as [app.database], "
@@ -359,6 +369,7 @@ def load_runtime_auth_settings(
     app_config: AppConfig | None,
     deployment_environment: DeploymentEnvironment | str | None,
     database_url: str | None = None,
+    resolve_database_credentials: bool = True,
 ) -> AuthSettings:
     """Load and validate auth settings for application runtime composition."""
 
@@ -373,6 +384,7 @@ def load_runtime_auth_settings(
             app_config=app_config,
             deployment_environment=deployment_environment,
             database_url_override=database_url,
+            resolve_database_credentials=resolve_database_credentials,
         )
     else:
         if database_url is None or not database_url.strip():

@@ -227,6 +227,7 @@ class KeychainSecretSourceDriver:
         )
 
     def identity(self, key: str) -> tuple[str, str]:
+        """Return the keychain service and account used for this secret."""
         key_value = secret_key_value(key)
         return self._keyring_service(), key_value
 
