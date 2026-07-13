@@ -1,3 +1,10 @@
+from wybra.db.provisioning.aws import (
+    AwsManagedDatabaseMetadata,
+    AwsRdsMetadataClient,
+    Boto3RdsMetadataClient,
+    database_family_for_aws_engine,
+    validate_aws_managed_database_context,
+)
 from wybra.db.provisioning.core import (
     CredentialTransition,
     DatabaseFamily,
@@ -27,6 +34,9 @@ from wybra.db.provisioning.unsupported import UnsupportedFamilyProvisioner
 from wybra.db.sql import quote_sql_identifier
 
 __all__ = (
+    "AwsManagedDatabaseMetadata",
+    "AwsRdsMetadataClient",
+    "Boto3RdsMetadataClient",
     "CredentialTransition",
     "DatabaseFamily",
     "DatabaseMaintenanceRequest",
@@ -45,6 +55,7 @@ __all__ = (
     "SQLiteProvisioner",
     "SQLServerProvisioner",
     "UnsupportedFamilyProvisioner",
+    "database_family_for_aws_engine",
     "database_family_for_backend",
     "destroy_database",
     "initialise_database",
@@ -52,4 +63,5 @@ __all__ = (
     "provisioning_context",
     "quote_sql_identifier",
     "run_database_maintenance",
+    "validate_aws_managed_database_context",
 )

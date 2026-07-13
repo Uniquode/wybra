@@ -233,10 +233,25 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             for key, value in app_data.items()
             if not isinstance(value, Mapping)
         }
-        for nested_name in ("assets", "database", "routes", "runserver", "templates"):
+        for nested_name in (
+            "assets",
+            "aws",
+            "database",
+            "routes",
+            "runserver",
+            "templates",
+        ):
             nested_value = app_data.get(nested_name)
             if isinstance(nested_value, Mapping):
-                sections[f"app.{nested_name}"] = dict(nested_value)
+                sections[f"app.{nested_name}"] = {
+                    key: value
+                    for key, value in nested_value.items()
+                    if not (
+                        nested_name == "database"
+                        and key == "aws"
+                        and isinstance(value, Mapping)
+                    )
+                }
                 if nested_name == "assets":
                     cors_value = nested_value.get("cors")
                     if isinstance(cors_value, Mapping):
@@ -245,6 +260,10 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                             for key, value in cors_value.items()
                             if not isinstance(value, Mapping)
                         }
+                if nested_name == "database":
+                    aws_value = nested_value.get("aws")
+                    if isinstance(aws_value, Mapping):
+                        sections["app.database.aws"] = dict(aws_value)
 
     auth_data = data.get("auth")
     if isinstance(auth_data, Mapping):

@@ -1414,6 +1414,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+aws = [
+    { name = "boto3" },
+]
 cache = [
     { name = "redis" },
 ]
@@ -1475,6 +1478,7 @@ requires-dist = [
     { name = "asyncodbc", marker = "extra == 'oracle'", specifier = ">=0.1.1,<1.0.0" },
     { name = "asyncpg", marker = "extra == 'databases'", specifier = ">=0.31.0" },
     { name = "asyncpg", marker = "extra == 'postgresql'", specifier = ">=0.31.0" },
+    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.43.42" },
     { name = "boto3", marker = "extra == 'kms'", specifier = ">=1.43.42" },
     { name = "click", specifier = ">=8.4.2" },
     { name = "cryptography", specifier = ">=49.0.0" },
@@ -1503,7 +1507,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.50.2" },
     { name = "webauthn", specifier = ">=3.0.0" },
 ]
-provides-extras = ["kms", "keychain", "vault", "cache", "postgresql", "psycopg", "mysql", "mariadb", "mssql", "oracle", "databases"]
+provides-extras = ["aws", "kms", "keychain", "vault", "cache", "postgresql", "psycopg", "mysql", "mariadb", "mssql", "oracle", "databases"]
 
 [package.metadata.requires-dev]
 dev = [

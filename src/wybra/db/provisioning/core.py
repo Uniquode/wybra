@@ -3,10 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from wybra.db.settings import ResolvedDatabaseConnection
 from wybra.db.urls import DatabaseBackend
+
+if TYPE_CHECKING:
+    from wybra.db.provisioning.aws import AwsRdsMetadataClient
 
 DatabaseFamily = Literal["sqlite", "postgresql", "mysql", "mariadb", "mssql", "oracle"]
 ProvisioningStatus = Literal[
@@ -158,9 +161,10 @@ def provisioning_context(
     provisioning_connection: ResolvedDatabaseConnection | None,
     project_root: Path,
     modules: tuple[str, ...],
+    aws_metadata_client: AwsRdsMetadataClient | None = None,
 ) -> ProvisioningContext:
     family = database_family_for_backend(runtime_connection.backend)
-    return ProvisioningContext(
+    context = ProvisioningContext(
         family=family,
         runtime_connection=runtime_connection,
         provisioning_connection=(
@@ -168,6 +172,18 @@ def provisioning_context(
         ),
         project_root=project_root.resolve(),
         modules=modules,
+    )
+    if runtime_connection.aws is None and (
+        context.provisioning_connection is None
+        or context.provisioning_connection.aws is None
+    ):
+        return context
+
+    from wybra.db.provisioning.aws import validate_aws_managed_database_context
+
+    return validate_aws_managed_database_context(
+        context,
+        metadata_client=aws_metadata_client,
     )
 
 

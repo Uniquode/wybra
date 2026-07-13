@@ -35,6 +35,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+aws = [
+    "boto3>=1.43.42",
+]
 kms = [
     "boto3>=1.43.42",
 ]
