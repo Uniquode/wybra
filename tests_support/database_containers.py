@@ -18,7 +18,7 @@ from testcontainers.mysql import MySqlContainer
 from testcontainers.postgres import PostgresContainer
 
 from wybra.db.provisioning.mysql import quote_mysql_identifier
-from wybra.db.sql import quote_sql_identifier
+from wybra.db.sql import ident, render_sql, trusted_sql
 
 DEFAULT_POSTGRES_IMAGE: Final = "postgres:17-alpine"
 DEFAULT_MYSQL_IMAGE: Final = "mysql:8.4"
@@ -370,12 +370,19 @@ async def _cleanup_postgresql_target(config: ContainerDatabaseConfig) -> None:
             """,
             config.database,
         )
-        await maintenance.execute(
-            f"DROP DATABASE IF EXISTS {quote_sql_identifier(config.database)}"
+        drop_database = render_sql(
+            t"DROP DATABASE IF EXISTS {ident(config.database)}",
+            dialect="postgresql",
         )
         await maintenance.execute(
-            f"DROP ROLE IF EXISTS {quote_sql_identifier(config.runtime_user)}"
+            drop_database.statement,
+            *drop_database.parameters,
         )
+        drop_role = render_sql(
+            t"DROP ROLE IF EXISTS {ident(config.runtime_user)}",
+            dialect="postgresql",
+        )
+        await maintenance.execute(drop_role.statement, *drop_role.parameters)
     finally:
         await maintenance.close()
 
@@ -398,8 +405,14 @@ async def _cleanup_mysql_target(config: ContainerDatabaseConfig) -> None:
             )
             database_row = await cursor.fetchone()
             if database_row is not None and database_row[0]:
+                drop_database = render_sql(
+                    t"DROP DATABASE {ident(config.database)}",
+                    dialect="mysql",
+                    quote_identifier=quote_mysql_identifier,
+                )
                 await cursor.execute(
-                    f"DROP DATABASE {quote_mysql_identifier(config.database)}"
+                    drop_database.statement,
+                    drop_database.parameters or None,
                 )
 
             await cursor.execute(
@@ -408,9 +421,13 @@ async def _cleanup_mysql_target(config: ContainerDatabaseConfig) -> None:
             )
             user_row = await cursor.fetchone()
             if user_row is not None and user_row[0]:
-                await cursor.execute(
-                    f"DROP USER {_sql_string(config.runtime_user)}@'%'"
+                account = trusted_sql(_mysql_account_literal(config.runtime_user))
+                drop_user = render_sql(
+                    t"DROP USER {account}",
+                    dialect="mysql",
+                    quote_identifier=quote_mysql_identifier,
                 )
+                await cursor.execute(drop_user.statement, drop_user.parameters or None)
     finally:
         connection.close()
         wait_closed = getattr(connection, "wait_closed", None)
@@ -578,6 +595,10 @@ def _toml_string(value: str) -> str:
 
 def _sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def _mysql_account_literal(user: str) -> str:
+    return _sql_string(user) + "@'%'"
 
 
 def skip_if_mssql_driver_unavailable() -> None:
