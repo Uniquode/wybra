@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 
 import pytest
 
@@ -1013,6 +1015,70 @@ def test_run_tortoise_cli_reports_non_zero_exit(
 
     with pytest.raises(migrate_module.MigrationStateError, match="exit_code=2"):
         asyncio.run(migrate_module._run_tortoise_cli(context, ["heads"]))
+
+
+def test_mysql_recorder_datetime_literals_are_mariadb_safe() -> None:
+    class RecordingConnection:
+        def __init__(self) -> None:
+            self.capabilities = SimpleNamespace(dialect="mysql")
+            self.query: str | None = None
+            self.values: list[object] | None = None
+
+        async def execute_query(
+            self, query: str, values: list[object] | None = None
+        ) -> None:
+            self.query = query
+            self.values = values
+
+    original_record_applied = migrate_module.MigrationRecorder.record_applied
+    connection = RecordingConnection()
+
+    with migrate_module._mysql_recorder_datetime_literals():
+        recorder = migrate_module.MigrationRecorder(connection)
+        asyncio.run(recorder.record_applied("wybra_sessions", "0001_initial"))
+
+    assert migrate_module.MigrationRecorder.record_applied is original_record_applied
+    assert connection.query is not None
+    assert connection.values is not None
+    assert connection.query.endswith("VALUES (%s, %s, %s)")
+    assert connection.values[:2] == ["wybra_sessions", "0001_initial"]
+    applied_at = connection.values[2]
+    assert isinstance(applied_at, str)
+    assert "+00:00" not in applied_at
+    assert re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+",
+        applied_at,
+    )
+
+
+def test_mysql_recorder_datetime_literals_keep_non_mysql_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OriginalModel:
+        pass
+
+    class RecordingConnection:
+        capabilities = SimpleNamespace(dialect="postgres")
+
+    calls: list[tuple[str, str]] = []
+
+    def original_make_model(self: object, table_name: str) -> type[OriginalModel]:
+        connection = getattr(self, "connection", None)
+        capabilities = getattr(connection, "capabilities", None)
+        calls.append((getattr(capabilities, "dialect", ""), table_name))
+        return OriginalModel
+
+    monkeypatch.setattr(
+        migrate_module.MigrationRecorder,
+        "_make_model",
+        original_make_model,
+    )
+
+    with migrate_module._mysql_recorder_datetime_literals():
+        recorder = migrate_module.MigrationRecorder(RecordingConnection())
+
+    assert recorder.model is OriginalModel
+    assert calls == [("postgres", "tortoise_migrations")]
 
 
 def test_load_migration_settings_passes_keyword_only_config_source(

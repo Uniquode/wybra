@@ -90,11 +90,12 @@ from wybra.site import Site, SiteCapabilityError, start
 
 
 class TestClient(FastAPITestClient):
-    """Test client that closes Tortoise connections before request-loop teardown."""
+    """Test client that keeps Tortoise connections scoped to the request loop."""
 
     @contextmanager
     def _portal_factory(self):
         with super()._portal_factory() as portal:
+            portal.call(_close_testclient_tortoise_connections, self.app)
             try:
                 yield portal
             finally:
@@ -117,14 +118,6 @@ async def _close_testclient_tortoise_connections(app) -> None:
         restore_create_connection=False,
     )
 
-
-# These async tests intentionally exercise the ASGI app through Starlette's
-# synchronous TestClient. TestClient runs requests on its own event loop, while
-# setup/assertion helpers use pytest's anyio loop. Runtime ASGI servers do not
-# use this split, and Tortoise reconnects safely in this test-only pattern.
-pytestmark = pytest.mark.filterwarnings(
-    "ignore::tortoise.warnings.TortoiseLoopSwitchWarning"
-)
 
 PAGE_MODULES = (
     "wybra.forms",

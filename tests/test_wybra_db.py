@@ -214,6 +214,9 @@ class _FakeRdsClient:
         }
 
 
+# Real backend lifecycle coverage lives under tests_integration. The recording
+# connectors below remain fast unit support for SQL rendering, validation,
+# safety branches, missing-driver paths, and redaction checks.
 class _RecordingPostgreSQLConnection:
     def __init__(self, fetch_values: list[object]) -> None:
         self.fetch_values = fetch_values
@@ -695,6 +698,46 @@ def test_structured_mariadb_config_uses_tortoise_mysql_backend(
             "host": "db.example",
             "user": "app_user",
             "password": "app_password",
+        },
+    }
+
+
+def test_structured_mssql_config_defaults_tortoise_driver(
+    tmp_path: Path,
+) -> None:
+    config = ConfigService(
+        [
+            MappingConfigSource(
+                {
+                    "app.database": {
+                        "backend": "mssql",
+                        "host": "db.example",
+                        "port": 1433,
+                        "database": "uniquode",
+                        "user": "app_user",
+                        "password": "app_password",
+                    }
+                }
+            )
+        ],
+        config_defs=(db_module_config,),
+    )
+
+    connection = resolve_database_connection_from_config(
+        config,
+        project_root=tmp_path,
+    )
+
+    assert connection is not None
+    assert connection.tortoise_connection_config == {
+        "engine": "tortoise.backends.mssql",
+        "credentials": {
+            "database": "uniquode",
+            "host": "db.example",
+            "port": 1433,
+            "user": "app_user",
+            "password": "app_password",
+            "driver": "ODBC Driver 18 for SQL Server",
         },
     }
 
@@ -2625,7 +2668,8 @@ def test_mssql_provisioner_initialises_database_principals_and_grants() -> None:
     ]
     executed_sql = _recorded_mssql_statements(maintenance, target)
     assert "CREATE DATABASE [app]" in executed_sql
-    assert "CREATE LOGIN [app] WITH PASSWORD = ?" in executed_sql
+    assert "CREATE LOGIN ' + QUOTENAME(?) +" in executed_sql
+    assert "WITH PASSWORD = N" in executed_sql
     assert "CREATE SCHEMA [app_schema]" in executed_sql
     assert (
         "CREATE USER [app] FOR LOGIN [app] WITH DEFAULT_SCHEMA = [app_schema]"
@@ -2638,7 +2682,7 @@ def test_mssql_provisioner_initialises_database_principals_and_grants() -> None:
     ) in executed_sql
     assert "secret" not in executed_sql
     assert "secret" not in " ".join(result.message for result in results)
-    assert maintenance.executed[1][1] == ("secret",)
+    assert maintenance.executed[1][1] == ("app", "secret")
     assert maintenance.closed
     assert target.closed
 
@@ -3261,6 +3305,70 @@ def test_mysql_destroy_removes_configured_database_and_safe_user() -> None:
     show_grants_query, show_grants_args = connection.queries[2]
     assert show_grants_query == "SHOW GRANTS FOR 'app'@'%'"
     assert show_grants_args == ()
+    processlist_query, processlist_args = connection.queries[4]
+    assert "FROM performance_schema.threads" in processlist_query
+    assert processlist_args == ("app", 99)
+
+
+def test_mysql_destroy_falls_back_to_information_schema_processlist() -> None:
+    class ProcessListFallbackConnection(_RecordingMySQLConnection):
+        async def fetchall(
+            self, query: str, *args: object
+        ) -> tuple[tuple[object, ...], ...]:
+            self.queries.append((query, args))
+            if query == "SHOW GRANTS FOR 'app'@'%'":
+                return (
+                    ("GRANT USAGE ON *.* TO 'app'@'%'",),
+                    ("GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'",),
+                )
+            if "FROM performance_schema.threads" in query:
+                raise RuntimeError("performance_schema denied")
+            if "FROM INFORMATION_SCHEMA.PROCESSLIST" in query:
+                return ((101,),)
+            raise AssertionError(f"Unexpected MySQL query: {query}")
+
+    connection = ProcessListFallbackConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            99,  # current connection id
+        ]
+    )
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("removed", "destroy"),
+        ("removed", "destroy"),
+    ]
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "KILL 101" in executed_sql
+    processlist_queries = [
+        (query, args)
+        for query, args in connection.queries
+        if "performance_schema.threads" in query
+        or "INFORMATION_SCHEMA.PROCESSLIST" in query
+    ]
+    assert processlist_queries == [
+        (
+            "SELECT PROCESSLIST_ID FROM performance_schema.threads "
+            "WHERE PROCESSLIST_DB = %s AND PROCESSLIST_ID <> %s",
+            ("app", 99),
+        ),
+        (
+            "SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST WHERE DB = %s AND ID <> %s",
+            ("app", 99),
+        ),
+    ]
 
 
 def test_mysql_destroy_skips_service_account_runtime_user() -> None:

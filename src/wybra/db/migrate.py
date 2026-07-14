@@ -6,15 +6,20 @@ import logging
 import sys
 import types
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 import click
+from tortoise import fields
 from tortoise.cli import cli as tortoise_cli
 from tortoise.cli import utils as tortoise_cli_utils
 from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
+from tortoise.migrations.recorder import MigrationRecorder
+from tortoise.models import Model
 
 from wybra.core.composition import AppConfig
 from wybra.core.logging import LoggingConfigurationError
@@ -32,7 +37,9 @@ from wybra.db.provisioning import (
     provisioning_context,
     run_database_maintenance,
 )
+from wybra.db.provisioning.mysql import quote_mysql_identifier
 from wybra.db.settings import CredentialPurpose, ResolvedDatabaseConnection
+from wybra.db.sql import ident, param, render_sql
 from wybra.db.surfaces import DataCompositionError
 from wybra.db.tortoise import build_tortoise_config as build_config
 from wybra.db.urls import (
@@ -963,13 +970,14 @@ def _database_connection_for_settings(
 async def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
     config_module = _register_tortoise_config_module(context.config)
     try:
-        exit_code = await tortoise_cli.run_cli_async(
-            [
-                "--config",
-                f"{config_module}.{TORTOISE_CONFIG_VARIABLE}",
-                *args,
-            ]
-        )
+        with _mysql_recorder_datetime_literals():
+            exit_code = await tortoise_cli.run_cli_async(
+                [
+                    "--config",
+                    f"{config_module}.{TORTOISE_CONFIG_VARIABLE}",
+                    *args,
+                ]
+            )
     finally:
         sys.modules.pop(config_module, None)
 
@@ -987,6 +995,64 @@ def _register_tortoise_config_module(config: dict[str, Any]) -> str:
     setattr(module, TORTOISE_CONFIG_VARIABLE, config)
     sys.modules[module_name] = module
     return module_name
+
+
+@contextmanager
+def _mysql_recorder_datetime_literals() -> Iterator[None]:
+    original_record_applied = MigrationRecorder.record_applied
+    original_make_model = MigrationRecorder._make_model
+
+    def recorder_dialect(self: Any) -> str:
+        dialect = getattr(self, "_dialect", "")
+        if isinstance(dialect, str) and dialect:
+            return dialect
+        connection = getattr(self, "connection", None)
+        capabilities = getattr(connection, "capabilities", None)
+        return str(getattr(capabilities, "dialect", ""))
+
+    async def record_applied(self: Any, app: str, name: str) -> None:
+        if recorder_dialect(self) != "mysql":
+            await original_record_applied(self, app, name)
+            return
+
+        # Tortoise currently writes timezone-aware ISO strings for migration
+        # recorder timestamps. MariaDB rejects those for DATETIME in strict
+        # mode, so use a plain UTC DATETIME literal for MySQL-family backends
+        # until the upstream recorder handles this natively.
+        applied_at = datetime.now(UTC).replace(tzinfo=None).isoformat(" ")
+        query = render_sql(
+            t"INSERT INTO {ident(self.table_name)} "
+            t"({ident('app')}, {ident('name')}, {ident('applied_at')}) "
+            t"VALUES ({param(app)}, {param(name)}, {param(applied_at)})",
+            dialect="mysql",
+            quote_identifier=quote_mysql_identifier,
+        )
+        await self.connection.execute_query(query.statement, list(query.parameters))
+
+    def make_model(self: Any, table_name: str) -> type[Model]:
+        if recorder_dialect(self) != "mysql":
+            return original_make_model(self, table_name)
+
+        class MigrationRecord(Model):
+            id = fields.IntField(primary_key=True)
+            app = fields.CharField(max_length=255)
+            name = fields.CharField(max_length=255)
+            applied_at = fields.DatetimeField()
+
+            class Meta:
+                table = table_name
+                app = "_migrations"
+                unique_together = (("app", "name"),)
+
+        return MigrationRecord
+
+    MigrationRecorder._make_model = make_model
+    MigrationRecorder.record_applied = record_applied
+    try:
+        yield
+    finally:
+        MigrationRecorder._make_model = original_make_model
+        MigrationRecorder.record_applied = original_record_applied
 
 
 def _missing_settings_loader(

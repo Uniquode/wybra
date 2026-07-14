@@ -438,16 +438,10 @@ class MySQLProvisioner:
                 ),
                 message=f"{self.label} connection id was invalid.",
             )
-            rows = await _fetchall(
+            rows = await self._database_session_rows(
                 connection,
-                render_sql(
-                    t"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST "
-                    t"WHERE DB = {param(database)} "
-                    t"AND ID <> {param(current_connection_id)}",
-                    dialect="mysql",
-                    quote_identifier=quote_mysql_identifier,
-                ),
-                label=self.label,
+                database=database,
+                current_connection_id=current_connection_id,
             )
             for row in rows:
                 if not row:
@@ -456,6 +450,8 @@ class MySQLProvisioner:
                     row[0],
                     message=f"{self.label} process id was invalid.",
                 )
+                if process_id == current_connection_id:
+                    continue
                 await _execute(
                     connection,
                     render_sql(
@@ -469,6 +465,41 @@ class MySQLProvisioner:
             raise DatabaseProvisioningOperationError(
                 f"Failed to terminate {self.label} sessions for target database."
             ) from exc
+
+    async def _database_session_rows(
+        self,
+        connection: MySQLConnection,
+        *,
+        database: str,
+        current_connection_id: int,
+    ) -> tuple[tuple[object, ...], ...]:
+        try:
+            return await _fetchall(
+                connection,
+                render_sql(
+                    t"SELECT PROCESSLIST_ID FROM performance_schema.threads "
+                    t"WHERE PROCESSLIST_DB = {param(database)} "
+                    t"AND PROCESSLIST_ID <> {param(current_connection_id)}",
+                    dialect="mysql",
+                    quote_identifier=quote_mysql_identifier,
+                ),
+                label=self.label,
+            )
+        except DatabaseProvisioningOperationError:
+            # Prefer performance_schema, but some managed MySQL deployments
+            # restrict it. Fall back to INFORMATION_SCHEMA.PROCESSLIST only
+            # when the preferred metadata source is unavailable.
+            return await _fetchall(
+                connection,
+                render_sql(
+                    t"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST "
+                    t"WHERE DB = {param(database)} "
+                    t"AND ID <> {param(current_connection_id)}",
+                    dialect="mysql",
+                    quote_identifier=quote_mysql_identifier,
+                ),
+                label=self.label,
+            )
 
     async def _user_grant_scope(
         self,

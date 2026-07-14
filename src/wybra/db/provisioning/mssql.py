@@ -597,7 +597,11 @@ async def _ensure_login(
     await _execute(
         connection,
         render_sql(
-            t"CREATE LOGIN {ident(app_user)} WITH PASSWORD = {param(app_password)}",
+            t"DECLARE @sql nvarchar(max) = N'CREATE LOGIN ' + "
+            t"QUOTENAME({param(app_user)}) + "
+            t"N' WITH PASSWORD = N''' + "
+            t"REPLACE({param(app_password)}, N'''', N'''''') + N''''; "
+            t"EXEC(@sql)",
             dialect="mssql",
             quote_identifier=quote_mssql_identifier,
         ),

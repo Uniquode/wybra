@@ -1185,6 +1185,8 @@ def _structured_backend_credentials(
         credentials["host"] = structured.host
     if structured.port is not None:
         credentials["port"] = structured.port
+    if structured.backend_info.tortoise_scheme == "mssql":
+        credentials.setdefault("driver", "ODBC Driver 18 for SQL Server")
     return credentials
 
 
