@@ -1002,8 +1002,16 @@ def _mysql_recorder_datetime_literals() -> Iterator[None]:
     original_record_applied = MigrationRecorder.record_applied
     original_make_model = MigrationRecorder._make_model
 
+    def recorder_dialect(self: Any) -> str:
+        dialect = getattr(self, "_dialect", "")
+        if isinstance(dialect, str) and dialect:
+            return dialect
+        connection = getattr(self, "connection", None)
+        capabilities = getattr(connection, "capabilities", None)
+        return str(getattr(capabilities, "dialect", ""))
+
     async def record_applied(self: Any, app: str, name: str) -> None:
-        if getattr(self, "_dialect", "") != "mysql":
+        if recorder_dialect(self) != "mysql":
             await original_record_applied(self, app, name)
             return
 
@@ -1022,7 +1030,8 @@ def _mysql_recorder_datetime_literals() -> Iterator[None]:
         await self.connection.execute_query(query.statement, list(query.parameters))
 
     def make_model(self: Any, table_name: str) -> type[Model]:
-        del self
+        if recorder_dialect(self) != "mysql":
+            return original_make_model(self, table_name)
 
         class MigrationRecord(Model):
             id = fields.IntField(primary_key=True)

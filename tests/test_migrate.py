@@ -1051,6 +1051,36 @@ def test_mysql_recorder_datetime_literals_are_mariadb_safe() -> None:
     )
 
 
+def test_mysql_recorder_datetime_literals_keep_non_mysql_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OriginalModel:
+        pass
+
+    class RecordingConnection:
+        capabilities = SimpleNamespace(dialect="postgres")
+
+    calls: list[tuple[str, str]] = []
+
+    def original_make_model(self: object, table_name: str) -> type[OriginalModel]:
+        connection = getattr(self, "connection", None)
+        capabilities = getattr(connection, "capabilities", None)
+        calls.append((getattr(capabilities, "dialect", ""), table_name))
+        return OriginalModel
+
+    monkeypatch.setattr(
+        migrate_module.MigrationRecorder,
+        "_make_model",
+        original_make_model,
+    )
+
+    with migrate_module._mysql_recorder_datetime_literals():
+        recorder = migrate_module.MigrationRecorder(RecordingConnection())
+
+    assert recorder.model is OriginalModel
+    assert calls == [("postgres", "tortoise_migrations")]
+
+
 def test_load_migration_settings_passes_keyword_only_config_source(
     tmp_path: Path,
 ) -> None:

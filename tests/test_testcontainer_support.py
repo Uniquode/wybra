@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import builtins
+import sys
+from types import SimpleNamespace
+
+import pytest
+import tests_support.database_containers as database_containers
 from tests_support.database_containers import (
     DEFAULT_MARIADB_IMAGE,
     DEFAULT_MSSQL_IMAGE,
@@ -107,3 +113,157 @@ def test_container_database_config_redacts_metadata() -> None:
     assert metadata["service_password"] == "<redacted>"
     assert metadata["runtime_user"] == "wy...pp"
     assert metadata["service_user"] == "po...es"
+
+
+def test_docker_availability_reports_missing_client(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def import_without_docker(
+        name: str,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        if name == "docker":
+            raise ImportError("missing docker")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_docker)
+    database_containers.docker_availability.cache_clear()
+
+    try:
+        available, reason = database_containers.docker_availability()
+    finally:
+        database_containers.docker_availability.cache_clear()
+
+    assert not available
+    assert reason == "Docker Python client is not installed."
+
+
+def test_docker_availability_reports_ping_failure(monkeypatch) -> None:
+    class FailingDockerClient:
+        closed = False
+
+        def ping(self) -> None:
+            raise RuntimeError("daemon unavailable")
+
+        def close(self) -> None:
+            self.closed = True
+
+    client = FailingDockerClient()
+    monkeypatch.setitem(
+        sys.modules,
+        "docker",
+        SimpleNamespace(from_env=lambda: client),
+    )
+    database_containers.docker_availability.cache_clear()
+
+    try:
+        available, reason = database_containers.docker_availability()
+    finally:
+        database_containers.docker_availability.cache_clear()
+
+    assert not available
+    assert reason == "Docker is unavailable for testcontainers: daemon unavailable"
+    assert client.closed
+
+
+def test_docker_availability_reports_success(monkeypatch) -> None:
+    class AvailableDockerClient:
+        closed = False
+
+        def ping(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    client = AvailableDockerClient()
+    monkeypatch.setitem(
+        sys.modules,
+        "docker",
+        SimpleNamespace(from_env=lambda: client),
+    )
+    database_containers.docker_availability.cache_clear()
+
+    try:
+        available, reason = database_containers.docker_availability()
+    finally:
+        database_containers.docker_availability.cache_clear()
+
+    assert available
+    assert reason == "Docker is available."
+    assert client.closed
+
+
+def test_skip_if_docker_unavailable_skips(monkeypatch) -> None:
+    monkeypatch.setattr(
+        database_containers,
+        "docker_availability",
+        lambda: (False, "Docker unavailable in test"),
+    )
+
+    with pytest.raises(pytest.skip.Exception, match="Docker unavailable in test"):
+        database_containers.skip_if_docker_unavailable()
+
+
+def test_skip_if_mssql_driver_unavailable_skips_import_errors(monkeypatch) -> None:
+    def missing_driver_modules() -> tuple[object, object]:
+        raise ImportError("missing asyncodbc")
+
+    monkeypatch.setattr(
+        database_containers,
+        "_mssql_driver_modules",
+        missing_driver_modules,
+    )
+
+    with pytest.raises(pytest.skip.Exception, match="ImportError"):
+        database_containers.skip_if_mssql_driver_unavailable()
+
+
+def test_skip_if_mssql_driver_unavailable_skips_missing_driver(monkeypatch) -> None:
+    pyodbc = SimpleNamespace(drivers=lambda: ["Other Driver"])
+    monkeypatch.setattr(
+        database_containers,
+        "_mssql_driver_modules",
+        lambda: (object(), pyodbc),
+    )
+
+    with pytest.raises(pytest.skip.Exception, match="ODBC Driver 18 missing"):
+        database_containers.skip_if_mssql_driver_unavailable()
+
+
+def test_skip_if_mssql_driver_unavailable_accepts_available_driver(monkeypatch) -> None:
+    pyodbc = SimpleNamespace(drivers=lambda: ["ODBC Driver 18 for SQL Server"])
+    monkeypatch.setattr(
+        database_containers,
+        "_mssql_driver_modules",
+        lambda: (object(), pyodbc),
+    )
+
+    database_containers.skip_if_mssql_driver_unavailable()
+
+
+def test_mssql_dsn_uses_service_credentials() -> None:
+    config = ContainerDatabaseConfig(
+        backend="mssql",
+        host="127.0.0.1",
+        port=14330,
+        database="wybra_it",
+        runtime_user="wybra_app",
+        runtime_password="runtime-secret",
+        service_user="SA",
+        service_password="service-secret",
+        service_database="master",
+    )
+
+    dsn = database_containers._mssql_dsn(config, database="master")
+
+    assert dsn == (
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        "SERVER={127.0.0.1,14330};"
+        "DATABASE={master};"
+        "UID={SA};"
+        "PWD={service-secret};"
+        "Encrypt={yes};"
+        "TrustServerCertificate={yes}"
+    )

@@ -3310,6 +3310,67 @@ def test_mysql_destroy_removes_configured_database_and_safe_user() -> None:
     assert processlist_args == ("app", 99)
 
 
+def test_mysql_destroy_falls_back_to_information_schema_processlist() -> None:
+    class ProcessListFallbackConnection(_RecordingMySQLConnection):
+        async def fetchall(
+            self, query: str, *args: object
+        ) -> tuple[tuple[object, ...], ...]:
+            self.queries.append((query, args))
+            if query == "SHOW GRANTS FOR 'app'@'%'":
+                return (
+                    ("GRANT USAGE ON *.* TO 'app'@'%'",),
+                    ("GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'",),
+                )
+            if "FROM performance_schema.threads" in query:
+                raise RuntimeError("performance_schema denied")
+            if "FROM INFORMATION_SCHEMA.PROCESSLIST" in query:
+                return ((101,),)
+            raise AssertionError(f"Unexpected MySQL query: {query}")
+
+    connection = ProcessListFallbackConnection(
+        [
+            1,  # database exists
+            1,  # user exists
+            99,  # current connection id
+        ]
+    )
+    provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
+    context = _mysql_provisioning_context(
+        provisioning_connection=_database_connection(
+            "mysql",
+            {"database": "app", "user": "app_sa", "password": "admin_secret"},
+        ),
+    )
+
+    results = asyncio.run(
+        provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+    )
+
+    assert [(result.status, result.phase) for result in results] == [
+        ("removed", "destroy"),
+        ("removed", "destroy"),
+    ]
+    executed_sql = "\n".join(query for query, _args in connection.executed)
+    assert "KILL 101" in executed_sql
+    processlist_queries = [
+        (query, args)
+        for query, args in connection.queries
+        if "performance_schema.threads" in query
+        or "INFORMATION_SCHEMA.PROCESSLIST" in query
+    ]
+    assert processlist_queries == [
+        (
+            "SELECT PROCESSLIST_ID FROM performance_schema.threads "
+            "WHERE PROCESSLIST_DB = %s AND PROCESSLIST_ID <> %s",
+            ("app", 99),
+        ),
+        (
+            "SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST WHERE DB = %s AND ID <> %s",
+            ("app", 99),
+        ),
+    ]
+
+
 def test_mysql_destroy_skips_service_account_runtime_user() -> None:
     connection = _RecordingMySQLConnection(
         [
