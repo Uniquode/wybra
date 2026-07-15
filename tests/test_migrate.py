@@ -126,6 +126,34 @@ def _write_test_app_config(config_path: Path, modules: tuple[str, ...]) -> Path:
 
 
 class TestMigrationCommands:
+    def test_wybra_migrate_main_delegates_to_async_entry_point(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        observed: dict[str, object] = {}
+
+        async def run_migration(
+            database_url: str | None,
+            *,
+            config_source: str | None,
+            operation: object,
+            **kwargs: object,
+        ) -> int:
+            observed.update(
+                database_url=database_url,
+                config_source=config_source,
+                operation=operation,
+                **kwargs,
+            )
+            return 0
+
+        monkeypatch.setattr(tools_migrate, "run_migration", run_migration)
+
+        assert tools_migrate.main(["heads"]) == 0
+        assert observed["database_url"] is None
+        assert observed["config_source"] is None
+        assert callable(observed["operation"])
+
     def test_migrate_help_exposes_native_tortoise_commands(self, capsys) -> None:
         fixture = create_migrate_command()
 
