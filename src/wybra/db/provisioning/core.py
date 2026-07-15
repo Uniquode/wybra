@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from tortoise.backends.base.client import BaseDBAsyncClient
+
 from wybra.db.settings import ResolvedDatabaseConnection
-from wybra.db.urls import DatabaseBackend
+from wybra.db.urls import DatabaseBackend, database_backend_for_url
 
 if TYPE_CHECKING:
     from wybra.db.provisioning.aws import AwsRdsMetadataClient
@@ -158,6 +160,12 @@ class DatabaseProvisioner(Protocol):
         request: DatabaseMaintenanceRequest,
     ) -> tuple[ProvisioningPhaseResult, ...]: ...
 
+    async def clear_test_data(
+        self,
+        connection: BaseDBAsyncClient,
+        table_names: tuple[str, ...],
+    ) -> None: ...
+
     def quote_identifier(self, identifier: str) -> str: ...
 
 
@@ -285,6 +293,24 @@ def database_maintenance_tasks(
     return provisioner_for_family(context.family).maintenance_tasks(context)
 
 
+async def clear_test_database_data(
+    connection: BaseDBAsyncClient,
+    *,
+    database_url: str,
+    table_names: tuple[str, ...],
+) -> None:
+    """Clear migrated application tables using the active database family."""
+    if not table_names:
+        return
+    backend = database_backend_for_url(database_url)
+    if backend is None:
+        raise DatabaseProvisioningConfigurationError(
+            "Test database URL uses an unsupported database scheme."
+        )
+    family = database_family_for_backend(backend)
+    await provisioner_for_family(family).clear_test_data(connection, table_names)
+
+
 def _ensure_family(context: ProvisioningContext, family: DatabaseFamily) -> None:
     if context.family != family:
         raise DatabaseProvisioningConfigurationError(
@@ -354,6 +380,7 @@ __all__ = (
     "TORTOISE_MIGRATIONS_TASK",
     "database_family_for_backend",
     "database_maintenance_tasks",
+    "clear_test_database_data",
     "destroy_database",
     "initialise_database",
     "provisioner_for_family",

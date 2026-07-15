@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 
 from wybra.errors.debug import _chained_errors, development_error_context
+from wybra.testing import WybraTestClient
 
 
 def test_development_error_context_includes_request_route_and_traceback() -> None:
@@ -18,7 +18,7 @@ def test_development_error_context_includes_request_route_and_traceback() -> Non
             captured["context"] = development_error_context(request, exc)
         return {"ok": True}
 
-    with TestClient(app) as client:
+    with WybraTestClient(app) as client:
         response = client.get("/debug/abc?mode=detail")
 
     assert response.status_code == 200
@@ -52,7 +52,7 @@ def test_development_error_context_includes_chained_causes() -> None:
             ]
         }
 
-    with TestClient(app) as client:
+    with WybraTestClient(app) as client:
         response = client.get("/debug")
 
     assert response.json() == {

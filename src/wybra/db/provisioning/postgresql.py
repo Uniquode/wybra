@@ -4,6 +4,8 @@ import importlib
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol, cast
 
+from tortoise.backends.base.client import BaseDBAsyncClient
+
 from wybra.db.provisioning.core import (
     REPAIR_PRIVILEGES_TASK,
     TORTOISE_MIGRATIONS_TASK,
@@ -19,7 +21,14 @@ from wybra.db.provisioning.core import (
     ProvisioningStatus,
 )
 from wybra.db.settings import ResolvedDatabaseConnection
-from wybra.db.sql import RenderedSql, ident, param, quote_sql_identifier, render_sql
+from wybra.db.sql import (
+    RenderedSql,
+    ident,
+    param,
+    quote_sql_identifier,
+    render_sql,
+    trusted_sql,
+)
 
 _DEFAULT_POSTGRESQL_SCHEMA = "public"
 _DEFAULT_SERVICE_ACCOUNT_DATABASE = "postgres"
@@ -373,6 +382,20 @@ class PostgreSQLProvisioner:
             )
         finally:
             await target.close()
+
+    async def clear_test_data(
+        self,
+        connection: BaseDBAsyncClient,
+        table_names: tuple[str, ...],
+    ) -> None:
+        quoted_tables = ", ".join(
+            self.quote_identifier(table_name) for table_name in table_names
+        )
+        statement = render_sql(
+            t"TRUNCATE TABLE {trusted_sql(quoted_tables)} RESTART IDENTITY CASCADE",
+            dialect="postgresql",
+        )
+        await connection.execute_query(statement.statement)
 
     def quote_identifier(self, identifier: str) -> str:
         return quote_sql_identifier(identifier)
