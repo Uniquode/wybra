@@ -631,6 +631,32 @@ class TestDatabaseConfigurationAndRuntime:
         assert registry.alias_for(reader_fallback) == "second"
         assert registry.alias_for(writer_fallback) == "first"
 
+    def test_weighted_selection_uses_configured_weights_without_expansion(
+        self,
+    ) -> None:
+        registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="primary",
+                    roles=frozenset({"reader"}),
+                    weight=10_000,
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="secondary",
+                    roles=frozenset({"reader"}),
+                    weight=1,
+                ),
+            ),
+            reader_rotation="weighted",
+        )
+
+        for _ in range(10_000):
+            assert registry.alias_for(registry.connection().for_read()) == "primary"
+        assert registry.alias_for(registry.connection().for_read()) == "secondary"
+        assert registry.alias_for(registry.connection().for_read()) == "primary"
+
     def test_load_and_adaptive_selection_use_route_metrics(self) -> None:
         registry = DatabaseRouteRegistry(
             (

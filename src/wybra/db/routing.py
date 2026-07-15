@@ -231,13 +231,17 @@ class DatabaseRouteRegistry:
         role: DatabaseRouteRole,
         candidates: tuple[DatabaseRouteInstance, ...],
     ) -> DatabaseRouteInstance:
-        expanded = tuple(
-            candidate for candidate in candidates for _ in range(candidate.weight)
-        )
         key = (database_name, role)
         offset = self._weighted_offsets.get(key, 0)
         self._weighted_offsets[key] = offset + 1
-        return expanded[offset % len(expanded)]
+        total_weight = sum(candidate.weight for candidate in candidates)
+        selected_offset = offset % total_weight
+        cumulative_weight = 0
+        for candidate in candidates:
+            cumulative_weight += candidate.weight
+            if selected_offset < cumulative_weight:
+                return candidate
+        raise AssertionError("Database route candidates must have positive weights.")
 
     def _load_key(self, instance: DatabaseRouteInstance) -> tuple[float, str]:
         metrics = self._metrics[instance.alias]
