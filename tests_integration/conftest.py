@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
@@ -28,14 +28,14 @@ def postgresql_service() -> Iterator[PostgreSQLContainerService]:
 
 
 @pytest.fixture
-def postgresql_database_config(
+async def postgresql_database_config(
     postgresql_service: PostgreSQLContainerService,
-) -> Iterator[ContainerDatabaseConfig]:
+) -> AsyncIterator[ContainerDatabaseConfig]:
     config = postgresql_service.runtime_config()
     try:
         yield config
     finally:
-        cleanup_postgresql_target(config)
+        await cleanup_postgresql_target(config)
 
 
 @pytest.fixture(scope="session")
@@ -57,25 +57,19 @@ def mariadb_service() -> Iterator[MySQLContainerService]:
 
 
 @pytest.fixture
-def mysql_database_config(
-    mysql_service: MySQLContainerService,
-) -> Iterator[ContainerDatabaseConfig]:
-    config = mysql_service.runtime_config()
+async def mysql_compatible_database_config(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[ContainerDatabaseConfig]:
+    backend = request.param
+    if backend not in {"mysql", "mariadb"}:
+        raise ValueError(f"Unsupported MySQL-compatible backend: {backend!r}.")
+    service = request.getfixturevalue(f"{backend}_service")
+    assert isinstance(service, MySQLContainerService)
+    config = service.runtime_config()
     try:
         yield config
     finally:
-        cleanup_mysql_target(config)
-
-
-@pytest.fixture
-def mariadb_database_config(
-    mariadb_service: MySQLContainerService,
-) -> Iterator[ContainerDatabaseConfig]:
-    config = mariadb_service.runtime_config()
-    try:
-        yield config
-    finally:
-        cleanup_mysql_target(config)
+        await cleanup_mysql_target(config)
 
 
 @pytest.fixture(scope="session")
@@ -88,11 +82,11 @@ def mssql_service() -> Iterator[SQLServerContainerService]:
 
 
 @pytest.fixture
-def mssql_database_config(
+async def mssql_database_config(
     mssql_service: SQLServerContainerService,
-) -> Iterator[ContainerDatabaseConfig]:
+) -> AsyncIterator[ContainerDatabaseConfig]:
     config = mssql_service.runtime_config()
     try:
         yield config
     finally:
-        cleanup_mssql_target(config)
+        await cleanup_mssql_target(config)

@@ -1,5 +1,4 @@
 import ast
-import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -228,7 +227,8 @@ class TestAuthentication:
                     for module in imported_modules
                 )
 
-    def test_identity_template_context_treats_session_lookup_failure_as_anonymous(
+    @pytest.mark.anyio
+    async def test_identity_template_context_treats_session_lookup_failure_as_anonymous(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -251,7 +251,7 @@ class TestAuthentication:
 
         monkeypatch.setattr(auth_context, "resolve_current_user", resolve_current_user)
 
-        asyncio.run(assert_context())
+        await assert_context()
 
     def test_wybra_auth_models_expose_authorisation_group_tables(self) -> None:
         assert Group._meta.db_table == "identity_group"
@@ -264,9 +264,11 @@ class TestAuthentication:
         assert {"group", "scope"}.issubset(GroupScope._meta.fields_map)
         assert {"group", "user"}.issubset(GroupUser._meta.fields_map)
         assert {"parent_group", "child_group"}.issubset(GroupGroup._meta.fields_map)
-        assert GroupScope._meta.unique_together == (("group", "scope"),)
-        assert GroupUser._meta.unique_together == (("group", "user"),)
-        assert GroupGroup._meta.unique_together == (("parent_group", "child_group"),)
+        assert GroupScope._meta.unique_together == (("group_id", "scope"),)
+        assert GroupUser._meta.unique_together == (("group_id", "user_id"),)
+        assert GroupGroup._meta.unique_together == (
+            ("parent_group_id", "child_group_id"),
+        )
 
     def test_wybra_auth_totp_seed_model_uses_encrypted_field(self) -> None:
         field = IdentityTotpCredential._meta.fields_map["crypt_secret"]
@@ -281,7 +283,10 @@ class TestAuthentication:
         assert fields["credential_id"].null is False
         assert fields["credential_id"].unique is True
 
-    def test_auth_persistence_scope_rolls_back_on_error(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_auth_persistence_scope_rolls_back_on_error(
+        self, tmp_path: Path
+    ) -> None:
         async def assert_scope_rolls_back() -> None:
             database = await initialise_auth_database(
                 sqlite_file_url(tmp_path / "auth-scope-rollback.sqlite3")
@@ -313,9 +318,12 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_scope_rolls_back())
+        await assert_scope_rolls_back()
 
-    def test_user_store_reduces_primary_email_rows_to_one(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_user_store_reduces_primary_email_rows_to_one(
+        self, tmp_path: Path
+    ) -> None:
         async def assert_primary_email_repaired() -> None:
             database = await initialise_auth_database(
                 sqlite_file_url(tmp_path / "primary-email-repair.sqlite3")
@@ -367,9 +375,12 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_primary_email_repaired())
+        await assert_primary_email_repaired()
 
-    def test_authorisation_scope_management_lifecycle(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_authorisation_scope_management_lifecycle(
+        self, tmp_path: Path
+    ) -> None:
         async def assert_scope_lifecycle() -> None:
             database = await initialise_auth_database(
                 sqlite_file_url(tmp_path / "scope.sqlite3")
@@ -427,9 +438,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_scope_lifecycle())
+        await assert_scope_lifecycle()
 
-    def test_authorisation_scope_integrity_race_keeps_transaction_usable(
+    @pytest.mark.anyio
+    async def test_authorisation_scope_integrity_race_keeps_transaction_usable(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -479,9 +491,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_scope_race())
+        await assert_scope_race()
 
-    def test_initial_admin_bootstrap_duplicate_claim_keeps_transaction_usable(
+    @pytest.mark.anyio
+    async def test_initial_admin_bootstrap_duplicate_claim_keeps_transaction_usable(
         self,
         tmp_path: Path,
     ) -> None:
@@ -506,9 +519,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_duplicate_claim())
+        await assert_duplicate_claim()
 
-    def test_deactivate_local_user_rechecks_locked_superuser(
+    @pytest.mark.anyio
+    async def test_deactivate_local_user_rechecks_locked_superuser(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -556,9 +570,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_deactivate_protects_promoted_user())
+        await assert_deactivate_protects_promoted_user()
 
-    def test_update_local_user_uses_locked_current_user(
+    @pytest.mark.anyio
+    async def test_update_local_user_uses_locked_current_user(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -608,9 +623,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_update_preserves_current_user_fields())
+        await assert_update_preserves_current_user_fields()
 
-    def test_authorisation_scope_delete_rejects_used_scope(
+    @pytest.mark.anyio
+    async def test_authorisation_scope_delete_rejects_used_scope(
         self, tmp_path: Path
     ) -> None:
         async def assert_used_scope_delete() -> None:
@@ -645,9 +661,12 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_used_scope_delete())
+        await assert_used_scope_delete()
 
-    def test_authorisation_group_management_lifecycle(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_authorisation_group_management_lifecycle(
+        self, tmp_path: Path
+    ) -> None:
         async def assert_group_lifecycle() -> None:
             database = await initialise_auth_database(
                 sqlite_file_url(tmp_path / "group.sqlite3")
@@ -701,9 +720,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_group_lifecycle())
+        await assert_group_lifecycle()
 
-    def test_authorisation_group_target_distinguishes_invalid_from_missing_uuid(
+    @pytest.mark.anyio
+    async def test_authorisation_group_target_distinguishes_invalid_from_missing_uuid(
         self,
         tmp_path: Path,
     ) -> None:
@@ -729,9 +749,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_group_target_errors())
+        await assert_group_target_errors()
 
-    def test_authorisation_group_scope_assignment_rejects_duplicates(
+    @pytest.mark.anyio
+    async def test_authorisation_group_scope_assignment_rejects_duplicates(
         self,
         tmp_path: Path,
     ) -> None:
@@ -771,9 +792,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_group_scope_assignment())
+        await assert_group_scope_assignment()
 
-    def test_authorisation_group_user_membership_rejects_duplicates_and_blocks_delete(
+    @pytest.mark.anyio
+    async def test_authorisation_group_user_membership_rejects_duplicates_and_blocks_delete(  # noqa: E501
         self,
         tmp_path: Path,
     ) -> None:
@@ -819,9 +841,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_user_membership())
+        await assert_user_membership()
 
-    def test_authorisation_nested_group_membership_rejects_duplicates_and_cycles(
+    @pytest.mark.anyio
+    async def test_authorisation_nested_group_membership_rejects_duplicates_and_cycles(
         self,
         tmp_path: Path,
     ) -> None:
@@ -882,9 +905,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_nested_group_membership())
+        await assert_nested_group_membership()
 
-    def test_authorisation_membership_removal_and_candidate_child_groups(
+    @pytest.mark.anyio
+    async def test_authorisation_membership_removal_and_candidate_child_groups(
         self,
         tmp_path: Path,
     ) -> None:
@@ -957,9 +981,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_removal_and_candidates())
+        await assert_removal_and_candidates()
 
-    def test_effective_scopes_invalid_user_target_returns_invalid_user_id(
+    @pytest.mark.anyio
+    async def test_effective_scopes_invalid_user_target_returns_invalid_user_id(
         self,
         tmp_path: Path,
     ) -> None:
@@ -983,9 +1008,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_invalid_user_id())
+        await assert_invalid_user_id()
 
-    def test_effective_scopes_missing_user_returns_not_found(
+    @pytest.mark.anyio
+    async def test_effective_scopes_missing_user_returns_not_found(
         self, tmp_path: Path
     ) -> None:
         async def assert_missing_user() -> None:
@@ -1005,9 +1031,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_missing_user())
+        await assert_missing_user()
 
-    def test_effective_scopes_resolve_direct_nested_and_duplicate_group_scopes(
+    @pytest.mark.anyio
+    async def test_effective_scopes_resolve_direct_nested_and_duplicate_group_scopes(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1078,9 +1105,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_effective_scopes())
+        await assert_effective_scopes()
 
-    def test_effective_scope_resolution_is_cycle_safe_and_reads_current_data(
+    @pytest.mark.anyio
+    async def test_effective_scope_resolution_is_cycle_safe_and_reads_current_data(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1156,7 +1184,7 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_cycle_safety_and_current_data())
+        await assert_cycle_safety_and_current_data()
 
     def test_wybra_auth_result_carries_success_values_and_failure_reason(self) -> None:
         result = Result.ok({"id": "user-1"})
@@ -1445,7 +1473,8 @@ class TestAuthentication:
             == "Password does not meet the strength requirement."
         )
 
-    def test_wybra_auth_no_challenge_policy_allows_direct_login(self) -> None:
+    @pytest.mark.anyio
+    async def test_wybra_auth_no_challenge_policy_allows_direct_login(self) -> None:
         async def assert_policy() -> None:
             decision = await NoChallengePolicy().after_primary_authentication(
                 PrimaryAuthenticationContext(user_id="user-1"),
@@ -1456,7 +1485,7 @@ class TestAuthentication:
             assert decision.requires_challenge is False
             assert decision.challenge is None
 
-        asyncio.run(assert_policy())
+        await assert_policy()
 
     def test_wybra_auth_identity_provider_and_link_models_are_well_formed(self) -> None:
         provider_fields = set(IdentityProvider._meta.fields_map)
@@ -1489,14 +1518,17 @@ class TestAuthentication:
         assert IdentityProvider._meta.unique_together == (
             ("provider_name", "provider_subject"),
         )
-        assert ExternalIdentityLink._meta.unique_together == (("user", "provider"),)
+        assert ExternalIdentityLink._meta.unique_together == (
+            ("user_id", "provider_id"),
+        )
 
     def test_wybra_auth_generated_session_tokens_fit_configured_column(self) -> None:
         token = generate_session_token()
 
         assert len(token) <= SESSION_TOKEN_MAX_LENGTH
 
-    def test_wybra_auth_provider_credential_store_encrypts_tokens(
+    @pytest.mark.anyio
+    async def test_wybra_auth_provider_credential_store_encrypts_tokens(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1538,9 +1570,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_encrypted_storage())
+        await assert_encrypted_storage()
 
-    def test_wybra_auth_provider_credential_store_handles_legacy_plaintext(
+    @pytest.mark.anyio
+    async def test_wybra_auth_provider_credential_store_handles_legacy_plaintext(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1572,9 +1605,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_legacy_plaintext())
+        await assert_legacy_plaintext()
 
-    def test_wybra_auth_provider_credential_store_rejects_malformed_envelope(
+    @pytest.mark.anyio
+    async def test_wybra_auth_provider_credential_store_rejects_malformed_envelope(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1604,9 +1638,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_malformed_envelope_rejected())
+        await assert_malformed_envelope_rejected()
 
-    def test_wybra_auth_provider_credential_store_requires_keys_for_secret_operations(
+    @pytest.mark.anyio
+    async def test_wybra_auth_provider_credential_store_requires_keys_for_secret_operations(  # noqa: E501
         self,
         tmp_path: Path,
     ) -> None:
@@ -1634,7 +1669,7 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_required_keys())
+        await assert_required_keys()
 
     def test_provider_disabled_identity_options_do_not_require_secret_keys(
         self,
@@ -1648,7 +1683,8 @@ class TestAuthentication:
             PLAIN_TEXT_VERSION,
         )
 
-    def test_wybra_auth_recovery_code_replacement_rejects_user_mismatch(
+    @pytest.mark.anyio
+    async def test_wybra_auth_recovery_code_replacement_rejects_user_mismatch(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1691,9 +1727,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_mismatch_rejected())
+        await assert_mismatch_rejected()
 
-    def test_wybra_auth_totp_seed_storage_uses_encrypted_envelope(
+    @pytest.mark.anyio
+    async def test_wybra_auth_totp_seed_storage_uses_encrypted_envelope(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1725,9 +1762,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_encrypted_storage())
+        await assert_encrypted_storage()
 
-    def test_wybra_auth_totp_rejects_replayed_code_and_persists_counter(
+    @pytest.mark.anyio
+    async def test_wybra_auth_totp_rejects_replayed_code_and_persists_counter(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1797,9 +1835,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_replay_rejected())
+        await assert_replay_rejected()
 
-    def test_wybra_auth_management_scope_uses_configured_secret_service_for_totp(
+    @pytest.mark.anyio
+    async def test_wybra_auth_management_scope_uses_configured_secret_service_for_totp(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1853,9 +1892,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_management_secret_service_used())
+        await assert_management_secret_service_used()
 
-    def test_wybra_auth_totp_verification_fails_closed_without_secret_keys(
+    @pytest.mark.anyio
+    async def test_wybra_auth_totp_verification_fails_closed_without_secret_keys(
         self,
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
@@ -1899,11 +1939,12 @@ class TestAuthentication:
                 await close_database(database)
 
         caplog.set_level(logging.ERROR, logger="wybra.auth.mfa.storage")
-        asyncio.run(assert_missing_keys_handled())
+        await assert_missing_keys_handled()
 
         assert "Unable to verify TOTP credential" in caplog.text
 
-    def test_wybra_auth_recovery_codes_use_keyed_verifiers(
+    @pytest.mark.anyio
+    async def test_wybra_auth_recovery_codes_use_keyed_verifiers(
         self,
         tmp_path: Path,
     ) -> None:
@@ -1955,9 +1996,10 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_recovery_verifier_storage())
+        await assert_recovery_verifier_storage()
 
-    def test_wybra_auth_webauthn_credential_store_lifecycle(
+    @pytest.mark.anyio
+    async def test_wybra_auth_webauthn_credential_store_lifecycle(
         self,
         tmp_path: Path,
     ) -> None:
@@ -2020,7 +2062,7 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_webauthn_storage_lifecycle())
+        await assert_webauthn_storage_lifecycle()
 
     def test_wybra_auth_webauthn_counter_regression_has_branch_reason(
         self,
@@ -2112,7 +2154,10 @@ class TestAuthentication:
             webauthn_user_verification_satisfies_totp=True,
         )
 
-    def test_identity_user_email_stores_normalised_email(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_identity_user_email_stores_normalised_email(
+        self, tmp_path: Path
+    ) -> None:
         async def assert_normalised_email() -> None:
             database = await initialise_auth_database(
                 sqlite_file_url(tmp_path / "normalised-email.sqlite3")
@@ -2135,9 +2180,12 @@ class TestAuthentication:
             finally:
                 await close_database(database)
 
-        asyncio.run(assert_normalised_email())
+        await assert_normalised_email()
 
-    def test_wybra_auth_challenge_completion_consumes_existing_challenge(self) -> None:
+    @pytest.mark.anyio
+    async def test_wybra_auth_challenge_completion_consumes_existing_challenge(
+        self,
+    ) -> None:
         async def assert_challenge_completion() -> None:
             store = MemoryChallengeStore()
             challenge = await store.create_challenge(
@@ -2150,7 +2198,7 @@ class TestAuthentication:
             assert challenge.id in store.consumed
             assert await complete_challenge(store, challenge.id) is False
 
-        asyncio.run(assert_challenge_completion())
+        await assert_challenge_completion()
 
     def test_wybra_auth_router_extension_plan_tracks_explicit_replacements(
         self,

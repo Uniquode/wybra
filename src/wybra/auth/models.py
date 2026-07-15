@@ -69,8 +69,8 @@ class ExternalIdentityLink(Model):
 
     class Meta:
         table = "identity_external_identity_link"
-        unique_together = (("user", "provider"),)
-        indexes = (Index(fields=("user",)),)
+        unique_together = (("user_id", "provider_id"),)
+        indexes = (Index(fields=("user_id",)),)
 
 
 class IdentityUserEmail(Model):
@@ -277,7 +277,7 @@ class GroupScope(Model):
 
     class Meta:
         table = "identity_group_scope"
-        unique_together = (("group", "scope"),)
+        unique_together = (("group_id", "scope"),)
 
 
 class GroupUser(Model):
@@ -302,7 +302,7 @@ class GroupUser(Model):
 
     class Meta:
         table = "identity_group_user"
-        unique_together = (("group", "user"),)
+        unique_together = (("group_id", "user_id"),)
 
 
 class GroupGroup(Model):
@@ -327,7 +327,7 @@ class GroupGroup(Model):
 
     class Meta:
         table = "identity_group_group"
-        unique_together = (("parent_group", "child_group"),)
+        unique_together = (("parent_group_id", "child_group_id"),)
 
 
 class AccessToken(Model):

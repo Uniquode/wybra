@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 import sys
@@ -10,9 +9,11 @@ from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+import anyio
 import click
 from tortoise import fields
 from tortoise.backends.base.client import BaseDBAsyncClient
@@ -279,7 +280,32 @@ def _database_url_option[F: Callable[..., Any]](function: F) -> F:
 
 def create_migrate_command(
     settings_loader: MigrationSettingsLoader,
+    *,
+    migration_runner: Callable[..., int] | None = None,
 ) -> click.Group:
+    if migration_runner is None:
+
+        def migration_runner(
+            database_url: str | None,
+            config_source: str | None,
+            operation: Callable[[MigrationBackend, MigrationContext], Awaitable[None]],
+            *,
+            database_credential_purpose: CredentialPurpose = "runtime",
+            fallback_to_runtime_credentials: bool = False,
+            include_provisioning_connection: bool = False,
+            resolve_database_credentials: bool = True,
+        ) -> int:
+            return _run_migration(
+                settings_loader,
+                database_url,
+                config_source,
+                operation,
+                database_credential_purpose=database_credential_purpose,
+                fallback_to_runtime_credentials=fallback_to_runtime_credentials,
+                include_provisioning_connection=include_provisioning_connection,
+                resolve_database_credentials=resolve_database_credentials,
+            )
+
     @click.group(
         name="wybra-migrate",
         context_settings={
@@ -314,8 +340,7 @@ def create_migrate_command(
         database_url: str | None,
         app_labels: tuple[str, ...],
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             operation=lambda backend, context: initialise_migration_lifecycle(
@@ -342,8 +367,7 @@ def create_migrate_command(
         database_url: str | None,
         confirm: str,
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             include_provisioning_connection=True,
@@ -363,8 +387,7 @@ def create_migrate_command(
         ctx: click.Context,
         database_url: str | None,
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             operation=list_database_maintenance_tasks_lifecycle,
@@ -388,8 +411,7 @@ def create_migrate_command(
         confirm: str | None,
         task: str,
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             include_provisioning_connection=True,
@@ -418,8 +440,7 @@ def create_migrate_command(
         empty: bool,
         name: str | None,
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             lambda backend, context: backend.makemigrations(
@@ -453,8 +474,7 @@ def create_migrate_command(
         dry_run: bool,
     ) -> int:
         app_label, migration = _migration_target_from_args(args)
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             lambda backend, context: backend.migrate(
@@ -492,8 +512,7 @@ def create_migrate_command(
         fake: bool,
         dry_run: bool,
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             lambda backend, context: backend.downgrade(
@@ -517,8 +536,7 @@ def create_migrate_command(
         database_url: str | None,
         app_labels: tuple[str, ...],
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             lambda backend, context: backend.history(context, app_labels),
@@ -533,8 +551,7 @@ def create_migrate_command(
         database_url: str | None,
         app_labels: tuple[str, ...],
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             lambda backend, context: backend.heads(context, app_labels),
@@ -557,8 +574,7 @@ def create_migrate_command(
         migration_name: str | None,
         backward: bool,
     ) -> int:
-        return _run_migration(
-            settings_loader,
+        return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             lambda backend, context: backend.sqlmigrate(
@@ -640,8 +656,9 @@ def _run_migration(
     include_provisioning_connection: bool = False,
     resolve_database_credentials: bool = True,
 ) -> int:
-    return asyncio.run(
-        _run_migration_async(
+    return anyio.run(
+        partial(
+            run_migration,
             settings_loader,
             database_url,
             config_source,
@@ -654,7 +671,7 @@ def _run_migration(
     )
 
 
-async def _run_migration_async(
+async def run_migration(
     settings_loader: MigrationSettingsLoader,
     database_url: str | None,
     config_source: str | None,

@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 import sys
@@ -126,6 +125,34 @@ def _write_test_app_config(config_path: Path, modules: tuple[str, ...]) -> Path:
 
 
 class TestMigrationCommands:
+    def test_wybra_migrate_main_delegates_to_async_entry_point(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        observed: dict[str, object] = {}
+
+        async def run_migration(
+            database_url: str | None,
+            *,
+            config_source: str | None,
+            operation: object,
+            **kwargs: object,
+        ) -> int:
+            observed.update(
+                database_url=database_url,
+                config_source=config_source,
+                operation=operation,
+                **kwargs,
+            )
+            return 0
+
+        monkeypatch.setattr(tools_migrate, "run_migration", run_migration)
+
+        assert tools_migrate.main(["heads"]) == 0
+        assert observed["database_url"] is None
+        assert observed["config_source"] is None
+        assert callable(observed["operation"])
+
     def test_migrate_help_exposes_native_tortoise_commands(self, capsys) -> None:
         fixture = create_migrate_command()
 
@@ -306,7 +333,8 @@ class TestMigrationCommands:
         assert exit_code == 0
         assert observed == ["provision", "tortoise:init"]
 
-    def test_migrate_lifecycle_reports_provisioning_results(
+    @pytest.mark.anyio
+    async def test_migrate_lifecycle_reports_provisioning_results(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -337,14 +365,15 @@ class TestMigrationCommands:
         )
         caplog.set_level(logging.INFO, logger=migrate_module.logger.name)
 
-        asyncio.run(migrate_module.initialise_database_lifecycle(context))
+        await migrate_module.initialise_database_lifecycle(context)
 
         assert (
             "database lifecycle: sqlite init skipped: already provisioned"
             in caplog.text
         )
 
-    def test_sqlite_provisioning_creates_file_target_and_parent_directory(
+    @pytest.mark.anyio
+    async def test_sqlite_provisioning_creates_file_target_and_parent_directory(
         self,
         tmp_path: Path,
     ) -> None:
@@ -354,14 +383,15 @@ class TestMigrationCommands:
             project_root=tmp_path,
         )
 
-        results = asyncio.run(migrate_module.initialise_database(context))
+        results = await migrate_module.initialise_database(context)
 
         assert database_path.is_file()
         assert [(result.status, result.phase) for result in results] == [
             ("created", "init")
         ]
 
-    def test_sqlite_provisioning_is_idempotent_for_existing_file(
+    @pytest.mark.anyio
+    async def test_sqlite_provisioning_is_idempotent_for_existing_file(
         self,
         tmp_path: Path,
     ) -> None:
@@ -372,14 +402,15 @@ class TestMigrationCommands:
             project_root=tmp_path,
         )
 
-        results = asyncio.run(migrate_module.initialise_database(context))
+        results = await migrate_module.initialise_database(context)
 
         assert database_path.is_file()
         assert [(result.status, result.phase) for result in results] == [
             ("skipped", "init")
         ]
 
-    def test_sqlite_provisioning_treats_concurrent_file_creation_as_skipped(
+    @pytest.mark.anyio
+    async def test_sqlite_provisioning_treats_concurrent_file_creation_as_skipped(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -403,14 +434,15 @@ class TestMigrationCommands:
 
         monkeypatch.setattr(Path, "touch", create_file_then_raise_file_exists)
 
-        results = asyncio.run(migrate_module.initialise_database(context))
+        results = await migrate_module.initialise_database(context)
 
         assert database_path.is_file()
         assert [(result.status, result.phase) for result in results] == [
             ("skipped", "init")
         ]
 
-    def test_sqlite_provisioning_accepts_in_memory_without_credentials(
+    @pytest.mark.anyio
+    async def test_sqlite_provisioning_accepts_in_memory_without_credentials(
         self,
         tmp_path: Path,
     ) -> None:
@@ -418,14 +450,15 @@ class TestMigrationCommands:
             "sqlite://:memory:", project_root=tmp_path
         )
 
-        results = asyncio.run(migrate_module.initialise_database(context))
+        results = await migrate_module.initialise_database(context)
 
         assert [(result.status, result.phase) for result in results] == [
             ("noop", "init")
         ]
         assert list(tmp_path.iterdir()) == []
 
-    def test_sqlite_destroy_removes_confirmed_file_and_sidecars(
+    @pytest.mark.anyio
+    async def test_sqlite_destroy_removes_confirmed_file_and_sidecars(
         self,
         tmp_path: Path,
     ) -> None:
@@ -443,11 +476,9 @@ class TestMigrationCommands:
             project_root=tmp_path,
         )
 
-        results = asyncio.run(
-            migrate_module.destroy_database(
-                context,
-                migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
-            )
+        results = await migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
         )
 
         assert [(result.status, result.phase) for result in results] == [
@@ -456,7 +487,8 @@ class TestMigrationCommands:
         assert not database_path.exists()
         assert all(not sidecar.exists() for sidecar in sidecars)
 
-    def test_sqlite_destroy_removes_sidecars_when_main_file_is_absent(
+    @pytest.mark.anyio
+    async def test_sqlite_destroy_removes_sidecars_when_main_file_is_absent(
         self,
         tmp_path: Path,
     ) -> None:
@@ -468,11 +500,9 @@ class TestMigrationCommands:
             project_root=tmp_path,
         )
 
-        results = asyncio.run(
-            migrate_module.destroy_database(
-                context,
-                migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
-            )
+        results = await migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
         )
 
         assert [(result.status, result.phase) for result in results] == [
@@ -481,7 +511,8 @@ class TestMigrationCommands:
         assert not database_path.exists()
         assert not sidecar.exists()
 
-    def test_sqlite_destroy_reports_already_absent_file_as_skipped(
+    @pytest.mark.anyio
+    async def test_sqlite_destroy_reports_already_absent_file_as_skipped(
         self,
         tmp_path: Path,
     ) -> None:
@@ -491,18 +522,17 @@ class TestMigrationCommands:
             project_root=tmp_path,
         )
 
-        results = asyncio.run(
-            migrate_module.destroy_database(
-                context,
-                migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
-            )
+        results = await migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
         )
 
         assert [(result.status, result.phase) for result in results] == [
             ("skipped", "destroy")
         ]
 
-    def test_sqlite_destroy_refuses_confirmation_mismatch(
+    @pytest.mark.anyio
+    async def test_sqlite_destroy_refuses_confirmation_mismatch(
         self,
         tmp_path: Path,
     ) -> None:
@@ -517,16 +547,17 @@ class TestMigrationCommands:
             migrate_module.DatabaseProvisioningConfigurationError,
             match="confirmation does not match",
         ):
-            asyncio.run(
-                migrate_module.destroy_database(
-                    context,
-                    migrate_module.DestroyDatabaseRequest(confirm="other.sqlite3"),
-                )
+            await migrate_module.destroy_database(
+                context,
+                migrate_module.DestroyDatabaseRequest(confirm="other.sqlite3"),
             )
 
         assert database_path.exists()
 
-    def test_sqlite_destroy_refuses_directory_target(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_sqlite_destroy_refuses_directory_target(
+        self, tmp_path: Path
+    ) -> None:
         database_path = tmp_path / "database.sqlite3"
         database_path.mkdir()
         context = sqlite_provisioning_context(
@@ -538,25 +569,22 @@ class TestMigrationCommands:
             migrate_module.DatabaseProvisioningConfigurationError,
             match="target is a directory",
         ):
-            asyncio.run(
-                migrate_module.destroy_database(
-                    context,
-                    migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
-                )
+            await migrate_module.destroy_database(
+                context,
+                migrate_module.DestroyDatabaseRequest(confirm=database_path.name),
             )
 
         assert database_path.is_dir()
 
-    def test_sqlite_in_memory_destroy_is_noop(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_sqlite_in_memory_destroy_is_noop(self, tmp_path: Path) -> None:
         context = sqlite_provisioning_context(
             "sqlite://:memory:", project_root=tmp_path
         )
 
-        results = asyncio.run(
-            migrate_module.destroy_database(
-                context,
-                migrate_module.DestroyDatabaseRequest(confirm=":memory:"),
-            )
+        results = await migrate_module.destroy_database(
+            context,
+            migrate_module.DestroyDatabaseRequest(confirm=":memory:"),
         )
 
         assert [(result.status, result.phase) for result in results] == [
@@ -1008,7 +1036,8 @@ class TestMigrationCommands:
             },
         }
 
-    def test_run_tortoise_cli_uses_transient_config_module_and_removes_it(
+    @pytest.mark.anyio
+    async def test_run_tortoise_cli_uses_transient_config_module_and_removes_it(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1030,7 +1059,7 @@ class TestMigrationCommands:
 
         monkeypatch.setattr(migrate_module.tortoise_cli, "run_cli_async", record_cli)
 
-        asyncio.run(migrate_module._run_tortoise_cli(context, ["heads"]))
+        await migrate_module._run_tortoise_cli(context, ["heads"])
 
         assert observed["argv"] == [
             "--config",
@@ -1041,7 +1070,8 @@ class TestMigrationCommands:
         assert observed["config"] == context.config
         assert observed["config_module"] not in sys.modules
 
-    def test_run_tortoise_cli_reports_non_zero_exit(
+    @pytest.mark.anyio
+    async def test_run_tortoise_cli_reports_non_zero_exit(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1058,9 +1088,10 @@ class TestMigrationCommands:
         monkeypatch.setattr(migrate_module.tortoise_cli, "run_cli_async", fail_cli)
 
         with pytest.raises(migrate_module.MigrationStateError, match="exit_code=2"):
-            asyncio.run(migrate_module._run_tortoise_cli(context, ["heads"]))
+            await migrate_module._run_tortoise_cli(context, ["heads"])
 
-    def test_tortoise_migration_recorder_uses_mariadb_safe_datetime_literals(
+    @pytest.mark.anyio
+    async def test_tortoise_migration_recorder_uses_mariadb_safe_datetime_literals(
         self,
     ) -> None:
         class RecordingConnection:
@@ -1080,7 +1111,7 @@ class TestMigrationCommands:
 
         with migrate_module._tortoise_migration_recorder_compatibility():
             recorder = migrate_module.MigrationRecorder(connection)
-            asyncio.run(recorder.record_applied("wybra_sessions", "0001_initial"))
+            await recorder.record_applied("wybra_sessions", "0001_initial")
 
         assert (
             migrate_module.MigrationRecorder.record_applied is original_record_applied

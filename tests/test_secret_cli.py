@@ -1,9 +1,10 @@
-import asyncio
 import importlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
 
+import click
+import pytest
 from click.testing import CliRunner
 
 import wybra.secrets.cli as secret_cli
@@ -195,6 +196,18 @@ previous_keys = "SYSTEM_SECRET_KEYS_PREVIOUS"
         encoding="utf-8",
     )
     return path
+
+
+async def _reencrypt_configured_secrets(
+    config_path: Path,
+    *,
+    dry_run: bool,
+) -> secret_cli.ReencryptSecretsResult:
+    context = click.Context(secret_cli.secret_command)
+    context.obj = {
+        secret_cli.CONFIG_SOURCE_CONTEXT_KEY: config_path.as_posix(),
+    }
+    return await secret_cli._reencrypt_secrets(context, dry_run=dry_run)
 
 
 async def _create_reencrypt_database(
@@ -900,7 +913,8 @@ def test_rotate_csrf_token_secret_refuses_non_keychain_forms_config(
     assert keyring.writes == []
 
 
-def test_reencrypt_secrets_dry_run_reports_without_writing_database_rows(
+@pytest.mark.anyio
+async def test_reencrypt_secrets_dry_run_reports_without_writing_database_rows(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -916,14 +930,12 @@ def test_reencrypt_secrets_dry_run_reports_without_writing_database_rows(
         context="totp-recovery-code",
     )
     database_url = sqlite_file_url(tmp_path / "reencrypt.sqlite3")
-    asyncio.run(
-        _create_reencrypt_database(
-            database_url,
-            provider_access_token=old_access,
-            provider_refresh_token=old_refresh,
-            totp_secret=old_totp,
-            recovery_code_verifier=recovery_verifier,
-        )
+    await _create_reencrypt_database(
+        database_url,
+        provider_access_token=old_access,
+        provider_refresh_token=old_refresh,
+        totp_secret=old_totp,
+        recovery_code_verifier=recovery_verifier,
     )
     keyring = FakeKeyring(
         {
@@ -934,44 +946,35 @@ def test_reencrypt_secrets_dry_run_reports_without_writing_database_rows(
     _install_fake_keyring(monkeypatch, keyring)
     config_path = _reencrypt_app_config(tmp_path / "app.toml", database_url)
 
-    result = CliRunner().invoke(
-        secret_cli.secret_command,
-        [
-            "--config",
-            config_path.as_posix(),
-            "reencrypt",
-            "--dry-run",
-            "--json",
-        ],
-    )
-
-    assert result.exit_code == 0
-    payload = json.loads(result.output)
+    result = await _reencrypt_configured_secrets(config_path, dry_run=True)
+    payload = secret_cli._reencrypt_result_payload(result, target="system")
     assert payload["target"] == "system"
     assert payload["dry_run"] is True
     assert payload["scanned"] == 3
     assert payload["rewritten"] == 3
     assert payload["unsupported_recovery_code_verifiers"] == 1
-    values = asyncio.run(_reencrypt_database_values(database_url))
+    values = await _reencrypt_database_values(database_url)
     assert values == {
         "access": old_access,
         "refresh": old_refresh,
         "totp": old_totp,
         "recovery": recovery_verifier,
     }
-    assert current_key not in result.output
-    assert previous_key not in result.output
-    assert old_access not in result.output
-    assert old_refresh not in result.output
-    assert old_totp not in result.output
-    assert "access-token" not in result.output
-    assert "refresh-token" not in result.output
-    assert "totp-secret" not in result.output
-    assert "recovery-code" not in result.output
+    output = json.dumps(payload)
+    assert current_key not in output
+    assert previous_key not in output
+    assert old_access not in output
+    assert old_refresh not in output
+    assert old_totp not in output
+    assert "access-token" not in output
+    assert "refresh-token" not in output
+    assert "totp-secret" not in output
+    assert "recovery-code" not in output
     assert current_service.current_version_required() == "current"
 
 
-def test_reencrypt_secrets_rewrites_previous_version_provider_and_totp_secrets(
+@pytest.mark.anyio
+async def test_reencrypt_secrets_rewrites_previous_version_provider_and_totp_secrets(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -987,14 +990,12 @@ def test_reencrypt_secrets_rewrites_previous_version_provider_and_totp_secrets(
         context="totp-recovery-code",
     )
     database_url = sqlite_file_url(tmp_path / "reencrypt.sqlite3")
-    asyncio.run(
-        _create_reencrypt_database(
-            database_url,
-            provider_access_token=old_access,
-            provider_refresh_token=old_refresh,
-            totp_secret=old_totp,
-            recovery_code_verifier=recovery_verifier,
-        )
+    await _create_reencrypt_database(
+        database_url,
+        provider_access_token=old_access,
+        provider_refresh_token=old_refresh,
+        totp_secret=old_totp,
+        recovery_code_verifier=recovery_verifier,
     )
     keyring = FakeKeyring(
         {
@@ -1005,17 +1006,12 @@ def test_reencrypt_secrets_rewrites_previous_version_provider_and_totp_secrets(
     _install_fake_keyring(monkeypatch, keyring)
     config_path = _reencrypt_app_config(tmp_path / "app.toml", database_url)
 
-    result = CliRunner().invoke(
-        secret_cli.secret_command,
-        ["--config", config_path.as_posix(), "reencrypt", "--json"],
-    )
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    result = await _reencrypt_configured_secrets(config_path, dry_run=False)
+    payload = secret_cli._reencrypt_result_payload(result, target="system")
     assert payload["dry_run"] is False
     assert payload["rewritten"] == 3
     assert payload["unsupported_recovery_code_verifiers"] == 1
-    values = asyncio.run(_reencrypt_database_values(database_url))
+    values = await _reencrypt_database_values(database_url)
     assert values["access"] != old_access
     assert values["refresh"] != old_refresh
     assert values["totp"] != old_totp
@@ -1032,17 +1028,19 @@ def test_reencrypt_secrets_rewrites_previous_version_provider_and_totp_secrets(
         "totp-secret",
         "current",
     )
-    assert current_key not in result.output
-    assert previous_key not in result.output
-    assert old_access not in result.output
-    assert old_refresh not in result.output
-    assert old_totp not in result.output
-    assert "access-token" not in result.output
-    assert "refresh-token" not in result.output
-    assert "totp-secret" not in result.output
+    output = json.dumps(payload)
+    assert current_key not in output
+    assert previous_key not in output
+    assert old_access not in output
+    assert old_refresh not in output
+    assert old_totp not in output
+    assert "access-token" not in output
+    assert "refresh-token" not in output
+    assert "totp-secret" not in output
 
 
-def test_reencrypt_secrets_skips_current_and_plaintext_values(
+@pytest.mark.anyio
+async def test_reencrypt_secrets_skips_current_and_plaintext_values(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1056,14 +1054,12 @@ def test_reencrypt_secrets_skips_current_and_plaintext_values(
         context="totp-recovery-code",
     )
     database_url = sqlite_file_url(tmp_path / "reencrypt.sqlite3")
-    asyncio.run(
-        _create_reencrypt_database(
-            database_url,
-            provider_access_token=current_access,
-            provider_refresh_token="plaintext-refresh-token",
-            totp_secret=current_totp,
-            recovery_code_verifier=recovery_verifier,
-        )
+    await _create_reencrypt_database(
+        database_url,
+        provider_access_token=current_access,
+        provider_refresh_token="plaintext-refresh-token",
+        totp_secret=current_totp,
+        recovery_code_verifier=recovery_verifier,
     )
     keyring = FakeKeyring(
         {
@@ -1074,31 +1070,27 @@ def test_reencrypt_secrets_skips_current_and_plaintext_values(
     _install_fake_keyring(monkeypatch, keyring)
     config_path = _reencrypt_app_config(tmp_path / "app.toml", database_url)
 
-    result = CliRunner().invoke(
-        secret_cli.secret_command,
-        ["--config", config_path.as_posix(), "reencrypt", "--json"],
-    )
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    result = await _reencrypt_configured_secrets(config_path, dry_run=False)
+    payload = secret_cli._reencrypt_result_payload(result, target="system")
     assert payload["scanned"] == 3
     assert payload["rewritten"] == 0
     assert payload["skipped_current"] == 2
     assert payload["skipped_plaintext"] == 1
-    values = asyncio.run(_reencrypt_database_values(database_url))
+    values = await _reencrypt_database_values(database_url)
     assert values == {
         "access": current_access,
         "refresh": "plaintext-refresh-token",
         "totp": current_totp,
         "recovery": recovery_verifier,
     }
-    assert current_key not in result.output
-    assert previous_key not in result.output
-    assert current_access not in result.output
-    assert current_totp not in result.output
-    assert "access-token" not in result.output
-    assert "plaintext-refresh-token" not in result.output
-    assert "totp-secret" not in result.output
+    output = json.dumps(payload)
+    assert current_key not in output
+    assert previous_key not in output
+    assert current_access not in output
+    assert current_totp not in output
+    assert "access-token" not in output
+    assert "plaintext-refresh-token" not in output
+    assert "totp-secret" not in output
 
 
 def test_blank_config_option_is_rejected() -> None:

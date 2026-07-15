@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 
@@ -10,11 +9,17 @@ from tests_support.database_containers import (
     assert_database_secrets_absent,
     mssql_fetch_value,
 )
+from tests_support.migration_lifecycle import (
+    apply_migrations,
+    destroy_database,
+    initialise_migrations,
+    list_maintenance_tasks,
+    run_maintenance_task,
+)
 
-from wybra.tools import migrate as tools_migrate
 
-
-def test_mssql_init_provisions_database_and_login(
+@pytest.mark.anyio
+async def test_mssql_init_provisions_database_and_login(
     mssql_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -23,38 +28,35 @@ def test_mssql_init_provisions_database_and_login(
     config_path = mssql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
     caplog.set_level(logging.INFO)
-    exit_code = tools_migrate.main(["--config", config_path.as_posix(), "init"])
+    exit_code = await initialise_migrations(config_path)
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert_database_secrets_absent(caplog.text, mssql_database_config)
     assert_database_secrets_absent(captured.out + captured.err, mssql_database_config)
-    assert asyncio.run(
-        mssql_fetch_value(
-            mssql_database_config,
-            "SELECT COUNT(*) FROM sys.databases WHERE name = ?",
-            mssql_database_config.database,
-            database=mssql_database_config.service_database,
-        )
+    assert await mssql_fetch_value(
+        mssql_database_config,
+        "SELECT COUNT(*) FROM sys.databases WHERE name = ?",
+        mssql_database_config.database,
+        database=mssql_database_config.service_database,
     )
-    assert asyncio.run(
-        mssql_fetch_value(
-            mssql_database_config,
-            "SELECT COUNT(*) FROM sys.server_principals WHERE name = ?",
-            mssql_database_config.runtime_user,
-            database=mssql_database_config.service_database,
-        )
+    assert await mssql_fetch_value(
+        mssql_database_config,
+        "SELECT COUNT(*) FROM sys.server_principals WHERE name = ?",
+        mssql_database_config.runtime_user,
+        database=mssql_database_config.service_database,
     )
 
 
-def test_mssql_tasks_list_safe_maintenance_metadata(
+@pytest.mark.anyio
+async def test_mssql_tasks_list_safe_maintenance_metadata(
     mssql_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     config_path = mssql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
-    exit_code = tools_migrate.main(["--config", config_path.as_posix(), "tasks"])
+    exit_code = await list_maintenance_tasks(config_path)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -66,73 +68,46 @@ def test_mssql_tasks_list_safe_maintenance_metadata(
     assert_database_secrets_absent(captured.out + captured.err, mssql_database_config)
 
 
-def test_mssql_migrate_runs_lifecycle(
+@pytest.mark.anyio
+async def test_mssql_migrate_runs_lifecycle(
     mssql_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     config_path = mssql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
-    assert tools_migrate.main(["--config", config_path.as_posix(), "init"]) == 0
-    assert tools_migrate.main(["--config", config_path.as_posix(), "migrate"]) == 0
-    assert (
-        tools_migrate.main(["--config", config_path.as_posix(), "run", "migrations"])
-        == 0
-    )
+    assert await initialise_migrations(config_path) == 0
+    assert await apply_migrations(config_path) == 0
+    assert await run_maintenance_task(config_path, "migrations") == 0
     captured = capsys.readouterr()
     assert_database_secrets_absent(captured.out + captured.err, mssql_database_config)
 
-    migration_count = asyncio.run(
-        mssql_fetch_value(
-            mssql_database_config,
-            "SELECT COUNT(*) FROM tortoise_migrations",
-        )
+    migration_count = await mssql_fetch_value(
+        mssql_database_config,
+        "SELECT COUNT(*) FROM tortoise_migrations",
     )
     assert isinstance(migration_count, int)
     assert migration_count > 0
 
 
-def test_mssql_destroy_removes_disposable_database(
+@pytest.mark.anyio
+async def test_mssql_destroy_removes_disposable_database(
     mssql_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     config_path = mssql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
-    assert tools_migrate.main(["--config", config_path.as_posix(), "init"]) == 0
-    assert (
-        tools_migrate.main(
-            [
-                "--config",
-                config_path.as_posix(),
-                "destroy",
-                "--confirm",
-                mssql_database_config.database,
-            ]
-        )
-        == 0
-    )
-    assert (
-        tools_migrate.main(
-            [
-                "--config",
-                config_path.as_posix(),
-                "destroy",
-                "--confirm",
-                mssql_database_config.database,
-            ]
-        )
-        == 0
-    )
+    assert await initialise_migrations(config_path) == 0
+    assert await destroy_database(config_path, mssql_database_config.database) == 0
+    assert await destroy_database(config_path, mssql_database_config.database) == 0
     captured = capsys.readouterr()
     assert_database_secrets_absent(captured.out + captured.err, mssql_database_config)
 
-    database_count = asyncio.run(
-        mssql_fetch_value(
-            mssql_database_config,
-            "SELECT COUNT(*) FROM sys.databases WHERE name = ?",
-            mssql_database_config.database,
-            database=mssql_database_config.service_database,
-        )
+    database_count = await mssql_fetch_value(
+        mssql_database_config,
+        "SELECT COUNT(*) FROM sys.databases WHERE name = ?",
+        mssql_database_config.database,
+        database=mssql_database_config.service_database,
     )
     assert database_count == 0

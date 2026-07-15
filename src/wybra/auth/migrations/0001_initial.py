@@ -215,8 +215,8 @@ class Migration(migrations.Migration):
             options={
                 "table": "identity_external_identity_link",
                 "app": "wybra_auth",
-                "unique_together": (("user", "provider"),),
-                "indexes": [Index(fields=["user"])],
+                "unique_together": (("user_id", "provider_id"),),
+                "indexes": [Index(fields=["user_id"])],
                 "pk_attr": "id",
                 "table_description": "Link row between a local user and one provider identity.",
             },
@@ -366,7 +366,7 @@ class Migration(migrations.Migration):
             options={
                 "table": "identity_webauthn_credential",
                 "app": "wybra_auth",
-                "indexes": [Index(fields=["user", "status"])],
+                "indexes": [Index(fields=["user_id", "status"])],
                 "pk_attr": "id",
                 "table_description": "A WebAuthn public-key credential linked to a local account.",
             },
@@ -397,7 +397,7 @@ class Migration(migrations.Migration):
             options={
                 "table": "identity_totp_recovery_code",
                 "app": "wybra_auth",
-                "unique_together": (("credential", "code_verifier"),),
+                "unique_together": (("credential_id", "code_verifier"),),
                 "pk_attr": "id",
                 "table_description": "Single-use TOTP recovery codes linked to a TOTP credential.",
             },
@@ -426,7 +426,7 @@ class Migration(migrations.Migration):
             options={
                 "table": "identity_group_scope",
                 "app": "wybra_auth",
-                "unique_together": (("group", "scope"),),
+                "unique_together": (("group_id", "scope"),),
                 "pk_attr": "id",
                 "table_description": "Scope assignment on an authorisation group.",
             },
@@ -463,7 +463,7 @@ class Migration(migrations.Migration):
             options={
                 "table": "identity_group_user",
                 "app": "wybra_auth",
-                "unique_together": (("group", "user"),),
+                "unique_together": (("group_id", "user_id"),),
                 "pk_attr": "id",
                 "table_description": "Direct user membership in an authorisation group.",
             },
@@ -500,7 +500,7 @@ class Migration(migrations.Migration):
             options={
                 "table": "identity_group_group",
                 "app": "wybra_auth",
-                "unique_together": (("parent_group", "child_group"),),
+                "unique_together": (("parent_group_id", "child_group_id"),),
                 "pk_attr": "id",
                 "table_description": "Nested group membership in an authorisation group tree.",
             },

@@ -2574,6 +2574,7 @@ def _mssql_provisioning_context(
 
 
 class TestDatabaseProvisioning:
+    @pytest.mark.anyio
     @pytest.mark.parametrize(
         ("database_url", "expected_queries"),
         (
@@ -2621,23 +2622,22 @@ class TestDatabaseProvisioning:
             ),
         ),
     )
-    def test_clear_test_database_data_uses_backend_specific_cleanup(
+    async def test_clear_test_database_data_uses_backend_specific_cleanup(
         self,
         database_url: str,
         expected_queries: tuple[str, ...],
     ) -> None:
         connection = _RecordingTestDatabaseConnection()
 
-        asyncio.run(
-            clear_test_database_data(
-                cast(BaseDBAsyncClient, connection),
-                database_url=database_url,
-                table_names=("child", "parent"),
-            )
+        await clear_test_database_data(
+            cast(BaseDBAsyncClient, connection),
+            database_url=database_url,
+            table_names=("child", "parent"),
         )
 
         assert connection.queries == list(expected_queries)
 
+    @pytest.mark.anyio
     @pytest.mark.parametrize(
         ("credentials", "expected_message"),
         (
@@ -2652,7 +2652,7 @@ class TestDatabaseProvisioning:
             ),
         ),
     )
-    def test_unsupported_database_provisioner_requires_service_account_credentials(
+    async def test_unsupported_database_provisioner_requires_service_account_credentials(  # noqa: E501
         self,
         credentials: dict[str, object] | None,
         expected_message: str,
@@ -2670,16 +2670,15 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match=expected_message,
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
         with pytest.raises(
             DatabaseProvisioningConfigurationError,
             match=expected_message,
         ):
-            asyncio.run(
-                provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
-            )
+            await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
-    def test_unsupported_database_provisioner_rejects_unimplemented_operations(
+    @pytest.mark.anyio
+    async def test_unsupported_database_provisioner_rejects_unimplemented_operations(
         self,
     ) -> None:
         provisioner = UnsupportedFamilyProvisioner("mysql")
@@ -2701,29 +2700,28 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningOperationError,
             match="mysql init provisioning is not implemented",
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
         with pytest.raises(
             DatabaseProvisioningOperationError,
             match="mysql destroy is not implemented",
         ):
-            asyncio.run(
-                provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
-            )
+            await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
         with pytest.raises(
             DatabaseProvisioningConfigurationError,
             match="Unknown mysql maintenance task",
         ):
-            asyncio.run(
-                provisioner.run_maintenance(
-                    context,
-                    DatabaseMaintenanceRequest(task="vacuum"),
-                )
+            await provisioner.run_maintenance(
+                context,
+                DatabaseMaintenanceRequest(task="vacuum"),
             )
 
     def test_mssql_provisioner_is_registered_for_mssql_family(self) -> None:
         assert isinstance(provisioner_for_family("mssql"), SQLServerProvisioner)
 
-    def test_mssql_provisioner_initialises_database_principals_and_grants(self) -> None:
+    @pytest.mark.anyio
+    async def test_mssql_provisioner_initialises_database_principals_and_grants(
+        self,
+    ) -> None:
         maintenance = _RecordingSQLServerConnection(
             [
                 0,  # database exists
@@ -2753,7 +2751,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(provisioner.initialise(context))
+        results = await provisioner.initialise(context)
 
         assert connector.credentials == [
             {
@@ -2798,7 +2796,8 @@ class TestDatabaseProvisioning:
         assert maintenance.closed
         assert target.closed
 
-    def test_mssql_provisioner_reuses_existing_objects_and_reports_migrations(
+    @pytest.mark.anyio
+    async def test_mssql_provisioner_reuses_existing_objects_and_reports_migrations(
         self,
     ) -> None:
         maintenance = _RecordingSQLServerConnection(
@@ -2826,7 +2825,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(provisioner.initialise(context))
+        results = await provisioner.initialise(context)
 
         assert [result.status for result in results] == [
             "skipped",
@@ -2848,7 +2847,8 @@ class TestDatabaseProvisioning:
         assert "ALTER USER [app] WITH LOGIN = [app]" in executed_sql
         assert "ALTER ROLE [app_role] ADD MEMBER [app]" not in executed_sql
 
-    def test_mssql_init_reports_external_login_prerequisite_without_password(
+    @pytest.mark.anyio
+    async def test_mssql_init_reports_external_login_prerequisite_without_password(
         self,
     ) -> None:
         maintenance = _RecordingSQLServerConnection(
@@ -2881,7 +2881,7 @@ class TestDatabaseProvisioning:
             },
         )
 
-        results = asyncio.run(provisioner.initialise(context))
+        results = await provisioner.initialise(context)
 
         assert [(result.status, result.phase) for result in results] == [
             ("created", "init"),
@@ -2905,7 +2905,8 @@ class TestDatabaseProvisioning:
         assert maintenance.closed
         assert target.closed
 
-    def test_mssql_init_requires_existing_external_login_before_database_changes(
+    @pytest.mark.anyio
+    async def test_mssql_init_requires_existing_external_login_before_database_changes(
         self,
     ) -> None:
         maintenance = _RecordingSQLServerConnection(
@@ -2932,13 +2933,14 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match="application login must exist",
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
 
         executed_sql = _recorded_mssql_statements(maintenance)
         assert "CREATE DATABASE" not in executed_sql
         assert maintenance.closed
 
-    def test_mssql_destroy_requires_confirmed_database_and_service_database(
+    @pytest.mark.anyio
+    async def test_mssql_destroy_requires_confirmed_database_and_service_database(
         self,
     ) -> None:
         provisioner = SQLServerProvisioner(
@@ -2955,9 +2957,7 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match="confirmation does not match",
         ):
-            asyncio.run(
-                provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
-            )
+            await provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
 
         service_connection = context.provisioning_connection
         assert service_connection is not None
@@ -2972,11 +2972,12 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match="target database must differ",
         ):
-            asyncio.run(
-                provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
-            )
+            await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
-    def test_mssql_destroy_removes_configured_database_and_safe_login(self) -> None:
+    @pytest.mark.anyio
+    async def test_mssql_destroy_removes_configured_database_and_safe_login(
+        self,
+    ) -> None:
         maintenance = _RecordingSQLServerConnection(
             [
                 1,  # database exists
@@ -2994,8 +2995,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         assert [(result.status, result.phase) for result in results] == [
@@ -3014,7 +3015,8 @@ class TestDatabaseProvisioning:
             args == ("app", "CONNECT SQL") for _query, args in maintenance.queries
         )
 
-    def test_mssql_destroy_skips_service_account_runtime_login(self) -> None:
+    @pytest.mark.anyio
+    async def test_mssql_destroy_skips_service_account_runtime_login(self) -> None:
         maintenance = _RecordingSQLServerConnection(
             [
                 1,  # database exists
@@ -3030,8 +3032,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         executed_sql = _recorded_mssql_statements(maintenance)
@@ -3039,7 +3041,8 @@ class TestDatabaseProvisioning:
         assert "DROP LOGIN" not in executed_sql
         assert any("users are the same" in result.message for result in results)
 
-    def test_mssql_destroy_skips_login_with_external_dependencies(self) -> None:
+    @pytest.mark.anyio
+    async def test_mssql_destroy_skips_login_with_external_dependencies(self) -> None:
         maintenance = _RecordingSQLServerConnection(
             [
                 1,  # database exists
@@ -3057,8 +3060,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         executed_sql = _recorded_mssql_statements(maintenance)
@@ -3066,7 +3069,10 @@ class TestDatabaseProvisioning:
         assert "DROP LOGIN" not in executed_sql
         assert any("dependencies were detected" in result.message for result in results)
 
-    def test_mssql_maintenance_tasks_execute_privilege_repair_and_state(self) -> None:
+    @pytest.mark.anyio
+    async def test_mssql_maintenance_tasks_execute_privilege_repair_and_state(
+        self,
+    ) -> None:
         repair_connection = _RecordingSQLServerConnection([0])
         state_connection = _RecordingSQLServerConnection(
             [
@@ -3093,23 +3099,17 @@ class TestDatabaseProvisioning:
             "migrations",
             "prerequisites",
         ]
-        repair_result = asyncio.run(
-            provisioner.run_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="repair-privs"),
-            )
+        repair_result = await provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="repair-privs"),
         )
-        state_result = asyncio.run(
-            provisioner.run_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="migrations"),
-            )
+        state_result = await provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="migrations"),
         )
-        prerequisite_result = asyncio.run(
-            provisioner.run_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="prerequisites"),
-            )
+        prerequisite_result = await provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="prerequisites"),
         )
 
         assert repair_result[0].status == "updated"
@@ -3120,7 +3120,10 @@ class TestDatabaseProvisioning:
         assert prerequisite_result[0].phase == "maintenance"
         assert "managed application login exists" in prerequisite_result[0].message
 
-    def test_mssql_validate_prerequisites_reports_missing_external_login(self) -> None:
+    @pytest.mark.anyio
+    async def test_mssql_validate_prerequisites_reports_missing_external_login(
+        self,
+    ) -> None:
         prerequisite_connection = _RecordingSQLServerConnection([0])
         connector = _RecordingSQLServerConnector(prerequisite_connection)
         provisioner = SQLServerProvisioner(connector=connector)
@@ -3137,11 +3140,9 @@ class TestDatabaseProvisioning:
             },
         )
 
-        result = asyncio.run(
-            provisioner.run_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="prerequisites"),
-            )
+        result = await provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="prerequisites"),
         )
 
         assert result[0].phase == "maintenance"
@@ -3181,7 +3182,8 @@ class TestDatabaseProvisioning:
                 }
             )
 
-    def test_mssql_provisioner_reports_missing_driver(
+    @pytest.mark.anyio
+    async def test_mssql_provisioner_reports_missing_driver(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -3203,7 +3205,7 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match=r"wybra\[mssql\]",
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
 
     def test_mysql_provisioner_is_registered_for_mysql_family(self) -> None:
         assert isinstance(provisioner_for_family("mysql"), MySQLProvisioner)
@@ -3211,7 +3213,8 @@ class TestDatabaseProvisioning:
     def test_mariadb_provisioner_is_registered_for_mariadb_family(self) -> None:
         assert isinstance(provisioner_for_family("mariadb"), MariaDBProvisioner)
 
-    def test_mysql_provisioner_initialises_database_user_and_grants(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_provisioner_initialises_database_user_and_grants(self) -> None:
         connection = _RecordingMySQLConnection(
             [
                 0,  # database exists
@@ -3233,7 +3236,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(provisioner.initialise(context))
+        results = await provisioner.initialise(context)
 
         assert connector.credentials == [
             {
@@ -3265,7 +3268,8 @@ class TestDatabaseProvisioning:
         assert "TO 'app'@'%'" in grant_query
         assert connection.closed
 
-    def test_mysql_provisioner_escapes_percent_usernames_in_parameterised_sql(
+    @pytest.mark.anyio
+    async def test_mysql_provisioner_escapes_percent_usernames_in_parameterised_sql(
         self,
     ) -> None:
         connection = _RecordingMySQLConnection(
@@ -3288,7 +3292,7 @@ class TestDatabaseProvisioning:
             },
         )
 
-        asyncio.run(provisioner.initialise(context))
+        await provisioner.initialise(context)
 
         assert connection.executed[1][0] == (
             "CREATE USER 'app%%ops'@'%%' IDENTIFIED BY %s"
@@ -3300,7 +3304,8 @@ class TestDatabaseProvisioning:
         assert grant_args == ()
         assert "TO 'app%ops'@'%'" in grant_query
 
-    def test_mysql_provisioner_reuses_existing_objects_and_reports_migrations(
+    @pytest.mark.anyio
+    async def test_mysql_provisioner_reuses_existing_objects_and_reports_migrations(
         self,
     ) -> None:
         connection = _RecordingMySQLConnection(
@@ -3319,7 +3324,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(provisioner.initialise(context))
+        results = await provisioner.initialise(context)
 
         assert [result.status for result in results] == [
             "skipped",
@@ -3343,7 +3348,8 @@ class TestDatabaseProvisioning:
             "ALTER USER 'app'@'%' IDENTIFIED BY <param>"
         )
 
-    def test_mysql_provisioner_rejects_invalid_count_result(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_provisioner_rejects_invalid_count_result(self) -> None:
         connection = _RecordingMySQLConnection(["not-count"])
         provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(connection))
         context = _mysql_provisioning_context(
@@ -3357,11 +3363,12 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningOperationError,
             match="MySQL count result was invalid.",
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
 
         assert connection.closed
 
-    def test_mysql_destroy_requires_confirmed_database(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_destroy_requires_confirmed_database(self) -> None:
         provisioner = MySQLProvisioner(
             connector=_RecordingMySQLConnector(_RecordingMySQLConnection([]))
         )
@@ -3376,11 +3383,12 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match="confirmation does not match",
         ):
-            asyncio.run(
-                provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
-            )
+            await provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
 
-    def test_mysql_destroy_removes_configured_database_and_safe_user(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_destroy_removes_configured_database_and_safe_user(
+        self,
+    ) -> None:
         connection = _RecordingMySQLConnection(
             [
                 1,  # database exists
@@ -3403,8 +3411,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         assert [(result.status, result.phase) for result in results] == [
@@ -3422,7 +3430,10 @@ class TestDatabaseProvisioning:
         assert "FROM performance_schema.threads" in processlist_query
         assert processlist_args == ("app", 99)
 
-    def test_mysql_destroy_falls_back_to_information_schema_processlist(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_destroy_falls_back_to_information_schema_processlist(
+        self,
+    ) -> None:
         class ProcessListFallbackConnection(_RecordingMySQLConnection):
             async def fetchall(
                 self, query: str, *args: object
@@ -3459,8 +3470,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         assert [(result.status, result.phase) for result in results] == [
@@ -3490,7 +3501,8 @@ class TestDatabaseProvisioning:
             ),
         ]
 
-    def test_mysql_destroy_skips_service_account_runtime_user(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_destroy_skips_service_account_runtime_user(self) -> None:
         connection = _RecordingMySQLConnection(
             [
                 1,  # database exists
@@ -3507,8 +3519,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         executed_sql = "\n".join(query for query, _args in connection.executed)
@@ -3517,7 +3529,8 @@ class TestDatabaseProvisioning:
         assert "DROP USER" not in executed_sql
         assert any("users are the same" in result.message for result in results)
 
-    def test_mysql_destroy_skips_user_with_external_grants(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_destroy_skips_user_with_external_grants(self) -> None:
         connection = _RecordingMySQLConnection(
             [
                 1,  # database exists
@@ -3540,8 +3553,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         executed_sql = "\n".join(query for query, _args in connection.executed)
@@ -3550,7 +3563,8 @@ class TestDatabaseProvisioning:
         assert "DROP USER" not in executed_sql
         assert any("grants outside app" in result.message for result in results)
 
-    def test_mysql_destroy_rejects_missing_connection_id(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_destroy_rejects_missing_connection_id(self) -> None:
         connection = _RecordingMySQLConnection(
             [
                 1,  # database exists
@@ -3576,13 +3590,14 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningOperationError,
             match="Failed to terminate MySQL sessions",
         ):
-            asyncio.run(
-                provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
-            )
+            await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         assert connection.closed
 
-    def test_mysql_maintenance_tasks_execute_privilege_repair_and_state(self) -> None:
+    @pytest.mark.anyio
+    async def test_mysql_maintenance_tasks_execute_privilege_repair_and_state(
+        self,
+    ) -> None:
         repair_connection = _RecordingMySQLConnection([])
         state_connection = _RecordingMySQLConnection(
             [
@@ -3603,17 +3618,13 @@ class TestDatabaseProvisioning:
             "repair-privs",
             "migrations",
         ]
-        repair_result = asyncio.run(
-            provisioner.run_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="repair-privs"),
-            )
+        repair_result = await provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="repair-privs"),
         )
-        state_result = asyncio.run(
-            provisioner.run_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="migrations"),
-            )
+        state_result = await provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="migrations"),
         )
 
         assert repair_result[0].status == "skipped"
@@ -3622,7 +3633,8 @@ class TestDatabaseProvisioning:
         )
         assert state_result[0].message == "Tortoise migration recorder table is empty."
 
-    def test_mysql_provisioner_reports_missing_driver(
+    @pytest.mark.anyio
+    async def test_mysql_provisioner_reports_missing_driver(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -3644,9 +3656,12 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match=r"wybra\[mysql\]",
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
 
-    def test_mariadb_provisioner_initialises_with_mysql_compatible_sql(self) -> None:
+    @pytest.mark.anyio
+    async def test_mariadb_provisioner_initialises_with_mysql_compatible_sql(
+        self,
+    ) -> None:
         connection = _RecordingMySQLConnection(
             [
                 0,  # database exists
@@ -3668,7 +3683,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(provisioner.initialise(context))
+        results = await provisioner.initialise(context)
 
         assert connector.credentials == [
             {
@@ -3697,7 +3712,8 @@ class TestDatabaseProvisioning:
         assert "secret" not in " ".join(result.message for result in results)
         assert connection.closed
 
-    def test_mariadb_destroy_uses_mariadb_labels_and_mysql_compatible_safety(
+    @pytest.mark.anyio
+    async def test_mariadb_destroy_uses_mariadb_labels_and_mysql_compatible_safety(
         self,
     ) -> None:
         connection = _RecordingMySQLConnection(
@@ -3722,8 +3738,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         assert [(result.family, result.status, result.phase) for result in results] == [
@@ -3738,7 +3754,8 @@ class TestDatabaseProvisioning:
         assert "DROP DATABASE `app`" in executed_sql
         assert "DROP USER 'app'@'%'" in executed_sql
 
-    def test_mariadb_destroy_reports_unclassified_role_grants_as_unsupported(
+    @pytest.mark.anyio
+    async def test_mariadb_destroy_reports_unclassified_role_grants_as_unsupported(
         self,
     ) -> None:
         connection = _RecordingMySQLConnection(
@@ -3760,8 +3777,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         assert [(result.family, result.status, result.phase) for result in results] == [
@@ -3780,7 +3797,10 @@ class TestDatabaseProvisioning:
         assert "DROP DATABASE `app`" in executed_sql
         assert "DROP USER" not in executed_sql
 
-    def test_mariadb_provisioner_uses_mariadb_label_for_count_errors(self) -> None:
+    @pytest.mark.anyio
+    async def test_mariadb_provisioner_uses_mariadb_label_for_count_errors(
+        self,
+    ) -> None:
         connection = _RecordingMySQLConnection(["not-count"])
         provisioner = MariaDBProvisioner(connector=_RecordingMySQLConnector(connection))
         context = _mariadb_provisioning_context(
@@ -3794,9 +3814,10 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningOperationError,
             match="MariaDB count result was invalid.",
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
 
-    def test_mariadb_provisioner_reports_missing_driver(
+    @pytest.mark.anyio
+    async def test_mariadb_provisioner_reports_missing_driver(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -3818,9 +3839,10 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match=r"wybra\[mariadb\]",
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
 
-    def test_postgresql_provisioner_initialises_database_role_schema_and_grants(
+    @pytest.mark.anyio
+    async def test_postgresql_provisioner_initialises_database_role_schema_and_grants(
         self,
     ) -> None:
         maintenance = _RecordingPostgreSQLConnection(
@@ -3850,7 +3872,7 @@ class TestDatabaseProvisioning:
             provisioning_connection=provisioning_connection,
         )
 
-        results = asyncio.run(provisioner.initialise(context))
+        results = await provisioner.initialise(context)
 
         assert connector.credentials[0]["database"] == "cluster_admin"
         assert connector.credentials[1]["database"] == "app"
@@ -3871,7 +3893,10 @@ class TestDatabaseProvisioning:
         assert maintenance.closed
         assert target.closed
 
-    def test_postgresql_provisioner_reuses_objects_and_reports_migrations(self) -> None:
+    @pytest.mark.anyio
+    async def test_postgresql_provisioner_reuses_objects_and_reports_migrations(
+        self,
+    ) -> None:
         maintenance = _RecordingPostgreSQLConnection(
             [
                 True,  # database exists
@@ -3896,7 +3921,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(provisioner.initialise(context))
+        results = await provisioner.initialise(context)
 
         assert [result.status for result in results] == [
             "skipped",
@@ -3913,7 +3938,8 @@ class TestDatabaseProvisioning:
         assert 'ALTER ROLE "app" WITH PASSWORD' in executed_sql
         assert 'GRANT USAGE ON SCHEMA "public" TO "app"' in executed_sql
 
-    def test_postgresql_destroy_requires_confirmed_database_and_sa_database(
+    @pytest.mark.anyio
+    async def test_postgresql_destroy_requires_confirmed_database_and_sa_database(
         self,
     ) -> None:
         provisioner = PostgreSQLProvisioner(
@@ -3930,9 +3956,7 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match="confirmation does not match",
         ):
-            asyncio.run(
-                provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
-            )
+            await provisioner.destroy(context, DestroyDatabaseRequest(confirm="other"))
 
         service_connection = context.provisioning_connection
         assert service_connection is not None
@@ -3947,11 +3971,12 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match="different service-account database",
         ):
-            asyncio.run(
-                provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
-            )
+            await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
-    def test_postgresql_init_requires_distinct_service_account_database(self) -> None:
+    @pytest.mark.anyio
+    async def test_postgresql_init_requires_distinct_service_account_database(
+        self,
+    ) -> None:
         provisioner = PostgreSQLProvisioner(
             connector=_RecordingPostgreSQLConnector(_RecordingPostgreSQLConnection([]))
         )
@@ -3971,9 +3996,12 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match="different service-account database",
         ):
-            asyncio.run(provisioner.initialise(context))
+            await provisioner.initialise(context)
 
-    def test_postgresql_destroy_removes_configured_database_and_role(self) -> None:
+    @pytest.mark.anyio
+    async def test_postgresql_destroy_removes_configured_database_and_role(
+        self,
+    ) -> None:
         maintenance = _RecordingPostgreSQLConnection(
             [
                 True,  # database exists
@@ -3990,8 +4018,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         assert [(result.status, result.phase) for result in results] == [
@@ -4003,7 +4031,8 @@ class TestDatabaseProvisioning:
         assert 'DROP DATABASE "app"' in executed_sql
         assert 'DROP ROLE "app"' in executed_sql
 
-    def test_postgresql_destroy_skips_service_account_runtime_role(self) -> None:
+    @pytest.mark.anyio
+    async def test_postgresql_destroy_skips_service_account_runtime_role(self) -> None:
         maintenance = _RecordingPostgreSQLConnection(
             [
                 True,  # database exists
@@ -4019,8 +4048,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         executed_sql = "\n".join(query for query, _args in maintenance.executed)
@@ -4028,7 +4057,10 @@ class TestDatabaseProvisioning:
         assert "DROP ROLE" not in executed_sql
         assert any("roles are the same" in result.message for result in results)
 
-    def test_postgresql_destroy_skips_role_with_external_dependencies(self) -> None:
+    @pytest.mark.anyio
+    async def test_postgresql_destroy_skips_role_with_external_dependencies(
+        self,
+    ) -> None:
         maintenance = _RecordingPostgreSQLConnection(
             [
                 True,  # database exists
@@ -4045,8 +4077,8 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = asyncio.run(
-            provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
+        results = await provisioner.destroy(
+            context, DestroyDatabaseRequest(confirm="app")
         )
 
         executed_sql = "\n".join(query for query, _args in maintenance.executed)
@@ -4054,7 +4086,8 @@ class TestDatabaseProvisioning:
         assert "DROP ROLE" not in executed_sql
         assert any("dependencies outside app" in result.message for result in results)
 
-    def test_postgresql_maintenance_tasks_execute_privilege_repair_and_state(
+    @pytest.mark.anyio
+    async def test_postgresql_maintenance_tasks_execute_privilege_repair_and_state(
         self,
     ) -> None:
         repair_connection = _RecordingPostgreSQLConnection([])
@@ -4079,17 +4112,13 @@ class TestDatabaseProvisioning:
             "analyse",
             "extensions",
         ]
-        repair_result = asyncio.run(
-            provisioner.run_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="repair-privs"),
-            )
+        repair_result = await provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="repair-privs"),
         )
-        state_result = asyncio.run(
-            provisioner.run_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="migrations"),
-            )
+        state_result = await provisioner.run_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="migrations"),
         )
 
         assert repair_result[0].status == "skipped"
@@ -4098,26 +4127,26 @@ class TestDatabaseProvisioning:
         )
         assert state_result[0].message == "Tortoise migration recorder table is empty."
 
-    def test_database_lifecycle_guards_reject_blank_requests(self) -> None:
+    @pytest.mark.anyio
+    async def test_database_lifecycle_guards_reject_blank_requests(self) -> None:
         context = _sqlite_provisioning_context()
 
         with pytest.raises(
             DatabaseProvisioningConfigurationError,
             match="Destroy confirmation must not be blank",
         ):
-            asyncio.run(destroy_database(context, DestroyDatabaseRequest(confirm=" ")))
+            await destroy_database(context, DestroyDatabaseRequest(confirm=" "))
         with pytest.raises(
             DatabaseProvisioningConfigurationError,
             match="Maintenance task name must not be blank",
         ):
-            asyncio.run(
-                run_database_maintenance(
-                    context,
-                    DatabaseMaintenanceRequest(task=" "),
-                )
+            await run_database_maintenance(
+                context,
+                DatabaseMaintenanceRequest(task=" "),
             )
 
-    def test_database_maintenance_requires_confirmation_for_protected_tasks(
+    @pytest.mark.anyio
+    async def test_database_maintenance_requires_confirmation_for_protected_tasks(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -4173,33 +4202,28 @@ class TestDatabaseProvisioning:
             DatabaseProvisioningConfigurationError,
             match="requires confirmation",
         ):
-            asyncio.run(
-                run_database_maintenance(
-                    context,
-                    DatabaseMaintenanceRequest(task="protected"),
-                )
+            await run_database_maintenance(
+                context,
+                DatabaseMaintenanceRequest(task="protected"),
             )
 
-        result = asyncio.run(
-            run_database_maintenance(
-                context,
-                DatabaseMaintenanceRequest(task="protected", confirm="protected"),
-            )
+        result = await run_database_maintenance(
+            context,
+            DatabaseMaintenanceRequest(task="protected", confirm="protected"),
         )
 
         assert result == ()
         assert ran == ["protected"]
 
-    def test_sqlite_provisioner_rejects_unknown_maintenance_task(self) -> None:
+    @pytest.mark.anyio
+    async def test_sqlite_provisioner_rejects_unknown_maintenance_task(self) -> None:
         with pytest.raises(
             DatabaseProvisioningConfigurationError,
             match="Unknown sqlite maintenance task",
         ):
-            asyncio.run(
-                SQLiteProvisioner().run_maintenance(
-                    _sqlite_provisioning_context(),
-                    DatabaseMaintenanceRequest(task="vacuum"),
-                )
+            await SQLiteProvisioner().run_maintenance(
+                _sqlite_provisioning_context(),
+                DatabaseMaintenanceRequest(task="vacuum"),
             )
 
     def test_database_provisioning_sql_renderer_quotes_identifiers(self) -> None:
