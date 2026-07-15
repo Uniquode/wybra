@@ -14,6 +14,7 @@ from anyio import Path as AsyncPath
 from wybra.core.environment import environment_get
 from wybra.core.runtime import LOCAL_ENVIRONMENT
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_transaction
 from wybra.services.crypto import (
     ENV_WYBRA_SECRET_KEY,
     ENVELOPE_PREFIX,
@@ -400,8 +401,10 @@ class DatabaseSessionStorage:
 
     async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
         cleanup_data: dict[str, Any] | None = None
-        async with self.database.require().transaction(
-            self.connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.connection_name).for_write(),
         ) as connection:
             row = await SessionRecordModel.get_or_none(
                 id=session_id,
@@ -425,8 +428,10 @@ class DatabaseSessionStorage:
 
     async def save(self, session_id: str, record: SessionRecord) -> None:
         data = _session_data_json(record.data, max_bytes=self.payload_max_bytes)
-        async with self.database.require().transaction(
-            self.connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.connection_name).for_write(),
         ) as connection:
             await SessionRecordModel.update_or_create(
                 id=session_id,
@@ -441,8 +446,10 @@ class DatabaseSessionStorage:
 
     async def delete(self, session_id: str) -> None:
         cleanup_data: dict[str, Any] | None = None
-        async with self.database.require().transaction(
-            self.connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.connection_name).for_write(),
         ) as connection:
             row = await SessionRecordModel.get_or_none(
                 id=session_id,
@@ -459,8 +466,10 @@ class DatabaseSessionStorage:
 
     async def cleanup(self, *, now: float) -> None:
         cleanup_records: list[dict[str, Any]] = []
-        async with self.database.require().transaction(
-            self.connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.connection_name).for_write(),
         ) as connection:
             rows = tuple(
                 await SessionRecordModel.filter(expires_at__lte=now)

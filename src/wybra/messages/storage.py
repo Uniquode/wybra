@@ -13,6 +13,7 @@ from fastapi import Request
 from tortoise.expressions import Q
 
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_transaction
 from wybra.messages.config import MessageStorageBackend
 from wybra.messages.exceptions import (
     InvalidAlertError,
@@ -333,8 +334,10 @@ class DatabaseMessagesStorage:
 
     async def enqueue(self, request: Request, alert: AlertRecord) -> None:
         queue_key = server_side_queue_key(request, prefix="")
-        async with self.database.require().transaction(
-            self.settings.database_connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.settings.database_connection_name).for_write(),
         ) as connection:
             await MessageAlert.create(
                 queue_key=queue_key,
@@ -351,8 +354,10 @@ class DatabaseMessagesStorage:
         queue_key = optional_server_side_queue_key(request, prefix="")
         if queue_key is None:
             return ()
-        async with self.database.require().transaction(
-            self.settings.database_connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.settings.database_connection_name).for_write(),
         ) as connection:
             rows = tuple(
                 await MessageAlert.filter(queue_key=queue_key)
@@ -377,8 +382,10 @@ class DatabaseMessagesStorage:
         queue_key = optional_server_side_queue_key(request, prefix="")
         if queue_key is None:
             return
-        async with self.database.require().transaction(
-            self.settings.database_connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.settings.database_connection_name).for_write(),
         ) as connection:
             await self._delete_queue(connection, queue_key)
 
@@ -391,14 +398,18 @@ class DatabaseMessagesStorage:
         queue_key = server_side_queue_key_from_session_data(session_data, prefix="")
         if queue_key is None:
             return
-        async with self.database.require().transaction(
-            self.settings.database_connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.settings.database_connection_name).for_write(),
         ) as connection:
             await self._delete_queue(connection, queue_key)
 
     async def cleanup(self, *, now: float) -> None:
-        async with self.database.require().transaction(
-            self.settings.database_connection_name
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database(self.settings.database_connection_name).for_write(),
         ) as connection:
             await self._delete_expired(connection, now)
 

@@ -10,12 +10,15 @@ from wybra.db.capabilities import (
     TortoiseDatabaseCapability,
 )
 from wybra.db.config import module_config
+from wybra.db.routing import DbConnection, DbRoute
 from wybra.db.settings import (
     EffectiveDatabaseConfig,
     ResolvedDatabaseConnection,
+    ResolvedDatabaseRouting,
     StructuredDatabaseConfig,
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
+    resolve_database_routing_from_config,
 )
 from wybra.db.urls import (
     available_database_url_schemes,
@@ -33,20 +36,20 @@ from wybra.site_config import app_config_from_site
 
 async def setup_site(site: Site) -> None:
     app_config = app_config_from_site(site)
-    database_connection = resolve_database_connection_from_config(
+    database_routing = resolve_database_routing_from_config(
         site.config,
         project_root=app_config.project_root,
         configured_database_url=app_config.database_url,
     )
-    if database_connection is None:
+    if database_routing is None:
         raise SiteCapabilityError(
             "Database capability requires [app.database] or [app].database_url "
             "to be configured."
         )
     site.provide_capability(
         DatabaseCapability,
-        await TortoiseDatabaseCapability.from_database_connection(
-            database_connection,
+        await TortoiseDatabaseCapability.from_database_routing(
+            database_routing,
             modules=site.modules,
         ),
     )
@@ -55,14 +58,18 @@ async def setup_site(site: Site) -> None:
 __all__ = (
     "DatabaseCapability",
     "DatabaseCapabilityError",
+    "DbConnection",
+    "DbRoute",
     "EffectiveDatabaseConfig",
     "module_config",
     "PersistenceValidationSettings",
     "ResolvedDatabaseConnection",
+    "ResolvedDatabaseRouting",
     "StructuredDatabaseConfig",
     "TortoiseDatabaseCapability",
     "available_database_url_schemes",
     "resolve_database_connection_from_config",
+    "resolve_database_routing_from_config",
     "resolve_database_provisioning_connection_from_config",
     "setup_site",
     "sqlite_database_path",

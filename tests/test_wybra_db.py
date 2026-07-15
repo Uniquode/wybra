@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI
 from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.models import Model
+from tortoise.transactions import in_transaction
 
 import wybra.db.migrate as migrate_module
 import wybra.db.provisioning.core as provisioning_core
@@ -25,6 +26,8 @@ from wybra.db import DatabaseCapability
 from wybra.db.capabilities import (
     DatabaseCapabilityError,
     TortoiseDatabaseCapability,
+    tortoise_connection,
+    tortoise_transaction,
 )
 from wybra.db.config import ENV_DATABASE_URL
 from wybra.db.config import module_config as db_module_config
@@ -59,6 +62,7 @@ from wybra.db.provisioning.mariadb import MariaDBProvisioner
 from wybra.db.provisioning.mssql import SQLServerProvisioner, quote_mssql_identifier
 from wybra.db.provisioning.mysql import MySQLProvisioner, quote_mysql_identifier
 from wybra.db.provisioning.postgresql import PostgreSQLProvisioner
+from wybra.db.routing import DatabaseRouteInstance, DatabaseRouteRegistry
 from wybra.db.settings import (
     AwsClientSettings,
     AwsManagedDatabaseSettings,
@@ -68,6 +72,7 @@ from wybra.db.settings import (
     database_connection_metadata_from_config,
     resolve_database_connection_from_config,
     resolve_database_provisioning_connection_from_config,
+    resolve_database_routing_from_config,
 )
 from wybra.db.sql import ident, param, quote_sql_identifier, render_sql, trusted_sql
 from wybra.db.surfaces import (
@@ -461,14 +466,278 @@ class TestDatabaseConfigurationAndRuntime:
             await site.close()
 
     @pytest.mark.anyio
-    async def test_database_capability_exposes_public_connection_helper(
+    async def test_database_capability_exposes_opaque_route_selection(
         self,
         tmp_path: Path,
     ) -> None:
         site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
         database = site.require_capability(DatabaseCapability)
         try:
-            assert isinstance(database.connection(), BaseDBAsyncClient)
+            route = database.database().default()
+
+            assert route.database_name == "default"
+            assert route.role == "default"
+            assert not hasattr(route, "alias")
+        finally:
+            await database.close()
+
+    def test_structured_database_routing_inherits_base_instance_settings(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        config = ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app.database": {
+                            "backend": "sqlite",
+                            "database": "primary.sqlite3",
+                            "reader_rotation": "queue",
+                        },
+                        "app.database.replica_one": {
+                            "role": "reader",
+                            "database": "replica.sqlite3",
+                            "weight": 2,
+                        },
+                    }
+                )
+            ],
+            config_defs=(db_module_config,),
+            discover_module_config=False,
+        )
+
+        routing = resolve_database_routing_from_config(
+            config,
+            project_root=tmp_path,
+        )
+
+        assert routing is not None
+        assert tuple(routing.connections) == ("default", "database_replica_one")
+        registry = routing.build_registry()
+        assert registry.connection().default().role == "default"
+        assert registry.connection().for_read().role == "reader"
+        assert registry.connection().for_write().role == "default"
+
+    def test_structured_database_routing_rejects_secondary_backend_override(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        config = ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app.database": {
+                            "backend": "sqlite",
+                            "database": "primary.sqlite3",
+                        },
+                        "app.database.replica_one": {
+                            "role": "reader",
+                            "backend": "postgresql",
+                        },
+                    }
+                )
+            ],
+            config_defs=(db_module_config,),
+            discover_module_config=False,
+        )
+
+        with pytest.raises(ConfigurationError, match="backend is not allowed"):
+            resolve_database_routing_from_config(config, project_root=tmp_path)
+
+    @pytest.mark.parametrize(
+        "field_name",
+        ("default_rotation", "reader_rotation", "writer_rotation"),
+    )
+    def test_structured_database_routing_rejects_secondary_rotation_policy(
+        self,
+        tmp_path: Path,
+        field_name: str,
+    ) -> None:
+        config = ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app.database": {
+                            "backend": "sqlite",
+                            "database": "primary.sqlite3",
+                        },
+                        "app.database.replica_one": {
+                            "role": "reader",
+                            field_name: "random",
+                        },
+                    }
+                )
+            ],
+            config_defs=(db_module_config,),
+            discover_module_config=False,
+        )
+
+        with pytest.raises(ConfigurationError, match=field_name):
+            resolve_database_routing_from_config(config, project_root=tmp_path)
+
+    def test_structured_database_routing_reports_secondary_weight_context(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        config = ConfigService(
+            [
+                MappingConfigSource(
+                    {
+                        "app.database": {
+                            "backend": "sqlite",
+                            "database": "primary.sqlite3",
+                        },
+                        "app.database.replica_one": {
+                            "role": "reader",
+                            "weight": 0,
+                        },
+                    }
+                )
+            ],
+            config_defs=(db_module_config,),
+            discover_module_config=False,
+        )
+
+        with pytest.raises(
+            ConfigurationError,
+            match=r"\[app\.database\.replica_one\]\.weight",
+        ):
+            resolve_database_routing_from_config(config, project_root=tmp_path)
+
+    def test_reader_and_writer_fallbacks_use_default_selection_policy(self) -> None:
+        registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="first",
+                    roles=frozenset({"default"}),
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="second",
+                    roles=frozenset({"default"}),
+                ),
+            ),
+            default_rotation="queue",
+            reader_rotation="default",
+            writer_rotation="random",
+        )
+
+        first_default = registry.connection().default()
+        reader_fallback = registry.connection().for_read()
+        writer_fallback = registry.connection().for_write()
+
+        assert registry.alias_for(first_default) == "first"
+        assert registry.alias_for(reader_fallback) == "second"
+        assert registry.alias_for(writer_fallback) == "first"
+
+    def test_load_and_adaptive_selection_use_route_metrics(self) -> None:
+        registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="reader_one",
+                    roles=frozenset({"reader"}),
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="reader_two",
+                    roles=frozenset({"reader"}),
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="fallback",
+                    roles=frozenset({"default"}),
+                ),
+            ),
+            reader_rotation="load",
+        )
+        first_reader = registry.connection().for_read()
+        started = registry.begin_statement(first_reader)
+
+        assert registry.alias_for(registry.connection().for_read()) == "reader_two"
+
+        registry.end_statement(first_reader, started)
+        registry.reader_rotation = "adaptive"
+        slow_reader = registry.connection().for_read()
+        slow_started = registry.begin_statement(slow_reader)
+        registry.end_statement(slow_reader, slow_started)
+
+        assert registry.alias_for(registry.connection().for_read()) == "reader_two"
+
+    @pytest.mark.anyio
+    async def test_tortoise_uses_a_default_role_instance_for_static_fallback(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.db",),
+                        "project_root": tmp_path,
+                    },
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "reader.sqlite3",
+                        "role": "reader",
+                    },
+                    "app.database.primary": {
+                        "database": "writer.sqlite3",
+                        "role": "default,writer",
+                    },
+                }
+            ),
+        )
+        database = site.require_capability(DatabaseCapability)
+        try:
+            assert isinstance(database, TortoiseDatabaseCapability)
+            applications = database._database.config["apps"]
+            assert isinstance(applications, dict)
+            assert {
+                application["default_connection"]
+                for application in applications.values()
+            } == {"database_primary"}
+        finally:
+            await database.close()
+
+    @pytest.mark.anyio
+    async def test_database_capability_records_statement_and_transaction_metrics(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
+        database = site.require_capability(DatabaseCapability)
+        try:
+            assert isinstance(database, TortoiseDatabaseCapability)
+            route = database.database().for_write()
+            connection = tortoise_connection(database, route)
+
+            await connection.execute_query("select 1")
+
+            active_statements, active_transactions, latency = (
+                database._database.routes.metrics(route)
+            )
+            assert active_statements == 0
+            assert active_transactions == 0
+            assert latency is not None
+
+            async with tortoise_transaction(database, route) as transaction:
+                assert database._database.routes.metrics(route)[1] == 1
+                await transaction.execute_query("select 1")
+
+            assert database._database.routes.metrics(route)[1] == 0
+            assert database._database.routes.metrics(route)[2] is not None
+
+            with database._database.context:
+                async with in_transaction(
+                    database._database.routes.alias_for(route)
+                ) as transaction:
+                    assert database._database.routes.metrics(route)[1] == 1
+                    await transaction.execute_query("select 1")
+
+            assert database._database.routes.metrics(route)[1] == 0
         finally:
             await database.close()
 
@@ -491,7 +760,10 @@ class TestDatabaseConfigurationAndRuntime:
         )
         database = site.require_capability(DatabaseCapability)
         try:
-            async with database.transaction() as connection:
+            async with tortoise_transaction(
+                database,
+                database.database().for_write(),
+            ) as connection:
                 await connection.execute_script(
                     "CREATE TABLE runtime_probe (id INTEGER)"
                 )
@@ -511,7 +783,10 @@ class TestDatabaseConfigurationAndRuntime:
         )
         database = site.require_capability(DatabaseCapability)
         try:
-            async with database.transaction() as connection:
+            async with tortoise_transaction(
+                database,
+                database.database().for_write(),
+            ) as connection:
                 await connection.execute_script(
                     "CREATE TABLE structured_probe (id INTEGER)"
                 )
@@ -1877,8 +2152,14 @@ class TestDatabaseConfigurationAndRuntime:
         site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
         database = site.require_capability(DatabaseCapability)
         try:
-            first_connection = database.connection()
-            second_connection = database.connection()
+            first_connection = tortoise_connection(
+                database,
+                database.database().default(),
+            )
+            second_connection = tortoise_connection(
+                database,
+                database.database().default(),
+            )
 
             assert first_connection is second_connection
         finally:
@@ -1892,7 +2173,10 @@ class TestDatabaseConfigurationAndRuntime:
         site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
         database = site.require_capability(DatabaseCapability)
         try:
-            async with database.transaction() as connection:
+            async with tortoise_transaction(
+                database,
+                database.database().for_write(),
+            ) as connection:
                 await connection.execute_script(
                     "create table records (value text not null)"
                 )
@@ -1902,32 +2186,43 @@ class TestDatabaseConfigurationAndRuntime:
                 )
 
             with pytest.raises(RuntimeError, match="rollback"):
-                async with database.transaction() as connection:
+                async with tortoise_transaction(
+                    database,
+                    database.database().for_write(),
+                ) as connection:
                     await connection.execute_query(
                         "insert into records values (?)",
                         ["rolled-back"],
                     )
                     raise RuntimeError("rollback")
 
-            _row_count, rows = await database.connection().execute_query(
-                "select value from records order by value"
-            )
+            _row_count, rows = await tortoise_connection(
+                database,
+                database.database().default(),
+            ).execute_query("select value from records order by value")
 
             assert [row["value"] for row in rows] == ["committed"]
         finally:
             await database.close()
 
     @pytest.mark.anyio
-    async def test_database_capability_supports_named_connection_aliases(
+    async def test_database_capability_selects_default_read_and_write_routes(
         self,
         tmp_path: Path,
     ) -> None:
         site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
         database = site.require_capability(DatabaseCapability)
         try:
-            reader_connection = database.connection("reader")
-            assert reader_connection is database.connection("default")
-            async with database.transaction("writer") as writer_connection:
+            default_route = database.database().default()
+            reader_route = database.database().for_read()
+            writer_route = database.database().for_write()
+
+            default_connection = tortoise_connection(database, default_route)
+            assert tortoise_connection(database, reader_route) is default_connection
+            assert tortoise_connection(database, writer_route) is default_connection
+            async with tortoise_transaction(
+                database, writer_route
+            ) as writer_connection:
                 assert callable(writer_connection.execute_query)
         finally:
             await database.close()
@@ -2042,9 +2337,9 @@ class TestDatabaseConfigurationAndRuntime:
         database = site.require_capability(DatabaseCapability)
         try:
             with pytest.raises(
-                DatabaseCapabilityError, match="Unknown database connection"
+                DatabaseCapabilityError, match="Unknown logical database"
             ):
-                database.connection("analytics")
+                database.database("analytics")
         finally:
             await database.close()
 
@@ -2061,7 +2356,7 @@ class TestDatabaseConfigurationAndRuntime:
         with pytest.raises(
             DatabaseCapabilityError, match="Database capability is closed"
         ):
-            database.connection()
+            database.database()
 
     @pytest.mark.anyio
     async def test_database_capability_attempts_all_distinct_closes(
@@ -2079,10 +2374,7 @@ class TestDatabaseConfigurationAndRuntime:
             "wybra.db.capabilities.close_database",
             close_or_fail,
         )
-        database = TortoiseDatabaseCapability(
-            first_database,
-            {"default": "default", "reader": "default", "writer": "default"},
-        )
+        database = TortoiseDatabaseCapability(first_database)
 
         with pytest.raises(DatabaseCapabilityError, match="error_count=1"):
             await database.close()

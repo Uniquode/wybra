@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from tortoise.expressions import Q
 
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_connection, tortoise_transaction
 from wybra.profile.exceptions import ProfileInputError
 from wybra.profile.models import UserPhoneContact, UserProfile
 from wybra.profile.phone import normalise_phone_contact
@@ -77,13 +78,18 @@ class TortoiseProfileRepository:
     database: SiteCapabilityProxy[DatabaseCapability]
 
     async def get_profile(self, user_id: uuid.UUID) -> UserProfile | None:
+        database = self.database.require()
         return await UserProfile.get_or_none(
             user_id=user_id,
-            using_db=self.database.require().connection(),
+            using_db=tortoise_connection(database, database.database().default()),
         )
 
     async def ensure_profile(self, user_id: uuid.UUID) -> UserProfile:
-        async with self.database.require().transaction() as connection:
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database().for_write(),
+        ) as connection:
             return await _ensure_profile(connection, user_id)
 
     async def set_profile_picture(
@@ -91,7 +97,11 @@ class TortoiseProfileRepository:
         user_id: uuid.UUID,
         media_id: uuid.UUID | None,
     ) -> UserProfile:
-        async with self.database.require().transaction() as connection:
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database().for_write(),
+        ) as connection:
             profile = await _ensure_profile(connection, user_id)
             profile.profile_picture_media_id = media_id
             await profile.save(using_db=connection)
@@ -104,7 +114,11 @@ class TortoiseProfileRepository:
         *,
         field_setters: Mapping[str, ProfileFieldSetter],
     ) -> UserProfile:
-        async with self.database.require().transaction() as connection:
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database().for_write(),
+        ) as connection:
             return await _save_profile_fields(
                 connection,
                 user_id,
@@ -121,7 +135,11 @@ class TortoiseProfileRepository:
         subdivision_code: str | None = None,
         contact_id: uuid.UUID | None = None,
     ) -> UserPhoneContact:
-        async with self.database.require().transaction() as connection:
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database().for_write(),
+        ) as connection:
             return await _save_phone_contact(
                 connection,
                 user_id,
@@ -139,7 +157,11 @@ class TortoiseProfileRepository:
         field_setters: Mapping[str, ProfileFieldSetter],
         phone_contact: Mapping[str, str | None] | None = None,
     ) -> None:
-        async with self.database.require().transaction() as connection:
+        database = self.database.require()
+        async with tortoise_transaction(
+            database,
+            database.database().for_write(),
+        ) as connection:
             if profile_values:
                 await _save_profile_fields(
                     connection,
@@ -162,7 +184,12 @@ class TortoiseProfileRepository:
     ) -> tuple[UserPhoneContact, ...]:
         return tuple(
             await UserPhoneContact.filter(user_id=user_id)
-            .using_db(self.database.require().connection())
+            .using_db(
+                tortoise_connection(
+                    database := self.database.require(),
+                    database.database().default(),
+                )
+            )
             .order_by("id")
             .all()
         )
@@ -176,7 +203,12 @@ class TortoiseProfileRepository:
         query = (
             UserPhoneContact.filter(user_id=user_id)
             .filter(Q(verified_at__isnull=False))
-            .using_db(self.database.require().connection())
+            .using_db(
+                tortoise_connection(
+                    database := self.database.require(),
+                    database.database().default(),
+                )
+            )
             .order_by("id")
         )
         if require_sms:
@@ -193,7 +225,12 @@ class TortoiseProfileRepository:
             )
             .filter(Q(verified_at__isnull=False))
             .exclude(user_id=user_id)
-            .using_db(self.database.require().connection())
+            .using_db(
+                tortoise_connection(
+                    database := self.database.require(),
+                    database.database().default(),
+                )
+            )
             .values_list("normalised_number", flat=True)
         )
         return tuple(

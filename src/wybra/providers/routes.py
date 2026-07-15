@@ -23,6 +23,7 @@ from wybra.auth.settings import identity_options_from_state
 from wybra.auth.timestamps import current_timestamp
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_transaction
 from wybra.providers.account_resolution import (
     ProviderAccountResolution,
     resolve_provider_account,
@@ -742,7 +743,9 @@ async def _provider_resolution_user(request: Request, user_id: str) -> User | No
     if parsed_user_id is None:
         return None
     database = get_site(request.app).require_capability(DatabaseCapability)
-    async with database.transaction() as session:
+    async with tortoise_transaction(
+        database, database.database().for_write()
+    ) as session:
         user = await User.get_or_none(id=parsed_user_id, using_db=session)
         return user if user is not None and is_user_effectively_active(user) else None
 

@@ -35,6 +35,11 @@ module_config: Final = ConfigDef(
                 ConfigField(name="sa_password"),
                 ConfigField(name="sa_user_key"),
                 ConfigField(name="sa_password_key"),
+                ConfigField(name="role"),
+                ConfigField(name="weight"),
+                ConfigField(name="default_rotation"),
+                ConfigField(name="reader_rotation"),
+                ConfigField(name="writer_rotation"),
             ),
         ),
         AWS_CONFIG_SECTION: ConfigGroup(

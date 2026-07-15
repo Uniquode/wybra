@@ -1,30 +1,22 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import (
     AbstractAsyncContextManager,
     AbstractContextManager,
-    asynccontextmanager,
     contextmanager,
 )
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from tortoise.backends.base.client import BaseDBAsyncClient
-from tortoise.transactions import in_transaction
 
+from wybra.core.exceptions import ConfigurationError
 from wybra.db.persistence import Database, close_database, create_database
-from wybra.db.settings import ResolvedDatabaseConnection
+from wybra.db.routing import DbConnection, DbRoute
+from wybra.db.settings import ResolvedDatabaseRouting
 
-DEFAULT_CONNECTION_NAME = "default"
-READER_CONNECTION_NAME = "reader"
-WRITER_CONNECTION_NAME = "writer"
-DEFAULT_CONNECTION_NAMES = (
-    DEFAULT_CONNECTION_NAME,
-    READER_CONNECTION_NAME,
-    WRITER_CONNECTION_NAME,
-)
 logger = logging.getLogger(__name__)
 
 
@@ -36,54 +28,75 @@ class DatabaseCapabilityError(RuntimeError):
 class DatabaseCapability(Protocol):
     """Public database capability exposed through ``Site``."""
 
-    def connection(
-        self,
-        name: str = DEFAULT_CONNECTION_NAME,
-    ) -> BaseDBAsyncClient: ...
-
-    def transaction(
-        self,
-        name: str = DEFAULT_CONNECTION_NAME,
-    ) -> AbstractAsyncContextManager[BaseDBAsyncClient]: ...
+    def database(self, name: str = "default") -> DbConnection: ...
 
     async def close(self) -> None: ...
+
+
+@runtime_checkable
+class TortoiseRouteAdapter(Protocol):
+    """Internal bridge from opaque routes to Tortoise client operations."""
+
+    def _connection_for(self, route: DbRoute) -> BaseDBAsyncClient: ...
+
+    def _transaction_for(
+        self,
+        route: DbRoute,
+    ) -> AbstractAsyncContextManager[BaseDBAsyncClient]: ...
+
+
+def tortoise_connection(
+    capability: DatabaseCapability,
+    route: DbRoute,
+) -> BaseDBAsyncClient:
+    """Resolve an opaque route through Wybra's internal Tortoise adapter."""
+    return _tortoise_adapter(capability)._connection_for(route)
+
+
+def tortoise_transaction(
+    capability: DatabaseCapability,
+    route: DbRoute,
+) -> AbstractAsyncContextManager[BaseDBAsyncClient]:
+    """Open a transaction pinned to one opaque route's physical connection."""
+    return _tortoise_adapter(capability)._transaction_for(route)
 
 
 @dataclass(frozen=True, slots=True)
 class TortoiseDatabaseCapability:
     _database: Database
-    _connection_aliases: Mapping[str, str]
     _closed: bool = field(default=False, init=False, repr=False)
 
     @classmethod
-    async def from_database_connection(
+    async def from_database_routing(
         cls,
-        database_connection: ResolvedDatabaseConnection,
+        database_routing: ResolvedDatabaseRouting,
         *,
         modules: Sequence[str],
     ) -> TortoiseDatabaseCapability:
         database = await create_database(
-            database_connection,
+            database_routing.instances[0].connection,
             modules=modules,
+            routing=database_routing,
         )
-        connection_aliases = {
-            name: DEFAULT_CONNECTION_NAME for name in DEFAULT_CONNECTION_NAMES
-        }
-        return cls(database, connection_aliases)
+        return cls(database)
 
-    def connection(
-        self,
-        name: str = DEFAULT_CONNECTION_NAME,
-    ) -> BaseDBAsyncClient:
+    def database(self, name: str = "default") -> DbConnection:
         self._require_open()
-        return self._database.connection(self._connection_name(name))
+        try:
+            return self._database.routes.connection(name)
+        except ConfigurationError as exc:
+            raise DatabaseCapabilityError(str(exc)) from exc
 
-    def transaction(
+    def _connection_for(self, route: DbRoute) -> BaseDBAsyncClient:
+        self._require_open()
+        return self._database.connection_for(route)
+
+    def _transaction_for(
         self,
-        name: str = DEFAULT_CONNECTION_NAME,
+        route: DbRoute,
     ) -> AbstractAsyncContextManager[BaseDBAsyncClient]:
         self._require_open()
-        return self._transaction_scope(self._connection_name(name))
+        return self._database.transaction_for(route)
 
     def context(self) -> AbstractContextManager[None]:
         self._require_open()
@@ -113,30 +126,19 @@ class TortoiseDatabaseCapability:
 
         object.__setattr__(self, "_closed", True)
 
-    @asynccontextmanager
-    async def _transaction_scope(
-        self,
-        connection_name: str,
-    ) -> AsyncIterator[BaseDBAsyncClient]:
-        with self._database.context:
-            async with in_transaction(connection_name) as connection:
-                yield connection
-
     @contextmanager
     def _context_scope(self) -> Iterator[None]:
         with self._database.context:
             yield
 
-    def _connection_name(self, name: str) -> str:
-        try:
-            return self._connection_aliases[name]
-        except KeyError as exc:
-            available = ", ".join(sorted(self._connection_aliases))
-            raise DatabaseCapabilityError(
-                "Unknown database connection: "
-                f"connection_name={name}, available_connections={available}."
-            ) from exc
-
     def _require_open(self) -> None:
         if self._closed:
             raise DatabaseCapabilityError("Database capability is closed.")
+
+
+def _tortoise_adapter(capability: DatabaseCapability) -> TortoiseRouteAdapter:
+    if isinstance(capability, TortoiseRouteAdapter):
+        return capability
+    raise DatabaseCapabilityError(
+        "Database capability does not provide the internal Tortoise route adapter."
+    )

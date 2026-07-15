@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, TextIO, cast
 
 import click
-from tortoise.transactions import in_transaction
 
 from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.config import (
@@ -568,13 +567,14 @@ async def _reencrypt_secrets(
         modules=("wybra.auth",),
     )
     try:
-        with database.context:
-            async with in_transaction("default") as connection:
-                return await reencrypt_persisted_secrets(
-                    connection,
-                    secret_service,
-                    dry_run=dry_run,
-                )
+        async with database.transaction_for(
+            database.routes.connection().for_write()
+        ) as connection:
+            return await reencrypt_persisted_secrets(
+                connection,
+                secret_service,
+                dry_run=dry_run,
+            )
     finally:
         await close_database(database)
 

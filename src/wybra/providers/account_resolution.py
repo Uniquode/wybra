@@ -14,6 +14,7 @@ from wybra.auth.provider_credentials import (
 )
 from wybra.auth.timestamps import current_timestamp
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_transaction
 from wybra.providers.flow import (
     PROVIDER_EMAIL_MATCH_USER_UNRESOLVED_REASON,
     PROVIDER_LINKING_USER_UNAVAILABLE_REASON,
@@ -55,7 +56,9 @@ async def resolve_provider_account(
     linking_user: User | None,
 ) -> ProviderPolicyDecision:
     database = get_site(request.app).require_capability(DatabaseCapability)
-    async with database.transaction() as session:
+    async with tortoise_transaction(
+        database, database.database().for_write()
+    ) as session:
         store = provider_credential_store(
             session,
             getattr(request.app.state, "secret_envelope_service", None),
