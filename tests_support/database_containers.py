@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
 import json
 import os
@@ -324,16 +323,16 @@ def start_mssql_container(
     return container, service
 
 
-def cleanup_postgresql_target(config: ContainerDatabaseConfig) -> None:
-    asyncio.run(_cleanup_postgresql_target(config))
+async def cleanup_postgresql_target(config: ContainerDatabaseConfig) -> None:
+    await _cleanup_postgresql_target(config)
 
 
-def cleanup_mysql_target(config: ContainerDatabaseConfig) -> None:
-    asyncio.run(_cleanup_mysql_target(config))
+async def cleanup_mysql_target(config: ContainerDatabaseConfig) -> None:
+    await _cleanup_mysql_target(config)
 
 
-def cleanup_mssql_target(config: ContainerDatabaseConfig) -> None:
-    asyncio.run(_cleanup_mssql_target(config))
+async def cleanup_mssql_target(config: ContainerDatabaseConfig) -> None:
+    await _cleanup_mssql_target(config)
 
 
 def assert_database_secrets_absent(

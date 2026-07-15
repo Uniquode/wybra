@@ -19,22 +19,22 @@ from tests_support.migration_lifecycle import (
 
 
 @pytest.mark.parametrize(
-    ("fixture_name", "label"),
+    ("mysql_compatible_database_config", "label"),
     (
-        ("mysql_database_config", "MySQL"),
-        ("mariadb_database_config", "MariaDB"),
+        ("mysql", "MySQL"),
+        ("mariadb", "MariaDB"),
     ),
+    indirect=("mysql_compatible_database_config",),
 )
 @pytest.mark.anyio
 async def test_mysql_compatible_init_provisions_database_and_user(
-    fixture_name: str,
+    mysql_compatible_database_config: ContainerDatabaseConfig,
     label: str,
-    request: pytest.FixtureRequest,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config = _database_config(request, fixture_name)
+    config = mysql_compatible_database_config
     config_path = config.write_app_config(tmp_path / "wybra-it.toml")
 
     caplog.set_level(logging.INFO)
@@ -58,21 +58,21 @@ async def test_mysql_compatible_init_provisions_database_and_user(
 
 
 @pytest.mark.parametrize(
-    ("fixture_name", "label"),
+    ("mysql_compatible_database_config", "label"),
     (
-        ("mysql_database_config", "MySQL"),
-        ("mariadb_database_config", "MariaDB"),
+        ("mysql", "MySQL"),
+        ("mariadb", "MariaDB"),
     ),
+    indirect=("mysql_compatible_database_config",),
 )
 @pytest.mark.anyio
 async def test_mysql_compatible_tasks_list_safe_maintenance_metadata(
-    fixture_name: str,
+    mysql_compatible_database_config: ContainerDatabaseConfig,
     label: str,
-    request: pytest.FixtureRequest,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config = _database_config(request, fixture_name)
+    config = mysql_compatible_database_config
     config_path = config.write_app_config(tmp_path / "wybra-it.toml")
 
     exit_code = await list_maintenance_tasks(config_path)
@@ -86,17 +86,17 @@ async def test_mysql_compatible_tasks_list_safe_maintenance_metadata(
 
 
 @pytest.mark.parametrize(
-    "fixture_name",
-    ("mysql_database_config", "mariadb_database_config"),
+    "mysql_compatible_database_config",
+    ("mysql", "mariadb"),
+    indirect=True,
 )
 @pytest.mark.anyio
 async def test_mysql_compatible_migrate_runs_lifecycle(
-    fixture_name: str,
-    request: pytest.FixtureRequest,
+    mysql_compatible_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config = _database_config(request, fixture_name)
+    config = mysql_compatible_database_config
     config_path = config.write_app_config(tmp_path / "wybra-it.toml")
 
     assert await initialise_migrations(config_path) == 0
@@ -115,17 +115,17 @@ async def test_mysql_compatible_migrate_runs_lifecycle(
 
 
 @pytest.mark.parametrize(
-    "fixture_name",
-    ("mysql_database_config", "mariadb_database_config"),
+    "mysql_compatible_database_config",
+    ("mysql", "mariadb"),
+    indirect=True,
 )
 @pytest.mark.anyio
 async def test_mysql_compatible_destroy_removes_disposable_database(
-    fixture_name: str,
-    request: pytest.FixtureRequest,
+    mysql_compatible_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config = _database_config(request, fixture_name)
+    config = mysql_compatible_database_config
     config_path = config.write_app_config(tmp_path / "wybra-it.toml")
 
     assert await initialise_migrations(config_path) == 0
@@ -140,10 +140,3 @@ async def test_mysql_compatible_destroy_removes_disposable_database(
         config.database,
     )
     assert database_count == 0
-
-
-def _database_config(
-    request: pytest.FixtureRequest,
-    fixture_name: str,
-) -> ContainerDatabaseConfig:
-    return request.getfixturevalue(fixture_name)

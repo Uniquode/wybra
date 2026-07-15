@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import re
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -71,6 +71,8 @@ from wybra.widgets.navigation import (
 )
 
 _CREATED_SITES: list[Site] = []
+
+pytestmark = pytest.mark.anyio
 
 
 def _test_client(app: FastAPI) -> WybraTestClient:
@@ -337,17 +339,17 @@ async def _ensure_auth_user(
 
 
 @pytest.fixture(autouse=True)
-def close_created_sites():
+async def close_created_sites() -> AsyncIterator[None]:
     yield
     while _CREATED_SITES:
-        asyncio.run(_CREATED_SITES.pop().close())
+        await _CREATED_SITES.pop().close()
 
 
 class TestProfile:
-    def test_profile_model_surface_exposes_tortoise_models(self) -> None:
+    async def test_profile_model_surface_exposes_tortoise_models(self) -> None:
         assert discover_model_package("wybra.profile") == "wybra.profile.models"
 
-    def test_profile_model_exposes_expected_fields(self) -> None:
+    async def test_profile_model_exposes_expected_fields(self) -> None:
         fields = UserProfile._meta.fields_map
 
         assert fields["user"].null is False
@@ -375,7 +377,7 @@ class TestProfile:
         assert fields["terms_accepted_at"].null is True
         assert fields["data_deletion_requested"].null is False
 
-    def test_profile_phone_contact_model_exposes_expected_fields(self) -> None:
+    async def test_profile_phone_contact_model_exposes_expected_fields(self) -> None:
         fields = UserPhoneContact._meta.fields_map
 
         assert fields["user"].null is False
@@ -436,7 +438,7 @@ class TestProfile:
 
         await site.close()
 
-    def test_validate_profile_accepts_configured_profile_module(self) -> None:
+    async def test_validate_profile_accepts_configured_profile_module(self) -> None:
         class Settings:
             modules = ("wybra.profile",)
 
@@ -444,7 +446,7 @@ class TestProfile:
 
         assert result.is_ok is True
 
-    def test_validate_profile_reports_absent_profile_module(self) -> None:
+    async def test_validate_profile_reports_absent_profile_module(self) -> None:
         class Settings:
             modules = ()
 
@@ -455,21 +457,23 @@ class TestProfile:
             "wybra.profile must be configured to validate profile resources.",
         )
 
-    def test_profile_settings_enable_editing_with_default_editable_fields(self) -> None:
+    async def test_profile_settings_enable_editing_with_default_editable_fields(
+        self,
+    ) -> None:
         settings = ProfileSettings.load_settings({})
 
         assert settings.editing_enabled is True
         assert settings.editable_fields == DEFAULT_EDITABLE_PROFILE_FIELDS
         assert "profile_picture" not in settings.editable_fields
 
-    def test_profile_settings_reads_configured_editable_fields(self) -> None:
+    async def test_profile_settings_reads_configured_editable_fields(self) -> None:
         settings = ProfileSettings.load_settings(
             {"editable_fields": "preferred_name,display_name,bio"}
         )
 
         assert settings.editable_fields == ("preferred_name", "display_name", "bio")
 
-    def test_profile_settings_rejects_unknown_editable_field(self) -> None:
+    async def test_profile_settings_rejects_unknown_editable_field(self) -> None:
         with pytest.raises(ConfigSourceError, match="unknown editable profile field"):
             config = ConfigService(
                 [
@@ -485,14 +489,14 @@ class TestProfile:
             )
             ProfileSettings.load_settings(config)
 
-    def test_profile_field_metadata_describes_default_text_fields(self) -> None:
+    async def test_profile_field_metadata_describes_default_text_fields(self) -> None:
         assert PROFILE_FIELD_METADATA["preferred_name"].label == "Preferred name"
         assert PROFILE_FIELD_METADATA["display_name"].label == "Display name"
         assert PROFILE_FIELD_METADATA["pronouns"].kind == "pronouns"
         assert PROFILE_FIELD_METADATA["profile_links"].kind == "links"
         assert PROFILE_FIELD_METADATA["bio"].max_length == 1024
 
-    def test_profile_settings_reads_configured_pronoun_options(self) -> None:
+    async def test_profile_settings_reads_configured_pronoun_options(self) -> None:
         settings = ProfileSettings.load_settings(
             {"pronoun_options": ("ze|zir", ("fae", "faer"))}
         )
@@ -502,7 +506,7 @@ class TestProfile:
             "fae|faer",
         )
 
-    def test_normalise_phone_contact_uses_country_context_for_local_numbers(
+    async def test_normalise_phone_contact_uses_country_context_for_local_numbers(
         self,
     ) -> None:
         contact = normalise_phone_contact("0412 345 678", country_code="AU")
@@ -512,17 +516,19 @@ class TestProfile:
         assert contact.number_type == "mobile"
         assert contact.sms_capable is True
 
-    def test_normalise_phone_contact_accepts_e164_numbers(self) -> None:
+    async def test_normalise_phone_contact_accepts_e164_numbers(self) -> None:
         contact = normalise_phone_contact("+14155552671", country_code="US")
 
         assert contact.country_code == "US"
         assert contact.normalised_number == "+14155552671"
 
-    def test_normalise_phone_contact_requires_country_for_local_numbers(self) -> None:
+    async def test_normalise_phone_contact_requires_country_for_local_numbers(
+        self,
+    ) -> None:
         with pytest.raises(ProfileInputError, match="country"):
             normalise_phone_contact("0412 345 678", country_code=None)
 
-    def test_normalise_phone_contact_keeps_subdivision_out_of_normalisation(
+    async def test_normalise_phone_contact_keeps_subdivision_out_of_normalisation(
         self,
     ) -> None:
         with_subdivision = normalise_phone_contact(
@@ -540,14 +546,16 @@ class TestProfile:
         )
         assert with_subdivision.subdivision_code == "AU-VIC"
 
-    def test_country_choices_are_iso_backed_with_dial_prefixes_and_flags(self) -> None:
+    async def test_country_choices_are_iso_backed_with_dial_prefixes_and_flags(
+        self,
+    ) -> None:
         countries = {country.code: country for country in country_choices()}
 
         assert countries["AU"].name == "Australia"
         assert countries["AU"].dial_prefix == "+61"
         assert len(countries["AU"].flag) == 2
 
-    def test_subdivision_choices_are_iso_backed(self) -> None:
+    async def test_subdivision_choices_are_iso_backed(self) -> None:
         subdivisions = {choice.code: choice for choice in subdivision_choices("AU")}
 
         assert subdivisions["AU-VIC"].name == "Victoria"
@@ -844,7 +852,7 @@ class TestProfile:
         assert profile.bio == "Existing bio"
         await site.close()
 
-    def test_profile_edit_template_renders_declarative_form_fields(self) -> None:
+    async def test_profile_edit_template_renders_declarative_form_fields(self) -> None:
         templates = DefaultTemplateCapability(
             template_sources=(
                 PackageResourceSource(package="wybra.template", directory="templates"),
@@ -926,7 +934,7 @@ class TestProfile:
         assert 'form.addEventListener("htmx:afterSwap"' in html
         assert 'querySelectorAll("[hx-get]")' in html
 
-    def test_profile_edit_template_suppresses_phone_status_when_phone_has_error(
+    async def test_profile_edit_template_suppresses_phone_status_when_phone_has_error(
         self,
     ) -> None:
         templates = DefaultTemplateCapability(
@@ -964,7 +972,7 @@ class TestProfile:
         assert "Phone contact number is invalid." in html
         assert "Not verified" not in html
 
-    def test_profile_edit_form_uses_phone_contact_control_for_normalisation(
+    async def test_profile_edit_form_uses_phone_contact_control_for_normalisation(
         self,
     ) -> None:
         form = ProfileEditForm(settings=ProfileSettings())
@@ -1139,7 +1147,7 @@ class TestProfile:
             "Login & Security",
         )
 
-    def test_login_widget_template_renders_avatar_after_logout(self) -> None:
+    async def test_login_widget_template_renders_avatar_after_logout(self) -> None:
         templates = DefaultTemplateCapability(
             template_sources=(
                 PackageResourceSource(package="wybra.widgets", directory="templates"),
@@ -1222,7 +1230,7 @@ class TestProfile:
             ({}, None, False, False),
         ),
     )
-    def test_login_widget_template_renders_logout_control_for_context(
+    async def test_login_widget_template_renders_logout_control_for_context(
         self,
         csrf_context: dict[str, str],
         logout_path: str | None,
@@ -1271,7 +1279,7 @@ class TestProfile:
             ) in html
             assert 'action="/logout"' not in html
 
-    def test_dropdown_menu_template_renders_shortcut_metadata(self) -> None:
+    async def test_dropdown_menu_template_renders_shortcut_metadata(self) -> None:
         templates = DefaultTemplateCapability(
             template_sources=(
                 PackageResourceSource(package="wybra.widgets", directory="templates"),
@@ -1314,7 +1322,7 @@ class TestProfile:
         assert 'data-shortcut-key="p"' in html
         assert '<kbd class="wybra-navigation-menu__shortcut">Ctrl P</kbd>' in html
 
-    def test_navigation_item_records_optional_icon_token(self) -> None:
+    async def test_navigation_item_records_optional_icon_token(self) -> None:
         item = NavigationItem(
             label="Profile",
             path="/profile",
@@ -1323,7 +1331,7 @@ class TestProfile:
 
         assert item.icon_token == "user"
 
-    def test_widget_layout_renders_continuous_header_row(self) -> None:
+    async def test_widget_layout_renders_continuous_header_row(self) -> None:
         templates = DefaultTemplateCapability(
             template_sources=(
                 PackageResourceSource(package="wybra.widgets", directory="templates"),
@@ -1351,7 +1359,7 @@ class TestProfile:
         assert "scripts/widgets.js" not in html
         assert 'href="/login"' in html
 
-    def test_widget_layout_omits_header_row_without_controls(self) -> None:
+    async def test_widget_layout_omits_header_row_without_controls(self) -> None:
         templates = DefaultTemplateCapability(
             template_sources=(
                 PackageResourceSource(package="wybra.widgets", directory="templates"),
@@ -1373,7 +1381,7 @@ class TestProfile:
         assert "page-header" not in html
         assert "page-tools" not in html
 
-    def test_foundation_styles_expose_header_and_control_tokens(self) -> None:
+    async def test_foundation_styles_expose_header_and_control_tokens(self) -> None:
         css = _resource_text("wybra.template", "static/styles/app.css")
 
         for token in (
@@ -1399,7 +1407,7 @@ class TestProfile:
         )
         assert re.search(r"^a\s*\{", css, flags=re.MULTILINE) is None
 
-    def test_widget_styles_use_header_and_control_tokens(self) -> None:
+    async def test_widget_styles_use_header_and_control_tokens(self) -> None:
         css = _resource_text("wybra.widgets", "static/styles/widgets.css")
 
         for property_name, value in (
@@ -1419,7 +1427,7 @@ class TestProfile:
         assert "left: anchor(right)" in css
         assert "transform: translateX(-100%)" in css
 
-    def test_form_styles_right_align_phone_contact_status(self) -> None:
+    async def test_form_styles_right_align_phone_contact_status(self) -> None:
         css = _resource_text("wybra.forms", "static/styles/forms.css")
 
         assert re.search(
@@ -1846,7 +1854,7 @@ class TestProfile:
         assert image.alt == "Profile picture"
         assert image.fallback_text == "D"
 
-    def test_profile_picture_storage_key_uses_profile_category_and_buckets(
+    async def test_profile_picture_storage_key_uses_profile_category_and_buckets(
         self,
     ) -> None:
         user_id = uuid.UUID("8ef0c57e-0000-4000-8000-000000000001")
@@ -1859,7 +1867,7 @@ class TestProfile:
     @pytest.mark.parametrize(
         "extension", (" ", ".png", "avatar.png", "profile/png", None)
     )
-    def test_profile_picture_storage_key_rejects_invalid_extensions(
+    async def test_profile_picture_storage_key_rejects_invalid_extensions(
         self,
         extension: object,
     ) -> None:

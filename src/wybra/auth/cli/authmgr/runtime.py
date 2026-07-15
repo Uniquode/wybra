@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -10,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
+import anyio
 import click
 
 from wybra.auth.admin.management import (
@@ -62,9 +62,7 @@ class _AuthmgrCommandSettings:
 
 def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
     try:
-        exit_code = asyncio.run(
-            _main_async(args, config_source=_config_source_from_context(ctx))
-        )
+        exit_code = anyio.run(_run_authmgr_from_context, ctx, args)
     except PasswordSourceError as exc:
         raise click.BadParameter(str(exc), param_hint=["--password"]) from exc
     except (ConfigurationError, LoggingConfigurationError) as exc:
@@ -73,6 +71,29 @@ def _run_authmgr(ctx: click.Context, args: AuthmgrArgs) -> None:
     except click.Abort:
         raise
     ctx.exit(exit_code)
+
+
+async def run_authmgr(
+    args: AuthmgrArgs,
+    *,
+    config_source: str | None = None,
+) -> int:
+    try:
+        return await _main_async(args, config_source=config_source)
+    except PasswordSourceError as exc:
+        raise click.BadParameter(str(exc), param_hint=["--password"]) from exc
+    except (ConfigurationError, LoggingConfigurationError) as exc:
+        logger.error("configuration: %s", exc)
+        return 1
+    except click.Abort:
+        raise
+
+
+async def _run_authmgr_from_context(ctx: click.Context, args: AuthmgrArgs) -> int:
+    return await run_authmgr(
+        args,
+        config_source=_config_source_from_context(ctx),
+    )
 
 
 async def _main_async(args: AuthmgrArgs, *, config_source: str | None = None) -> int:
