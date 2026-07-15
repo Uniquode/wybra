@@ -264,9 +264,11 @@ class TestAuthentication:
         assert {"group", "scope"}.issubset(GroupScope._meta.fields_map)
         assert {"group", "user"}.issubset(GroupUser._meta.fields_map)
         assert {"parent_group", "child_group"}.issubset(GroupGroup._meta.fields_map)
-        assert GroupScope._meta.unique_together == (("group", "scope"),)
-        assert GroupUser._meta.unique_together == (("group", "user"),)
-        assert GroupGroup._meta.unique_together == (("parent_group", "child_group"),)
+        assert GroupScope._meta.unique_together == (("group_id", "scope"),)
+        assert GroupUser._meta.unique_together == (("group_id", "user_id"),)
+        assert GroupGroup._meta.unique_together == (
+            ("parent_group_id", "child_group_id"),
+        )
 
     def test_wybra_auth_totp_seed_model_uses_encrypted_field(self) -> None:
         field = IdentityTotpCredential._meta.fields_map["crypt_secret"]
@@ -1489,7 +1491,9 @@ class TestAuthentication:
         assert IdentityProvider._meta.unique_together == (
             ("provider_name", "provider_subject"),
         )
-        assert ExternalIdentityLink._meta.unique_together == (("user", "provider"),)
+        assert ExternalIdentityLink._meta.unique_together == (
+            ("user_id", "provider_id"),
+        )
 
     def test_wybra_auth_generated_session_tokens_fit_configured_column(self) -> None:
         token = generate_session_token()

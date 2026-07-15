@@ -73,6 +73,27 @@ def test_postgresql_migrate_applies_tortoise_migrations(
     assert migration_count > 0
 
 
+def test_postgresql_migrate_applies_auth_migrations(
+    postgresql_database_config: ContainerDatabaseConfig,
+    tmp_path: Path,
+) -> None:
+    config_path = postgresql_database_config.write_app_config(
+        tmp_path / "wybra-auth-it.toml",
+        modules=("wybra.sessions", "wybra.auth"),
+    )
+
+    assert tools_migrate.main(["--config", config_path.as_posix(), "init"]) == 0
+    assert tools_migrate.main(["--config", config_path.as_posix(), "migrate"]) == 0
+
+    auth_table = asyncio.run(
+        postgresql_fetch_value(
+            postgresql_database_config,
+            "SELECT to_regclass('identity_external_identity_link')",
+        )
+    )
+    assert auth_table == "identity_external_identity_link"
+
+
 def test_postgresql_tasks_list_safe_maintenance_metadata(
     postgresql_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
