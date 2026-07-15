@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import logging
+from functools import partial
 from pathlib import Path
 
+import anyio
 import pytest
 from tests_support.database_containers import (
     ContainerDatabaseConfig,
@@ -34,16 +35,18 @@ def test_postgresql_init_provisions_database_and_role(
         captured.out + captured.err,
         postgresql_database_config,
     )
-    assert asyncio.run(
-        postgresql_fetch_value(
+    assert anyio.run(
+        partial(
+            postgresql_fetch_value,
             postgresql_database_config,
             "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)",
             postgresql_database_config.database,
             database=postgresql_database_config.service_database,
         )
     )
-    assert asyncio.run(
-        postgresql_fetch_value(
+    assert anyio.run(
+        partial(
+            postgresql_fetch_value,
             postgresql_database_config,
             "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)",
             postgresql_database_config.runtime_user,
@@ -63,11 +66,10 @@ def test_postgresql_migrate_applies_tortoise_migrations(
     assert tools_migrate.main(["--config", config_path.as_posix(), "init"]) == 0
     assert tools_migrate.main(["--config", config_path.as_posix(), "migrate"]) == 0
 
-    migration_count = asyncio.run(
-        postgresql_fetch_value(
-            postgresql_database_config,
-            "SELECT COUNT(*) FROM tortoise_migrations",
-        )
+    migration_count = anyio.run(
+        postgresql_fetch_value,
+        postgresql_database_config,
+        "SELECT COUNT(*) FROM tortoise_migrations",
     )
     assert isinstance(migration_count, int)
     assert migration_count > 0
@@ -85,13 +87,26 @@ def test_postgresql_migrate_applies_auth_migrations(
     assert tools_migrate.main(["--config", config_path.as_posix(), "init"]) == 0
     assert tools_migrate.main(["--config", config_path.as_posix(), "migrate"]) == 0
 
-    auth_table = asyncio.run(
-        postgresql_fetch_value(
-            postgresql_database_config,
-            "SELECT to_regclass('identity_external_identity_link')",
-        )
+    auth_table = anyio.run(
+        postgresql_fetch_value,
+        postgresql_database_config,
+        "SELECT to_regclass('identity_external_identity_link')",
     )
     assert auth_table == "identity_external_identity_link"
+    external_identity_link_constraint = anyio.run(
+        postgresql_fetch_value,
+        postgresql_database_config,
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conrelid = 'identity_external_identity_link'::regclass
+              AND contype = 'u'
+              AND pg_get_constraintdef(oid) = 'UNIQUE (user_id, provider_id)'
+        )
+        """,
+    )
+    assert external_identity_link_constraint is True
 
 
 def test_postgresql_tasks_list_safe_maintenance_metadata(
@@ -164,8 +179,9 @@ def test_postgresql_destroy_removes_disposable_database(
         == 0
     )
 
-    database_exists = asyncio.run(
-        postgresql_fetch_value(
+    database_exists = anyio.run(
+        partial(
+            postgresql_fetch_value,
             postgresql_database_config,
             "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)",
             postgresql_database_config.database,
