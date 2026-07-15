@@ -9,74 +9,13 @@ from tests_support.database_containers import (
     assert_database_secrets_absent,
     postgresql_fetch_value,
 )
-
-from wybra.db import migrate as data_migrate
-from wybra.tools import migrate as tools_migrate
-
-
-async def _initialise_migrations(config_path: Path) -> int:
-    return await tools_migrate.run_migration(
-        None,
-        config_source=config_path.as_posix(),
-        operation=lambda backend, context: data_migrate.initialise_migration_lifecycle(
-            backend,
-            context,
-            app_labels=(),
-        ),
-        include_provisioning_connection=True,
-    )
-
-
-async def _apply_migrations(config_path: Path) -> int:
-    return await tools_migrate.run_migration(
-        None,
-        config_source=config_path.as_posix(),
-        operation=lambda backend, context: backend.migrate(
-            context,
-            data_migrate.MigrationTargetRequest(
-                app_label=None,
-                migration=None,
-                fake=False,
-                dry_run=False,
-            ),
-        ),
-        database_credential_purpose="service_account",
-    )
-
-
-async def _list_maintenance_tasks(config_path: Path) -> int:
-    return await tools_migrate.run_migration(
-        None,
-        config_source=config_path.as_posix(),
-        operation=data_migrate.list_database_maintenance_tasks_lifecycle,
-        resolve_database_credentials=False,
-    )
-
-
-async def _run_maintenance_task(config_path: Path, task: str) -> int:
-    return await tools_migrate.run_migration(
-        None,
-        config_source=config_path.as_posix(),
-        operation=lambda _backend, context: (
-            data_migrate.run_database_maintenance_lifecycle(
-                context,
-                data_migrate.DatabaseMaintenanceRequest(task=task, confirm=None),
-            )
-        ),
-        include_provisioning_connection=True,
-    )
-
-
-async def _destroy_database(config_path: Path, confirm: str) -> int:
-    return await tools_migrate.run_migration(
-        None,
-        config_source=config_path.as_posix(),
-        operation=lambda _backend, context: data_migrate.destroy_database_lifecycle(
-            context,
-            data_migrate.DestroyDatabaseRequest(confirm=confirm),
-        ),
-        include_provisioning_connection=True,
-    )
+from tests_support.migration_lifecycle import (
+    apply_migrations,
+    destroy_database,
+    initialise_migrations,
+    list_maintenance_tasks,
+    run_maintenance_task,
+)
 
 
 @pytest.mark.anyio
@@ -91,7 +30,7 @@ async def test_postgresql_init_provisions_database_and_role(
     )
 
     caplog.set_level(logging.INFO, logger="wybra.db.migrate")
-    exit_code = await _initialise_migrations(config_path)
+    exit_code = await initialise_migrations(config_path)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -123,8 +62,8 @@ async def test_postgresql_migrate_applies_tortoise_migrations(
         tmp_path / "wybra-it.toml"
     )
 
-    assert await _initialise_migrations(config_path) == 0
-    assert await _apply_migrations(config_path) == 0
+    assert await initialise_migrations(config_path) == 0
+    assert await apply_migrations(config_path) == 0
 
     migration_count = await postgresql_fetch_value(
         postgresql_database_config,
@@ -144,8 +83,8 @@ async def test_postgresql_migrate_applies_auth_migrations(
         modules=("wybra.sessions", "wybra.auth"),
     )
 
-    assert await _initialise_migrations(config_path) == 0
-    assert await _apply_migrations(config_path) == 0
+    assert await initialise_migrations(config_path) == 0
+    assert await apply_migrations(config_path) == 0
 
     auth_table = await postgresql_fetch_value(
         postgresql_database_config,
@@ -177,7 +116,7 @@ async def test_postgresql_tasks_list_safe_maintenance_metadata(
         tmp_path / "wybra-it.toml"
     )
 
-    exit_code = await _list_maintenance_tasks(config_path)
+    exit_code = await list_maintenance_tasks(config_path)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -197,9 +136,9 @@ async def test_postgresql_run_migrations_maintenance_task(
         tmp_path / "wybra-it.toml"
     )
 
-    assert await _initialise_migrations(config_path) == 0
-    assert await _apply_migrations(config_path) == 0
-    assert await _run_maintenance_task(config_path, "migrations") == 0
+    assert await initialise_migrations(config_path) == 0
+    assert await apply_migrations(config_path) == 0
+    assert await run_maintenance_task(config_path, "migrations") == 0
 
 
 @pytest.mark.anyio
@@ -211,13 +150,9 @@ async def test_postgresql_destroy_removes_disposable_database(
         tmp_path / "wybra-it.toml"
     )
 
-    assert await _initialise_migrations(config_path) == 0
-    assert (
-        await _destroy_database(config_path, postgresql_database_config.database) == 0
-    )
-    assert (
-        await _destroy_database(config_path, postgresql_database_config.database) == 0
-    )
+    assert await initialise_migrations(config_path) == 0
+    assert await destroy_database(config_path, postgresql_database_config.database) == 0
+    assert await destroy_database(config_path, postgresql_database_config.database) == 0
 
     database_exists = await postgresql_fetch_value(
         postgresql_database_config,
