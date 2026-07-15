@@ -14,6 +14,7 @@ from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_transaction
 from wybra.db.surfaces import (
     discover_migration_version_locations,
     discover_model_package,
@@ -287,7 +288,9 @@ async def test_database_storage_persists_session_records() -> None:
         assert await storage.load("session", now=2.0) == _record(
             data={"value": "database"}
         )
-        async with capability.transaction("default") as connection:
+        async with tortoise_transaction(
+            capability, capability.database().for_write()
+        ) as connection:
             row = await SessionRecordModel.get_or_none(
                 id="session",
                 using_db=connection,

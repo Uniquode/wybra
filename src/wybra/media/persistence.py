@@ -6,6 +6,7 @@ from typing import Protocol
 from tortoise.exceptions import IntegrityError
 
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_connection, tortoise_transaction
 from wybra.media.models import MediaItem, MediaResourceKey
 from wybra.site import SiteCapabilityProxy
 
@@ -57,7 +58,11 @@ class TortoiseMediaCatalogueRepository:
         resource_key: str | None = None,
     ) -> MediaItem:
         try:
-            async with self.database.transaction() as connection:
+            capability = self.database.require()
+            async with tortoise_transaction(
+                capability,
+                capability.database().for_write(),
+            ) as connection:
                 if resource_key is not None:
                     conflicting = await MediaResourceKey.get_or_none(
                         resource_key=resource_key,
@@ -85,31 +90,45 @@ class TortoiseMediaCatalogueRepository:
         return item
 
     async def get_item(self, media_id: uuid.UUID) -> MediaItem | None:
-        async with self.database.transaction() as connection:
-            return await MediaItem.get_or_none(id=media_id, using_db=connection)
+        capability = self.database.require()
+        return await MediaItem.get_or_none(
+            id=media_id,
+            using_db=tortoise_connection(
+                capability,
+                capability.database().default(),
+            ),
+        )
 
     async def get_item_by_resource_key(
         self,
         resource_key: str,
     ) -> MediaItem | None:
-        async with self.database.transaction() as connection:
-            resource = await MediaResourceKey.get_or_none(
-                resource_key=resource_key,
-                using_db=connection,
-            )
-            if resource is None:
-                return None
-            return await MediaItem.get_or_none(
-                id=resource.media_id,
-                using_db=connection,
-            )
+        capability = self.database.require()
+        connection = tortoise_connection(
+            capability,
+            capability.database().default(),
+        )
+        resource = await MediaResourceKey.get_or_none(
+            resource_key=resource_key,
+            using_db=connection,
+        )
+        if resource is None:
+            return None
+        return await MediaItem.get_or_none(
+            id=resource.media_id,
+            using_db=connection,
+        )
 
     async def assign_resource_key(
         self,
         media_id: uuid.UUID,
         resource_key: str,
     ) -> None:
-        async with self.database.transaction() as connection:
+        capability = self.database.require()
+        async with tortoise_transaction(
+            capability,
+            capability.database().for_write(),
+        ) as connection:
             existing = await MediaResourceKey.get_or_none(
                 resource_key=resource_key,
                 using_db=connection,

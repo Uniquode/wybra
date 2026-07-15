@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_connection
 from wybra.messages import MessagesCapability
 from wybra.sessions.models import SessionRecordModel
 from wybra.sessions.storage import SessionRecord
@@ -64,7 +65,11 @@ async def test_migrated_test_database_clears_data_but_retains_migrations() -> No
 @pytest.mark.anyio
 async def test_migrated_test_database_exposes_live_database_capability() -> None:
     async with migrated_test_database(modules=("wybra.db",)) as database:
-        assert database.capability().connection() is database.connection()
+        capability = database.capability()
+        assert (
+            tortoise_connection(capability, capability.database().default())
+            is database.connection()
+        )
 
 
 @pytest.mark.anyio
@@ -111,8 +116,10 @@ async def test_wybra_test_client_uses_composed_app_and_migrated_tables() -> None
 
     @app.post("/sessions/{session_id}")
     async def create_session(session_id: str, request: Request) -> dict[str, int]:
-        connection = (
-            get_site(request.app).require_capability(DatabaseCapability).connection()
+        database = get_site(request.app).require_capability(DatabaseCapability)
+        connection = tortoise_connection(
+            database,
+            database.database().for_write(),
         )
         await connection.execute_query(
             "INSERT INTO sessions_session "

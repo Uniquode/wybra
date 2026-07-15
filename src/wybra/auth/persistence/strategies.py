@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 
 from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.exceptions import IntegrityError
-from tortoise.transactions import in_transaction
 
 from wybra.auth.accounts.manager import InvalidID, UserManager, UserNotExists
 from wybra.auth.admin.management import TortoiseAuthManagementStore
@@ -37,7 +36,7 @@ from wybra.auth.persistence.contracts import (
 from wybra.auth.provider_credentials import provider_credential_store
 from wybra.auth.session_tokens import generate_session_token
 from wybra.db import DatabaseCapability
-from wybra.db.capabilities import DEFAULT_CONNECTION_NAME
+from wybra.db.capabilities import tortoise_transaction
 from wybra.db.persistence import Database
 from wybra.services.crypto import SecretEnvelopeService
 from wybra.site import SiteCapabilityProxy
@@ -311,7 +310,10 @@ class TortoiseAuthPersistenceCapability:
         database = self.database.require()
         context_scope = getattr(database, "context", nullcontext)()
         with context_scope:
-            async with database.transaction() as connection:
+            async with tortoise_transaction(
+                database,
+                database.database().for_write(),
+            ) as connection:
                 yield TortoiseAuthPersistenceScope(connection, self._secret_service())
 
     def _secret_service(self) -> SecretEnvelopeService | None:
@@ -335,7 +337,9 @@ async def auth_persistence_scope(
         else secret_service
     )
     with database.context:
-        async with in_transaction(DEFAULT_CONNECTION_NAME) as connection:
+        async with database.transaction_for(
+            database.routes.connection().for_write()
+        ) as connection:
             yield TortoiseAuthPersistenceScope(
                 connection,
                 resolved_secret_service,

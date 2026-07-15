@@ -17,6 +17,7 @@ from wybra.auth import models as auth_models  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core import InputValidationError
 from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
+from wybra.db.capabilities import tortoise_transaction
 from wybra.db.surfaces import discover_model_package
 from wybra.media import (
     FilesystemMediaCapability,
@@ -101,10 +102,7 @@ async def _site_with_media_database(tmp_path: Path) -> Site:
     )
     site.provide_capability(
         DatabaseCapability,
-        TortoiseDatabaseCapability(
-            database,
-            {"default": "default", "reader": "default", "writer": "default"},
-        ),
+        TortoiseDatabaseCapability(database),
     )
     return site
 
@@ -398,7 +396,10 @@ async def test_media_item_save_refreshes_modified_timestamp_for_partial_updates(
 
     item.content_type = "image/jpeg"
     database = capability.catalogue.database.require()
-    async with database.transaction() as connection:
+    async with tortoise_transaction(
+        database,
+        database.database().for_write(),
+    ) as connection:
         await item.save(using_db=connection, update_fields=("content_type",))
         stored = await MediaItem.get(id=item.id, using_db=connection)
 

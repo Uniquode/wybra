@@ -264,6 +264,21 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                     aws_value = nested_value.get("aws")
                     if isinstance(aws_value, Mapping):
                         sections["app.database.aws"] = dict(aws_value)
+                    for instance_name, instance_value in nested_value.items():
+                        if instance_name == "aws" or not isinstance(
+                            instance_value,
+                            Mapping,
+                        ):
+                            continue
+                        section_name = f"app.database.{instance_name}"
+                        sections[section_name] = {
+                            key: value
+                            for key, value in instance_value.items()
+                            if key != "aws" and not isinstance(value, Mapping)
+                        }
+                        instance_aws = instance_value.get("aws")
+                        if isinstance(instance_aws, Mapping):
+                            sections[f"{section_name}.aws"] = dict(instance_aws)
 
     auth_data = data.get("auth")
     if isinstance(auth_data, Mapping):

@@ -12,6 +12,7 @@ def test_pytest_plugin_provides_migrated_database_and_client(pytester) -> None:
         from fastapi import FastAPI, Request
 
         from wybra.db import DatabaseCapability
+        from wybra.db.capabilities import tortoise_connection
         from wybra.site import get_site
         from wybra.testing import create_test_application
 
@@ -27,9 +28,11 @@ def test_pytest_plugin_provides_migrated_database_and_client(pytester) -> None:
 
             @app.get("/database")
             async def database(request: Request):
-                connection = get_site(request.app).require_capability(
-                    DatabaseCapability
-                ).connection()
+                database = get_site(request.app).require_capability(DatabaseCapability)
+                connection = tortoise_connection(
+                    database,
+                    database.database().for_write(),
+                )
                 await connection.execute_query(
                     "INSERT INTO sessions_session "
                     "(id, data, created_at, updated_at, expires_at) "

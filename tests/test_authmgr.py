@@ -261,10 +261,7 @@ async def initialise_app_identity_database(app: FastAPI) -> None:
         site = app.state.site
         site.provide_capability(
             DatabaseCapability,
-            TortoiseDatabaseCapability(
-                database,
-                {"default": "default", "reader": "default", "writer": "default"},
-            ),
+            TortoiseDatabaseCapability(database),
         )
         site.provide_capability(
             AuthPersistenceCapability,

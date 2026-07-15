@@ -16,6 +16,14 @@ from wybra.db.config import (
     DATABASE_AWS_CONFIG_SECTION,
     DATABASE_CONFIG_SECTION,
 )
+from wybra.db.routing import (
+    DATABASE_ROTATION_POLICIES,
+    DATABASE_ROUTE_ROLES,
+    DatabaseRotationPolicy,
+    DatabaseRouteInstance,
+    DatabaseRouteRegistry,
+    DatabaseRouteRole,
+)
 from wybra.db.urls import (
     DatabaseBackend,
     database_backend_for_scheme,
@@ -38,6 +46,7 @@ DATABASE_URL_SOURCE_ENVIRONMENT = "environment"
 DatabaseConfigSource = Literal["url", "structured"]
 CredentialPurpose = Literal["runtime", "service_account"]
 AwsManagedTarget = Literal["rds", "aurora"]
+DEFAULT_LOGICAL_DATABASE_NAME = "default"
 RESERVED_OPTION_KEYS = frozenset(
     {
         "database",
@@ -891,6 +900,61 @@ class ResolvedDatabaseConnection:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedDatabaseRouteInstance:
+    """One resolved database instance participating in logical route pools."""
+
+    instance_name: str
+    roles: frozenset[DatabaseRouteRole]
+    weight: int
+    connection: ResolvedDatabaseConnection
+
+    @property
+    def alias(self) -> str:
+        if self.instance_name == DEFAULT_LOGICAL_DATABASE_NAME:
+            return DEFAULT_LOGICAL_DATABASE_NAME
+        return f"database_{self.instance_name}"
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedDatabaseRouting:
+    """Resolved runtime connections and route-selection policy."""
+
+    instances: tuple[ResolvedDatabaseRouteInstance, ...]
+    default_rotation: DatabaseRotationPolicy = "queue"
+    reader_rotation: DatabaseRotationPolicy = "queue"
+    writer_rotation: DatabaseRotationPolicy = "queue"
+
+    def __post_init__(self) -> None:
+        if not self.instances:
+            raise ConfigurationError("At least one database route is required.")
+        if not any("default" in instance.roles for instance in self.instances):
+            raise ConfigurationError("At least one default database route is required.")
+
+    @property
+    def connections(self) -> Mapping[str, ResolvedDatabaseConnection]:
+        return MappingProxyType(
+            {instance.alias: instance.connection for instance in self.instances}
+        )
+
+    def build_registry(self) -> DatabaseRouteRegistry:
+        """Build the one runtime registry owned by a database lifecycle."""
+        return DatabaseRouteRegistry(
+            tuple(
+                DatabaseRouteInstance(
+                    name=DEFAULT_LOGICAL_DATABASE_NAME,
+                    alias=instance.alias,
+                    roles=instance.roles,
+                    weight=instance.weight,
+                )
+                for instance in self.instances
+            ),
+            default_rotation=self.default_rotation,
+            reader_rotation=self.reader_rotation,
+            writer_rotation=self.writer_rotation,
+        )
+
+
 def effective_database_config_from_config(
     config: ConfigService | Mapping[str, Mapping[str, Any]],
     *,
@@ -933,7 +997,10 @@ def effective_database_config_from_config(
             )
         return EffectiveDatabaseConfig.from_structured(
             StructuredDatabaseConfig.from_values(
-                structured_values,
+                _database_connection_values(
+                    structured_values,
+                    section_name=DATABASE_CONFIG_SECTION,
+                ),
                 shared_aws_values=shared_aws_values,
                 database_aws_values=database_aws_values,
             ),
@@ -979,6 +1046,132 @@ def resolve_database_connection_from_config(
         environ=_config_environ(config),
         secrets=resolved_secrets,
         purpose=resolved_purpose,
+    )
+
+
+def resolve_database_routing_from_config(
+    config: ConfigService | Mapping[str, Mapping[str, Any]],
+    *,
+    project_root: Path,
+    configured_database_url: str | None = None,
+    database_url_override: str | None = None,
+    secrets: SecretsCapability | None = None,
+) -> ResolvedDatabaseRouting | None:
+    """Resolve the base database and its inherited route-specific instances."""
+    effective = effective_database_config_from_config(
+        config,
+        project_root=project_root,
+        configured_database_url=configured_database_url,
+        database_url_override=database_url_override,
+    )
+    if effective is None:
+        return None
+    if effective.source == "url":
+        connection = effective.resolve(
+            environ=_config_environ(config),
+            secrets=secrets,
+        )
+        return ResolvedDatabaseRouting(
+            instances=(
+                ResolvedDatabaseRouteInstance(
+                    instance_name=DEFAULT_LOGICAL_DATABASE_NAME,
+                    roles=frozenset(DATABASE_ROUTE_ROLES),
+                    weight=1,
+                    connection=connection,
+                ),
+            )
+        )
+
+    base_values = _section_values(config, DATABASE_CONFIG_SECTION)
+    shared_aws_values = _section_values(config, AWS_CONFIG_SECTION)
+    base_aws_values = _section_values(config, DATABASE_AWS_CONFIG_SECTION)
+    base_roles = _database_route_roles(base_values.get("role"), is_base=True)
+    rotations = _database_rotation_policies(base_values)
+    base_connection_values = _database_connection_values(
+        base_values,
+        section_name=DATABASE_CONFIG_SECTION,
+    )
+    base_structured = StructuredDatabaseConfig.from_values(
+        base_connection_values,
+        shared_aws_values=shared_aws_values,
+        database_aws_values=base_aws_values,
+    )
+    resolved_secrets = secrets
+    if (
+        base_structured.requires_secret_capability_for("runtime")
+        and resolved_secrets is None
+    ):
+        resolved_secrets = _secrets_capability_from_config(config)
+    environ = _config_environ(config)
+    instances = [
+        ResolvedDatabaseRouteInstance(
+            instance_name=DEFAULT_LOGICAL_DATABASE_NAME,
+            roles=base_roles,
+            weight=_database_route_weight(
+                base_values.get("weight"),
+                section_name=DATABASE_CONFIG_SECTION,
+            ),
+            connection=EffectiveDatabaseConfig.from_structured(
+                base_structured,
+                project_root=project_root,
+            ).resolve(environ=environ, secrets=resolved_secrets),
+        )
+    ]
+    for instance_name, instance_values in _database_instance_sections(config).items():
+        if "backend" in instance_values:
+            raise ConfigurationError(
+                f"[{DATABASE_CONFIG_SECTION}.{instance_name}].backend is not allowed."
+            )
+        roles = _database_route_roles(instance_values.get("role"), is_base=False)
+        rotation_fields = sorted(
+            set(instance_values)
+            & {"default_rotation", "reader_rotation", "writer_rotation"}
+        )
+        if rotation_fields:
+            raise ConfigurationError(
+                f"[{DATABASE_CONFIG_SECTION}.{instance_name}] does not allow "
+                f"{', '.join(rotation_fields)}."
+            )
+        merged_values = dict(base_connection_values)
+        merged_values.update(
+            _database_connection_values(
+                instance_values,
+                section_name=f"{DATABASE_CONFIG_SECTION}.{instance_name}",
+            )
+        )
+        instance_aws_values = dict(base_aws_values)
+        instance_aws_values.update(
+            _section_values(config, f"{DATABASE_CONFIG_SECTION}.{instance_name}.aws")
+        )
+        structured = StructuredDatabaseConfig.from_values(
+            merged_values,
+            shared_aws_values=shared_aws_values,
+            database_aws_values=instance_aws_values,
+        )
+        if (
+            structured.requires_secret_capability_for("runtime")
+            and resolved_secrets is None
+        ):
+            resolved_secrets = _secrets_capability_from_config(config)
+        instances.append(
+            ResolvedDatabaseRouteInstance(
+                instance_name=instance_name,
+                roles=roles,
+                weight=_database_route_weight(
+                    instance_values.get("weight"),
+                    section_name=f"{DATABASE_CONFIG_SECTION}.{instance_name}",
+                ),
+                connection=EffectiveDatabaseConfig.from_structured(
+                    structured,
+                    project_root=project_root,
+                ).resolve(environ=environ, secrets=resolved_secrets),
+            )
+        )
+    return ResolvedDatabaseRouting(
+        instances=tuple(instances),
+        default_rotation=rotations["default"],
+        reader_rotation=rotations["reader"],
+        writer_rotation=rotations["writer"],
     )
 
 
@@ -1400,6 +1593,112 @@ def _structured_database_configured(values: Mapping[str, Any]) -> bool:
     return any(value is not None for value in values.values())
 
 
+def _database_instance_sections(
+    config: ConfigService | Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    sections = config.config.values if isinstance(config, ConfigService) else config
+    prefix = f"{DATABASE_CONFIG_SECTION}."
+    instances: dict[str, dict[str, Any]] = {}
+    for section_name, values in sections.items():
+        if not section_name.startswith(prefix):
+            continue
+        instance_name = section_name.removeprefix(prefix)
+        if not instance_name or "." in instance_name:
+            continue
+        if not isinstance(values, Mapping):
+            raise ConfigurationError(
+                f"Config section {section_name!r} must be a table."
+            )
+        instances[instance_name] = dict(values)
+    return instances
+
+
+def _database_connection_values(
+    values: Mapping[str, Any],
+    *,
+    section_name: str,
+) -> dict[str, Any]:
+    allowed_fields = _structured_database_fields() | _database_route_fields()
+    unknown_fields = sorted(set(values) - allowed_fields)
+    if unknown_fields:
+        raise ConfigurationError(
+            f"Unknown option(s) in [{section_name}] configuration: "
+            + ", ".join(unknown_fields)
+            + "."
+        )
+    return {
+        field_name: value
+        for field_name, value in values.items()
+        if field_name in _structured_database_fields()
+    }
+
+
+def _database_route_roles(
+    value: object,
+    *,
+    is_base: bool,
+) -> frozenset[DatabaseRouteRole]:
+    if value is None:
+        if is_base:
+            return frozenset({"default"})
+        raise ConfigurationError("Database route instances must configure role.")
+    if not isinstance(value, str):
+        raise ConfigurationError(
+            "Database route role must be a comma-separated string."
+        )
+    roles = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not roles:
+        raise ConfigurationError("Database route role must not be blank.")
+    invalid_roles = sorted(set(roles) - DATABASE_ROUTE_ROLES)
+    if invalid_roles:
+        raise ConfigurationError(
+            "Unknown database route role(s): " + ", ".join(invalid_roles) + "."
+        )
+    if len(set(roles)) != len(roles):
+        raise ConfigurationError("Database route roles must not be duplicated.")
+    return frozenset(cast(DatabaseRouteRole, role) for role in roles)
+
+
+def _database_route_weight(value: object, *, section_name: str) -> int:
+    if value is None:
+        return 1
+    return (
+        _optional_positive_int(
+            value,
+            "weight",
+            section_name=section_name,
+        )
+        or 1
+    )
+
+
+def _database_rotation_policies(
+    values: Mapping[str, Any],
+) -> dict[DatabaseRouteRole, DatabaseRotationPolicy]:
+    policies: dict[DatabaseRouteRole, DatabaseRotationPolicy] = {}
+    for role in ("default", "reader", "writer"):
+        raw_value = values.get(f"{role}_rotation", "queue")
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            raise ConfigurationError(f"{role}_rotation must be a non-blank string.")
+        policy = raw_value.strip()
+        if policy not in DATABASE_ROTATION_POLICIES:
+            raise ConfigurationError(f"Unknown database route rotation: {policy}.")
+        policies[role] = cast(DatabaseRotationPolicy, policy)
+    return policies
+
+
+def _database_route_fields() -> frozenset[str]:
+    return frozenset(
+        {
+            "role",
+            "weight",
+            "default_rotation",
+            "reader_rotation",
+            "writer_rotation",
+        }
+    )
+
+
 def _structured_database_fields() -> frozenset[str]:
     return frozenset(
         {
@@ -1588,9 +1887,12 @@ __all__ = (
     "EffectiveDatabaseConfig",
     "ResolvedDatabaseConnection",
     "ResolvedDatabaseCredentials",
+    "ResolvedDatabaseRouteInstance",
+    "ResolvedDatabaseRouting",
     "StructuredDatabaseConfig",
     "database_connection_metadata_from_config",
     "effective_database_config_from_config",
     "resolve_database_connection_from_config",
+    "resolve_database_routing_from_config",
     "resolve_database_provisioning_connection_from_config",
 )

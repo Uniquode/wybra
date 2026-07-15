@@ -11,7 +11,6 @@ from typing import cast
 import pytest
 from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.exceptions import BaseORMException
-from tortoise.transactions import in_transaction
 from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 
 import wybra.auth.accounts.bootstrap as auth_bootstrap
@@ -113,7 +112,6 @@ from wybra.auth.session_tokens import (
     generate_session_token,
 )
 from wybra.core.exceptions import ConfigurationError
-from wybra.db.capabilities import DEFAULT_CONNECTION_NAME
 from wybra.db.persistence import Database, close_database
 from wybra.services.crypto import (
     ENVELOPE_PREFIX,
@@ -503,16 +501,15 @@ class TestAuthentication:
                 sqlite_file_url(tmp_path / "bootstrap-claim-race.sqlite3")
             )
             try:
-                with database.context:
-                    async with in_transaction(DEFAULT_CONNECTION_NAME) as connection:
-                        await InitialAdminBootstrap.create(id=1, using_db=connection)
+                async with database.transaction_for(
+                    database.routes.connection().for_write()
+                ) as connection:
+                    await InitialAdminBootstrap.create(id=1, using_db=connection)
 
-                        claimed = await auth_bootstrap._claim_initial_admin_bootstrap(
-                            connection
-                        )
-                        admin = await auth_bootstrap.find_administrative_user(
-                            connection
-                        )
+                    claimed = await auth_bootstrap._claim_initial_admin_bootstrap(
+                        connection
+                    )
+                    admin = await auth_bootstrap.find_administrative_user(connection)
 
                 assert claimed is False
                 assert admin is None

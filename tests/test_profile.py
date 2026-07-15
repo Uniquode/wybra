@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from support_database import sqlite_file_url
+from support_database import database_write_transaction, sqlite_file_url
 from wybra.auth import AuthCapability, login_required  # noqa: F401
 from wybra.auth.admin.management import delete_local_user_for_management
 from wybra.auth.models import User
@@ -221,10 +221,7 @@ async def _site_with_database(tmp_path: Path) -> Site:
     )
     site.provide_capability(
         DatabaseCapability,
-        TortoiseDatabaseCapability(
-            database,
-            {"default": "default", "reader": "default", "writer": "default"},
-        ),
+        TortoiseDatabaseCapability(database),
     )
     _CREATED_SITES.append(site)
     return site
@@ -259,10 +256,7 @@ async def _profile_route_site(
     )
     site.provide_capability(
         DatabaseCapability,
-        TortoiseDatabaseCapability(
-            database,
-            {"default": "default", "reader": "default", "writer": "default"},
-        ),
+        TortoiseDatabaseCapability(database),
     )
     site.provide_capability(
         ProfileCapability,
@@ -327,7 +321,9 @@ async def _ensure_auth_user(
     *,
     email: str | None = None,
 ) -> None:
-    async with site.require_capability(DatabaseCapability).transaction() as connection:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as connection:
         await User.get_or_create(
             id=user_id,
             defaults={
@@ -397,9 +393,9 @@ class TestProfile:
         site = await _site_with_database(tmp_path)
         await _create_site_schema(site)
 
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as connection:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
             await User.create(
                 id=user_id,
                 email="deleted-profile@example.test",
@@ -619,9 +615,9 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as connection:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
             await UserProfile.create(
                 user_id=user.id,
                 preferred_name="David",
@@ -643,9 +639,9 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as connection:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
             await UserPhoneContact.create(
                 user_id=user.id,
                 country_code="AU",
@@ -741,9 +737,9 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as connection:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
             await UserProfile.create(
                 user_id=user.id,
                 preferred_name="David",
@@ -822,9 +818,9 @@ class TestProfile:
             profile_config={"editable_fields": ("preferred_name",)},
         )
         await _create_site_schema(site)
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as connection:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
             await UserProfile.create(
                 user_id=user.id,
                 preferred_name="Previous",
@@ -1653,9 +1649,9 @@ class TestProfile:
         user_id = uuid.uuid4()
         await _ensure_auth_user(site, user_id)
 
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as connection:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
             contact = await UserPhoneContact.create(
                 user_id=user_id,
                 country_code="AU",
@@ -1691,9 +1687,9 @@ class TestProfile:
         await _ensure_auth_user(site, user_id)
         await _ensure_auth_user(site, other_user_id)
 
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as connection:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
             eligible = await UserPhoneContact.create(
                 user_id=user_id,
                 country_code="AU",

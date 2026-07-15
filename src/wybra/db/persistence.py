@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from types import MethodType
 from typing import Any, Protocol, cast
@@ -10,9 +11,17 @@ from tortoise import Tortoise
 from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.connection import ConnectionHandler
 from tortoise.context import TortoiseContext
+from tortoise.transactions import in_transaction
 
 from wybra.core.exceptions import ConfigurationError
-from wybra.db.settings import ResolvedDatabaseConnection
+from wybra.db.routing import (
+    DatabaseRouteInstance,
+    DatabaseRouteRegistry,
+    DbRoute,
+    instrument_tortoise_route_connection,
+    tortoise_route_router,
+)
+from wybra.db.settings import ResolvedDatabaseConnection, ResolvedDatabaseRouting
 from wybra.db.tortoise import build_tortoise_config
 from wybra.db.urls import (
     database_url_support_error,
@@ -51,6 +60,7 @@ class DatabaseSettings(Protocol):
 class Database:
     context: TortoiseContext
     config: dict[str, object]
+    routes: DatabaseRouteRegistry
     _create_connection_restore: object = field(
         compare=False,
         repr=False,
@@ -64,21 +74,53 @@ class Database:
     def connection(self, name: str = "default") -> BaseDBAsyncClient:
         return self.context.connections.get(name)
 
+    def connection_for(self, route: DbRoute) -> BaseDBAsyncClient:
+        return self.connection(self.routes.alias_for(route))
+
+    @asynccontextmanager
+    async def transaction_for(self, route: DbRoute) -> AsyncIterator[BaseDBAsyncClient]:
+        with self.context:
+            async with in_transaction(self.routes.alias_for(route)) as connection:
+                yield connection
+
 
 async def create_database(
     settings_or_url: DatabaseSettings | ResolvedDatabaseConnection | str,
     *,
     modules: Sequence[str],
+    routing: ResolvedDatabaseRouting | None = None,
     enable_global_fallback: bool = False,
 ) -> Database:
     database_connection = _database_connection_from(settings_or_url)
-    if database_connection is None:
+    if routing is not None:
+        for connection in routing.connections.values():
+            if not is_database_backend_available(connection.backend):
+                raise ConfigurationError(
+                    database_url_support_error(f"{connection.backend.scheme}://")
+                )
+        route_registry = routing.build_registry()
+        config = build_tortoise_config(
+            database_connections=routing.connections,
+            routers=(tortoise_route_router(route_registry),),
+            default_connection=route_registry.static_default_alias(),
+            modules=modules,
+        )
+    elif database_connection is None:
         database_url = _database_url_from(settings_or_url)
         if not is_supported_database_url(database_url):
             raise ConfigurationError(database_url_support_error(database_url))
         config = build_tortoise_config(
             database_url=database_url,
             modules=modules,
+        )
+        route_registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="default",
+                    roles=frozenset({"default", "reader", "writer"}),
+                ),
+            )
         )
     else:
         if not is_database_backend_available(database_connection.backend):
@@ -89,6 +131,15 @@ async def create_database(
             database_connection=database_connection,
             modules=modules,
         )
+        route_registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="default",
+                    roles=frozenset({"default", "reader", "writer"}),
+                ),
+            )
+        )
 
     context = await Tortoise.init(
         config=config,
@@ -96,11 +147,14 @@ async def create_database(
     )
     instrument_tortoise_context(context)
     create_connection_restore, tracked_connections = _track_created_connections(
-        context.connections
+        context.connections,
+        route_registry,
     )
+    _instrument_database_route_connections(context, route_registry)
     return Database(
         context=context,
         config=config,
+        routes=route_registry,
         _create_connection_restore=create_connection_restore,
         _connections=tracked_connections,
     )
@@ -133,6 +187,7 @@ async def close_database_connections(
 
 def _track_created_connections(
     connections: ConnectionHandler,
+    route_registry: DatabaseRouteRegistry,
 ) -> tuple[object, list[BaseDBAsyncClient]]:
     # Tortoise close_all() calls get(), which can replace cross-loop clients
     # during shutdown. Track created clients so close never creates replacements.
@@ -153,6 +208,11 @@ def _track_created_connections(
         conn_alias: str,
     ) -> BaseDBAsyncClient:
         connection = create_connection(conn_alias)
+        instrument_tortoise_route_connection(
+            connection,
+            registry=route_registry,
+            alias=conn_alias,
+        )
         tracked_connections.append(connection)
         return connection
 
@@ -161,6 +221,18 @@ def _track_created_connections(
         MethodType(tracked_create_connection, connections),
     )
     return create_connection_restore, tracked_connections
+
+
+def _instrument_database_route_connections(
+    context: TortoiseContext,
+    route_registry: DatabaseRouteRegistry,
+) -> None:
+    for alias, connection in context.connections._copy_storage().items():
+        instrument_tortoise_route_connection(
+            connection,
+            registry=route_registry,
+            alias=alias,
+        )
 
 
 def _restore_create_connection(database: Database) -> None:

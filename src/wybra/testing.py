@@ -20,7 +20,7 @@ from wybra.auth.models import User
 from wybra.auth.persistence.contracts import LocalUserRecord
 from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability
-from wybra.db.capabilities import TortoiseDatabaseCapability
+from wybra.db.capabilities import TortoiseDatabaseCapability, tortoise_connection
 from wybra.db.migrate import apply_tortoise_migrations
 from wybra.db.persistence import (
     Database,
@@ -91,13 +91,14 @@ async def migrated_test_database(
         modules=module_names,
         database_url=resolved_url,
     )
+    capability = TortoiseDatabaseCapability(database)
     try:
         yield MigratedTestDatabase(
-            _connection=database.connection(),
-            _capability=TortoiseDatabaseCapability(
-                database,
-                {"default": "default", "reader": "default", "writer": "default"},
+            _connection=tortoise_connection(
+                capability,
+                capability.database().default(),
             ),
+            _capability=capability,
             database_url=resolved_url,
             modules=module_names,
             table_names=_migrated_application_table_names(database),
@@ -538,11 +539,17 @@ async def _migrate_application_database(app: FastAPI) -> MigratedTestDatabase:
     if not isinstance(apps, dict):
         raise RuntimeError("Tortoise test application configuration has no apps.")
     await apply_tortoise_migrations(
-        database.connection(),
+        tortoise_connection(
+            database,
+            database.database().default(),
+        ),
         cast(dict[str, dict[str, object]], apps),
     )
     return MigratedTestDatabase(
-        _connection=database.connection(),
+        _connection=tortoise_connection(
+            database,
+            database.database().default(),
+        ),
         _capability=database,
         database_url=app_config.database_url,
         modules=site.modules,

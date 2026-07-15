@@ -128,6 +128,10 @@ _.available_methods
 _.requires_challenge
 _.complete_challenge
 
+# Tortoise router hooks discovered from the configured router type.
+_.db_for_read
+_.db_for_write
+
 # Protocol, dataclass, and ORM fields used by consumers and SQLAlchemy.
 _.__call__
 _.additive_route_names

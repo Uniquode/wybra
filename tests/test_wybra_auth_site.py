@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 
 from provider_test_keys import apple_private_key_pem as _apple_private_key_pem
-from support_database import sqlite_file_url
+from support_database import database_write_transaction, sqlite_file_url
 from wybra.auth import (
     AuthCapability,
     AuthPersistenceCapability,
@@ -212,7 +212,9 @@ async def _create_active_totp_credential(
     site.app.state.secret_envelope_service = secret_service
     secret = generate_totp_secret()
     recovery_codes = generate_recovery_codes()
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         store = TortoiseTOTPCredentialStore(
             db_session,
             secret_service,
@@ -237,7 +239,9 @@ async def _ensure_identity_user(
     *,
     email: str = "security@example.test",
 ) -> None:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         await User.get_or_create(
             id=user_id,
             defaults={
@@ -251,7 +255,9 @@ async def _ensure_identity_user(
 
 
 async def _active_totp_credential_id(site, user_id: uuid.UUID) -> str | None:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         store = TortoiseTOTPCredentialStore(
             db_session,
             site.app.state.secret_envelope_service,
@@ -267,7 +273,9 @@ async def _create_passkey_credential(
     label: str = "Test passkey",
 ) -> str:
     stored_credential_id = credential_id or credential_id_to_text(b"test-passkey")
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         store = TortoiseWebAuthnCredentialStore(db_session)
         return await store.store_webauthn_credential(
             str(user_id),
@@ -285,13 +293,17 @@ async def _create_passkey_credential(
 
 
 async def _active_passkey_count(site, user_id: uuid.UUID) -> int:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         store = TortoiseWebAuthnCredentialStore(db_session)
         return await store.count_active_webauthn_credentials(str(user_id))
 
 
 async def _authentication_challenge_exists(site, challenge_id: str) -> bool:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         store = TortoiseChallengeStore(db_session)
         return await store.get_challenge(challenge_id) is not None
 
@@ -365,7 +377,9 @@ async def _create_local_user(
     password: str = STRONG_TEST_PASSWORD,
     is_verified: bool,
 ) -> uuid.UUID:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         manager = create_user_manager(
             db_session,
             site.app.state.auth_settings.identity_options,
@@ -384,7 +398,9 @@ async def _set_password_login_enabled(
     user_id: uuid.UUID,
     enabled: bool,
 ) -> None:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         user = await User.get_or_none(id=user_id, using_db=db_session)
         assert user is not None
         user.password_login_enabled = enabled
@@ -392,7 +408,9 @@ async def _set_password_login_enabled(
 
 
 async def _password_login_enabled(site, user_id: uuid.UUID) -> bool:
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as db_session:
         user = await User.get_or_none(id=user_id, using_db=db_session)
         assert user is not None
         return user.password_login_enabled
@@ -628,7 +646,9 @@ async def _create_google_provider_link(
     provider_subject: str = "google-subject",
     account_email: str = "user@example.com",
 ) -> str:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
@@ -653,7 +673,9 @@ async def _create_github_provider_link(
     provider_subject: str = "github-subject",
     account_email: str = "user@example.com",
 ) -> str:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
@@ -678,7 +700,9 @@ async def _create_apple_provider_link(
     provider_subject: str = "apple-subject",
     account_email: str = "user@example.com",
 ) -> str:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
@@ -701,7 +725,9 @@ async def _google_provider_linked_user_id(
     *,
     provider_subject: str,
 ) -> uuid.UUID | None:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         provider = await IdentityProvider.get_or_none(
             provider_name=GOOGLE_PROVIDER_NAME,
             provider_subject=provider_subject,
@@ -721,7 +747,9 @@ async def _github_provider_linked_user_id(
     *,
     provider_subject: str,
 ) -> uuid.UUID | None:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         provider = await IdentityProvider.get_or_none(
             provider_name=GITHUB_PROVIDER_NAME,
             provider_subject=provider_subject,
@@ -741,7 +769,9 @@ async def _apple_provider_linked_user_id(
     *,
     provider_subject: str,
 ) -> uuid.UUID | None:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         provider = await IdentityProvider.get_or_none(
             provider_name=APPLE_PROVIDER_NAME,
             provider_subject=provider_subject,
@@ -869,7 +899,9 @@ async def _google_provider_id(
     *,
     provider_subject: str,
 ) -> uuid.UUID | None:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         provider = await IdentityProvider.get_or_none(
             provider_name=GOOGLE_PROVIDER_NAME,
             provider_subject=provider_subject,
@@ -883,7 +915,9 @@ async def _google_provider_subjects_for_user(
     *,
     user_id: uuid.UUID,
 ) -> tuple[str, ...]:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         provider_ids = (
             await ExternalIdentityLink.filter(
                 user_id=user_id,
@@ -903,7 +937,9 @@ async def _google_provider_subjects_for_user(
 
 
 async def _google_user_by_email(site, email: str) -> User | None:
-    async with site.require_capability(DatabaseCapability).transaction() as session:
+    async with database_write_transaction(
+        site.require_capability(DatabaseCapability)
+    ) as session:
         return await User.get_or_none(email=email, using_db=session)
 
 
@@ -3492,7 +3528,9 @@ class TestAuthenticationPages:
             "status": "registered",
             "redirect_to": "/account/security",
         }
-        async with site.require_capability(DatabaseCapability).transaction() as session:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as session:
             store = TortoiseWebAuthnCredentialStore(session)
             credential = await store.get_webauthn_credential(credential_id)
             assert credential is not None
@@ -4701,9 +4739,9 @@ class TestAuthenticationPages:
 
         assert response.status_code == 400
         assert "Confirm this action" in response.text
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as db_session:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as db_session:
             recovery_store = TortoiseRecoveryCodeStore(
                 db_session,
                 site.app.state.secret_envelope_service,
@@ -4758,9 +4796,9 @@ class TestAuthenticationPages:
         assert response.status_code == 200
         assert "Store these recovery codes" in response.text
         _assert_recovery_codes_download(response.text)
-        async with site.require_capability(
-            DatabaseCapability
-        ).transaction() as db_session:
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as db_session:
             recovery_store = TortoiseRecoveryCodeStore(
                 db_session,
                 site.app.state.secret_envelope_service,

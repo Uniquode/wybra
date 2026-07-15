@@ -12,6 +12,7 @@ from starlette.requests import Request
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.resources import PackageResourceSource
 from wybra.db import DatabaseCapability
+from wybra.db.capabilities import tortoise_transaction
 from wybra.db.surfaces import (
     discover_migration_version_locations,
     discover_model_package,
@@ -459,7 +460,9 @@ async def test_database_storage_cleanup_removes_expired_alerts() -> None:
             settings,
             site.capability_proxy(DatabaseCapability),
         )
-        async with db_capability.transaction("default") as connection:
+        async with tortoise_transaction(
+            db_capability, db_capability.database().for_write()
+        ) as connection:
             await MessageAlert.create(
                 queue_key="queue",
                 severity=SUCCESS_ALERT,
@@ -548,7 +551,9 @@ def test_default_alert_component_escapes_message_text() -> None:
 async def _message_alert_count(
     db_capability: DatabaseCapability,
 ) -> int:
-    async with db_capability.transaction("default") as connection:
+    async with tortoise_transaction(
+        db_capability, db_capability.database().for_write()
+    ) as connection:
         return await MessageAlert.all(using_db=connection).count()
 
 
