@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tortoise.backends.base.client import BaseDBAsyncClient
+
 from wybra.db.provisioning.core import (
     DatabaseFamily,
     DatabaseMaintenanceRequest,
@@ -13,7 +15,7 @@ from wybra.db.provisioning.core import (
     ProvisioningPhaseResult,
     _ensure_family,
 )
-from wybra.db.sql import quote_sql_identifier
+from wybra.db.sql import ident, quote_sql_identifier, render_sql
 from wybra.db.urls import is_memory_database_url, parse_sqlite_database_url
 
 _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
@@ -116,6 +118,22 @@ class SQLiteProvisioner:
         raise DatabaseProvisioningConfigurationError(
             f"Unknown sqlite maintenance task: {request.task}."
         )
+
+    async def clear_test_data(
+        self,
+        connection: BaseDBAsyncClient,
+        table_names: tuple[str, ...],
+    ) -> None:
+        await connection.execute_query("PRAGMA foreign_keys = OFF")
+        try:
+            for table_name in table_names:
+                statement = render_sql(
+                    t"DELETE FROM {ident(table_name)}",
+                    dialect="sqlite",
+                )
+                await connection.execute_query(statement.statement)
+        finally:
+            await connection.execute_query("PRAGMA foreign_keys = ON")
 
     def quote_identifier(self, identifier: str) -> str:
         return quote_sql_identifier(identifier)

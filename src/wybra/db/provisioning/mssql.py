@@ -5,6 +5,8 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol, cast
 
+from tortoise.backends.base.client import BaseDBAsyncClient
+
 from wybra.db.provisioning.core import (
     REPAIR_PRIVILEGES_TASK,
     TORTOISE_MIGRATIONS_TASK,
@@ -20,7 +22,7 @@ from wybra.db.provisioning.core import (
     ProvisioningStatus,
 )
 from wybra.db.settings import ResolvedDatabaseConnection
-from wybra.db.sql import RenderedSql, ident, param, render_sql
+from wybra.db.sql import RenderedSql, ident, param, render_sql, trusted_sql
 
 _DEFAULT_SERVICE_ACCOUNT_DATABASE = "master"
 _DEFAULT_SCHEMA = "dbo"
@@ -387,6 +389,33 @@ class SQLServerProvisioner:
             )
         finally:
             await target.close()
+
+    async def clear_test_data(
+        self,
+        connection: BaseDBAsyncClient,
+        table_names: tuple[str, ...],
+    ) -> None:
+        quoted_tables = tuple(
+            self.quote_identifier(table_name) for table_name in table_names
+        )
+        for table_name in quoted_tables:
+            await connection.execute_query(
+                f"ALTER TABLE {table_name} NOCHECK CONSTRAINT ALL"
+            )
+        try:
+            for table_name in quoted_tables:
+                # The provisioner has already quoted this identifier. It is SQL,
+                # not HTML, so escaping it again would produce invalid SQL.
+                statement = render_sql(
+                    t"DELETE FROM {trusted_sql(table_name)}",
+                    dialect="mssql",
+                )
+                await connection.execute_query(statement.statement)
+        finally:
+            for table_name in quoted_tables:
+                await connection.execute_query(
+                    f"ALTER TABLE {table_name} WITH CHECK CHECK CONSTRAINT ALL"
+                )
 
     def quote_identifier(self, identifier: str) -> str:
         return quote_mssql_identifier(identifier)

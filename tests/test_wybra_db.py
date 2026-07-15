@@ -47,6 +47,7 @@ from wybra.db.provisioning import (
     ProvisioningContext,
     SQLiteProvisioner,
     UnsupportedFamilyProvisioner,
+    clear_test_database_data,
     database_family_for_aws_engine,
     database_family_for_backend,
     destroy_database,
@@ -336,6 +337,20 @@ class _RecordingSQLServerConnector:
         if not self.connections:
             raise AssertionError("Unexpected SQL Server connection attempt.")
         return self.connections.pop(0)
+
+
+class _RecordingTestDatabaseConnection:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def execute_query(
+        self,
+        query: str,
+        values: list[object] | None = None,
+    ) -> tuple[int, list[dict[str, object]]]:
+        assert values is None
+        self.queries.append(query)
+        return 0, []
 
 
 def _recorded_mssql_statements(
@@ -2559,6 +2574,70 @@ def _mssql_provisioning_context(
 
 
 class TestDatabaseProvisioning:
+    @pytest.mark.parametrize(
+        ("database_url", "expected_queries"),
+        (
+            (
+                "sqlite://:memory:",
+                (
+                    "PRAGMA foreign_keys = OFF",
+                    'DELETE FROM "child"',
+                    'DELETE FROM "parent"',
+                    "PRAGMA foreign_keys = ON",
+                ),
+            ),
+            (
+                "postgresql://user:password@db.example/app",
+                ('TRUNCATE TABLE "child", "parent" RESTART IDENTITY CASCADE',),
+            ),
+            (
+                "mysql://user:password@db.example/app",
+                (
+                    "SET FOREIGN_KEY_CHECKS = 0",
+                    "DELETE FROM `child`",
+                    "DELETE FROM `parent`",
+                    "SET FOREIGN_KEY_CHECKS = 1",
+                ),
+            ),
+            (
+                "mariadb://user:password@db.example/app",
+                (
+                    "SET FOREIGN_KEY_CHECKS = 0",
+                    "DELETE FROM `child`",
+                    "DELETE FROM `parent`",
+                    "SET FOREIGN_KEY_CHECKS = 1",
+                ),
+            ),
+            (
+                "mssql://user:password@db.example/app",
+                (
+                    "ALTER TABLE [child] NOCHECK CONSTRAINT ALL",
+                    "ALTER TABLE [parent] NOCHECK CONSTRAINT ALL",
+                    "DELETE FROM [child]",
+                    "DELETE FROM [parent]",
+                    "ALTER TABLE [child] WITH CHECK CHECK CONSTRAINT ALL",
+                    "ALTER TABLE [parent] WITH CHECK CHECK CONSTRAINT ALL",
+                ),
+            ),
+        ),
+    )
+    def test_clear_test_database_data_uses_backend_specific_cleanup(
+        self,
+        database_url: str,
+        expected_queries: tuple[str, ...],
+    ) -> None:
+        connection = _RecordingTestDatabaseConnection()
+
+        asyncio.run(
+            clear_test_database_data(
+                cast(BaseDBAsyncClient, connection),
+                database_url=database_url,
+                table_names=("child", "parent"),
+            )
+        )
+
+        assert connection.queries == list(expected_queries)
+
     @pytest.mark.parametrize(
         ("credentials", "expected_message"),
         (

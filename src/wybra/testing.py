@@ -12,6 +12,7 @@ from typing import Any, cast
 import httpx2
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient as FastAPITestClient
+from tortoise import Tortoise
 from tortoise.backends.base.client import BaseDBAsyncClient
 
 from wybra.auth.delivery import IdentityDelivery
@@ -27,8 +28,8 @@ from wybra.db.persistence import (
     close_database_connections,
     create_database,
 )
+from wybra.db.provisioning import clear_test_database_data
 from wybra.db.settings import resolve_database_connection_from_config
-from wybra.db.sql import ident, render_sql
 from wybra.db.tortoise import build_tortoise_config
 from wybra.db.urls import SQLITE_MEMORY_DATABASE_URL, is_memory_database_url
 from wybra.messages import MessagesCapability
@@ -45,17 +46,17 @@ from wybra.site import Site, SiteCapabilityError, get_site, start_site
 from wybra.site_config import app_config_from_site
 
 TEST_BASE_URL = "http://testserver"
-MIGRATION_RECORDER_TABLE = "tortoise_migrations"
 
 
 @dataclass(frozen=True, slots=True)
 class MigratedTestDatabase:
-    """An isolated SQLite database whose configured migrations are applied."""
+    """An isolated migrated database for application and end-to-end tests."""
 
     _connection: BaseDBAsyncClient = field(repr=False)
     _capability: DatabaseCapability = field(repr=False)
     database_url: str
     modules: tuple[str, ...]
+    table_names: tuple[str, ...]
 
     def connection(self) -> BaseDBAsyncClient:
         return self._connection
@@ -66,31 +67,11 @@ class MigratedTestDatabase:
 
     async def clear(self) -> None:
         """Clear application tables while retaining the migrated schema."""
-        connection = self.connection()
-        _count, rows = await connection.execute_query(
-            "SELECT name FROM sqlite_master "
-            "WHERE type = 'table' "
-            "AND name NOT LIKE 'sqlite_%' "
-            "AND name <> ? "
-            "ORDER BY name",
-            [MIGRATION_RECORDER_TABLE],
+        await clear_test_database_data(
+            self.connection(),
+            database_url=self.database_url,
+            table_names=self.table_names,
         )
-        table_names = tuple(
-            name for row in rows if isinstance(name := row["name"], str)
-        )
-        if not table_names:
-            return
-
-        await connection.execute_script("PRAGMA foreign_keys = OFF;")
-        try:
-            for table_name in table_names:
-                statement = render_sql(
-                    t"DELETE FROM {ident(table_name)}",
-                    dialect="sqlite",
-                )
-                await connection.execute_query(statement.statement)
-        finally:
-            await connection.execute_script("PRAGMA foreign_keys = ON;")
 
 
 @asynccontextmanager
@@ -99,7 +80,7 @@ async def migrated_test_database(
     modules: Sequence[str],
     database_url: str | None = None,
 ) -> AsyncIterator[MigratedTestDatabase]:
-    """Create an in-memory database and apply native Tortoise migrations.
+    """Create a database and apply native Tortoise migrations.
 
     The context keeps its original Tortoise connection open for its full
     lifetime, allowing direct module tests to reuse the migrated schema.
@@ -119,6 +100,7 @@ async def migrated_test_database(
             ),
             database_url=resolved_url,
             modules=module_names,
+            table_names=_migrated_application_table_names(database),
         )
     finally:
         await close_database(database)
@@ -157,6 +139,35 @@ async def migrate_test_database(database: Database) -> None:
     await apply_tortoise_migrations(
         database.connection(),
         cast(dict[str, dict[str, object]], apps),
+    )
+
+
+def _migrated_application_table_names(database: Database) -> tuple[str, ...]:
+    """Return only Tortoise model tables, preserving the migration recorder."""
+    apps = database.context.apps
+    if apps is None:
+        return ()
+    return _application_table_names(cast(Mapping[str, Mapping[str, object]], apps))
+
+
+def _application_table_names(
+    apps: Mapping[str, Mapping[str, object]],
+) -> tuple[str, ...]:
+    """Return sorted application model tables from the active Tortoise registry."""
+    return tuple(
+        sorted(
+            {
+                table_name
+                for models in apps.values()
+                for model in models.values()
+                if isinstance(
+                    table_name := getattr(
+                        getattr(model, "_meta", None), "db_table", None
+                    ),
+                    str,
+                )
+            }
+        )
     )
 
 
@@ -535,12 +546,14 @@ async def _migrate_application_database(app: FastAPI) -> MigratedTestDatabase:
         _capability=database,
         database_url=app_config.database_url,
         modules=site.modules,
+        table_names=_application_table_names(
+            cast(Mapping[str, Mapping[str, object]], Tortoise.apps)
+        ),
     )
 
 
 __all__ = (
     "DeliveryRecord",
-    "MIGRATION_RECORDER_TABLE",
     "MigratedTestApplication",
     "MigratedTestDatabase",
     "RecordingIdentityDelivery",

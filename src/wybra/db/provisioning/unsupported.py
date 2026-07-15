@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tortoise.backends.base.client import BaseDBAsyncClient
+
 from wybra.db.provisioning.core import (
     DatabaseFamily,
     DatabaseMaintenanceRequest,
@@ -60,6 +62,16 @@ class UnsupportedFamilyProvisioner:
         )
         raise DatabaseProvisioningConfigurationError(
             f"Unknown {self.family} maintenance task: {request.task}."
+        )
+
+    async def clear_test_data(
+        self,
+        connection: BaseDBAsyncClient,
+        table_names: tuple[str, ...],
+    ) -> None:
+        del connection, table_names
+        raise DatabaseProvisioningOperationError(
+            f"Database family {self.family} test data cleanup is not implemented."
         )
 
     def quote_identifier(self, identifier: str) -> str:

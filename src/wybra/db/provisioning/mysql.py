@@ -6,6 +6,8 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal, Protocol, cast
 
+from tortoise.backends.base.client import BaseDBAsyncClient
+
 from wybra.db.provisioning.core import (
     REPAIR_PRIVILEGES_TASK,
     TORTOISE_MIGRATIONS_TASK,
@@ -340,6 +342,23 @@ class MySQLProvisioner:
             )
         finally:
             await maintenance.close()
+
+    async def clear_test_data(
+        self,
+        connection: BaseDBAsyncClient,
+        table_names: tuple[str, ...],
+    ) -> None:
+        await connection.execute_query("SET FOREIGN_KEY_CHECKS = 0")
+        try:
+            for table_name in table_names:
+                statement = render_sql(
+                    t"DELETE FROM {ident(table_name)}",
+                    dialect="mysql",
+                    quote_identifier=self.quote_identifier,
+                )
+                await connection.execute_query(statement.statement)
+        finally:
+            await connection.execute_query("SET FOREIGN_KEY_CHECKS = 1")
 
     def quote_identifier(self, identifier: str) -> str:
         return quote_mysql_identifier(identifier)

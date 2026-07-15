@@ -44,22 +44,23 @@ async def wybra_test_application(
 
 
 @pytest.fixture(scope="module")
-def wybra_test_database(
+def _wybra_test_database(
     wybra_test_application: MigratedTestApplication,
 ) -> MigratedTestDatabase:
-    """Return the live application database after native migrations run."""
+    """Return the module-scoped database after native migrations run."""
     return wybra_test_application.database
 
 
-@pytest.fixture(autouse=True)
-async def _clear_wybra_test_database(
-    wybra_test_database: MigratedTestDatabase,
-) -> AsyncIterator[None]:
-    await wybra_test_database.clear()
+@pytest.fixture
+async def wybra_test_database(
+    _wybra_test_database: MigratedTestDatabase,
+) -> AsyncIterator[MigratedTestDatabase]:
+    """Yield a clean migrated database for one database-backed test."""
+    await _wybra_test_database.clear()
     try:
-        yield
+        yield _wybra_test_database
     finally:
-        await wybra_test_database.clear()
+        await _wybra_test_database.clear()
 
 
 @pytest.fixture(scope="module")
@@ -78,9 +79,11 @@ def wybra_test_app(wybra_test_config: dict[str, dict[str, object]]) -> FastAPI:
     return create_test_application(wybra_test_config)
 
 
-@pytest.fixture(scope="module")
-def wybra_test_client(
+@pytest.fixture
+async def wybra_test_client(
+    wybra_test_database: MigratedTestDatabase,
     wybra_test_application: MigratedTestApplication,
-) -> httpx2.AsyncClient:
+) -> AsyncIterator[httpx2.AsyncClient]:
     """Yield an async client for the composed, migrated test application."""
-    return wybra_test_application.client
+    del wybra_test_database
+    yield wybra_test_application.client

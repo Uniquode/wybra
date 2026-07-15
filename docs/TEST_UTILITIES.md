@@ -19,8 +19,8 @@ def anyio_backend() -> str:
 
 The plugin creates one local, in-memory SQLite database for each test module,
 applies the configured modules' native migrations once, and clears application
-tables before and after every test. Migration history is retained, so the
-schema is not rebuilt between tests.
+tables before and after each test that requests its database or client fixture.
+Migration history is retained, so the schema is not rebuilt between tests.
 
 The plugin provides:
 
@@ -80,10 +80,12 @@ async def test_account_service() -> None:
         assert user.is_verified
 ```
 
-`migrated_test_database()` is an async context manager. It owns an isolated
-in-memory database connection and applies the supplied modules' native
-migrations before yielding it. Call `await database.clear()` when a direct test
-needs to reset its data without rebuilding its schema.
+`migrated_test_database()` is an async context manager. By default it owns an
+isolated in-memory SQLite connection, but `database_url` may select any
+supported test backend. It applies the supplied modules' native migrations
+before yielding it. Call `await database.clear()` when a direct test needs to
+reset its application data without rebuilding its schema or removing migration
+history.
 
 `create_test_database()` returns the underlying database for tests that need to
 own a temporary file-backed database or manage its lifecycle explicitly. It
