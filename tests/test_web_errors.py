@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -16,6 +16,7 @@ from wybra.errors.handlers import (
     register_error_handlers,
 )
 from wybra.site import Site
+from wybra.testing import WybraTestClient
 
 
 class CustomApiCapability:
@@ -106,14 +107,21 @@ def test_errors_are_translated_through_error_handling_capability() -> None:
     async def fail() -> Response:
         raise RuntimeError("boom")
 
-    with TestClient(app, raise_server_exceptions=False) as client:
+    with WybraTestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/fail")
 
     assert response.status_code == 599
     assert response.json() == {"custom_error": "RuntimeError", "path": "/fail"}
 
 
-def test_debug_mode_returns_starlette_traceback_response() -> None:
+@pytest.mark.parametrize(
+    ("debug", "includes_traceback"),
+    ((True, True), (False, False)),
+)
+def test_debug_mode_controls_error_response(
+    debug: bool,
+    includes_traceback: bool,
+) -> None:
     app = FastAPI(
         lifespan=start_site(
             config_source=MappingConfigSource(
@@ -121,7 +129,7 @@ def test_debug_mode_returns_starlette_traceback_response() -> None:
                     "app": {
                         "modules": ("wybra.errors",),
                         "deployment_environment": "local",
-                        "debug": True,
+                        "debug": debug,
                     }
                 }
             )
@@ -132,38 +140,13 @@ def test_debug_mode_returns_starlette_traceback_response() -> None:
     async def fail() -> Response:
         raise RuntimeError("boom")
 
-    with TestClient(app, raise_server_exceptions=False) as client:
+    with WybraTestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/fail")
 
     assert response.status_code == 500
-    assert "Traceback" in response.text
-    assert "RuntimeError: boom" in response.text
-
-
-def test_debug_disabled_uses_safe_error_response() -> None:
-    app = FastAPI(
-        lifespan=start_site(
-            config_source=MappingConfigSource(
-                {
-                    "app": {
-                        "modules": ("wybra.errors",),
-                        "deployment_environment": "local",
-                        "debug": False,
-                    }
-                }
-            )
-        )
-    )
-
-    @app.get("/fail")
-    async def fail() -> Response:
-        raise RuntimeError("boom")
-
-    with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.get("/fail")
-
-    assert response.status_code == 500
-    assert "Traceback" not in response.text
+    assert ("Traceback" in response.text) is includes_traceback
+    if includes_traceback:
+        assert "RuntimeError: boom" in response.text
 
 
 def test_api_errors_are_rendered_through_api_capability() -> None:
@@ -180,7 +163,7 @@ def test_api_errors_are_rendered_through_api_capability() -> None:
     async def fail() -> Response:
         raise RuntimeError("boom")
 
-    with TestClient(app, raise_server_exceptions=False) as client:
+    with WybraTestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/api/fail")
 
     assert response.status_code == 500
@@ -204,7 +187,7 @@ def test_api_error_codes_are_status_based_not_heading_based() -> None:
     async def fail() -> Response:
         raise HTTPException(status_code=418)
 
-    with TestClient(app, raise_server_exceptions=False) as client:
+    with WybraTestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/api/fail")
 
     assert response.status_code == 418
@@ -229,7 +212,7 @@ def test_api_errors_without_api_capability_use_plain_text_fallback() -> None:
     async def fail() -> Response:
         raise RuntimeError("boom")
 
-    with TestClient(app, raise_server_exceptions=False) as client:
+    with WybraTestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/api/fail")
 
     assert response.status_code == 500
@@ -247,7 +230,7 @@ def test_error_classification_uses_htmx_header() -> None:
         observed["kind"] = _resolve_error_response_kind(request)
         return Response()
 
-    with TestClient(app) as client:
+    with WybraTestClient(app) as client:
         client.get("/items", headers={"HX-Request": "true"})
 
     assert observed["kind"] == "partial"
@@ -263,7 +246,7 @@ def test_error_classification_uses_accept_header() -> None:
         observed["kind"] = _resolve_error_response_kind(request)
         return Response()
 
-    with TestClient(app) as client:
+    with WybraTestClient(app) as client:
         client.get("/items", headers={"Accept": "application/json"})
 
     assert observed["kind"] == "api"
@@ -282,7 +265,7 @@ def test_error_classification_uses_route_type_metadata() -> None:
         observed["kind"] = _resolve_error_response_kind(request)
         return Response()
 
-    with TestClient(app) as client:
+    with WybraTestClient(app) as client:
         client.get("/items")
 
     assert observed["kind"] == "api"

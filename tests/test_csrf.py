@@ -1,11 +1,9 @@
-import asyncio
 import json
 import logging
 from typing import Any
 
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
-from fastapi.testclient import TestClient
 
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.forms import (
@@ -21,6 +19,7 @@ from wybra.forms import (
 )
 from wybra.forms.rotation import plan_csrf_token_secret_rotation
 from wybra.forms.secrets import forms_keychain_secret_references
+from wybra.testing import WybraTestClient
 
 
 def csrf_request(
@@ -46,7 +45,8 @@ def csrf_request(
     )
 
 
-def test_csrf_form_validation_rejects_non_form_content_type() -> None:
+@pytest.mark.anyio
+async def test_csrf_form_validation_rejects_non_form_content_type() -> None:
     nonce = "a" * 32
     protector = CsrfProtector("test-secret")
     token = protector.create_token(nonce)
@@ -61,10 +61,11 @@ def test_csrf_form_validation_rejects_non_form_content_type() -> None:
         body=body,
     )
 
-    assert asyncio.run(protector.validate_request(request)) is False
+    assert await protector.validate_request(request) is False
 
 
-def test_csrf_form_validation_rejects_oversized_form_body() -> None:
+@pytest.mark.anyio
+async def test_csrf_form_validation_rejects_oversized_form_body() -> None:
     nonce = "a" * 32
     protector = CsrfProtector("test-secret", max_form_body_bytes=8)
     token = protector.create_token(nonce)
@@ -79,31 +80,29 @@ def test_csrf_form_validation_rejects_oversized_form_body() -> None:
         body=body,
     )
 
-    assert asyncio.run(protector.validate_request(request)) is False
+    assert await protector.validate_request(request) is False
 
 
-def test_csrf_form_validation_caches_parsed_form_for_downstream_views() -> None:
-    async def assert_form_cache() -> None:
-        nonce = "a" * 32
-        protector = CsrfProtector("test-secret")
-        token = protector.create_token(nonce)
-        body = f"{CSRF_FIELD_NAME}={token}&field=value".encode()
-        request = csrf_request(
-            method="POST",
-            headers={
-                "content-type": "application/x-www-form-urlencoded",
-                "content-length": str(len(body)),
-                "cookie": f"{CSRF_COOKIE_NAME}={nonce}",
-            },
-            body=body,
-        )
+@pytest.mark.anyio
+async def test_csrf_form_validation_caches_parsed_form_for_downstream_views() -> None:
+    nonce = "a" * 32
+    protector = CsrfProtector("test-secret")
+    token = protector.create_token(nonce)
+    body = f"{CSRF_FIELD_NAME}={token}&field=value".encode()
+    request = csrf_request(
+        method="POST",
+        headers={
+            "content-type": "application/x-www-form-urlencoded",
+            "content-length": str(len(body)),
+            "cookie": f"{CSRF_COOKIE_NAME}={nonce}",
+        },
+        body=body,
+    )
 
-        assert await protector.validate_request(request) is True
-        form_data = await request_form_data(request)
-        assert form_data.get(CSRF_FIELD_NAME) == token
-        assert form_data.get("field") == "value"
-
-    asyncio.run(assert_form_cache())
+    assert await protector.validate_request(request) is True
+    form_data = await request_form_data(request)
+    assert form_data.get(CSRF_FIELD_NAME) == token
+    assert form_data.get("field") == "value"
 
 
 def test_csrf_tokens_include_signed_issue_time() -> None:
@@ -243,7 +242,8 @@ def test_csrf_token_secret_rotation_plan_repr_redacts_secret_values() -> None:
     assert str(plan.previous_secret_count) in rendered
 
 
-def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
+@pytest.mark.anyio
+async def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
     nonce = "a" * 32
     protector = CsrfProtector("test-secret")
     token = protector.create_token(nonce)
@@ -258,7 +258,7 @@ def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
     )
     caplog.set_level(logging.DEBUG, logger="wybra.forms.csrf")
 
-    assert asyncio.run(protector.validate_request(request)) is False
+    assert await protector.validate_request(request) is False
     assert "CSRF request rejected." in caplog.text
     assert any(
         getattr(record, "csrf_reason", None) == "missing_content_length"
@@ -277,7 +277,7 @@ def test_csrf_dependency_allows_safe_methods_on_protected_router() -> None:
 
     app.include_router(router)
 
-    response = TestClient(app).get("/form")
+    response = WybraTestClient(app).get("/form")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
@@ -296,7 +296,7 @@ def test_csrf_dependency_is_noop_when_csrf_protector_missing() -> None:
         return {"ok": True}
 
     app.include_router(router)
-    client = TestClient(app)
+    client = WybraTestClient(app)
 
     get_response = client.get("/form")
     post_response = client.post("/submit", data={"field": "value"})
@@ -321,7 +321,7 @@ def test_csrf_dependency_raises_when_csrf_protector_misconfigured() -> None:
     with pytest.raises(
         RuntimeError, match="CSRF protector is not configured correctly"
     ):
-        TestClient(app).post("/submit", data={"field": "value"})
+        WybraTestClient(app).post("/submit", data={"field": "value"})
 
 
 def test_csrf_dependency_rejects_unsafe_methods_without_token() -> None:
@@ -335,7 +335,7 @@ def test_csrf_dependency_rejects_unsafe_methods_without_token() -> None:
 
     app.include_router(router)
 
-    response = TestClient(app).post("/form", data={"field": "value"})
+    response = WybraTestClient(app).post("/form", data={"field": "value"})
 
     assert response.status_code == 403
     assert response.json() == {"detail": "Invalid CSRF token."}
@@ -353,7 +353,7 @@ def test_csrf_exempt_allows_route_to_bypass_protected_router() -> None:
 
     app.include_router(router)
 
-    response = TestClient(app).post("/callback", data={"field": "value"})
+    response = WybraTestClient(app).post("/callback", data={"field": "value"})
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}

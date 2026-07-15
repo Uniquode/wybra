@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -9,8 +11,7 @@ from starlette.requests import Request
 
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core.resources import PackageResourceSource
-from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
-from wybra.db.persistence import close_database, create_database
+from wybra.db import DatabaseCapability
 from wybra.db.surfaces import (
     discover_migration_version_locations,
     discover_model_package,
@@ -52,6 +53,7 @@ from wybra.sessions import (
 from wybra.site import Site, start
 from wybra.template.capabilities import DefaultTemplateCapability
 from wybra.template.context import TemplateContext
+from wybra.testing import create_test_site, migrated_test_database
 from wybra.tools.validation.registry import discover_validation_targets
 
 
@@ -97,24 +99,16 @@ def _site(settings: MessagesSettings, capability: DefaultMessagesCapability) -> 
     return site
 
 
-async def _database_capability(
+@asynccontextmanager
+async def _database_site(
     *,
     modules: tuple[str, ...] = ("wybra.messages",),
-) -> tuple[object, TortoiseDatabaseCapability]:
-    database = await create_database(
-        "sqlite://:memory:",
-        modules=modules,
-    )
-    capability = TortoiseDatabaseCapability(
-        database,
-        {"default": "default", "reader": "default", "writer": "default"},
-    )
-    try:
-        await database.context.generate_schemas()
-    except Exception:
-        await close_database(database)
-        raise
-    return database, capability
+) -> AsyncIterator[tuple[Site, DatabaseCapability]]:
+    async with migrated_test_database(modules=modules) as database:
+        site = create_test_site({"app": {"modules": modules}})
+        capability = database.capability()
+        site.provide_capability(DatabaseCapability, capability)
+        yield site, capability
 
 
 @pytest.mark.anyio
@@ -339,26 +333,16 @@ async def test_redis_cache_storage_pops_queue_with_atomic_script() -> None:
 @pytest.mark.anyio
 async def test_database_storage_persists_and_pops_alerts() -> None:
     settings = _settings({"storage_backend": "database"})
-    database, db_capability = await _database_capability()
-    app = FastAPI()
-    site = Site(
-        app=app,
-        config=ConfigService([], discover_module_config=False),
-    )
-    site.provide_capability(DatabaseCapability, db_capability)
-    storage = DatabaseMessagesStorage(
-        settings,
-        site.capability_proxy(DatabaseCapability),
-    )
-    capability = DefaultMessagesCapability(settings, storage)
-    session: dict[str, object] = {}
-
-    try:
+    async with _database_site() as (site, _db_capability):
+        storage = DatabaseMessagesStorage(
+            settings,
+            site.capability_proxy(DatabaseCapability),
+        )
+        capability = DefaultMessagesCapability(settings, storage)
+        session: dict[str, object] = {}
         await capability.error(_request(session), "Stored")
         alerts = await capability.consume_alerts(_request(session))
         empty_alerts = await capability.consume_alerts(_request(session))
-    finally:
-        await close_database(database)
 
     assert [alert.severity for alert in alerts] == [ERROR_ALERT]
     assert [alert.message for alert in alerts] == ["Stored"]
@@ -368,29 +352,19 @@ async def test_database_storage_persists_and_pops_alerts() -> None:
 @pytest.mark.anyio
 async def test_database_storage_queue_depth_keeps_newest_alerts() -> None:
     settings = _settings({"storage_backend": "database", "queue_depth": 2})
-    database, db_capability = await _database_capability()
-    app = FastAPI()
-    site = Site(
-        app=app,
-        config=ConfigService([], discover_module_config=False),
-    )
-    site.provide_capability(DatabaseCapability, db_capability)
-    capability = DefaultMessagesCapability(
-        settings,
-        DatabaseMessagesStorage(
+    async with _database_site() as (site, _db_capability):
+        capability = DefaultMessagesCapability(
             settings,
-            site.capability_proxy(DatabaseCapability),
-        ),
-    )
-    session: dict[str, object] = {}
-
-    try:
+            DatabaseMessagesStorage(
+                settings,
+                site.capability_proxy(DatabaseCapability),
+            ),
+        )
+        session: dict[str, object] = {}
         await capability.success(_request(session), "One")
         await capability.warning(_request(session), "Two")
         await capability.error(_request(session), "Three")
         alerts = await capability.consume_alerts(_request(session))
-    finally:
-        await close_database(database)
 
     assert [alert.message for alert in alerts] == ["Two", "Three"]
 
@@ -398,34 +372,26 @@ async def test_database_storage_queue_depth_keeps_newest_alerts() -> None:
 @pytest.mark.anyio
 async def test_database_storage_removes_alert_queue_when_session_is_deleted() -> None:
     settings = _settings({"storage_backend": "database"})
-    database, db_capability = await _database_capability(
+    async with _database_site(
         modules=("wybra.messages", "wybra.sessions"),
-    )
-    app = FastAPI()
-    site = Site(
-        app=app,
-        config=ConfigService([], discover_module_config=False),
-    )
-    site.provide_capability(DatabaseCapability, db_capability)
-    messages = DefaultMessagesCapability(
-        settings,
-        DatabaseMessagesStorage(
+    ) as (site, db_capability):
+        messages = DefaultMessagesCapability(
             settings,
-            site.capability_proxy(DatabaseCapability),
-        ),
-    )
-    cleanup_registry = SessionCleanupRegistry()
-    cleanup_registry.register(messages.cleanup_session_data)
-    sessions = DatabaseRequestSessionStorage(
-        database=site.capability_proxy(DatabaseCapability),
-        connection_name="default",
-        payload_max_bytes=1024,
-        cleanup_registry=cleanup_registry,
-    )
-    session_data: dict[str, object] = {}
-    session_id = create_session_id(now=1.0)
-
-    try:
+            DatabaseMessagesStorage(
+                settings,
+                site.capability_proxy(DatabaseCapability),
+            ),
+        )
+        cleanup_registry = SessionCleanupRegistry()
+        cleanup_registry.register(messages.cleanup_session_data)
+        sessions = DatabaseRequestSessionStorage(
+            database=site.capability_proxy(DatabaseCapability),
+            connection_name="default",
+            payload_max_bytes=1024,
+            cleanup_registry=cleanup_registry,
+        )
+        session_data: dict[str, object] = {}
+        session_id = create_session_id(now=1.0)
         await messages.error(_request(session_data), "Stored")
         await sessions.save(
             session_id,
@@ -443,41 +409,31 @@ async def test_database_storage_removes_alert_queue_when_session_is_deleted() ->
         await sessions.delete(session_id)
 
         assert await _message_alert_count(db_capability) == 0
-    finally:
-        await close_database(database)
 
 
 @pytest.mark.anyio
 async def test_database_storage_removes_alert_queue_when_session_expires() -> None:
     settings = _settings({"storage_backend": "database"})
-    database, db_capability = await _database_capability(
+    async with _database_site(
         modules=("wybra.messages", "wybra.sessions"),
-    )
-    app = FastAPI()
-    site = Site(
-        app=app,
-        config=ConfigService([], discover_module_config=False),
-    )
-    site.provide_capability(DatabaseCapability, db_capability)
-    messages = DefaultMessagesCapability(
-        settings,
-        DatabaseMessagesStorage(
+    ) as (site, db_capability):
+        messages = DefaultMessagesCapability(
             settings,
-            site.capability_proxy(DatabaseCapability),
-        ),
-    )
-    cleanup_registry = SessionCleanupRegistry()
-    cleanup_registry.register(messages.cleanup_session_data)
-    sessions = DatabaseRequestSessionStorage(
-        database=site.capability_proxy(DatabaseCapability),
-        connection_name="default",
-        payload_max_bytes=1024,
-        cleanup_registry=cleanup_registry,
-    )
-    session_data: dict[str, object] = {}
-    session_id = create_session_id(now=1.0)
-
-    try:
+            DatabaseMessagesStorage(
+                settings,
+                site.capability_proxy(DatabaseCapability),
+            ),
+        )
+        cleanup_registry = SessionCleanupRegistry()
+        cleanup_registry.register(messages.cleanup_session_data)
+        sessions = DatabaseRequestSessionStorage(
+            database=site.capability_proxy(DatabaseCapability),
+            connection_name="default",
+            payload_max_bytes=1024,
+            cleanup_registry=cleanup_registry,
+        )
+        session_data: dict[str, object] = {}
+        session_id = create_session_id(now=1.0)
         await messages.warning(_request(session_data), "Expired")
         await sessions.save(
             session_id,
@@ -493,26 +449,16 @@ async def test_database_storage_removes_alert_queue_when_session_expires() -> No
         assert await sessions.load(session_id, now=3.0) is None
 
         assert await _message_alert_count(db_capability) == 0
-    finally:
-        await close_database(database)
 
 
 @pytest.mark.anyio
 async def test_database_storage_cleanup_removes_expired_alerts() -> None:
     settings = _settings({"storage_backend": "database"})
-    database, db_capability = await _database_capability()
-    app = FastAPI()
-    site = Site(
-        app=app,
-        config=ConfigService([], discover_module_config=False),
-    )
-    site.provide_capability(DatabaseCapability, db_capability)
-    storage = DatabaseMessagesStorage(
-        settings,
-        site.capability_proxy(DatabaseCapability),
-    )
-
-    try:
+    async with _database_site() as (site, db_capability):
+        storage = DatabaseMessagesStorage(
+            settings,
+            site.capability_proxy(DatabaseCapability),
+        )
         async with db_capability.transaction("default") as connection:
             await MessageAlert.create(
                 queue_key="queue",
@@ -528,8 +474,6 @@ async def test_database_storage_cleanup_removes_expired_alerts() -> None:
         await storage.cleanup(now=3.0)
 
         assert await _message_alert_count(db_capability) == 0
-    finally:
-        await close_database(database)
 
 
 def test_database_storage_exposes_model_and_migration_surface() -> None:
@@ -602,7 +546,7 @@ def test_default_alert_component_escapes_message_text() -> None:
 
 
 async def _message_alert_count(
-    db_capability: TortoiseDatabaseCapability,
+    db_capability: DatabaseCapability,
 ) -> int:
     async with db_capability.transaction("default") as connection:
         return await MessageAlert.all(using_db=connection).count()

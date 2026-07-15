@@ -2,7 +2,6 @@ import re
 import sys
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +9,6 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient as FastAPITestClient
 
 from provider_test_keys import apple_private_key_pem as _apple_private_key_pem
 from support_database import sqlite_file_url
@@ -39,7 +37,6 @@ from wybra.auth.routes.pages import totp_management as totp_management_pages
 from wybra.auth.routes.totp import TOTP_LOGIN_NONCE_COOKIE
 from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
-from wybra.db.persistence import close_database_connections
 from wybra.providers.apple import (
     APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
     APPLE_OAUTH_STATE_COOKIE,
@@ -87,37 +84,7 @@ from wybra.providers.google import (
 from wybra.services.crypto import SecretEnvelopeService
 from wybra.services.secrets import MissingSecretError, SecretsCapability, SecretValue
 from wybra.site import Site, SiteCapabilityError, start
-
-
-class TestClient(FastAPITestClient):
-    """Test client that keeps Tortoise connections scoped to the request loop."""
-
-    @contextmanager
-    def _portal_factory(self):
-        with super()._portal_factory() as portal:
-            portal.call(_close_testclient_tortoise_connections, self.app)
-            try:
-                yield portal
-            finally:
-                portal.call(_close_testclient_tortoise_connections, self.app)
-
-
-async def _close_testclient_tortoise_connections(app) -> None:
-    site = getattr(getattr(app, "state", None), "site", None)
-    if site is None:
-        return
-    try:
-        database = site.require_capability(DatabaseCapability)
-    except SiteCapabilityError:
-        return
-    if not isinstance(database, TortoiseDatabaseCapability):
-        return
-
-    await close_database_connections(
-        database._database,
-        restore_create_connection=False,
-    )
-
+from wybra.testing import WybraTestClient, migrate_test_database
 
 PAGE_MODULES = (
     "wybra.forms",
@@ -231,7 +198,7 @@ def _site_config_source(
 async def _create_auth_schema(site) -> None:
     database = site.require_capability(DatabaseCapability)
     assert isinstance(database, TortoiseDatabaseCapability)
-    await database.generate_schemas()
+    await migrate_test_database(database._database)
     user_id = getattr(site.app.state, "security_test_user_id", None)
     if isinstance(user_id, uuid.UUID):
         await _ensure_identity_user(site, user_id)
@@ -365,8 +332,8 @@ def _override_current_user(
     app.dependency_overrides[login_required] = current_user
 
 
-def _security_page_client(site) -> TestClient:
-    return TestClient(site.app)
+def _security_page_client(site) -> WybraTestClient:
+    return WybraTestClient(site.app)
 
 
 def _csrf_token(response_text: str) -> str:
@@ -945,8 +912,8 @@ def _authenticated_client(
     *,
     email: str,
     password: str = STRONG_TEST_PASSWORD,
-) -> TestClient:
-    client = TestClient(site.app)
+) -> WybraTestClient:
+    client = WybraTestClient(site.app)
     login_page = client.get("/account/login")
     response = client.post(
         "/account/login",
@@ -1115,3756 +1082,3789 @@ class FakeAppleIDTokenValidator:
         return self.claims
 
 
-@pytest.mark.anyio
-async def test_wybra_auth_setup_site_registers_auth_capability(
-    tmp_path: Path,
-) -> None:
-    app = FastAPI()
-    site = await start(app, config_source=_site_config_source(tmp_path))
+class TestAuthenticationPages:
+    @pytest.mark.anyio
+    async def test_wybra_auth_setup_site_registers_auth_capability(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        app = FastAPI()
+        site = await start(app, config_source=_site_config_source(tmp_path))
 
-    auth = site.require_capability(AuthCapability)
-    auth_persistence = site.require_capability(AuthPersistenceCapability)
+        auth = site.require_capability(AuthCapability)
+        auth_persistence = site.require_capability(AuthPersistenceCapability)
 
-    assert site.has_capability(AuthCapability) is True
-    assert site.has_capability(AuthPersistenceCapability) is True
-    assert isinstance(auth, AuthCapability)
-    assert isinstance(auth_persistence, AuthPersistenceCapability)
-    assert auth.settings is app.state.auth_settings
-    assert not hasattr(auth, "fastapi_users")
-    assert not hasattr(app.state, "fastapi_users")
-    assert isinstance(app.state.identity_delivery, NullIdentityDelivery)
-    assert callable(auth.optional_current_user)
-    assert callable(auth.login_required)
-    assert callable(auth.anonymous_required)
-    assert callable(auth_persistence.scope)
-    assert callable(auth_persistence.transaction)
-    async with auth_persistence.scope() as persistence_scope:
-        assert callable(persistence_scope.management.resolve_user_record)
-    assert callable(login_required)
-    assert callable(anonymous_required)
+        assert site.has_capability(AuthCapability) is True
+        assert site.has_capability(AuthPersistenceCapability) is True
+        assert isinstance(auth, AuthCapability)
+        assert isinstance(auth_persistence, AuthPersistenceCapability)
+        assert auth.settings is app.state.auth_settings
+        assert not hasattr(auth, "fastapi_users")
+        assert not hasattr(app.state, "fastapi_users")
+        assert isinstance(app.state.identity_delivery, NullIdentityDelivery)
+        assert callable(auth.optional_current_user)
+        assert callable(auth.login_required)
+        assert callable(auth.anonymous_required)
+        assert callable(auth_persistence.scope)
+        assert callable(auth_persistence.transaction)
+        async with auth_persistence.scope() as persistence_scope:
+            assert callable(persistence_scope.management.resolve_user_record)
+        assert callable(login_required)
+        assert callable(anonymous_required)
 
-
-@pytest.mark.anyio
-async def test_wybra_auth_setup_site_allows_database_provider_later(
-    tmp_path: Path,
-) -> None:
-    app = FastAPI()
-    site = await start(
-        app,
-        config_source=_site_config_source(
-            tmp_path,
-            modules=("wybra.forms", "wybra.auth", "wybra.db"),
-        ),
-    )
-
-    assert site.has_capability(DatabaseCapability) is True
-    assert site.has_capability(AuthCapability) is True
-
-
-@pytest.mark.anyio
-async def test_wybra_auth_post_setup_site_requires_database_capability(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(SiteCapabilityError, match="Missing capability"):
-        await start(
-            FastAPI(),
+    @pytest.mark.anyio
+    async def test_wybra_auth_setup_site_allows_database_provider_later(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        app = FastAPI()
+        site = await start(
+            app,
             config_source=_site_config_source(
                 tmp_path,
-                modules=("wybra.forms", "wybra.auth"),
+                modules=("wybra.forms", "wybra.auth", "wybra.db"),
             ),
         )
 
+        assert site.has_capability(DatabaseCapability) is True
+        assert site.has_capability(AuthCapability) is True
 
-@pytest.mark.anyio
-async def test_wybra_auth_setup_is_omitted_when_module_is_not_configured(
-    tmp_path: Path,
-) -> None:
-    site = await start(
-        FastAPI(),
-        config_source=_site_config_source(tmp_path, modules=("wybra.db",)),
-    )
-
-    assert site.has_capability(DatabaseCapability) is True
-    assert site.has_capability(AuthCapability) is False
-    assert all(route.path != "/account/login" for route in site.app.routes)
-
-
-@pytest.mark.anyio
-async def test_google_login_start_redirects_with_cookie_backed_state(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-
-    response = TestClient(site.app).get(
-        "/account/providers/google/login?return_to=/dashboard",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    location = response.headers["location"]
-    parsed_location = urlsplit(location)
-    redirect_query = parse_qs(parsed_location.query)
-    cookie_state = _google_oauth_cookie_state(site, response)
-    assert parsed_location.scheme == "https"
-    assert parsed_location.netloc == "accounts.google.com"
-    assert parsed_location.path == "/o/oauth2/v2/auth"
-    assert redirect_query["client_id"] == ["google-client-id"]
-    assert redirect_query["redirect_uri"] == [
-        "http://testserver/account/providers/google/callback"
-    ]
-    assert redirect_query["response_type"] == ["code"]
-    assert redirect_query["scope"] == ["openid email profile"]
-    assert redirect_query["state"] == [cookie_state.state]
-    assert redirect_query["nonce"] == [cookie_state.nonce]
-    assert cookie_state.provider_name == GOOGLE_PROVIDER_NAME
-    assert cookie_state.purpose == "login"
-    assert cookie_state.return_to == "/dashboard"
-    assert cookie_state.redirect_uri == (
-        "http://testserver/account/providers/google/callback"
-    )
-    assert cookie_state.user_id is None
-    assert GOOGLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
-    assert "HttpOnly" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_google_login_start_uses_configured_provider_route_prefix(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(
-        tmp_path,
-        account_prefix="/identity",
-        provider_route_prefix="/identity/oauth/google",
-    )
-
-    response = TestClient(site.app).get(
-        "/identity/oauth/google/login",
-        follow_redirects=False,
-    )
-
-    redirect_query = parse_qs(urlsplit(response.headers["location"]).query)
-    cookie_state = _google_oauth_cookie_state(site, response)
-    assert redirect_query["redirect_uri"] == [
-        "http://testserver/identity/oauth/google/callback"
-    ]
-    assert cookie_state.return_to == "/identity"
-    assert cookie_state.redirect_uri == (
-        "http://testserver/identity/oauth/google/callback"
-    )
-    assert "/account/providers" not in redirect_query["redirect_uri"][0]
-
-
-@pytest.mark.anyio
-async def test_google_link_start_requires_authenticated_user(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-
-    response = TestClient(site.app).get(
-        "/account/providers/google/link",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 401
-    assert GOOGLE_OAUTH_STATE_COOKIE not in response.cookies
-
-
-@pytest.mark.anyio
-async def test_google_link_start_records_authenticated_user(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    user_id = uuid.uuid4()
-    _override_current_user(site.app, user_id=user_id)
-
-    response = TestClient(site.app).get(
-        "/account/providers/google/link?return_to=/account/security",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    cookie_state = _google_oauth_cookie_state(site, response)
-    assert cookie_state.purpose == "link"
-    assert cookie_state.user_id == str(user_id)
-    assert cookie_state.return_to == "/account/security"
-
-
-@pytest.mark.anyio
-async def test_google_start_routes_are_unavailable_when_provider_disabled(
-    tmp_path: Path,
-) -> None:
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(enabled=False),
-    )
-
-    response = TestClient(site.app).get(
-        "/account/providers/google/login",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 404
-    assert GOOGLE_OAUTH_STATE_COOKIE not in response.cookies
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    "provider_name",
-    (GOOGLE_PROVIDER_NAME, GITHUB_PROVIDER_NAME, APPLE_PROVIDER_NAME),
-)
-async def test_provider_start_routes_are_unavailable_after_secret_degradation(
-    tmp_path: Path,
-    provider_name: str,
-) -> None:
-    site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
-
-    response = TestClient(site.app).get(
-        f"/account/providers/{provider_name}/login",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 404
-    assert _provider_state_cookie_name(provider_name) not in response.cookies
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_missing_state_cookie(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-
-    response = TestClient(site.app).get(
-        "/account/providers/google/callback?code=code&state=state",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Google callback state is invalid."
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_mismatched_state(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        "/account/providers/google/callback?code=code&state=other-state",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Google callback state is invalid."
-    assert cookie_state.state != "other-state"
-    assert GOOGLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_expired_state_cookie(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    expired_state = create_google_oauth_state(
-        purpose="login",
-        return_to="/account",
-        redirect_uri="http://testserver/account/providers/google/callback",
-        now=1.0,
-    )
-    client = TestClient(site.app)
-    client.cookies.set(
-        GOOGLE_OAUTH_STATE_COOKIE,
-        encode_google_oauth_state_cookie(
-            expired_state,
-            secret=_google_state_cookie_secret(site),
-        ),
-    )
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={expired_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Google callback state is invalid."
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_google_callback_exchanges_code_through_configured_token_client(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    token_client = FakeGoogleTokenClient()
-    id_token_validator = FakeGoogleIDTokenValidator()
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        token_client,
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        id_token_validator,
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Google account is not linked."
-    assert len(token_client.requests) == 1
-    token_request = token_client.requests[0]
-    assert token_request.token_endpoint == "https://oauth2.googleapis.com/token"
-    assert token_request.client_id == "google-client-id"
-    assert token_request.client_secret == "client-secret"
-    assert token_request.code == "code"
-    assert token_request.redirect_uri == (
-        "http://testserver/account/providers/google/callback"
-    )
-    assert len(id_token_validator.requests) == 1
-    validation_request = id_token_validator.requests[0]
-    assert validation_request.id_token == "id-token"
-    assert validation_request.settings.client_id == "google-client-id"
-    assert validation_request.nonce == cookie_state.nonce
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_google_callback_resolves_existing_provider_link(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="linked@example.com",
-        is_verified=True,
-    )
-    await _create_google_provider_link(
-        site,
-        user_id=user_id,
-        provider_subject="google-subject",
-        account_email="linked@example.com",
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-subject",
-                email="linked@example.com",
-                email_verified=True,
-                nonce="nonce",
+    @pytest.mark.anyio
+    async def test_wybra_auth_post_setup_site_requires_database_capability(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        with pytest.raises(SiteCapabilityError, match="Missing capability"):
+            await start(
+                FastAPI(),
+                config_source=_site_config_source(
+                    tmp_path,
+                    modules=("wybra.forms", "wybra.auth"),
+                ),
             )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
 
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
+    @pytest.mark.anyio
+    async def test_wybra_auth_setup_is_omitted_when_module_is_not_configured(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await start(
+            FastAPI(),
+            config_source=_site_config_source(tmp_path, modules=("wybra.db",)),
+        )
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
+        assert site.has_capability(DatabaseCapability) is True
+        assert site.has_capability(AuthCapability) is False
+        assert all(route.path != "/account/login" for route in site.app.routes)
 
+    @pytest.mark.anyio
+    async def test_google_login_start_redirects_with_cookie_backed_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
 
-@pytest.mark.anyio
-async def test_google_callback_requires_local_totp_for_linked_user(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        providers_config=_google_provider_config(),
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="totp-linked@example.com",
-        is_verified=True,
-    )
-    await _create_active_totp_credential(site, user_id)
-    await _create_google_provider_link(
-        site,
-        user_id=user_id,
-        provider_subject="google-totp-subject",
-        account_email="totp-linked@example.com",
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-totp-subject",
-                email="totp-linked@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
+        response = WybraTestClient(site.app).get(
+            "/account/providers/google/login?return_to=/dashboard",
+            follow_redirects=False,
+        )
 
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
+        assert response.status_code == 303
+        location = response.headers["location"]
+        parsed_location = urlsplit(location)
+        redirect_query = parse_qs(parsed_location.query)
+        cookie_state = _google_oauth_cookie_state(site, response)
+        assert parsed_location.scheme == "https"
+        assert parsed_location.netloc == "accounts.google.com"
+        assert parsed_location.path == "/o/oauth2/v2/auth"
+        assert redirect_query["client_id"] == ["google-client-id"]
+        assert redirect_query["redirect_uri"] == [
+            "http://testserver/account/providers/google/callback"
+        ]
+        assert redirect_query["response_type"] == ["code"]
+        assert redirect_query["scope"] == ["openid email profile"]
+        assert redirect_query["state"] == [cookie_state.state]
+        assert redirect_query["nonce"] == [cookie_state.nonce]
+        assert cookie_state.provider_name == GOOGLE_PROVIDER_NAME
+        assert cookie_state.purpose == "login"
+        assert cookie_state.return_to == "/dashboard"
+        assert cookie_state.redirect_uri == (
+            "http://testserver/account/providers/google/callback"
+        )
+        assert cookie_state.user_id is None
+        assert GOOGLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
+        assert "HttpOnly" in response.headers["set-cookie"]
 
-    assert response.status_code == 200
-    assert "Two-factor authentication" in response.text
-    assert "Authenticator code" in response.text
-    assert TOTP_LOGIN_NONCE_COOKIE in response.cookies
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name not in response.cookies
+    @pytest.mark.anyio
+    async def test_google_login_start_uses_configured_provider_route_prefix(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(
+            tmp_path,
+            account_prefix="/identity",
+            provider_route_prefix="/identity/oauth/google",
+        )
 
+        response = WybraTestClient(site.app).get(
+            "/identity/oauth/google/login",
+            follow_redirects=False,
+        )
 
-@pytest.mark.anyio
-async def test_google_callback_auto_links_verified_email_match(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(email_match_linking_enabled=True),
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="match@example.com",
-        is_verified=True,
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(
-            response=GoogleTokenResponse(
-                access_token="access-token",
-                id_token="id-token",
-                refresh_token="refresh-token",
-                expires_in=300,
-            )
-        ),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-match-subject",
-                email="match@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
+        redirect_query = parse_qs(urlsplit(response.headers["location"]).query)
+        cookie_state = _google_oauth_cookie_state(site, response)
+        assert redirect_query["redirect_uri"] == [
+            "http://testserver/identity/oauth/google/callback"
+        ]
+        assert cookie_state.return_to == "/identity"
+        assert cookie_state.redirect_uri == (
+            "http://testserver/identity/oauth/google/callback"
+        )
+        assert "/account/providers" not in redirect_query["redirect_uri"][0]
 
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
+    @pytest.mark.anyio
+    async def test_google_link_start_requires_authenticated_user(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
-    assert (
-        await _google_provider_linked_user_id(
+        response = WybraTestClient(site.app).get(
+            "/account/providers/google/link",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 401
+        assert GOOGLE_OAUTH_STATE_COOKIE not in response.cookies
+
+    @pytest.mark.anyio
+    async def test_google_link_start_records_authenticated_user(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        user_id = uuid.uuid4()
+        _override_current_user(site.app, user_id=user_id)
+
+        response = WybraTestClient(site.app).get(
+            "/account/providers/google/link?return_to=/account/security",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        cookie_state = _google_oauth_cookie_state(site, response)
+        assert cookie_state.purpose == "link"
+        assert cookie_state.user_id == str(user_id)
+        assert cookie_state.return_to == "/account/security"
+
+    @pytest.mark.anyio
+    async def test_google_start_routes_are_unavailable_when_provider_disabled(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_google_provider_site(
+            tmp_path,
+            providers_config=_google_provider_config(enabled=False),
+        )
+
+        response = WybraTestClient(site.app).get(
+            "/account/providers/google/login",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 404
+        assert GOOGLE_OAUTH_STATE_COOKIE not in response.cookies
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "provider_name",
+        (GOOGLE_PROVIDER_NAME, GITHUB_PROVIDER_NAME, APPLE_PROVIDER_NAME),
+    )
+    async def test_provider_start_routes_are_unavailable_after_secret_degradation(
+        self,
+        tmp_path: Path,
+        provider_name: str,
+    ) -> None:
+        site = await _start_provider_site(
+            tmp_path=tmp_path, provider_name=provider_name
+        )
+
+        response = WybraTestClient(site.app).get(
+            f"/account/providers/{provider_name}/login",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 404
+        assert _provider_state_cookie_name(provider_name) not in response.cookies
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_missing_state_cookie(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+
+        response = WybraTestClient(site.app).get(
+            "/account/providers/google/callback?code=code&state=state",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Google callback state is invalid."
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_mismatched_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            "/account/providers/google/callback?code=code&state=other-state",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Google callback state is invalid."
+        assert cookie_state.state != "other-state"
+        assert GOOGLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
+        assert "Max-Age=0" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_expired_state_cookie(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        expired_state = create_google_oauth_state(
+            purpose="login",
+            return_to="/account",
+            redirect_uri="http://testserver/account/providers/google/callback",
+            now=1.0,
+        )
+        client = WybraTestClient(site.app)
+        client.cookies.set(
+            GOOGLE_OAUTH_STATE_COOKIE,
+            encode_google_oauth_state_cookie(
+                expired_state,
+                secret=_google_state_cookie_secret(site),
+            ),
+        )
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={expired_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Google callback state is invalid."
+        assert "Max-Age=0" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_google_callback_exchanges_code_through_configured_token_client(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        token_client = FakeGoogleTokenClient()
+        id_token_validator = FakeGoogleIDTokenValidator()
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            token_client,
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            id_token_validator,
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Google account is not linked."
+        assert len(token_client.requests) == 1
+        token_request = token_client.requests[0]
+        assert token_request.token_endpoint == "https://oauth2.googleapis.com/token"
+        assert token_request.client_id == "google-client-id"
+        assert token_request.client_secret == "client-secret"
+        assert token_request.code == "code"
+        assert token_request.redirect_uri == (
+            "http://testserver/account/providers/google/callback"
+        )
+        assert len(id_token_validator.requests) == 1
+        validation_request = id_token_validator.requests[0]
+        assert validation_request.id_token == "id-token"
+        assert validation_request.settings.client_id == "google-client-id"
+        assert validation_request.nonce == cookie_state.nonce
+        assert "Max-Age=0" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_google_callback_resolves_existing_provider_link(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
             site,
-            provider_subject="google-match-subject",
+            email="linked@example.com",
+            is_verified=True,
         )
-        == user_id
-    )
-
-
-@pytest.mark.anyio
-async def test_google_callback_email_match_verifies_matching_local_email(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(email_match_linking_enabled=True),
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="match-unverified@example.com",
-        is_verified=False,
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(
-            response=GoogleTokenResponse(
-                access_token="access-token",
-                id_token="id-token",
-            )
-        ),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-match-unverified-subject",
-                email="match-unverified@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    user = await _google_user_by_email(site, "match-unverified@example.com")
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    assert user is not None
-    assert user.id == user_id
-    assert user.is_verified is True
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
-
-
-@pytest.mark.anyio
-async def test_google_callback_linked_login_verifies_matching_local_email(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="linked-unverified@example.com",
-        is_verified=False,
-    )
-    await _create_google_provider_link(
-        site,
-        user_id=user_id,
-        provider_subject="google-linked-unverified-subject",
-        account_email="linked-unverified@example.com",
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-linked-unverified-subject",
-                email="linked-unverified@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    user = await _google_user_by_email(site, "linked-unverified@example.com")
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    assert user is not None
-    assert user.is_verified is True
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
-
-
-@pytest.mark.anyio
-async def test_google_callback_creates_provider_account_with_password_login_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(account_creation_enabled=True),
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(
-            response=GoogleTokenResponse(
-                access_token="access-token",
-                id_token="id-token",
-            )
-        ),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-created-subject",
-                email="created@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    created_user = await _google_user_by_email(site, "created@example.com")
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    assert created_user is not None
-    assert created_user.hashed_password is None
-    assert created_user.password_login_enabled is False
-    assert created_user.is_verified is True
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
-    assert (
-        await _google_provider_linked_user_id(
+        await _create_google_provider_link(
             site,
-            provider_subject="google-created-subject",
+            user_id=user_id,
+            provider_subject="google-subject",
+            account_email="linked@example.com",
         )
-        == created_user.id
-    )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-subject",
+                    email="linked@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
 
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
 
-@pytest.mark.anyio
-async def test_google_callback_rejects_provider_token_storage_without_crypto_keys(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(account_creation_enabled=True),
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.from_key_bundle(None)
-    await _create_auth_schema(site)
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(
-            response=GoogleTokenResponse(
-                access_token="access-token",
-                id_token="id-token",
-            )
-        ),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-missing-crypto-subject",
-                email="missing-crypto@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
 
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Google login is not available."
-    assert await _google_user_by_email(site, "missing-crypto@example.com") is None
-    assert (
-        await _google_provider_linked_user_id(
+    @pytest.mark.anyio
+    async def test_google_callback_requires_local_totp_for_linked_user(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            providers_config=_google_provider_config(),
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
             site,
-            provider_subject="google-missing-crypto-subject",
+            email="totp-linked@example.com",
+            is_verified=True,
         )
-        is None
-    )
-
-
-@pytest.mark.anyio
-async def test_google_callback_created_unverified_account_requires_email_verification(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(account_creation_enabled=True),
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(
-            response=GoogleTokenResponse(
-                access_token="access-token",
-                id_token="id-token",
-            )
-        ),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-unverified-subject",
-                email="unverified-provider@example.com",
-                email_verified=False,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    created_user = await _google_user_by_email(
-        site,
-        "unverified-provider@example.com",
-    )
-    assert response.status_code == 403
-    assert "Verify your email before signing in." in response.text
-    assert created_user is not None
-    assert created_user.is_verified is False
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name not in response.cookies
-
-
-@pytest.mark.anyio
-async def test_google_callback_links_provider_to_authenticated_user(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="current@example.com",
-        is_verified=True,
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(
-            response=GoogleTokenResponse(
-                access_token="access-token",
-                id_token="id-token",
-            )
-        ),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-link-subject",
-                email="current@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = _authenticated_client(site, email="current@example.com")
-    start = client.get("/account/providers/google/link", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert (
-        await _google_provider_linked_user_id(
+        await _create_active_totp_credential(site, user_id)
+        await _create_google_provider_link(
             site,
-            provider_subject="google-link-subject",
+            user_id=user_id,
+            provider_subject="google-totp-subject",
+            account_email="totp-linked@example.com",
         )
-        == user_id
-    )
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_link_when_session_is_missing(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    await _create_local_user(
-        site,
-        email="current@example.com",
-        is_verified=True,
-    )
-    token_client = FakeGoogleTokenClient()
-    setattr(site.app.state, GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
-    client = _authenticated_client(site, email="current@example.com")
-    start = client.get("/account/providers/google/link", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-    state_cookie = start.cookies.get(GOOGLE_OAUTH_STATE_COOKIE)
-    assert state_cookie is not None
-    client_without_session = TestClient(site.app)
-    client_without_session.cookies.set(GOOGLE_OAUTH_STATE_COOKIE, state_cookie)
-
-    response = client_without_session.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Google linking requires an active session."
-    assert token_client.requests == []
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_link_when_session_user_changes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    await _create_local_user(
-        site,
-        email="first@example.com",
-        is_verified=True,
-    )
-    await _create_local_user(
-        site,
-        email="second@example.com",
-        is_verified=True,
-    )
-    token_client = FakeGoogleTokenClient()
-    setattr(site.app.state, GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
-    client = _authenticated_client(site, email="first@example.com")
-    start = client.get("/account/providers/google/link", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-    login_page = client.get("/account/login")
-    response = client.post(
-        "/account/login",
-        data={
-            "csrf_token": _csrf_token(login_page.text),
-            "email": "second@example.com",
-            "password": STRONG_TEST_PASSWORD,
-        },
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Google linking requires an active session."
-    assert token_client.requests == []
-
-
-@pytest.mark.anyio
-async def test_google_callback_allows_multiple_google_links_for_same_user(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="current@example.com",
-        is_verified=True,
-    )
-    await _create_google_provider_link(
-        site,
-        user_id=user_id,
-        provider_subject="google-first-subject",
-        account_email="first-google@example.com",
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(
-            response=GoogleTokenResponse(
-                access_token="access-token",
-                id_token="id-token",
-            )
-        ),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-second-subject",
-                email="second-google@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = _authenticated_client(site, email="current@example.com")
-    start = client.get("/account/providers/google/link", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _google_provider_subjects_for_user(site, user_id=user_id) == (
-        "google-first-subject",
-        "google-second-subject",
-    )
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_explicit_link_collision(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    await _create_local_user(
-        site,
-        email="current@example.com",
-        is_verified=True,
-    )
-    linked_user_id = await _create_local_user(
-        site,
-        email="linked@example.com",
-        is_verified=True,
-    )
-    await _create_google_provider_link(
-        site,
-        user_id=linked_user_id,
-        provider_subject="google-subject",
-        account_email="linked@example.com",
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(
-            claims=GoogleIDTokenClaims(
-                subject="google-subject",
-                email="linked@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = _authenticated_client(site, email="current@example.com")
-    start = client.get("/account/providers/google/link", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == (
-        "Google account is already linked to another user."
-    )
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_token_exchange_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    token_client = FakeGoogleTokenClient(
-        error=GoogleTokenExchangeError("Google token exchange failed.")
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        token_client,
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Google token exchange failed."
-    assert len(token_client.requests) == 1
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_missing_id_token(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    token_client = FakeGoogleTokenClient(response=GoogleTokenResponse())
-    id_token_validator = FakeGoogleIDTokenValidator()
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        token_client,
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        id_token_validator,
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Google ID token is invalid."
-    assert len(token_client.requests) == 1
-    assert id_token_validator.requests == []
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_google_callback_rejects_invalid_id_token(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    token_client = FakeGoogleTokenClient()
-    id_token_validator = FakeGoogleIDTokenValidator(
-        error=GoogleIDTokenValidationError("Google ID token is invalid.")
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        token_client,
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        id_token_validator,
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Google ID token is invalid."
-    assert len(token_client.requests) == 1
-    assert len(id_token_validator.requests) == 1
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_google_callback_state_cookie_is_cleared_after_use(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    setattr(
-        site.app.state,
-        GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGoogleTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeGoogleIDTokenValidator(),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/google/login", follow_redirects=False)
-    cookie_state = _google_oauth_cookie_state(site, start)
-    client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    replay = client.get(
-        f"/account/providers/google/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert replay.status_code == 400
-    assert replay.json()["detail"] == "Google callback state is invalid."
-
-
-@pytest.mark.anyio
-async def test_github_login_start_redirects_with_cookie_backed_pkce_state(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
-
-    response = TestClient(site.app).get(
-        "/account/providers/github/login?return_to=/dashboard",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    location = response.headers["location"]
-    parsed_location = urlsplit(location)
-    redirect_query = parse_qs(parsed_location.query)
-    cookie_state = _github_oauth_cookie_state(site, response)
-    assert parsed_location.scheme == "https"
-    assert parsed_location.netloc == "github.com"
-    assert parsed_location.path == "/login/oauth/authorize"
-    assert redirect_query["client_id"] == ["github-client-id"]
-    assert redirect_query["redirect_uri"] == [
-        "http://testserver/account/providers/github/callback"
-    ]
-    assert redirect_query["scope"] == ["read:user user:email"]
-    assert redirect_query["state"] == [cookie_state.state]
-    assert redirect_query["code_challenge"] == [cookie_state.code_challenge]
-    assert redirect_query["code_challenge_method"] == ["S256"]
-    assert "nonce" not in redirect_query
-    assert cookie_state.provider_name == GITHUB_PROVIDER_NAME
-    assert cookie_state.purpose == "login"
-    assert cookie_state.return_to == "/dashboard"
-    assert cookie_state.redirect_uri == (
-        "http://testserver/account/providers/github/callback"
-    )
-    assert cookie_state.user_id is None
-    assert GITHUB_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
-    assert "HttpOnly" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_github_callback_exchanges_code_and_fetches_identity(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    token_client = FakeGitHubTokenClient()
-    api_client = FakeGitHubAPIClient()
-    setattr(
-        site.app.state,
-        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        token_client,
-    )
-    setattr(site.app.state, GITHUB_API_CLIENT_STATE_ATTRIBUTE, api_client)
-    client = TestClient(site.app)
-    start = client.get("/account/providers/github/login", follow_redirects=False)
-    cookie_state = _github_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "GitHub account is not linked."
-    assert len(token_client.requests) == 1
-    token_request = token_client.requests[0]
-    assert token_request.token_endpoint == "https://github.com/login/oauth/access_token"
-    assert token_request.client_id == "github-client-id"
-    assert token_request.client_secret == "client-secret"
-    assert token_request.code == "code"
-    assert token_request.redirect_uri == (
-        "http://testserver/account/providers/github/callback"
-    )
-    assert token_request.code_verifier == cookie_state.code_verifier
-    assert len(api_client.requests) == 1
-    identity_request = api_client.requests[0]
-    assert identity_request.settings.client_id == "github-client-id"
-    assert identity_request.access_token == "access-token"
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_github_callback_rejects_missing_required_scopes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
-    token_client = FakeGitHubTokenClient(
-        response=GitHubTokenResponse(
-            access_token="access-token",
-            token_type="bearer",
-            scope="read:user",
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(),
         )
-    )
-    api_client = FakeGitHubAPIClient()
-    setattr(site.app.state, GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
-    setattr(site.app.state, GITHUB_API_CLIENT_STATE_ATTRIBUTE, api_client)
-    client = TestClient(site.app)
-    start = client.get("/account/providers/github/login", follow_redirects=False)
-    cookie_state = _github_oauth_cookie_state(site, start)
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-totp-subject",
+                    email="totp-linked@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
 
-    response = client.get(
-        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "GitHub token response is invalid."
-    assert len(token_client.requests) == 1
-    assert api_client.requests == []
-    assert "Max-Age=0" in response.headers["set-cookie"]
+        assert response.status_code == 200
+        assert "Two-factor authentication" in response.text
+        assert "Authenticator code" in response.text
+        assert TOTP_LOGIN_NONCE_COOKIE in response.cookies
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name not in response.cookies
 
+    @pytest.mark.anyio
+    async def test_google_callback_auto_links_verified_email_match(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(
+            tmp_path,
+            providers_config=_google_provider_config(email_match_linking_enabled=True),
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="match@example.com",
+            is_verified=True,
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(
+                response=GoogleTokenResponse(
+                    access_token="access-token",
+                    id_token="id-token",
+                    refresh_token="refresh-token",
+                    expires_in=300,
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-match-subject",
+                    email="match@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
 
-@pytest.mark.anyio
-async def test_github_callback_resolves_existing_provider_link(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="linked@example.com",
-        is_verified=True,
-    )
-    await _create_github_provider_link(
-        site,
-        user_id=user_id,
-        provider_subject="github-subject",
-        account_email="linked@example.com",
-    )
-    setattr(
-        site.app.state,
-        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGitHubTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        GITHUB_API_CLIENT_STATE_ATTRIBUTE,
-        FakeGitHubAPIClient(
-            claims=GitHubUserClaims(
-                subject="github-subject",
-                email="linked@example.com",
-                email_verified=True,
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
+        assert (
+            await _google_provider_linked_user_id(
+                site,
+                provider_subject="google-match-subject",
             )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/github/login", follow_redirects=False)
-    cookie_state = _github_oauth_cookie_state(site, start)
+            == user_id
+        )
 
-    response = client.get(
-        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
+    @pytest.mark.anyio
+    async def test_google_callback_email_match_verifies_matching_local_email(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(
+            tmp_path,
+            providers_config=_google_provider_config(email_match_linking_enabled=True),
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="match-unverified@example.com",
+            is_verified=False,
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(
+                response=GoogleTokenResponse(
+                    access_token="access-token",
+                    id_token="id-token",
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-match-unverified-subject",
+                    email="match-unverified@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
 
+        user = await _google_user_by_email(site, "match-unverified@example.com")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        assert user is not None
+        assert user.id == user_id
+        assert user.is_verified is True
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
 
-@pytest.mark.anyio
-async def test_github_callback_auto_links_verified_email_match(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(
-        tmp_path,
-        providers_config=_github_provider_config(email_match_linking_enabled=True),
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="match@example.com",
-        is_verified=True,
-    )
-    setattr(
-        site.app.state,
-        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGitHubTokenClient(
+    @pytest.mark.anyio
+    async def test_google_callback_linked_login_verifies_matching_local_email(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="linked-unverified@example.com",
+            is_verified=False,
+        )
+        await _create_google_provider_link(
+            site,
+            user_id=user_id,
+            provider_subject="google-linked-unverified-subject",
+            account_email="linked-unverified@example.com",
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-linked-unverified-subject",
+                    email="linked-unverified@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        user = await _google_user_by_email(site, "linked-unverified@example.com")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        assert user is not None
+        assert user.is_verified is True
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
+
+    @pytest.mark.anyio
+    async def test_google_callback_creates_provider_account_with_password_disabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(
+            tmp_path,
+            providers_config=_google_provider_config(account_creation_enabled=True),
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(
+                response=GoogleTokenResponse(
+                    access_token="access-token",
+                    id_token="id-token",
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-created-subject",
+                    email="created@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        created_user = await _google_user_by_email(site, "created@example.com")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        assert created_user is not None
+        assert created_user.hashed_password is None
+        assert created_user.password_login_enabled is False
+        assert created_user.is_verified is True
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
+        assert (
+            await _google_provider_linked_user_id(
+                site,
+                provider_subject="google-created-subject",
+            )
+            == created_user.id
+        )
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_provider_token_storage_without_crypto_keys(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(
+            tmp_path,
+            providers_config=_google_provider_config(account_creation_enabled=True),
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.from_key_bundle(
+            None
+        )
+        await _create_auth_schema(site)
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(
+                response=GoogleTokenResponse(
+                    access_token="access-token",
+                    id_token="id-token",
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-missing-crypto-subject",
+                    email="missing-crypto@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == "Google login is not available."
+        assert await _google_user_by_email(site, "missing-crypto@example.com") is None
+        assert (
+            await _google_provider_linked_user_id(
+                site,
+                provider_subject="google-missing-crypto-subject",
+            )
+            is None
+        )
+
+    @pytest.mark.anyio
+    async def test_google_callback_unverified_account_requires_email_verification(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(
+            tmp_path,
+            providers_config=_google_provider_config(account_creation_enabled=True),
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(
+                response=GoogleTokenResponse(
+                    access_token="access-token",
+                    id_token="id-token",
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-unverified-subject",
+                    email="unverified-provider@example.com",
+                    email_verified=False,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        created_user = await _google_user_by_email(
+            site,
+            "unverified-provider@example.com",
+        )
+        assert response.status_code == 403
+        assert "Verify your email before signing in." in response.text
+        assert created_user is not None
+        assert created_user.is_verified is False
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name not in response.cookies
+
+    @pytest.mark.anyio
+    async def test_google_callback_links_provider_to_authenticated_user(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="current@example.com",
+            is_verified=True,
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(
+                response=GoogleTokenResponse(
+                    access_token="access-token",
+                    id_token="id-token",
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-link-subject",
+                    email="current@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = _authenticated_client(site, email="current@example.com")
+        start = client.get("/account/providers/google/link", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert (
+            await _google_provider_linked_user_id(
+                site,
+                provider_subject="google-link-subject",
+            )
+            == user_id
+        )
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_link_when_session_is_missing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        await _create_local_user(
+            site,
+            email="current@example.com",
+            is_verified=True,
+        )
+        token_client = FakeGoogleTokenClient()
+        setattr(site.app.state, GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
+        client = _authenticated_client(site, email="current@example.com")
+        start = client.get("/account/providers/google/link", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+        state_cookie = start.cookies.get(GOOGLE_OAUTH_STATE_COOKIE)
+        assert state_cookie is not None
+        client_without_session = WybraTestClient(site.app)
+        client_without_session.cookies.set(GOOGLE_OAUTH_STATE_COOKIE, state_cookie)
+
+        response = client_without_session.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Google linking requires an active session."
+        assert token_client.requests == []
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_link_when_session_user_changes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        await _create_local_user(
+            site,
+            email="first@example.com",
+            is_verified=True,
+        )
+        await _create_local_user(
+            site,
+            email="second@example.com",
+            is_verified=True,
+        )
+        token_client = FakeGoogleTokenClient()
+        setattr(site.app.state, GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
+        client = _authenticated_client(site, email="first@example.com")
+        start = client.get("/account/providers/google/link", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+        login_page = client.get("/account/login")
+        response = client.post(
+            "/account/login",
+            data={
+                "csrf_token": _csrf_token(login_page.text),
+                "email": "second@example.com",
+                "password": STRONG_TEST_PASSWORD,
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Google linking requires an active session."
+        assert token_client.requests == []
+
+    @pytest.mark.anyio
+    async def test_google_callback_allows_multiple_google_links_for_same_user(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="current@example.com",
+            is_verified=True,
+        )
+        await _create_google_provider_link(
+            site,
+            user_id=user_id,
+            provider_subject="google-first-subject",
+            account_email="first-google@example.com",
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(
+                response=GoogleTokenResponse(
+                    access_token="access-token",
+                    id_token="id-token",
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-second-subject",
+                    email="second-google@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = _authenticated_client(site, email="current@example.com")
+        start = client.get("/account/providers/google/link", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _google_provider_subjects_for_user(site, user_id=user_id) == (
+            "google-first-subject",
+            "google-second-subject",
+        )
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_explicit_link_collision(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        await _create_local_user(
+            site,
+            email="current@example.com",
+            is_verified=True,
+        )
+        linked_user_id = await _create_local_user(
+            site,
+            email="linked@example.com",
+            is_verified=True,
+        )
+        await _create_google_provider_link(
+            site,
+            user_id=linked_user_id,
+            provider_subject="google-subject",
+            account_email="linked@example.com",
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(
+                claims=GoogleIDTokenClaims(
+                    subject="google-subject",
+                    email="linked@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = _authenticated_client(site, email="current@example.com")
+        start = client.get("/account/providers/google/link", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == (
+            "Google account is already linked to another user."
+        )
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_token_exchange_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        token_client = FakeGoogleTokenClient(
+            error=GoogleTokenExchangeError("Google token exchange failed.")
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            token_client,
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Google token exchange failed."
+        assert len(token_client.requests) == 1
+        assert "Max-Age=0" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_missing_id_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        token_client = FakeGoogleTokenClient(response=GoogleTokenResponse())
+        id_token_validator = FakeGoogleIDTokenValidator()
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            token_client,
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            id_token_validator,
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Google ID token is invalid."
+        assert len(token_client.requests) == 1
+        assert id_token_validator.requests == []
+        assert "Max-Age=0" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_google_callback_rejects_invalid_id_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        token_client = FakeGoogleTokenClient()
+        id_token_validator = FakeGoogleIDTokenValidator(
+            error=GoogleIDTokenValidationError("Google ID token is invalid.")
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            token_client,
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            id_token_validator,
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Google ID token is invalid."
+        assert len(token_client.requests) == 1
+        assert len(id_token_validator.requests) == 1
+        assert "Max-Age=0" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_google_callback_state_cookie_is_cleared_after_use(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        setattr(
+            site.app.state,
+            GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGoogleTokenClient(),
+        )
+        setattr(
+            site.app.state,
+            GOOGLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeGoogleIDTokenValidator(),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/google/login", follow_redirects=False)
+        cookie_state = _google_oauth_cookie_state(site, start)
+        client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        replay = client.get(
+            f"/account/providers/google/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert replay.status_code == 400
+        assert replay.json()["detail"] == "Google callback state is invalid."
+
+    @pytest.mark.anyio
+    async def test_github_login_start_redirects_with_cookie_backed_pkce_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+        site = await _start_github_provider_site(tmp_path)
+
+        response = WybraTestClient(site.app).get(
+            "/account/providers/github/login?return_to=/dashboard",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        location = response.headers["location"]
+        parsed_location = urlsplit(location)
+        redirect_query = parse_qs(parsed_location.query)
+        cookie_state = _github_oauth_cookie_state(site, response)
+        assert parsed_location.scheme == "https"
+        assert parsed_location.netloc == "github.com"
+        assert parsed_location.path == "/login/oauth/authorize"
+        assert redirect_query["client_id"] == ["github-client-id"]
+        assert redirect_query["redirect_uri"] == [
+            "http://testserver/account/providers/github/callback"
+        ]
+        assert redirect_query["scope"] == ["read:user user:email"]
+        assert redirect_query["state"] == [cookie_state.state]
+        assert redirect_query["code_challenge"] == [cookie_state.code_challenge]
+        assert redirect_query["code_challenge_method"] == ["S256"]
+        assert "nonce" not in redirect_query
+        assert cookie_state.provider_name == GITHUB_PROVIDER_NAME
+        assert cookie_state.purpose == "login"
+        assert cookie_state.return_to == "/dashboard"
+        assert cookie_state.redirect_uri == (
+            "http://testserver/account/providers/github/callback"
+        )
+        assert cookie_state.user_id is None
+        assert GITHUB_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
+        assert "HttpOnly" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_github_callback_exchanges_code_and_fetches_identity(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+        site = await _start_github_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        token_client = FakeGitHubTokenClient()
+        api_client = FakeGitHubAPIClient()
+        setattr(
+            site.app.state,
+            GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            token_client,
+        )
+        setattr(site.app.state, GITHUB_API_CLIENT_STATE_ATTRIBUTE, api_client)
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/github/login", follow_redirects=False)
+        cookie_state = _github_oauth_cookie_state(site, start)
+
+        response = client.get(
+            f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "GitHub account is not linked."
+        assert len(token_client.requests) == 1
+        token_request = token_client.requests[0]
+        assert (
+            token_request.token_endpoint
+            == "https://github.com/login/oauth/access_token"
+        )
+        assert token_request.client_id == "github-client-id"
+        assert token_request.client_secret == "client-secret"
+        assert token_request.code == "code"
+        assert token_request.redirect_uri == (
+            "http://testserver/account/providers/github/callback"
+        )
+        assert token_request.code_verifier == cookie_state.code_verifier
+        assert len(api_client.requests) == 1
+        identity_request = api_client.requests[0]
+        assert identity_request.settings.client_id == "github-client-id"
+        assert identity_request.access_token == "access-token"
+        assert "Max-Age=0" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_github_callback_rejects_missing_required_scopes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+        site = await _start_github_provider_site(tmp_path)
+        token_client = FakeGitHubTokenClient(
             response=GitHubTokenResponse(
                 access_token="access-token",
                 token_type="bearer",
-                scope="read:user,user:email",
-                expires_in=300,
+                scope="read:user",
             )
-        ),
-    )
-    setattr(
-        site.app.state,
-        GITHUB_API_CLIENT_STATE_ATTRIBUTE,
-        FakeGitHubAPIClient(
-            claims=GitHubUserClaims(
-                subject="github-match-subject",
-                email="match@example.com",
-                email_verified=True,
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/github/login", follow_redirects=False)
-    cookie_state = _github_oauth_cookie_state(site, start)
+        )
+        api_client = FakeGitHubAPIClient()
+        setattr(site.app.state, GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
+        setattr(site.app.state, GITHUB_API_CLIENT_STATE_ATTRIBUTE, api_client)
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/github/login", follow_redirects=False)
+        cookie_state = _github_oauth_cookie_state(site, start)
 
-    response = client.get(
-        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
+        response = client.get(
+            f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
-    assert (
-        await _github_provider_linked_user_id(
+        assert response.status_code == 400
+        assert response.json()["detail"] == "GitHub token response is invalid."
+        assert len(token_client.requests) == 1
+        assert api_client.requests == []
+        assert "Max-Age=0" in response.headers["set-cookie"]
+
+    @pytest.mark.anyio
+    async def test_github_callback_resolves_existing_provider_link(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+        site = await _start_github_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
             site,
-            provider_subject="github-match-subject",
+            email="linked@example.com",
+            is_verified=True,
         )
-        == user_id
-    )
-
-
-@pytest.mark.anyio
-async def test_github_callback_links_provider_to_authenticated_user(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="current@example.com",
-        is_verified=True,
-    )
-    setattr(
-        site.app.state,
-        GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeGitHubTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        GITHUB_API_CLIENT_STATE_ATTRIBUTE,
-        FakeGitHubAPIClient(
-            claims=GitHubUserClaims(
-                subject="github-link-subject",
-                email="current@example.com",
-                email_verified=True,
-            )
-        ),
-    )
-    client = _authenticated_client(site, email="current@example.com")
-    start = client.get("/account/providers/github/link", follow_redirects=False)
-    cookie_state = _github_oauth_cookie_state(site, start)
-
-    response = client.get(
-        f"/account/providers/github/callback?code=code&state={cookie_state.state}",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert (
-        await _github_provider_linked_user_id(
+        await _create_github_provider_link(
             site,
-            provider_subject="github-link-subject",
+            user_id=user_id,
+            provider_subject="github-subject",
+            account_email="linked@example.com",
         )
-        == user_id
-    )
+        setattr(
+            site.app.state,
+            GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGitHubTokenClient(),
+        )
+        setattr(
+            site.app.state,
+            GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+            FakeGitHubAPIClient(
+                claims=GitHubUserClaims(
+                    subject="github-subject",
+                    email="linked@example.com",
+                    email_verified=True,
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/github/login", follow_redirects=False)
+        cookie_state = _github_oauth_cookie_state(site, start)
 
+        response = client.get(
+            f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
 
-@pytest.mark.anyio
-async def test_apple_login_start_redirects_with_cookie_backed_state(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
-    site = await _start_apple_provider_site(tmp_path)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
 
-    response = TestClient(site.app).get(
-        "/account/providers/apple/login?return_to=/dashboard",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    location = response.headers["location"]
-    parsed_location = urlsplit(location)
-    redirect_query = parse_qs(parsed_location.query)
-    cookie_state = _apple_oauth_cookie_state(site, response)
-    assert parsed_location.scheme == "https"
-    assert parsed_location.netloc == "appleid.apple.com"
-    assert parsed_location.path == "/auth/authorize"
-    assert redirect_query["client_id"] == ["com.example.app.web"]
-    assert redirect_query["redirect_uri"] == [
-        "http://testserver/account/providers/apple/callback"
-    ]
-    assert redirect_query["response_type"] == ["code"]
-    assert redirect_query["response_mode"] == ["form_post"]
-    assert redirect_query["scope"] == ["name email"]
-    assert redirect_query["state"] == [cookie_state.state]
-    assert redirect_query["nonce"] == [cookie_state.nonce]
-    assert cookie_state.provider_name == APPLE_PROVIDER_NAME
-    assert cookie_state.purpose == "login"
-    assert cookie_state.return_to == "/dashboard"
-    assert cookie_state.redirect_uri == (
-        "http://testserver/account/providers/apple/callback"
-    )
-    assert cookie_state.user_id is None
-    assert APPLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
-    assert "HttpOnly" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_apple_start_routes_are_unavailable_after_private_key_degradation(
-    tmp_path: Path,
-) -> None:
-    site = await _start_apple_provider_site(tmp_path)
-
-    response = TestClient(site.app).get(
-        "/account/providers/apple/login",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 404
-    assert APPLE_OAUTH_STATE_COOKIE not in response.cookies
-
-
-@pytest.mark.anyio
-async def test_apple_callback_exchanges_code_and_validates_id_token_from_post(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
-    site = await _start_apple_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    token_client = FakeAppleTokenClient()
-    id_token_validator = FakeAppleIDTokenValidator()
-    setattr(
-        site.app.state,
-        APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        token_client,
-    )
-    setattr(
-        site.app.state,
-        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        id_token_validator,
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/apple/login", follow_redirects=False)
-    cookie_state = _apple_oauth_cookie_state(site, start)
-
-    response = client.post(
-        "/account/providers/apple/callback",
-        data={"code": "code", "state": cookie_state.state},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Apple account is not linked."
-    assert len(token_client.requests) == 1
-    token_request = token_client.requests[0]
-    assert token_request.token_endpoint == "https://appleid.apple.com/auth/token"
-    assert token_request.client_id == "com.example.app.web"
-    assert token_request.client_secret.count(".") == 2
-    assert token_request.code == "code"
-    assert token_request.redirect_uri == (
-        "http://testserver/account/providers/apple/callback"
-    )
-    assert len(id_token_validator.requests) == 1
-    validation_request = id_token_validator.requests[0]
-    assert validation_request.id_token == "id-token"
-    assert validation_request.settings.client_id == "com.example.app.web"
-    assert validation_request.nonce == cookie_state.nonce
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_apple_callback_rejects_invalid_token_response(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
-    site = await _start_apple_provider_site(tmp_path)
-    token_client = FakeAppleTokenClient(response=AppleTokenResponse())
-    id_token_validator = FakeAppleIDTokenValidator()
-    setattr(site.app.state, APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
-    setattr(
-        site.app.state,
-        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        id_token_validator,
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/apple/login", follow_redirects=False)
-    cookie_state = _apple_oauth_cookie_state(site, start)
-
-    response = client.post(
-        "/account/providers/apple/callback",
-        data={"code": "code", "state": cookie_state.state},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Apple token response is invalid."
-    assert len(token_client.requests) == 1
-    assert id_token_validator.requests == []
-    assert "Max-Age=0" in response.headers["set-cookie"]
-
-
-@pytest.mark.anyio
-async def test_apple_callback_logs_private_key_resolution_failure(
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
-    site = await _start_apple_provider_site(tmp_path)
-    client = TestClient(site.app)
-    start = client.get("/account/providers/apple/login", follow_redirects=False)
-    cookie_state = _apple_oauth_cookie_state(site, start)
-    site._capabilities[SecretsCapability] = MissingSecretsCapability()
-
-    response = client.post(
-        "/account/providers/apple/callback",
-        data={"code": "code", "state": cookie_state.state},
-        follow_redirects=False,
-    )
-    captured = capsys.readouterr()
-
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Apple login is not available."
-    assert (
-        "Apple private key resolution failed: source=environment key=APPLE_PRIVATE_KEY"
-        in captured.err
-    )
-
-
-@pytest.mark.anyio
-async def test_apple_callback_logs_client_secret_generation_failure(
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", "not-a-private-key")
-    site = await _start_apple_provider_site(tmp_path)
-    client = TestClient(site.app)
-    start = client.get("/account/providers/apple/login", follow_redirects=False)
-    cookie_state = _apple_oauth_cookie_state(site, start)
-
-    response = client.post(
-        "/account/providers/apple/callback",
-        data={"code": "code", "state": cookie_state.state},
-        follow_redirects=False,
-    )
-    captured = capsys.readouterr()
-
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Apple login is not available."
-    assert "Apple client secret generation failed." in captured.err
-
-
-@pytest.mark.anyio
-async def test_apple_callback_resolves_existing_provider_link(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
-    site = await _start_apple_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="linked@example.com",
-        is_verified=True,
-    )
-    await _create_apple_provider_link(
-        site,
-        user_id=user_id,
-        provider_subject="apple-subject",
-        account_email="linked@example.com",
-    )
-    setattr(
-        site.app.state,
-        APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeAppleTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeAppleIDTokenValidator(
-            claims=AppleIDTokenClaims(
-                subject="apple-subject",
-                email="linked@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/apple/login", follow_redirects=False)
-    cookie_state = _apple_oauth_cookie_state(site, start)
-
-    response = client.post(
-        "/account/providers/apple/callback",
-        data={"code": "code", "state": cookie_state.state},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
-
-
-@pytest.mark.anyio
-async def test_apple_callback_auto_links_verified_email_match(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
-    site = await _start_apple_provider_site(
-        tmp_path,
-        providers_config=_apple_provider_config(email_match_linking_enabled=True),
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="match@example.com",
-        is_verified=True,
-    )
-    setattr(
-        site.app.state,
-        APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeAppleTokenClient(
-            response=AppleTokenResponse(
-                access_token="access-token",
-                id_token="id-token",
-                token_type="bearer",
-                expires_in=300,
-            )
-        ),
-    )
-    setattr(
-        site.app.state,
-        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeAppleIDTokenValidator(
-            claims=AppleIDTokenClaims(
-                subject="apple-match-subject",
-                email="match@example.com",
-                email_verified=True,
-                nonce="nonce",
-            )
-        ),
-    )
-    client = TestClient(site.app)
-    start = client.get("/account/providers/apple/login", follow_redirects=False)
-    cookie_state = _apple_oauth_cookie_state(site, start)
-
-    response = client.post(
-        "/account/providers/apple/callback",
-        data={"code": "code", "state": cookie_state.state},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account"
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
-    assert (
-        await _apple_provider_linked_user_id(
+    @pytest.mark.anyio
+    async def test_github_callback_auto_links_verified_email_match(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+        site = await _start_github_provider_site(
+            tmp_path,
+            providers_config=_github_provider_config(email_match_linking_enabled=True),
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
             site,
-            provider_subject="apple-match-subject",
+            email="match@example.com",
+            is_verified=True,
         )
-        == user_id
-    )
+        setattr(
+            site.app.state,
+            GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGitHubTokenClient(
+                response=GitHubTokenResponse(
+                    access_token="access-token",
+                    token_type="bearer",
+                    scope="read:user,user:email",
+                    expires_in=300,
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+            FakeGitHubAPIClient(
+                claims=GitHubUserClaims(
+                    subject="github-match-subject",
+                    email="match@example.com",
+                    email_verified=True,
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/github/login", follow_redirects=False)
+        cookie_state = _github_oauth_cookie_state(site, start)
 
+        response = client.get(
+            f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
 
-@pytest.mark.anyio
-async def test_apple_callback_links_provider_to_authenticated_user(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
-    site = await _start_apple_provider_site(tmp_path)
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="current@example.com",
-        is_verified=True,
-    )
-    setattr(
-        site.app.state,
-        APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
-        FakeAppleTokenClient(),
-    )
-    setattr(
-        site.app.state,
-        APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
-        FakeAppleIDTokenValidator(
-            claims=AppleIDTokenClaims(
-                subject="apple-link-subject",
-                email="current@example.com",
-                email_verified=True,
-                nonce="nonce",
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
+        assert (
+            await _github_provider_linked_user_id(
+                site,
+                provider_subject="github-match-subject",
             )
-        ),
-    )
-    client = _authenticated_client(site, email="current@example.com")
-    start = client.get("/account/providers/apple/link", follow_redirects=False)
-    cookie_state = _apple_oauth_cookie_state(site, start)
+            == user_id
+        )
 
-    response = client.post(
-        "/account/providers/apple/callback",
-        data={"code": "code", "state": cookie_state.state},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert (
-        await _apple_provider_linked_user_id(
+    @pytest.mark.anyio
+    async def test_github_callback_links_provider_to_authenticated_user(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+        site = await _start_github_provider_site(tmp_path)
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
             site,
-            provider_subject="apple-link-subject",
+            email="current@example.com",
+            is_verified=True,
         )
-        == user_id
-    )
+        setattr(
+            site.app.state,
+            GITHUB_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeGitHubTokenClient(),
+        )
+        setattr(
+            site.app.state,
+            GITHUB_API_CLIENT_STATE_ATTRIBUTE,
+            FakeGitHubAPIClient(
+                claims=GitHubUserClaims(
+                    subject="github-link-subject",
+                    email="current@example.com",
+                    email_verified=True,
+                )
+            ),
+        )
+        client = _authenticated_client(site, email="current@example.com")
+        start = client.get("/account/providers/github/link", follow_redirects=False)
+        cookie_state = _github_oauth_cookie_state(site, start)
 
+        response = client.get(
+            f"/account/providers/github/callback?code=code&state={cookie_state.state}",
+            follow_redirects=False,
+        )
 
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("provider_name", "provider_label"),
-    PROVIDER_PAGE_CASES,
-)
-async def test_login_page_shows_provider_sign_in_when_provider_available(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    provider_name: str,
-    provider_label: str,
-) -> None:
-    _set_available_provider_secret(monkeypatch, provider_name)
-    site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert (
+            await _github_provider_linked_user_id(
+                site,
+                provider_subject="github-link-subject",
+            )
+            == user_id
+        )
 
-    response = TestClient(site.app).get("/account/login?return_to=/dashboard")
+    @pytest.mark.anyio
+    async def test_apple_login_start_redirects_with_cookie_backed_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+        site = await _start_apple_provider_site(tmp_path)
 
-    assert response.status_code == 200
-    assert f"Sign in with {provider_label}" in response.text
-    assert (
-        f"/account/providers/{provider_name}/login?return_to=%2Fdashboard"
-        in response.text
-    )
+        response = WybraTestClient(site.app).get(
+            "/account/providers/apple/login?return_to=/dashboard",
+            follow_redirects=False,
+        )
 
+        assert response.status_code == 303
+        location = response.headers["location"]
+        parsed_location = urlsplit(location)
+        redirect_query = parse_qs(parsed_location.query)
+        cookie_state = _apple_oauth_cookie_state(site, response)
+        assert parsed_location.scheme == "https"
+        assert parsed_location.netloc == "appleid.apple.com"
+        assert parsed_location.path == "/auth/authorize"
+        assert redirect_query["client_id"] == ["com.example.app.web"]
+        assert redirect_query["redirect_uri"] == [
+            "http://testserver/account/providers/apple/callback"
+        ]
+        assert redirect_query["response_type"] == ["code"]
+        assert redirect_query["response_mode"] == ["form_post"]
+        assert redirect_query["scope"] == ["name email"]
+        assert redirect_query["state"] == [cookie_state.state]
+        assert redirect_query["nonce"] == [cookie_state.nonce]
+        assert cookie_state.provider_name == APPLE_PROVIDER_NAME
+        assert cookie_state.purpose == "login"
+        assert cookie_state.return_to == "/dashboard"
+        assert cookie_state.redirect_uri == (
+            "http://testserver/account/providers/apple/callback"
+        )
+        assert cookie_state.user_id is None
+        assert APPLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
+        assert "HttpOnly" in response.headers["set-cookie"]
 
-@pytest.mark.anyio
-async def test_login_page_hides_google_sign_in_when_provider_disabled(
-    tmp_path: Path,
-) -> None:
-    google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(enabled=False),
-    )
+    @pytest.mark.anyio
+    async def test_apple_start_routes_are_unavailable_after_private_key_degradation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_apple_provider_site(tmp_path)
 
-    response = TestClient(site.app).get("/account/login")
+        response = WybraTestClient(site.app).get(
+            "/account/providers/apple/login",
+            follow_redirects=False,
+        )
 
-    assert response.status_code == 200
-    assert f"Sign in with {google_label}" not in response.text
+        assert response.status_code == 404
+        assert APPLE_OAUTH_STATE_COOKIE not in response.cookies
 
+    @pytest.mark.anyio
+    async def test_apple_callback_exchanges_code_and_validates_id_token_from_post(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+        site = await _start_apple_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        token_client = FakeAppleTokenClient()
+        id_token_validator = FakeAppleIDTokenValidator()
+        setattr(
+            site.app.state,
+            APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            token_client,
+        )
+        setattr(
+            site.app.state,
+            APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            id_token_validator,
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/apple/login", follow_redirects=False)
+        cookie_state = _apple_oauth_cookie_state(site, start)
 
-@pytest.mark.anyio
-async def test_login_and_security_pages_hide_google_when_oauth_config_incomplete(
-    tmp_path: Path,
-) -> None:
-    google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(secret_key=None),
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-    client = _security_page_client(site)
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
+        )
 
-    login_response = client.get("/account/login")
-    security_response = client.get("/account/security")
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Apple account is not linked."
+        assert len(token_client.requests) == 1
+        token_request = token_client.requests[0]
+        assert token_request.token_endpoint == "https://appleid.apple.com/auth/token"
+        assert token_request.client_id == "com.example.app.web"
+        assert token_request.client_secret.count(".") == 2
+        assert token_request.code == "code"
+        assert token_request.redirect_uri == (
+            "http://testserver/account/providers/apple/callback"
+        )
+        assert len(id_token_validator.requests) == 1
+        validation_request = id_token_validator.requests[0]
+        assert validation_request.id_token == "id-token"
+        assert validation_request.settings.client_id == "com.example.app.web"
+        assert validation_request.nonce == cookie_state.nonce
+        assert "Max-Age=0" in response.headers["set-cookie"]
 
-    assert login_response.status_code == 200
-    assert f"Sign in with {google_label}" not in login_response.text
-    assert security_response.status_code == 200
-    assert "Provider sign-in" not in security_response.text
+    @pytest.mark.anyio
+    async def test_apple_callback_rejects_invalid_token_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+        site = await _start_apple_provider_site(tmp_path)
+        token_client = FakeAppleTokenClient(response=AppleTokenResponse())
+        id_token_validator = FakeAppleIDTokenValidator()
+        setattr(site.app.state, APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE, token_client)
+        setattr(
+            site.app.state,
+            APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            id_token_validator,
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/apple/login", follow_redirects=False)
+        cookie_state = _apple_oauth_cookie_state(site, start)
 
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
+        )
 
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("provider_name", "provider_label"),
-    PROVIDER_PAGE_CASES,
-)
-async def test_security_page_shows_provider_link_control(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    provider_name: str,
-    provider_label: str,
-) -> None:
-    _set_available_provider_secret(monkeypatch, provider_name)
-    site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Apple token response is invalid."
+        assert len(token_client.requests) == 1
+        assert id_token_validator.requests == []
+        assert "Max-Age=0" in response.headers["set-cookie"]
 
-    response = _security_page_client(site).get("/account/security")
+    @pytest.mark.anyio
+    async def test_apple_callback_logs_private_key_resolution_failure(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+        site = await _start_apple_provider_site(tmp_path)
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/apple/login", follow_redirects=False)
+        cookie_state = _apple_oauth_cookie_state(site, start)
+        site._capabilities[SecretsCapability] = MissingSecretsCapability()
 
-    assert response.status_code == 200
-    assert "Provider sign-in" in response.text
-    assert f"Link {provider_label}" in response.text
-    assert (
-        f"/account/providers/{provider_name}/link?return_to=%2Faccount%2Fsecurity"
-        in response.text
-    )
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
+        )
+        captured = capsys.readouterr()
 
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Apple login is not available."
+        assert (
+            "Apple private key resolution failed: source=environment "
+            "key=APPLE_PRIVATE_KEY"
+        ) in captured.err
 
-@pytest.mark.anyio
-async def test_security_page_shows_google_unlink_and_password_disable_controls(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    provider_id = await _create_google_provider_link(
-        site,
-        user_id=user_id,
-        account_email="google-user@example.test",
-    )
-    _override_current_user(site.app, user_id=user_id)
+    @pytest.mark.anyio
+    async def test_apple_callback_logs_client_secret_generation_failure(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", "not-a-private-key")
+        site = await _start_apple_provider_site(tmp_path)
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/apple/login", follow_redirects=False)
+        cookie_state = _apple_oauth_cookie_state(site, start)
 
-    response = _security_page_client(site).get("/account/security")
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
+        )
+        captured = capsys.readouterr()
 
-    assert response.status_code == 200
-    assert (
-        f"{google_label} sign-in is linked as google-user@example.test" in response.text
-    )
-    assert f'value="{provider_id}"' in response.text
-    assert f"Link another {google_label} account" in response.text
-    assert f"Unlink {google_label}" in response.text
-    assert "Disable username/password login" in response.text
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Apple login is not available."
+        assert "Apple client secret generation failed." in captured.err
 
-
-@pytest.mark.anyio
-async def test_security_page_shows_github_unlink_control(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    github_label = _provider_case(GITHUB_PROVIDER_NAME).label
-    monkeypatch.setenv("GITHUB_SECRET", "client-secret")
-    site = await _start_github_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    provider_id = await _create_github_provider_link(
-        site,
-        user_id=user_id,
-        account_email="github-user@example.test",
-    )
-    _override_current_user(site.app, user_id=user_id)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert (
-        f"{github_label} sign-in is linked as github-user@example.test" in response.text
-    )
-    assert f'value="{provider_id}"' in response.text
-    assert f"Link another {github_label} account" in response.text
-    assert f"Unlink {github_label}" in response.text
-    assert "Disable username/password login" in response.text
-
-
-@pytest.mark.anyio
-async def test_security_page_shows_apple_unlink_control(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    apple_label = _provider_case(APPLE_PROVIDER_NAME).label
-    monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
-    site = await _start_apple_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    provider_id = await _create_apple_provider_link(
-        site,
-        user_id=user_id,
-        account_email="apple-user@example.test",
-    )
-    _override_current_user(site.app, user_id=user_id)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert (
-        f"{apple_label} sign-in is linked as apple-user@example.test" in response.text
-    )
-    assert f'value="{provider_id}"' in response.text
-    assert f"Link another {apple_label} account" in response.text
-    assert f"Unlink {apple_label}" in response.text
-    assert "Disable username/password login" in response.text
-
-
-@pytest.mark.anyio
-async def test_security_page_unlinks_google_when_password_login_remains(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    provider_id = await _create_google_provider_link(site, user_id=user_id)
-    _override_current_user(site.app, user_id=user_id)
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-
-    response = client.post(
-        "/account/security/providers/google/unlink",
-        data={
-            "csrf_token": _csrf_token(security_page.text),
-            "provider_id": provider_id,
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert (
-        await _google_provider_linked_user_id(
+    @pytest.mark.anyio
+    async def test_apple_callback_resolves_existing_provider_link(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+        site = await _start_apple_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
             site,
-            provider_subject="google-subject",
+            email="linked@example.com",
+            is_verified=True,
         )
-        is None
-    )
+        await _create_apple_provider_link(
+            site,
+            user_id=user_id,
+            provider_subject="apple-subject",
+            account_email="linked@example.com",
+        )
+        setattr(
+            site.app.state,
+            APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeAppleTokenClient(),
+        )
+        setattr(
+            site.app.state,
+            APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeAppleIDTokenValidator(
+                claims=AppleIDTokenClaims(
+                    subject="apple-subject",
+                    email="linked@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/apple/login", follow_redirects=False)
+        cookie_state = _apple_oauth_cookie_state(site, start)
 
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("provider_name", "provider_label"),
-    PROVIDER_PAGE_CASES,
-)
-async def test_security_page_rejects_unlinking_last_provider_sign_in_method(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    provider_name: str,
-    provider_label: str,
-) -> None:
-    _set_available_provider_secret(monkeypatch, provider_name)
-    site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    await _set_password_login_enabled(site, user_id, False)
-    provider_id = await _create_provider_link(
-        provider_name,
-        site,
-        user_id=user_id,
-    )
-    _override_current_user(
-        site.app,
-        user_id=user_id,
-        hashed_password=None,
-        password_login_enabled=False,
-    )
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-
-    response = client.post(
-        f"/account/security/providers/{provider_name}/unlink",
-        data={
-            "csrf_token": _csrf_token(security_page.text),
-            "provider_id": provider_id,
-        },
-    )
-
-    assert response.status_code == 400
-    assert (
-        f"Add another sign-in method before unlinking {provider_label}."
-        in response.text
-    )
-    assert await _provider_linked_user_id(provider_name, site) == user_id
-
-
-@pytest.mark.anyio
-async def test_security_page_unlinks_one_google_account_when_another_remains(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    await _set_password_login_enabled(site, user_id, False)
-    first_provider_id = await _create_google_provider_link(
-        site,
-        user_id=user_id,
-        provider_subject="google-first-subject",
-        account_email="first-google@example.com",
-    )
-    await _create_google_provider_link(
-        site,
-        user_id=user_id,
-        provider_subject="google-second-subject",
-        account_email="second-google@example.com",
-    )
-    _override_current_user(
-        site.app,
-        user_id=user_id,
-        hashed_password=None,
-        password_login_enabled=False,
-    )
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-
-    response = client.post(
-        "/account/security/providers/google/unlink",
-        data={
-            "csrf_token": _csrf_token(security_page.text),
-            "provider_id": first_provider_id,
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _google_provider_subjects_for_user(site, user_id=user_id) == (
-        "google-second-subject",
-    )
-
-
-@pytest.mark.anyio
-async def test_security_page_disables_password_login_when_google_is_linked(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    await _create_google_provider_link(site, user_id=user_id)
-    _override_current_user(site.app, user_id=user_id)
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-
-    response = client.post(
-        "/account/security/password/disable",
-        data={"csrf_token": _csrf_token(security_page.text)},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _password_login_enabled(site, user_id) is False
-
-
-@pytest.mark.anyio
-async def test_security_page_rejects_disabling_password_without_provider_link(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(tmp_path)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-    client = _security_page_client(site)
-    login_page = client.get("/account/login")
-
-    response = client.post(
-        "/account/security/password/disable",
-        data={"csrf_token": _csrf_token(login_page.text)},
-    )
-
-    assert response.status_code == 400
-    assert "Add another sign-in method before disabling password sign-in." in (
-        response.text
-    )
-    assert await _password_login_enabled(site, user_id) is True
-
-
-@pytest.mark.anyio
-async def test_security_page_rejects_disabling_password_when_google_unavailable(
-    tmp_path: Path,
-) -> None:
-    site = await _start_google_provider_site(
-        tmp_path,
-        providers_config=_google_provider_config(enabled=False),
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    await _create_google_provider_link(site, user_id=user_id)
-    _override_current_user(site.app, user_id=user_id)
-    client = _security_page_client(site)
-    login_page = client.get("/account/login")
-
-    response = client.post(
-        "/account/security/password/disable",
-        data={"csrf_token": _csrf_token(login_page.text)},
-    )
-
-    assert response.status_code == 400
-    assert "Add another sign-in method before disabling password sign-in." in (
-        response.text
-    )
-    assert await _password_login_enabled(site, user_id) is True
-
-
-@pytest.mark.anyio
-async def test_login_page_shows_passkey_button_when_enabled(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(tmp_path, auth_config=PASSKEY_AUTH_CONFIG)
-
-    response = _security_page_client(site).get("/account/login?return_to=/dashboard")
-
-    assert response.status_code == 200
-    assert "Sign in with passkey" in response.text
-    assert "/account/login/passkey/options" in response.text
-    assert "/account/login/passkey/complete" in response.text
-    assert "scripts/passkeys.js" in response.text
-
-
-@pytest.mark.anyio
-async def test_security_page_omits_passkey_section_when_disabled(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(tmp_path)
-    await _create_auth_schema(site)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert "Passkey sign-in" not in response.text
-
-
-@pytest.mark.anyio
-async def test_security_page_shows_passkey_controls_when_enabled(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=PASSKEY_AUTH_CONFIG,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert "Passkey sign-in" in response.text
-    assert "Add passkey" in response.text
-    assert "/account/security/passkeys/register/options" in response.text
-    assert "/account/security/passkeys/register/complete" in response.text
-    assert "scripts/passkeys.js" in response.text
-
-
-@pytest.mark.anyio
-async def test_passkey_registration_rejects_unverified_user(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=PASSKEY_AUTH_CONFIG,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=False,
-    )
-    _override_current_user(site.app, user_id=user_id)
-    client = _security_page_client(site)
-    login_page = client.get("/account/login")
-
-    response = client.post(
-        "/account/security/passkeys/register/options",
-        headers=_csrf_header(login_page.text),
-        json={},
-    )
-
-    assert response.status_code == 403
-    assert response.json()["error"] == "Verify your email before adding a passkey."
-    assert await _active_passkey_count(site, user_id) == 0
-
-
-@pytest.mark.anyio
-async def test_passkey_registration_stores_verified_credential(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    credential_id = credential_id_to_text(b"new-passkey")
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=PASSKEY_AUTH_CONFIG,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-
-    def verify_registration(_options, **kwargs):
-        assert kwargs["expected_challenge"]
-        return SimpleNamespace(
-            credential_id=credential_id,
-            public_key=b"verified-public-key",
-            sign_count=1,
-            user_verified=True,
-            credential_device_type="multi_device",
-            credential_backed_up=True,
-            aaguid="test-aaguid",
-            attestation_format="none",
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
         )
 
-    monkeypatch.setattr(
-        passkey_pages,
-        "verify_passkey_registration",
-        verify_registration,
-    )
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-    headers = _csrf_header(security_page.text)
-    options_response = client.post(
-        "/account/security/passkeys/register/options",
-        headers=headers,
-        json={},
-    )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
 
-    response = client.post(
-        "/account/security/passkeys/register/complete",
-        headers=headers,
-        json={
-            "challenge_id": options_response.json()["challenge_id"],
-            "credential": {
-                "id": credential_id,
-                "response": {"transports": ["internal"]},
+    @pytest.mark.anyio
+    async def test_apple_callback_auto_links_verified_email_match(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+        site = await _start_apple_provider_site(
+            tmp_path,
+            providers_config=_apple_provider_config(email_match_linking_enabled=True),
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="match@example.com",
+            is_verified=True,
+        )
+        setattr(
+            site.app.state,
+            APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeAppleTokenClient(
+                response=AppleTokenResponse(
+                    access_token="access-token",
+                    id_token="id-token",
+                    token_type="bearer",
+                    expires_in=300,
+                )
+            ),
+        )
+        setattr(
+            site.app.state,
+            APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeAppleIDTokenValidator(
+                claims=AppleIDTokenClaims(
+                    subject="apple-match-subject",
+                    email="match@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = WybraTestClient(site.app)
+        start = client.get("/account/providers/apple/login", follow_redirects=False)
+        cookie_state = _apple_oauth_cookie_state(site, start)
+
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account"
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
+        assert (
+            await _apple_provider_linked_user_id(
+                site,
+                provider_subject="apple-match-subject",
+            )
+            == user_id
+        )
+
+    @pytest.mark.anyio
+    async def test_apple_callback_links_provider_to_authenticated_user(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+        site = await _start_apple_provider_site(tmp_path)
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="current@example.com",
+            is_verified=True,
+        )
+        setattr(
+            site.app.state,
+            APPLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
+            FakeAppleTokenClient(),
+        )
+        setattr(
+            site.app.state,
+            APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
+            FakeAppleIDTokenValidator(
+                claims=AppleIDTokenClaims(
+                    subject="apple-link-subject",
+                    email="current@example.com",
+                    email_verified=True,
+                    nonce="nonce",
+                )
+            ),
+        )
+        client = _authenticated_client(site, email="current@example.com")
+        start = client.get("/account/providers/apple/link", follow_redirects=False)
+        cookie_state = _apple_oauth_cookie_state(site, start)
+
+        response = client.post(
+            "/account/providers/apple/callback",
+            data={"code": "code", "state": cookie_state.state},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert (
+            await _apple_provider_linked_user_id(
+                site,
+                provider_subject="apple-link-subject",
+            )
+            == user_id
+        )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("provider_name", "provider_label"),
+        PROVIDER_PAGE_CASES,
+    )
+    async def test_login_page_shows_provider_sign_in_when_provider_available(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        provider_name: str,
+        provider_label: str,
+    ) -> None:
+        _set_available_provider_secret(monkeypatch, provider_name)
+        site = await _start_provider_site(
+            tmp_path=tmp_path, provider_name=provider_name
+        )
+
+        response = WybraTestClient(site.app).get("/account/login?return_to=/dashboard")
+
+        assert response.status_code == 200
+        assert f"Sign in with {provider_label}" in response.text
+        assert (
+            f"/account/providers/{provider_name}/login?return_to=%2Fdashboard"
+            in response.text
+        )
+
+    @pytest.mark.anyio
+    async def test_login_page_hides_google_sign_in_when_provider_disabled(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
+        site = await _start_google_provider_site(
+            tmp_path,
+            providers_config=_google_provider_config(enabled=False),
+        )
+
+        response = WybraTestClient(site.app).get("/account/login")
+
+        assert response.status_code == 200
+        assert f"Sign in with {google_label}" not in response.text
+
+    @pytest.mark.anyio
+    async def test_login_and_security_pages_hide_google_when_oauth_config_incomplete(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
+        site = await _start_google_provider_site(
+            tmp_path,
+            providers_config=_google_provider_config(secret_key=None),
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+        client = _security_page_client(site)
+
+        login_response = client.get("/account/login")
+        security_response = client.get("/account/security")
+
+        assert login_response.status_code == 200
+        assert f"Sign in with {google_label}" not in login_response.text
+        assert security_response.status_code == 200
+        assert "Provider sign-in" not in security_response.text
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("provider_name", "provider_label"),
+        PROVIDER_PAGE_CASES,
+    )
+    async def test_security_page_shows_provider_link_control(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        provider_name: str,
+        provider_label: str,
+    ) -> None:
+        _set_available_provider_secret(monkeypatch, provider_name)
+        site = await _start_provider_site(
+            tmp_path=tmp_path, provider_name=provider_name
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert "Provider sign-in" in response.text
+        assert f"Link {provider_label}" in response.text
+        assert (
+            f"/account/providers/{provider_name}/link?return_to=%2Faccount%2Fsecurity"
+            in response.text
+        )
+
+    @pytest.mark.anyio
+    async def test_security_page_shows_google_unlink_and_password_disable_controls(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        google_label = _provider_case(GOOGLE_PROVIDER_NAME).label
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        provider_id = await _create_google_provider_link(
+            site,
+            user_id=user_id,
+            account_email="google-user@example.test",
+        )
+        _override_current_user(site.app, user_id=user_id)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert (
+            f"{google_label} sign-in is linked as google-user@example.test"
+            in response.text
+        )
+        assert f'value="{provider_id}"' in response.text
+        assert f"Link another {google_label} account" in response.text
+        assert f"Unlink {google_label}" in response.text
+        assert "Disable username/password login" in response.text
+
+    @pytest.mark.anyio
+    async def test_security_page_shows_github_unlink_control(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        github_label = _provider_case(GITHUB_PROVIDER_NAME).label
+        monkeypatch.setenv("GITHUB_SECRET", "client-secret")
+        site = await _start_github_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        provider_id = await _create_github_provider_link(
+            site,
+            user_id=user_id,
+            account_email="github-user@example.test",
+        )
+        _override_current_user(site.app, user_id=user_id)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert (
+            f"{github_label} sign-in is linked as github-user@example.test"
+            in response.text
+        )
+        assert f'value="{provider_id}"' in response.text
+        assert f"Link another {github_label} account" in response.text
+        assert f"Unlink {github_label}" in response.text
+        assert "Disable username/password login" in response.text
+
+    @pytest.mark.anyio
+    async def test_security_page_shows_apple_unlink_control(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        apple_label = _provider_case(APPLE_PROVIDER_NAME).label
+        monkeypatch.setenv("APPLE_PRIVATE_KEY", _apple_private_key_pem())
+        site = await _start_apple_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        provider_id = await _create_apple_provider_link(
+            site,
+            user_id=user_id,
+            account_email="apple-user@example.test",
+        )
+        _override_current_user(site.app, user_id=user_id)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert (
+            f"{apple_label} sign-in is linked as apple-user@example.test"
+            in response.text
+        )
+        assert f'value="{provider_id}"' in response.text
+        assert f"Link another {apple_label} account" in response.text
+        assert f"Unlink {apple_label}" in response.text
+        assert "Disable username/password login" in response.text
+
+    @pytest.mark.anyio
+    async def test_security_page_unlinks_google_when_password_login_remains(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        provider_id = await _create_google_provider_link(site, user_id=user_id)
+        _override_current_user(site.app, user_id=user_id)
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
+
+        response = client.post(
+            "/account/security/providers/google/unlink",
+            data={
+                "csrf_token": _csrf_token(security_page.text),
+                "provider_id": provider_id,
             },
-            "label": "  Laptop key  ",
-        },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert (
+            await _google_provider_linked_user_id(
+                site,
+                provider_subject="google-subject",
+            )
+            is None
+        )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("provider_name", "provider_label"),
+        PROVIDER_PAGE_CASES,
     )
+    async def test_security_page_rejects_unlinking_last_provider_sign_in_method(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        provider_name: str,
+        provider_label: str,
+    ) -> None:
+        _set_available_provider_secret(monkeypatch, provider_name)
+        site = await _start_provider_site(
+            tmp_path=tmp_path, provider_name=provider_name
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        await _set_password_login_enabled(site, user_id, False)
+        provider_id = await _create_provider_link(
+            provider_name,
+            site,
+            user_id=user_id,
+        )
+        _override_current_user(
+            site.app,
+            user_id=user_id,
+            hashed_password=None,
+            password_login_enabled=False,
+        )
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "status": "registered",
-        "redirect_to": "/account/security",
-    }
-    async with site.require_capability(DatabaseCapability).transaction() as session:
-        store = TortoiseWebAuthnCredentialStore(session)
-        credential = await store.get_webauthn_credential(credential_id)
-        assert credential is not None
-        assert credential.label == "Laptop key"
-        assert credential.public_key == b"verified-public-key"
-        assert credential.transports == ("internal",)
-
-
-@pytest.mark.anyio
-async def test_passkey_registration_failure_consumes_challenge(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=PASSKEY_AUTH_CONFIG,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-
-    def reject_registration(_options, **_kwargs):
-        raise passkey_pages.WebAuthnCeremonyError()
-
-    monkeypatch.setattr(
-        passkey_pages,
-        "verify_passkey_registration",
-        reject_registration,
-    )
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-    headers = _csrf_header(security_page.text)
-    options_response = client.post(
-        "/account/security/passkeys/register/options",
-        headers=headers,
-        json={},
-    )
-    challenge_id = options_response.json()["challenge_id"]
-
-    response = client.post(
-        "/account/security/passkeys/register/complete",
-        headers=headers,
-        json={
-            "challenge_id": challenge_id,
-            "credential": {
-                "id": credential_id_to_text(b"rejected-passkey"),
-                "response": {"transports": ["internal"]},
+        response = client.post(
+            f"/account/security/providers/{provider_name}/unlink",
+            data={
+                "csrf_token": _csrf_token(security_page.text),
+                "provider_id": provider_id,
             },
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"] == "Passkey verification failed."
-    assert await _active_passkey_count(site, user_id) == 0
-    assert not await _authentication_challenge_exists(site, challenge_id)
-
-
-@pytest.mark.anyio
-async def test_passkey_registration_malformed_json_returns_controlled_error(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=PASSKEY_AUTH_CONFIG,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-    headers = {
-        **_csrf_header(security_page.text),
-        "content-type": "application/json",
-    }
-
-    response = client.post(
-        "/account/security/passkeys/register/complete",
-        headers=headers,
-        content="{",
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"] == "Passkey verification failed."
-    assert await _active_passkey_count(site, user_id) == 0
-
-
-@pytest.mark.anyio
-async def test_passkey_login_user_verified_assertion_satisfies_active_totp(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
-    credential_id = credential_id_to_text(b"login-passkey")
-    site = await _start_security_site(tmp_path, auth_config=auth_config)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="passkey-login@example.com",
-        is_verified=True,
-    )
-    await _create_passkey_credential(
-        site,
-        user_id=user_id,
-        credential_id=credential_id,
-    )
-    await _create_active_totp_credential(site, user_id)
-
-    def verify_authentication(_options, **kwargs):
-        assert kwargs["stored_credential"].credential_id == credential_id
-        return SimpleNamespace(
-            credential_id=credential_id,
-            sign_count=1,
-            user_verified=True,
-            credential_device_type="multi_device",
-            credential_backed_up=True,
         )
 
-    monkeypatch.setattr(
-        passkey_pages,
-        "verify_passkey_authentication",
-        verify_authentication,
-    )
-    client = _security_page_client(site)
-    login_page = client.get("/account/login?return_to=/dashboard")
-    headers = _csrf_header(login_page.text)
-    options_response = client.post(
-        "/account/login/passkey/options",
-        headers=headers,
-        json={
-            "email": "passkey-login@example.com",
-            "return_to": "/dashboard",
-        },
-    )
+        assert response.status_code == 400
+        assert (
+            f"Add another sign-in method before unlinking {provider_label}."
+            in response.text
+        )
+        assert await _provider_linked_user_id(provider_name, site) == user_id
 
-    response = client.post(
-        "/account/login/passkey/complete",
-        headers=headers,
-        json={
-            "challenge_id": options_response.json()["challenge_id"],
-            "credential": {"id": credential_id},
-            "return_to": "/dashboard",
-        },
-    )
+    @pytest.mark.anyio
+    async def test_security_page_unlinks_one_google_account_when_another_remains(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        await _set_password_login_enabled(site, user_id, False)
+        first_provider_id = await _create_google_provider_link(
+            site,
+            user_id=user_id,
+            provider_subject="google-first-subject",
+            account_email="first-google@example.com",
+        )
+        await _create_google_provider_link(
+            site,
+            user_id=user_id,
+            provider_subject="google-second-subject",
+            account_email="second-google@example.com",
+        )
+        _override_current_user(
+            site.app,
+            user_id=user_id,
+            hashed_password=None,
+            password_login_enabled=False,
+        )
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok", "redirect_to": "/dashboard"}
-    assert TOTP_LOGIN_NONCE_COOKIE not in response.cookies
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name in response.cookies
-
-
-@pytest.mark.anyio
-async def test_passkey_login_user_verified_assertion_requires_totp_when_policy_disabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    auth_config = {
-        **PASSKEY_AUTH_CONFIG,
-        "totp_mode": "opt_in",
-        "passkeys": {
-            **PASSKEY_AUTH_CONFIG["passkeys"],
-            "user_verification_satisfies_totp": False,
-        },
-    }
-    credential_id = credential_id_to_text(b"login-passkey-totp-policy")
-    site = await _start_security_site(tmp_path, auth_config=auth_config)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="passkey-policy@example.com",
-        is_verified=True,
-    )
-    await _create_passkey_credential(
-        site,
-        user_id=user_id,
-        credential_id=credential_id,
-    )
-    await _create_active_totp_credential(site, user_id)
-
-    def verify_authentication(_options, **kwargs):
-        assert kwargs["stored_credential"].credential_id == credential_id
-        return SimpleNamespace(
-            credential_id=credential_id,
-            sign_count=1,
-            user_verified=True,
-            credential_device_type="multi_device",
-            credential_backed_up=True,
+        response = client.post(
+            "/account/security/providers/google/unlink",
+            data={
+                "csrf_token": _csrf_token(security_page.text),
+                "provider_id": first_provider_id,
+            },
+            follow_redirects=False,
         )
 
-    monkeypatch.setattr(
-        passkey_pages,
-        "verify_passkey_authentication",
-        verify_authentication,
-    )
-    client = _security_page_client(site)
-    login_page = client.get("/account/login?return_to=/dashboard")
-    headers = _csrf_header(login_page.text)
-    options_response = client.post(
-        "/account/login/passkey/options",
-        headers=headers,
-        json={
-            "email": "passkey-policy@example.com",
-            "return_to": "/dashboard",
-        },
-    )
-
-    response = client.post(
-        "/account/login/passkey/complete",
-        headers=headers,
-        json={
-            "challenge_id": options_response.json()["challenge_id"],
-            "credential": {"id": credential_id},
-            "return_to": "/dashboard",
-        },
-    )
-
-    payload = response.json()
-    assert response.status_code == 200
-    assert payload["status"] == "totp_required"
-    assert "challenge_step=totp" in payload["redirect_to"]
-    assert TOTP_LOGIN_NONCE_COOKIE in response.cookies
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name not in response.cookies
-
-
-@pytest.mark.anyio
-async def test_passkey_login_possession_only_assertion_requires_totp(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
-    credential_id = credential_id_to_text(b"possession-passkey")
-    site = await _start_security_site(tmp_path, auth_config=auth_config)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="passkey-totp@example.com",
-        is_verified=True,
-    )
-    await _create_passkey_credential(
-        site,
-        user_id=user_id,
-        credential_id=credential_id,
-    )
-    await _create_active_totp_credential(site, user_id)
-
-    def verify_authentication(_options, **kwargs):
-        assert kwargs["stored_credential"].credential_id == credential_id
-        return SimpleNamespace(
-            credential_id=credential_id,
-            sign_count=1,
-            user_verified=False,
-            credential_device_type="multi_device",
-            credential_backed_up=True,
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _google_provider_subjects_for_user(site, user_id=user_id) == (
+            "google-second-subject",
         )
 
-    monkeypatch.setattr(
-        passkey_pages,
-        "verify_passkey_authentication",
-        verify_authentication,
-    )
-    client = _security_page_client(site)
-    login_page = client.get("/account/login?return_to=/dashboard")
-    headers = _csrf_header(login_page.text)
-    options_response = client.post(
-        "/account/login/passkey/options",
-        headers=headers,
-        json={
-            "email": "passkey-totp@example.com",
-            "return_to": "/dashboard",
-        },
-    )
+    @pytest.mark.anyio
+    async def test_security_page_disables_password_login_when_google_is_linked(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        await _create_google_provider_link(site, user_id=user_id)
+        _override_current_user(site.app, user_id=user_id)
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
 
-    response = client.post(
-        "/account/login/passkey/complete",
-        headers=headers,
-        json={
-            "challenge_id": options_response.json()["challenge_id"],
-            "credential": {"id": credential_id},
-            "return_to": "/dashboard",
-        },
-    )
-
-    payload = response.json()
-    assert response.status_code == 200
-    assert payload["status"] == "totp_required"
-    assert "challenge_step=totp" in payload["redirect_to"]
-    assert TOTP_LOGIN_NONCE_COOKIE in response.cookies
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name not in response.cookies
-
-
-@pytest.mark.anyio
-async def test_passkey_login_keeps_verified_email_gate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    credential_id = credential_id_to_text(b"unverified-passkey")
-    site = await _start_security_site(tmp_path, auth_config=PASSKEY_AUTH_CONFIG)
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="unverified-passkey@example.com",
-        is_verified=False,
-    )
-    await _create_passkey_credential(
-        site,
-        user_id=user_id,
-        credential_id=credential_id,
-    )
-
-    def verify_authentication(_options, **kwargs):
-        assert kwargs["stored_credential"].credential_id == credential_id
-        return SimpleNamespace(
-            credential_id=credential_id,
-            sign_count=1,
-            user_verified=True,
-            credential_device_type="multi_device",
-            credential_backed_up=True,
+        response = client.post(
+            "/account/security/password/disable",
+            data={"csrf_token": _csrf_token(security_page.text)},
+            follow_redirects=False,
         )
 
-    monkeypatch.setattr(
-        passkey_pages,
-        "verify_passkey_authentication",
-        verify_authentication,
-    )
-    client = _security_page_client(site)
-    login_page = client.get("/account/login")
-    headers = _csrf_header(login_page.text)
-    options_response = client.post(
-        "/account/login/passkey/options",
-        headers=headers,
-        json={"email": "unverified-passkey@example.com"},
-    )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _password_login_enabled(site, user_id) is False
 
-    response = client.post(
-        "/account/login/passkey/complete",
-        headers=headers,
-        json={
-            "challenge_id": options_response.json()["challenge_id"],
-            "credential": {"id": credential_id},
-        },
-    )
+    @pytest.mark.anyio
+    async def test_security_page_rejects_disabling_password_without_provider_link(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(tmp_path)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+        client = _security_page_client(site)
+        login_page = client.get("/account/login")
 
-    assert response.status_code == 403
-    assert response.json()["status"] == "email_verification_required"
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name not in response.cookies
+        response = client.post(
+            "/account/security/password/disable",
+            data={"csrf_token": _csrf_token(login_page.text)},
+        )
 
+        assert response.status_code == 400
+        assert "Add another sign-in method before disabling password sign-in." in (
+            response.text
+        )
+        assert await _password_login_enabled(site, user_id) is True
 
-@pytest.mark.anyio
-async def test_security_page_rejects_removing_last_passkey_sign_in_method(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=PASSKEY_AUTH_CONFIG,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    await _set_password_login_enabled(site, user_id, False)
-    row_id = await _create_passkey_credential(site, user_id=user_id)
-    _override_current_user(
-        site.app,
-        user_id=user_id,
-        hashed_password=None,
-        password_login_enabled=False,
-    )
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-
-    response = client.post(
-        "/account/security/passkeys/revoke",
-        data={
-            "csrf_token": _csrf_token(security_page.text),
-            "credential_id": row_id,
-        },
-    )
-
-    assert response.status_code == 400
-    assert "Add another sign-in method before removing this passkey." in response.text
-    assert await _active_passkey_count(site, user_id) == 1
-
-
-@pytest.mark.anyio
-async def test_security_page_removes_passkey_when_password_login_remains(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=PASSKEY_AUTH_CONFIG,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-    row_id = await _create_passkey_credential(site, user_id=user_id)
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-
-    response = client.post(
-        "/account/security/passkeys/revoke",
-        data={
-            "csrf_token": _csrf_token(security_page.text),
-            "credential_id": row_id,
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _active_passkey_count(site, user_id) == 0
-
-
-@pytest.mark.anyio
-async def test_security_page_disables_password_login_when_passkey_registered(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=PASSKEY_AUTH_CONFIG,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-    await _create_passkey_credential(site, user_id=user_id)
-    client = _security_page_client(site)
-    security_page = client.get("/account/security")
-
-    response = client.post(
-        "/account/security/password/disable",
-        data={"csrf_token": _csrf_token(security_page.text)},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _password_login_enabled(site, user_id) is False
-
-
-@pytest.mark.anyio
-async def test_totp_disable_allows_passkey_as_remaining_sign_in(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
-    site = await _start_security_site(
-        tmp_path,
-        auth_config=auth_config,
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-    await _set_password_login_enabled(site, user_id, False)
-    secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
-    await _create_passkey_credential(site, user_id=user_id)
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password=None,
-        password_login_enabled=False,
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/disable")
-
-    response = client.post(
-        "/account/totp/disable",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "totp_code": generate_totp(secret),
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _active_totp_credential_id(site, user_id) is None
-
-
-@pytest.mark.anyio
-async def test_security_page_requires_authenticated_user(tmp_path: Path) -> None:
-    app = FastAPI()
-    site = await start(
-        app,
-        config_source=_site_config_source(
+    @pytest.mark.anyio
+    async def test_security_page_rejects_disabling_password_when_google_unavailable(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_google_provider_site(
             tmp_path,
-            modules=PAGE_MODULES,
-        ),
-    )
+            providers_config=_google_provider_config(enabled=False),
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        await _create_google_provider_link(site, user_id=user_id)
+        _override_current_user(site.app, user_id=user_id)
+        client = _security_page_client(site)
+        login_page = client.get("/account/login")
 
-    response = TestClient(site.app, raise_server_exceptions=False).get(
-        "/account/security"
-    )
+        response = client.post(
+            "/account/security/password/disable",
+            data={"csrf_token": _csrf_token(login_page.text)},
+        )
 
-    assert response.status_code == 401
+        assert response.status_code == 400
+        assert "Add another sign-in method before disabling password sign-in." in (
+            response.text
+        )
+        assert await _password_login_enabled(site, user_id) is True
 
+    @pytest.mark.anyio
+    async def test_login_page_shows_passkey_button_when_enabled(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(tmp_path, auth_config=PASSKEY_AUTH_CONFIG)
 
-@pytest.mark.anyio
-async def test_login_requires_verified_email_before_session_issue(
-    tmp_path: Path,
-) -> None:
-    app = FastAPI()
-    site = await start(
-        app,
-        config_source=_site_config_source(
+        response = _security_page_client(site).get(
+            "/account/login?return_to=/dashboard"
+        )
+
+        assert response.status_code == 200
+        assert "Sign in with passkey" in response.text
+        assert "/account/login/passkey/options" in response.text
+        assert "/account/login/passkey/complete" in response.text
+        assert "scripts/passkeys.js" in response.text
+
+    @pytest.mark.anyio
+    async def test_security_page_omits_passkey_section_when_disabled(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(tmp_path)
+        await _create_auth_schema(site)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert "Passkey sign-in" not in response.text
+
+    @pytest.mark.anyio
+    async def test_security_page_shows_passkey_controls_when_enabled(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(
             tmp_path,
-            modules=PAGE_MODULES,
-        ),
-    )
-    await _create_auth_schema(site)
-    await _create_local_user(
-        site,
-        email="unverified@example.com",
-        is_verified=False,
-    )
+            auth_config=PASSKEY_AUTH_CONFIG,
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
 
-    client = TestClient(site.app)
-    login_page = client.get("/account/login")
-    response = client.post(
-        "/account/login",
-        data={
-            "csrf_token": _csrf_token(login_page.text),
-            "email": "unverified@example.com",
-            "password": STRONG_TEST_PASSWORD,
-        },
-    )
+        response = _security_page_client(site).get("/account/security")
 
-    assert response.status_code == 403
-    assert "Verify your email before signing in." in response.text
-    assert 'value="unverified@example.com"' in response.text
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name not in response.cookies
+        assert response.status_code == 200
+        assert "Passkey sign-in" in response.text
+        assert "Add passkey" in response.text
+        assert "/account/security/passkeys/register/options" in response.text
+        assert "/account/security/passkeys/register/complete" in response.text
+        assert "scripts/passkeys.js" in response.text
 
-
-@pytest.mark.anyio
-async def test_login_rejects_disabled_password_login(tmp_path: Path) -> None:
-    app = FastAPI()
-    site = await start(
-        app,
-        config_source=_site_config_source(
+    @pytest.mark.anyio
+    async def test_passkey_registration_rejects_unverified_user(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(
             tmp_path,
-            modules=PAGE_MODULES,
-        ),
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="password-disabled@example.com",
-        is_verified=True,
-    )
-    await _set_password_login_enabled(site, user_id, False)
+            auth_config=PASSKEY_AUTH_CONFIG,
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=False,
+        )
+        _override_current_user(site.app, user_id=user_id)
+        client = _security_page_client(site)
+        login_page = client.get("/account/login")
 
-    client = TestClient(site.app)
-    login_page = client.get("/account/login")
-    response = client.post(
-        "/account/login",
-        data={
-            "csrf_token": _csrf_token(login_page.text),
-            "email": "password-disabled@example.com",
-            "password": STRONG_TEST_PASSWORD,
-        },
-    )
+        response = client.post(
+            "/account/security/passkeys/register/options",
+            headers=_csrf_header(login_page.text),
+            json={},
+        )
 
-    assert response.status_code == 401
-    assert "Email or password is incorrect." in response.text
-    cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
-    assert cookie_name not in response.cookies
+        assert response.status_code == 403
+        assert response.json()["error"] == "Verify your email before adding a passkey."
+        assert await _active_passkey_count(site, user_id) == 0
 
-
-@pytest.mark.anyio
-async def test_security_page_renders_for_authenticated_user(tmp_path: Path) -> None:
-    app = FastAPI()
-    site = await start(
-        app,
-        config_source=_site_config_source(
+    @pytest.mark.anyio
+    async def test_passkey_registration_stores_verified_credential(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        credential_id = credential_id_to_text(b"new-passkey")
+        site = await _start_security_site(
             tmp_path,
-            modules=PAGE_MODULES,
-        ),
-    )
-
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    _override_current_user(site.app, user_id=user_id)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert "Login &amp; Security" in response.text
-    assert "security@example.test" in response.text
-
-
-@pytest.mark.anyio
-async def test_security_page_omits_totp_section_when_totp_disabled(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(tmp_path)
-    await _create_auth_schema(site)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert "Authenticator app" not in response.text
-
-
-@pytest.mark.anyio
-async def test_security_page_shows_totp_setup_when_totp_enabled_without_credential(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(tmp_path, auth_config={"totp_mode": "opt_in"})
-    await _create_auth_schema(site)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert "Authenticator app" in response.text
-    assert "Set up authenticator" in response.text
-    assert "/account/totp/setup?return_to=%2Faccount%2Fsecurity" in response.text
-
-
-@pytest.mark.anyio
-async def test_security_page_totp_setup_link_uses_configured_account_prefix(
-    tmp_path: Path,
-) -> None:
-    site = await _start_security_site(
-        tmp_path,
-        account_prefix="/identity",
-        auth_config={"totp_mode": "opt_in"},
-    )
-    await _create_auth_schema(site)
-
-    response = _security_page_client(site).get("/identity/security")
-
-    assert response.status_code == 200
-    assert "/identity/totp/setup?return_to=%2Fidentity%2Fsecurity" in response.text
-    assert "/account/security" not in response.text
-
-
-@pytest.mark.anyio
-async def test_totp_setup_page_shows_setup_qr_code_by_default(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        expires_at=None,
-    )
-
-    async def current_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "resolve_current_user",
-        current_user,
-    )
-
-    response = _security_page_client(site).get("/account/totp/setup")
-
-    assert response.status_code == 200
-    assert "Show setup QRCode" in response.text
-    assert "<svg" in response.text
-    assert "otpauth://totp/" not in response.text.split("<summary>Show setup URI")[0]
-    assert "Show setup URI" in response.text
-
-
-@pytest.mark.anyio
-async def test_totp_setup_completion_returns_to_security_page(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
-    await _create_auth_schema(site)
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        expires_at=None,
-    )
-
-    async def current_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "resolve_current_user",
-        current_user,
-    )
-    client = _security_page_client(site)
-    setup = client.get("/account/totp/setup?return_to=/account/security?tab=totp")
-    secret_match = re.search(
-        r"<strong>Secret:</strong> <code>([^<]+)</code>",
-        setup.text,
-    )
-    assert secret_match is not None
-
-    response = client.post(
-        "/account/totp/setup",
-        data={
-            "csrf_token": _csrf_token(setup.text),
-            "return_to": "/account/security?tab=totp",
-            "setup_challenge_id": "",
-            "setup_totp_code": generate_totp(secret_match.group(1)),
-        },
-    )
-
-    assert response.status_code == 200
-    assert "Store these recovery codes" in response.text
-    assert "Return to Login &amp; Security" in response.text
-    assert 'href="/account/security?tab=totp"' in response.text
-    _assert_recovery_codes_download(response.text)
-
-
-@pytest.mark.anyio
-async def test_security_page_shows_totp_controls_when_totp_is_active(
-    tmp_path: Path,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    await _create_active_totp_credential(site, user_id)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert "Authenticator verification is enabled" in response.text
-    assert "Disable authenticator" in response.text
-    assert "/account/totp/disable" in response.text
-
-
-@pytest.mark.anyio
-async def test_totp_disable_requires_confirmation_before_disabling(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    await _create_active_totp_credential(site, user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password="hash",
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/disable")
-
-    response = client.post(
-        "/account/totp/disable",
-        data={"csrf_token": _csrf_token(confirmation.text)},
-    )
-
-    assert response.status_code == 400
-    assert "Confirm this action" in response.text
-    assert await _active_totp_credential_id(site, user_id) is not None
-
-
-@pytest.mark.anyio
-async def test_totp_disable_accepts_active_totp_confirmation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password="hash",
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/disable")
-
-    response = client.post(
-        "/account/totp/disable",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "totp_code": generate_totp(secret),
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _active_totp_credential_id(site, user_id) is None
-
-
-@pytest.mark.anyio
-async def test_totp_disable_accepts_password_confirmation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    await _create_active_totp_credential(site, user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password="hash",
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    async def authenticate_user(_request, email: str, password: str):
-        return user if email == user.email and password == "correct-password" else None
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    monkeypatch.setattr(
-        "wybra.auth.routes.pages.shared.authenticate_user",
-        authenticate_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/disable")
-
-    response = client.post(
-        "/account/totp/disable",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "password": "correct-password",
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _active_totp_credential_id(site, user_id) is None
-
-
-@pytest.mark.anyio
-async def test_totp_disable_accepts_recovery_code_confirmation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    _secret, recovery_codes = await _create_active_totp_credential(site, user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password="hash",
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/disable")
-
-    response = client.post(
-        "/account/totp/disable",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "recovery_code": recovery_codes[0],
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _active_totp_credential_id(site, user_id) is None
-
-
-@pytest.mark.anyio
-async def test_totp_disable_rejects_removing_last_usable_sign_in_method(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password=None,
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/disable")
-
-    response = client.post(
-        "/account/totp/disable",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "totp_code": generate_totp(secret),
-        },
-    )
-
-    assert response.status_code == 400
-    assert "Add another sign-in method" in response.text
-    assert await _active_totp_credential_id(site, user_id) is not None
-
-
-@pytest.mark.anyio
-async def test_totp_disable_allows_linked_google_as_remaining_sign_in(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
-    site = await _start_google_provider_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    await _set_password_login_enabled(site, user_id, False)
-    secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
-    await _create_google_provider_link(site, user_id=user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password=None,
-        password_login_enabled=False,
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/disable")
-
-    response = client.post(
-        "/account/totp/disable",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "totp_code": generate_totp(secret),
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/account/security"
-    assert await _active_totp_credential_id(site, user_id) is None
-
-
-@pytest.mark.anyio
-async def test_totp_disable_rejects_unavailable_google_as_remaining_sign_in(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    site = await _start_google_provider_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        providers_config=_google_provider_config(enabled=False),
-    )
-    await _create_auth_schema(site)
-    user_id = await _create_local_user(
-        site,
-        email="security@example.com",
-        is_verified=True,
-    )
-    await _set_password_login_enabled(site, user_id, False)
-    secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
-    await _create_google_provider_link(site, user_id=user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password=None,
-        password_login_enabled=False,
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/disable")
-
-    response = client.post(
-        "/account/totp/disable",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "totp_code": generate_totp(secret),
-        },
-    )
-
-    assert response.status_code == 400
-    assert "Add another sign-in method" in response.text
-    assert await _active_totp_credential_id(site, user_id) is not None
-
-
-@pytest.mark.anyio
-async def test_security_page_links_to_recovery_code_replacement_when_totp_is_active(
-    tmp_path: Path,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    await _create_active_totp_credential(site, user_id)
-
-    response = _security_page_client(site).get("/account/security")
-
-    assert response.status_code == 200
-    assert "Generate replacement recovery codes" in response.text
-    assert "/account/totp/recovery-codes/regenerate" in response.text
-
-
-@pytest.mark.anyio
-async def test_totp_recovery_code_replacement_requires_confirmation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    _secret, recovery_codes = await _create_active_totp_credential(site, user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password="hash",
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/recovery-codes/regenerate")
-
-    assert confirmation.status_code == 200
-    assert "Confirm this action with your password" in confirmation.text
-    assert "one of your existing sign-in methods" not in confirmation.text
-    assert 'name="confirmation"' in confirmation.text
-    assert 'name="password"' not in confirmation.text
-    assert 'name="totp_code"' not in confirmation.text
-    assert 'name="recovery_code"' not in confirmation.text
-
-    response = client.post(
-        "/account/totp/recovery-codes/regenerate",
-        data={"csrf_token": _csrf_token(confirmation.text)},
-    )
-
-    assert response.status_code == 400
-    assert "Confirm this action" in response.text
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        recovery_store = TortoiseRecoveryCodeStore(
-            db_session,
-            site.app.state.secret_envelope_service,
+            auth_config=PASSKEY_AUTH_CONFIG,
         )
-        assert await recovery_store.consume_recovery_code(
-            str(user_id),
-            recovery_codes[0],
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+
+        def verify_registration(_options, **kwargs):
+            assert kwargs["expected_challenge"]
+            return SimpleNamespace(
+                credential_id=credential_id,
+                public_key=b"verified-public-key",
+                sign_count=1,
+                user_verified=True,
+                credential_device_type="multi_device",
+                credential_backed_up=True,
+                aaguid="test-aaguid",
+                attestation_format="none",
+            )
+
+        monkeypatch.setattr(
+            passkey_pages,
+            "verify_passkey_registration",
+            verify_registration,
+        )
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
+        headers = _csrf_header(security_page.text)
+        options_response = client.post(
+            "/account/security/passkeys/register/options",
+            headers=headers,
+            json={},
         )
 
-
-@pytest.mark.anyio
-async def test_totp_recovery_code_replacement_rotates_codes_after_confirmation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    _secret, recovery_codes = await _create_active_totp_credential(site, user_id)
-
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password="hash",
-    )
-
-    async def authenticated_user(_request):
-        return user
-
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/recovery-codes/regenerate")
-
-    response = client.post(
-        "/account/totp/recovery-codes/regenerate",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "confirmation": recovery_codes[0],
-        },
-    )
-
-    assert response.status_code == 200
-    assert "Store these recovery codes" in response.text
-    _assert_recovery_codes_download(response.text)
-    async with site.require_capability(DatabaseCapability).transaction() as db_session:
-        recovery_store = TortoiseRecoveryCodeStore(
-            db_session,
-            site.app.state.secret_envelope_service,
-        )
-        assert not await recovery_store.consume_recovery_code(
-            str(user_id),
-            recovery_codes[0],
+        response = client.post(
+            "/account/security/passkeys/register/complete",
+            headers=headers,
+            json={
+                "challenge_id": options_response.json()["challenge_id"],
+                "credential": {
+                    "id": credential_id,
+                    "response": {"transports": ["internal"]},
+                },
+                "label": "  Laptop key  ",
+            },
         )
 
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "registered",
+            "redirect_to": "/account/security",
+        }
+        async with site.require_capability(DatabaseCapability).transaction() as session:
+            store = TortoiseWebAuthnCredentialStore(session)
+            credential = await store.get_webauthn_credential(credential_id)
+            assert credential is not None
+            assert credential.label == "Laptop key"
+            assert credential.public_key == b"verified-public-key"
+            assert credential.transports == ("internal",)
 
-@pytest.mark.anyio
-async def test_totp_recovery_code_replacement_accepts_single_totp_field(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
+    @pytest.mark.anyio
+    async def test_passkey_registration_failure_consumes_challenge(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        site = await _start_security_site(
+            tmp_path,
+            auth_config=PASSKEY_AUTH_CONFIG,
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
 
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password="hash",
-    )
+        def reject_registration(_options, **_kwargs):
+            raise passkey_pages.WebAuthnCeremonyError()
 
-    async def authenticated_user(_request):
-        return user
+        monkeypatch.setattr(
+            passkey_pages,
+            "verify_passkey_registration",
+            reject_registration,
+        )
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
+        headers = _csrf_header(security_page.text)
+        options_response = client.post(
+            "/account/security/passkeys/register/options",
+            headers=headers,
+            json={},
+        )
+        challenge_id = options_response.json()["challenge_id"]
 
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/recovery-codes/regenerate")
+        response = client.post(
+            "/account/security/passkeys/register/complete",
+            headers=headers,
+            json={
+                "challenge_id": challenge_id,
+                "credential": {
+                    "id": credential_id_to_text(b"rejected-passkey"),
+                    "response": {"transports": ["internal"]},
+                },
+            },
+        )
 
-    response = client.post(
-        "/account/totp/recovery-codes/regenerate",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "confirmation": generate_totp(secret),
-        },
-    )
+        assert response.status_code == 400
+        assert response.json()["error"] == "Passkey verification failed."
+        assert await _active_passkey_count(site, user_id) == 0
+        assert not await _authentication_challenge_exists(site, challenge_id)
 
-    assert response.status_code == 200
-    assert "Store these recovery codes" in response.text
+    @pytest.mark.anyio
+    async def test_passkey_registration_malformed_json_returns_controlled_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(
+            tmp_path,
+            auth_config=PASSKEY_AUTH_CONFIG,
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
+        headers = {
+            **_csrf_header(security_page.text),
+            "content-type": "application/json",
+        }
 
+        response = client.post(
+            "/account/security/passkeys/register/complete",
+            headers=headers,
+            content="{",
+        )
 
-@pytest.mark.anyio
-async def test_totp_recovery_code_replacement_accepts_single_password_field(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id = uuid.uuid4()
-    site = await _start_security_site(
-        tmp_path,
-        auth_config={"totp_mode": "opt_in"},
-        user_id=user_id,
-    )
-    await _create_auth_schema(site)
-    await _create_active_totp_credential(site, user_id)
+        assert response.status_code == 400
+        assert response.json()["error"] == "Passkey verification failed."
+        assert await _active_passkey_count(site, user_id) == 0
 
-    user = SimpleNamespace(
-        id=user_id,
-        email="security@example.test",
-        is_active=True,
-        is_verified=True,
-        hashed_password="hash",
-    )
+    @pytest.mark.anyio
+    async def test_passkey_login_user_verified_assertion_satisfies_active_totp(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
+        credential_id = credential_id_to_text(b"login-passkey")
+        site = await _start_security_site(tmp_path, auth_config=auth_config)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="passkey-login@example.com",
+            is_verified=True,
+        )
+        await _create_passkey_credential(
+            site,
+            user_id=user_id,
+            credential_id=credential_id,
+        )
+        await _create_active_totp_credential(site, user_id)
 
-    async def authenticated_user(_request):
-        return user
+        def verify_authentication(_options, **kwargs):
+            assert kwargs["stored_credential"].credential_id == credential_id
+            return SimpleNamespace(
+                credential_id=credential_id,
+                sign_count=1,
+                user_verified=True,
+                credential_device_type="multi_device",
+                credential_backed_up=True,
+            )
 
-    async def authenticate_user(_request, email: str, password: str):
-        return user if email == user.email and password == "correct-password" else None
+        monkeypatch.setattr(
+            passkey_pages,
+            "verify_passkey_authentication",
+            verify_authentication,
+        )
+        client = _security_page_client(site)
+        login_page = client.get("/account/login?return_to=/dashboard")
+        headers = _csrf_header(login_page.text)
+        options_response = client.post(
+            "/account/login/passkey/options",
+            headers=headers,
+            json={
+                "email": "passkey-login@example.com",
+                "return_to": "/dashboard",
+            },
+        )
 
-    monkeypatch.setattr(
-        totp_management_pages,
-        "_require_authenticated_user",
-        authenticated_user,
-    )
-    monkeypatch.setattr(
-        "wybra.auth.routes.pages.shared.authenticate_user",
-        authenticate_user,
-    )
-    client = _security_page_client(site)
-    confirmation = client.get("/account/totp/recovery-codes/regenerate")
+        response = client.post(
+            "/account/login/passkey/complete",
+            headers=headers,
+            json={
+                "challenge_id": options_response.json()["challenge_id"],
+                "credential": {"id": credential_id},
+                "return_to": "/dashboard",
+            },
+        )
 
-    response = client.post(
-        "/account/totp/recovery-codes/regenerate",
-        data={
-            "csrf_token": _csrf_token(confirmation.text),
-            "confirmation": "correct-password",
-        },
-    )
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "redirect_to": "/dashboard"}
+        assert TOTP_LOGIN_NONCE_COOKIE not in response.cookies
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name in response.cookies
 
-    assert response.status_code == 200
-    assert "Store these recovery codes" in response.text
+    @pytest.mark.anyio
+    async def test_passkey_verified_assertion_requires_totp_when_policy_disabled(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        auth_config = {
+            **PASSKEY_AUTH_CONFIG,
+            "totp_mode": "opt_in",
+            "passkeys": {
+                **PASSKEY_AUTH_CONFIG["passkeys"],
+                "user_verification_satisfies_totp": False,
+            },
+        }
+        credential_id = credential_id_to_text(b"login-passkey-totp-policy")
+        site = await _start_security_site(tmp_path, auth_config=auth_config)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="passkey-policy@example.com",
+            is_verified=True,
+        )
+        await _create_passkey_credential(
+            site,
+            user_id=user_id,
+            credential_id=credential_id,
+        )
+        await _create_active_totp_credential(site, user_id)
+
+        def verify_authentication(_options, **kwargs):
+            assert kwargs["stored_credential"].credential_id == credential_id
+            return SimpleNamespace(
+                credential_id=credential_id,
+                sign_count=1,
+                user_verified=True,
+                credential_device_type="multi_device",
+                credential_backed_up=True,
+            )
+
+        monkeypatch.setattr(
+            passkey_pages,
+            "verify_passkey_authentication",
+            verify_authentication,
+        )
+        client = _security_page_client(site)
+        login_page = client.get("/account/login?return_to=/dashboard")
+        headers = _csrf_header(login_page.text)
+        options_response = client.post(
+            "/account/login/passkey/options",
+            headers=headers,
+            json={
+                "email": "passkey-policy@example.com",
+                "return_to": "/dashboard",
+            },
+        )
+
+        response = client.post(
+            "/account/login/passkey/complete",
+            headers=headers,
+            json={
+                "challenge_id": options_response.json()["challenge_id"],
+                "credential": {"id": credential_id},
+                "return_to": "/dashboard",
+            },
+        )
+
+        payload = response.json()
+        assert response.status_code == 200
+        assert payload["status"] == "totp_required"
+        assert "challenge_step=totp" in payload["redirect_to"]
+        assert TOTP_LOGIN_NONCE_COOKIE in response.cookies
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name not in response.cookies
+
+    @pytest.mark.anyio
+    async def test_passkey_login_possession_only_assertion_requires_totp(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
+        credential_id = credential_id_to_text(b"possession-passkey")
+        site = await _start_security_site(tmp_path, auth_config=auth_config)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="passkey-totp@example.com",
+            is_verified=True,
+        )
+        await _create_passkey_credential(
+            site,
+            user_id=user_id,
+            credential_id=credential_id,
+        )
+        await _create_active_totp_credential(site, user_id)
+
+        def verify_authentication(_options, **kwargs):
+            assert kwargs["stored_credential"].credential_id == credential_id
+            return SimpleNamespace(
+                credential_id=credential_id,
+                sign_count=1,
+                user_verified=False,
+                credential_device_type="multi_device",
+                credential_backed_up=True,
+            )
+
+        monkeypatch.setattr(
+            passkey_pages,
+            "verify_passkey_authentication",
+            verify_authentication,
+        )
+        client = _security_page_client(site)
+        login_page = client.get("/account/login?return_to=/dashboard")
+        headers = _csrf_header(login_page.text)
+        options_response = client.post(
+            "/account/login/passkey/options",
+            headers=headers,
+            json={
+                "email": "passkey-totp@example.com",
+                "return_to": "/dashboard",
+            },
+        )
+
+        response = client.post(
+            "/account/login/passkey/complete",
+            headers=headers,
+            json={
+                "challenge_id": options_response.json()["challenge_id"],
+                "credential": {"id": credential_id},
+                "return_to": "/dashboard",
+            },
+        )
+
+        payload = response.json()
+        assert response.status_code == 200
+        assert payload["status"] == "totp_required"
+        assert "challenge_step=totp" in payload["redirect_to"]
+        assert TOTP_LOGIN_NONCE_COOKIE in response.cookies
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name not in response.cookies
+
+    @pytest.mark.anyio
+    async def test_passkey_login_keeps_verified_email_gate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        credential_id = credential_id_to_text(b"unverified-passkey")
+        site = await _start_security_site(tmp_path, auth_config=PASSKEY_AUTH_CONFIG)
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="unverified-passkey@example.com",
+            is_verified=False,
+        )
+        await _create_passkey_credential(
+            site,
+            user_id=user_id,
+            credential_id=credential_id,
+        )
+
+        def verify_authentication(_options, **kwargs):
+            assert kwargs["stored_credential"].credential_id == credential_id
+            return SimpleNamespace(
+                credential_id=credential_id,
+                sign_count=1,
+                user_verified=True,
+                credential_device_type="multi_device",
+                credential_backed_up=True,
+            )
+
+        monkeypatch.setattr(
+            passkey_pages,
+            "verify_passkey_authentication",
+            verify_authentication,
+        )
+        client = _security_page_client(site)
+        login_page = client.get("/account/login")
+        headers = _csrf_header(login_page.text)
+        options_response = client.post(
+            "/account/login/passkey/options",
+            headers=headers,
+            json={"email": "unverified-passkey@example.com"},
+        )
+
+        response = client.post(
+            "/account/login/passkey/complete",
+            headers=headers,
+            json={
+                "challenge_id": options_response.json()["challenge_id"],
+                "credential": {"id": credential_id},
+            },
+        )
+
+        assert response.status_code == 403
+        assert response.json()["status"] == "email_verification_required"
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name not in response.cookies
+
+    @pytest.mark.anyio
+    async def test_security_page_rejects_removing_last_passkey_sign_in_method(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(
+            tmp_path,
+            auth_config=PASSKEY_AUTH_CONFIG,
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        await _set_password_login_enabled(site, user_id, False)
+        row_id = await _create_passkey_credential(site, user_id=user_id)
+        _override_current_user(
+            site.app,
+            user_id=user_id,
+            hashed_password=None,
+            password_login_enabled=False,
+        )
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
+
+        response = client.post(
+            "/account/security/passkeys/revoke",
+            data={
+                "csrf_token": _csrf_token(security_page.text),
+                "credential_id": row_id,
+            },
+        )
+
+        assert response.status_code == 400
+        assert (
+            "Add another sign-in method before removing this passkey." in response.text
+        )
+        assert await _active_passkey_count(site, user_id) == 1
+
+    @pytest.mark.anyio
+    async def test_security_page_removes_passkey_when_password_login_remains(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(
+            tmp_path,
+            auth_config=PASSKEY_AUTH_CONFIG,
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+        row_id = await _create_passkey_credential(site, user_id=user_id)
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
+
+        response = client.post(
+            "/account/security/passkeys/revoke",
+            data={
+                "csrf_token": _csrf_token(security_page.text),
+                "credential_id": row_id,
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _active_passkey_count(site, user_id) == 0
+
+    @pytest.mark.anyio
+    async def test_security_page_disables_password_login_when_passkey_registered(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(
+            tmp_path,
+            auth_config=PASSKEY_AUTH_CONFIG,
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+        await _create_passkey_credential(site, user_id=user_id)
+        client = _security_page_client(site)
+        security_page = client.get("/account/security")
+
+        response = client.post(
+            "/account/security/password/disable",
+            data={"csrf_token": _csrf_token(security_page.text)},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _password_login_enabled(site, user_id) is False
+
+    @pytest.mark.anyio
+    async def test_totp_disable_allows_passkey_as_remaining_sign_in(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        auth_config = {**PASSKEY_AUTH_CONFIG, "totp_mode": "opt_in"}
+        site = await _start_security_site(
+            tmp_path,
+            auth_config=auth_config,
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+        await _set_password_login_enabled(site, user_id, False)
+        secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
+        await _create_passkey_credential(site, user_id=user_id)
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password=None,
+            password_login_enabled=False,
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/disable")
+
+        response = client.post(
+            "/account/totp/disable",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "totp_code": generate_totp(secret),
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _active_totp_credential_id(site, user_id) is None
+
+    @pytest.mark.anyio
+    async def test_security_page_requires_authenticated_user(
+        self, tmp_path: Path
+    ) -> None:
+        app = FastAPI()
+        site = await start(
+            app,
+            config_source=_site_config_source(
+                tmp_path,
+                modules=PAGE_MODULES,
+            ),
+        )
+
+        response = WybraTestClient(site.app, raise_server_exceptions=False).get(
+            "/account/security"
+        )
+
+        assert response.status_code == 401
+
+    @pytest.mark.anyio
+    async def test_login_requires_verified_email_before_session_issue(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        app = FastAPI()
+        site = await start(
+            app,
+            config_source=_site_config_source(
+                tmp_path,
+                modules=PAGE_MODULES,
+            ),
+        )
+        await _create_auth_schema(site)
+        await _create_local_user(
+            site,
+            email="unverified@example.com",
+            is_verified=False,
+        )
+
+        client = WybraTestClient(site.app)
+        login_page = client.get("/account/login")
+        response = client.post(
+            "/account/login",
+            data={
+                "csrf_token": _csrf_token(login_page.text),
+                "email": "unverified@example.com",
+                "password": STRONG_TEST_PASSWORD,
+            },
+        )
+
+        assert response.status_code == 403
+        assert "Verify your email before signing in." in response.text
+        assert 'value="unverified@example.com"' in response.text
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name not in response.cookies
+
+    @pytest.mark.anyio
+    async def test_login_rejects_disabled_password_login(self, tmp_path: Path) -> None:
+        app = FastAPI()
+        site = await start(
+            app,
+            config_source=_site_config_source(
+                tmp_path,
+                modules=PAGE_MODULES,
+            ),
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="password-disabled@example.com",
+            is_verified=True,
+        )
+        await _set_password_login_enabled(site, user_id, False)
+
+        client = WybraTestClient(site.app)
+        login_page = client.get("/account/login")
+        response = client.post(
+            "/account/login",
+            data={
+                "csrf_token": _csrf_token(login_page.text),
+                "email": "password-disabled@example.com",
+                "password": STRONG_TEST_PASSWORD,
+            },
+        )
+
+        assert response.status_code == 401
+        assert "Email or password is incorrect." in response.text
+        cookie_name = site.app.state.auth_settings.identity_options.session_cookie_name
+        assert cookie_name not in response.cookies
+
+    @pytest.mark.anyio
+    async def test_security_page_renders_for_authenticated_user(
+        self, tmp_path: Path
+    ) -> None:
+        app = FastAPI()
+        site = await start(
+            app,
+            config_source=_site_config_source(
+                tmp_path,
+                modules=PAGE_MODULES,
+            ),
+        )
+
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        _override_current_user(site.app, user_id=user_id)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert "Login &amp; Security" in response.text
+        assert "security@example.test" in response.text
+
+    @pytest.mark.anyio
+    async def test_security_page_omits_totp_section_when_totp_disabled(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(tmp_path)
+        await _create_auth_schema(site)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert "Authenticator app" not in response.text
+
+    @pytest.mark.anyio
+    async def test_security_page_shows_totp_setup_when_totp_enabled_without_credential(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(tmp_path, auth_config={"totp_mode": "opt_in"})
+        await _create_auth_schema(site)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert "Authenticator app" in response.text
+        assert "Set up authenticator" in response.text
+        assert "/account/totp/setup?return_to=%2Faccount%2Fsecurity" in response.text
+
+    @pytest.mark.anyio
+    async def test_security_page_totp_setup_link_uses_configured_account_prefix(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await _start_security_site(
+            tmp_path,
+            account_prefix="/identity",
+            auth_config={"totp_mode": "opt_in"},
+        )
+        await _create_auth_schema(site)
+
+        response = _security_page_client(site).get("/identity/security")
+
+        assert response.status_code == 200
+        assert "/identity/totp/setup?return_to=%2Fidentity%2Fsecurity" in response.text
+        assert "/account/security" not in response.text
+
+    @pytest.mark.anyio
+    async def test_totp_setup_page_shows_setup_qr_code_by_default(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            expires_at=None,
+        )
+
+        async def current_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "resolve_current_user",
+            current_user,
+        )
+
+        response = _security_page_client(site).get("/account/totp/setup")
+
+        assert response.status_code == 200
+        assert "Show setup QRCode" in response.text
+        assert "<svg" in response.text
+        assert (
+            "otpauth://totp/" not in response.text.split("<summary>Show setup URI")[0]
+        )
+        assert "Show setup URI" in response.text
+
+    @pytest.mark.anyio
+    async def test_totp_setup_completion_returns_to_security_page(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.for_testing()
+        await _create_auth_schema(site)
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            expires_at=None,
+        )
+
+        async def current_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "resolve_current_user",
+            current_user,
+        )
+        client = _security_page_client(site)
+        setup = client.get("/account/totp/setup?return_to=/account/security?tab=totp")
+        secret_match = re.search(
+            r"<strong>Secret:</strong> <code>([^<]+)</code>",
+            setup.text,
+        )
+        assert secret_match is not None
+
+        response = client.post(
+            "/account/totp/setup",
+            data={
+                "csrf_token": _csrf_token(setup.text),
+                "return_to": "/account/security?tab=totp",
+                "setup_challenge_id": "",
+                "setup_totp_code": generate_totp(secret_match.group(1)),
+            },
+        )
+
+        assert response.status_code == 200
+        assert "Store these recovery codes" in response.text
+        assert "Return to Login &amp; Security" in response.text
+        assert 'href="/account/security?tab=totp"' in response.text
+        _assert_recovery_codes_download(response.text)
+
+    @pytest.mark.anyio
+    async def test_security_page_shows_totp_controls_when_totp_is_active(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        await _create_active_totp_credential(site, user_id)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert "Authenticator verification is enabled" in response.text
+        assert "Disable authenticator" in response.text
+        assert "/account/totp/disable" in response.text
+
+    @pytest.mark.anyio
+    async def test_totp_disable_requires_confirmation_before_disabling(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password="hash",
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/disable")
+
+        response = client.post(
+            "/account/totp/disable",
+            data={"csrf_token": _csrf_token(confirmation.text)},
+        )
+
+        assert response.status_code == 400
+        assert "Confirm this action" in response.text
+        assert await _active_totp_credential_id(site, user_id) is not None
+
+    @pytest.mark.anyio
+    async def test_totp_disable_accepts_active_totp_confirmation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password="hash",
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/disable")
+
+        response = client.post(
+            "/account/totp/disable",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "totp_code": generate_totp(secret),
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _active_totp_credential_id(site, user_id) is None
+
+    @pytest.mark.anyio
+    async def test_totp_disable_accepts_password_confirmation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password="hash",
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        async def authenticate_user(_request, email: str, password: str):
+            return (
+                user if email == user.email and password == "correct-password" else None
+            )
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        monkeypatch.setattr(
+            "wybra.auth.routes.pages.shared.authenticate_user",
+            authenticate_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/disable")
+
+        response = client.post(
+            "/account/totp/disable",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "password": "correct-password",
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _active_totp_credential_id(site, user_id) is None
+
+    @pytest.mark.anyio
+    async def test_totp_disable_accepts_recovery_code_confirmation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        _secret, recovery_codes = await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password="hash",
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/disable")
+
+        response = client.post(
+            "/account/totp/disable",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "recovery_code": recovery_codes[0],
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _active_totp_credential_id(site, user_id) is None
+
+    @pytest.mark.anyio
+    async def test_totp_disable_rejects_removing_last_usable_sign_in_method(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password=None,
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/disable")
+
+        response = client.post(
+            "/account/totp/disable",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "totp_code": generate_totp(secret),
+            },
+        )
+
+        assert response.status_code == 400
+        assert "Add another sign-in method" in response.text
+        assert await _active_totp_credential_id(site, user_id) is not None
+
+    @pytest.mark.anyio
+    async def test_totp_disable_allows_linked_google_as_remaining_sign_in(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
+        site = await _start_google_provider_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        await _set_password_login_enabled(site, user_id, False)
+        secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
+        await _create_google_provider_link(site, user_id=user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password=None,
+            password_login_enabled=False,
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/disable")
+
+        response = client.post(
+            "/account/totp/disable",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "totp_code": generate_totp(secret),
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/account/security"
+        assert await _active_totp_credential_id(site, user_id) is None
+
+    @pytest.mark.anyio
+    async def test_totp_disable_rejects_unavailable_google_as_remaining_sign_in(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        site = await _start_google_provider_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            providers_config=_google_provider_config(enabled=False),
+        )
+        await _create_auth_schema(site)
+        user_id = await _create_local_user(
+            site,
+            email="security@example.com",
+            is_verified=True,
+        )
+        await _set_password_login_enabled(site, user_id, False)
+        secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
+        await _create_google_provider_link(site, user_id=user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password=None,
+            password_login_enabled=False,
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/disable")
+
+        response = client.post(
+            "/account/totp/disable",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "totp_code": generate_totp(secret),
+            },
+        )
+
+        assert response.status_code == 400
+        assert "Add another sign-in method" in response.text
+        assert await _active_totp_credential_id(site, user_id) is not None
+
+    @pytest.mark.anyio
+    async def test_security_page_links_to_recovery_code_replacement_when_totp_is_active(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        await _create_active_totp_credential(site, user_id)
+
+        response = _security_page_client(site).get("/account/security")
+
+        assert response.status_code == 200
+        assert "Generate replacement recovery codes" in response.text
+        assert "/account/totp/recovery-codes/regenerate" in response.text
+
+    @pytest.mark.anyio
+    async def test_totp_recovery_code_replacement_requires_confirmation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        _secret, recovery_codes = await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password="hash",
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/recovery-codes/regenerate")
+
+        assert confirmation.status_code == 200
+        assert "Confirm this action with your password" in confirmation.text
+        assert "one of your existing sign-in methods" not in confirmation.text
+        assert 'name="confirmation"' in confirmation.text
+        assert 'name="password"' not in confirmation.text
+        assert 'name="totp_code"' not in confirmation.text
+        assert 'name="recovery_code"' not in confirmation.text
+
+        response = client.post(
+            "/account/totp/recovery-codes/regenerate",
+            data={"csrf_token": _csrf_token(confirmation.text)},
+        )
+
+        assert response.status_code == 400
+        assert "Confirm this action" in response.text
+        async with site.require_capability(
+            DatabaseCapability
+        ).transaction() as db_session:
+            recovery_store = TortoiseRecoveryCodeStore(
+                db_session,
+                site.app.state.secret_envelope_service,
+            )
+            assert await recovery_store.consume_recovery_code(
+                str(user_id),
+                recovery_codes[0],
+            )
+
+    @pytest.mark.anyio
+    async def test_totp_recovery_code_replacement_rotates_codes_after_confirmation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        _secret, recovery_codes = await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password="hash",
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/recovery-codes/regenerate")
+
+        response = client.post(
+            "/account/totp/recovery-codes/regenerate",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "confirmation": recovery_codes[0],
+            },
+        )
+
+        assert response.status_code == 200
+        assert "Store these recovery codes" in response.text
+        _assert_recovery_codes_download(response.text)
+        async with site.require_capability(
+            DatabaseCapability
+        ).transaction() as db_session:
+            recovery_store = TortoiseRecoveryCodeStore(
+                db_session,
+                site.app.state.secret_envelope_service,
+            )
+            assert not await recovery_store.consume_recovery_code(
+                str(user_id),
+                recovery_codes[0],
+            )
+
+    @pytest.mark.anyio
+    async def test_totp_recovery_code_replacement_accepts_single_totp_field(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        secret, _recovery_codes = await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password="hash",
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/recovery-codes/regenerate")
+
+        response = client.post(
+            "/account/totp/recovery-codes/regenerate",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "confirmation": generate_totp(secret),
+            },
+        )
+
+        assert response.status_code == 200
+        assert "Store these recovery codes" in response.text
+
+    @pytest.mark.anyio
+    async def test_totp_recovery_code_replacement_accepts_single_password_field(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_id = uuid.uuid4()
+        site = await _start_security_site(
+            tmp_path,
+            auth_config={"totp_mode": "opt_in"},
+            user_id=user_id,
+        )
+        await _create_auth_schema(site)
+        await _create_active_totp_credential(site, user_id)
+
+        user = SimpleNamespace(
+            id=user_id,
+            email="security@example.test",
+            is_active=True,
+            is_verified=True,
+            hashed_password="hash",
+        )
+
+        async def authenticated_user(_request):
+            return user
+
+        async def authenticate_user(_request, email: str, password: str):
+            return (
+                user if email == user.email and password == "correct-password" else None
+            )
+
+        monkeypatch.setattr(
+            totp_management_pages,
+            "_require_authenticated_user",
+            authenticated_user,
+        )
+        monkeypatch.setattr(
+            "wybra.auth.routes.pages.shared.authenticate_user",
+            authenticate_user,
+        )
+        client = _security_page_client(site)
+        confirmation = client.get("/account/totp/recovery-codes/regenerate")
+
+        response = client.post(
+            "/account/totp/recovery-codes/regenerate",
+            data={
+                "csrf_token": _csrf_token(confirmation.text),
+                "confirmation": "correct-password",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "Store these recovery codes" in response.text

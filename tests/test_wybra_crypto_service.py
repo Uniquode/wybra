@@ -182,19 +182,15 @@ def test_secret_key_rotation_plan_repr_redacts_key_material() -> None:
     assert plan.new_version in rendered
 
 
-def test_parse_secret_key_ring_from_env_returns_none_if_unset() -> None:
-    assert parse_secret_key_ring_from_env({}) is None
-
-
-def test_parse_secret_key_ring_from_env_ignores_blank_values() -> None:
-    assert (
-        parse_secret_key_ring_from_env(
-            {
-                ENV_WYBRA_SECRET_KEY: "   ",
-            }
-        )
-        is None
-    )
+@pytest.mark.parametrize(
+    "environ",
+    ({}, {ENV_WYBRA_SECRET_KEY: "   "}),
+    ids=("unset", "blank"),
+)
+def test_parse_secret_key_ring_from_env_ignores_missing_or_blank_values(
+    environ: dict[str, str],
+) -> None:
+    assert parse_secret_key_ring_from_env(environ) is None
 
 
 def test_parse_secret_key_ring_from_secrets_reads_current_and_previous_keys() -> None:

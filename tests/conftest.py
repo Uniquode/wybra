@@ -1,5 +1,4 @@
-from collections.abc import Awaitable, Callable, Iterator
-from typing import Any
+from collections.abc import Iterator
 
 import pytest
 
@@ -16,7 +15,7 @@ from wybra.core.config import (
 from wybra.db.config import ENV_DATABASE_URL
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def anyio_backend() -> str:
     return "asyncio"
 
@@ -39,26 +38,3 @@ def isolate_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
         monkeypatch.delenv(name, raising=False)
     yield
     ConfigService.set_runtime_environment({})
-
-
-@pytest.fixture
-def create_database_schema() -> Callable[[Any], Awaitable[None]]:
-    async def _create_database_schema(capability: Any) -> None:
-        database = getattr(
-            capability,
-            "database",
-            getattr(getattr(capability, "catalogue", None), "database", None),
-        )
-        if database is None:
-            raise RuntimeError(
-                "Test capability does not expose a database for schema creation."
-            )
-        backing_database = getattr(database, "_database", None)
-        context = getattr(backing_database, "context", None)
-        if context is None:
-            raise RuntimeError(
-                "Test database does not expose a Tortoise context for schema creation."
-            )
-        await context.generate_schemas()
-
-    return _create_database_schema

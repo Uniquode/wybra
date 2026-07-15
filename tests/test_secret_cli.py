@@ -33,6 +33,7 @@ from wybra.services.crypto import (
     generate_secret_key_entry,
     parse_secret_key_bundle,
 )
+from wybra.testing import create_test_database
 
 
 class FakeKeyring:
@@ -204,10 +205,12 @@ async def _create_reencrypt_database(
     totp_secret: str,
     recovery_code_verifier: str,
 ) -> None:
-    database = await create_database(database_url, modules=("wybra.auth",))
+    database = await create_test_database(
+        database_url=database_url,
+        modules=("wybra.auth",),
+    )
     try:
         with database.context:
-            await database.context.generate_schemas()
             connection = database.connection()
             user = await User.create(
                 email="user@example.com",

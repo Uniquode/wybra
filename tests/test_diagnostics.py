@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from tortoise.transactions import in_transaction
 
 from wybra import start_site
@@ -29,6 +28,7 @@ from wybra.diagnostics.logging import emit_request_diagnostics
 from wybra.diagnostics.tortoise import instrument_tortoise_context
 from wybra.site import start
 from wybra.template.capabilities import DefaultTemplateCapability
+from wybra.testing import WybraTestClient
 
 
 @pytest.fixture(autouse=True)
@@ -134,7 +134,7 @@ def test_request_diagnostics_collect_without_logging_bridge(caplog) -> None:
 
     caplog.set_level(TRACE_LEVEL, logger="wybra.diagnostics")
 
-    with TestClient(app) as client:
+    with WybraTestClient(app) as client:
         response = client.get("/status")
 
     assert response.json()["events"] >= 1
@@ -238,7 +238,7 @@ def test_sql_template_and_backend_diagnostics_are_collected(tmp_path: Path) -> N
             "backend": diagnostics.backend_operation_count,
         }
 
-    with TestClient(app) as client:
+    with WybraTestClient(app) as client:
         response = client.get("/work")
 
     assert response.json()["sql"] == 1
@@ -340,7 +340,7 @@ async def test_diagnostics_middleware_wraps_module_middleware(
             "diagnostics_middleware"
         )
 
-        with TestClient(app) as client:
+        with WybraTestClient(app) as client:
             response = client.get("/status")
     finally:
         await site.close()

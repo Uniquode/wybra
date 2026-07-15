@@ -15,9 +15,11 @@ from typing import Any, Protocol, cast
 
 import click
 from tortoise import fields
+from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.cli import cli as tortoise_cli
 from tortoise.cli import utils as tortoise_cli_utils
 from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
+from tortoise.migrations.executor import MigrationExecutor
 from tortoise.migrations.recorder import MigrationRecorder
 from tortoise.models import Model
 
@@ -970,7 +972,7 @@ def _database_connection_for_settings(
 async def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
     config_module = _register_tortoise_config_module(context.config)
     try:
-        with _mysql_recorder_datetime_literals():
+        with _tortoise_migration_recorder_compatibility():
             exit_code = await tortoise_cli.run_cli_async(
                 [
                     "--config",
@@ -997,8 +999,17 @@ def _register_tortoise_config_module(config: dict[str, Any]) -> str:
     return module_name
 
 
+async def apply_tortoise_migrations(
+    connection: BaseDBAsyncClient,
+    apps: dict[str, dict[str, object]],
+) -> None:
+    """Apply native Tortoise migrations using an existing database connection."""
+    with _tortoise_migration_recorder_compatibility():
+        await MigrationExecutor(connection, apps).migrate()
+
+
 @contextmanager
-def _mysql_recorder_datetime_literals() -> Iterator[None]:
+def _tortoise_migration_recorder_compatibility() -> Iterator[None]:
     original_record_applied = MigrationRecorder.record_applied
     original_make_model = MigrationRecorder._make_model
 
@@ -1030,10 +1041,10 @@ def _mysql_recorder_datetime_literals() -> Iterator[None]:
         await self.connection.execute_query(query.statement, list(query.parameters))
 
     def make_model(self: Any, table_name: str) -> type[Model]:
-        if recorder_dialect(self) != "mysql":
-            return original_make_model(self, table_name)
-
         class MigrationRecord(Model):
+            # Tortoise 1.1 still calls this deprecated field alias with
+            # ``pk=True``. Use the current spelling until upstream updates its
+            # migration recorder implementation.
             id = fields.IntField(primary_key=True)
             app = fields.CharField(max_length=255)
             name = fields.CharField(max_length=255)

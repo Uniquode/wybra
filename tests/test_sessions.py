@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
-from fastapi.testclient import TestClient
 
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
-from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
-from wybra.db.persistence import close_database, create_database
+from wybra.db import DatabaseCapability
 from wybra.db.surfaces import (
     discover_migration_version_locations,
     discover_model_package,
@@ -49,6 +49,11 @@ from wybra.sessions.middleware import SESSION_CLEANUP_INTERVAL_SECONDS
 from wybra.sessions.setup import session_storage_from_site
 from wybra.sessions.storage import CacheSessionStorage, SessionStorageError
 from wybra.site import Site, SiteCapabilityError, start, start_site
+from wybra.testing import (
+    WybraTestClient,
+    create_test_site,
+    migrated_test_database,
+)
 
 
 def _config(
@@ -98,24 +103,16 @@ def _record(
     )
 
 
-async def _database_capability(
+@asynccontextmanager
+async def _database_site(
     *,
     modules: tuple[str, ...] = ("wybra.sessions",),
-) -> tuple[object, TortoiseDatabaseCapability]:
-    database = await create_database(
-        "sqlite://:memory:",
-        modules=modules,
-    )
-    capability = TortoiseDatabaseCapability(
-        database,
-        {"default": "default", "reader": "default", "writer": "default"},
-    )
-    try:
-        await database.context.generate_schemas()
-    except Exception:
-        await close_database(database)
-        raise
-    return database, capability
+) -> AsyncIterator[tuple[Site, DatabaseCapability]]:
+    async with migrated_test_database(modules=modules) as database:
+        site = create_test_site({"app": {"modules": modules}})
+        capability = database.capability()
+        site.provide_capability(DatabaseCapability, capability)
+        yield site, capability
 
 
 def test_sessions_settings_defaults_to_cookie_for_local_deployments() -> None:
@@ -280,17 +277,12 @@ async def test_cache_storage_supports_memory_url() -> None:
 
 @pytest.mark.anyio
 async def test_database_storage_persists_session_records() -> None:
-    database, capability = await _database_capability()
-    app = FastAPI()
-    site = Site(app=app, config=ConfigService([], discover_module_config=False))
-    site.provide_capability(DatabaseCapability, capability)
-    storage = DatabaseSessionStorage(
-        database=site.capability_proxy(DatabaseCapability),
-        connection_name="default",
-        payload_max_bytes=1024,
-    )
-
-    try:
+    async with _database_site() as (site, capability):
+        storage = DatabaseSessionStorage(
+            database=site.capability_proxy(DatabaseCapability),
+            connection_name="default",
+            payload_max_bytes=1024,
+        )
         await storage.save("session", _record(data={"value": "database"}))
         assert await storage.load("session", now=2.0) == _record(
             data={"value": "database"}
@@ -318,8 +310,6 @@ async def test_database_storage_persists_session_records() -> None:
 
         await storage.delete("session")
         assert await storage.load("session", now=2.0) is None
-    finally:
-        await close_database(database)
 
 
 def test_core_model_and_migration_surfaces_include_sessions() -> None:
@@ -360,7 +350,8 @@ async def test_start_registers_core_session_storage_capability() -> None:
         await site.close()
 
 
-def test_session_middleware_persists_request_session_between_requests() -> None:
+@pytest.mark.anyio
+async def test_session_middleware_persists_request_session_between_requests() -> None:
     app = FastAPI(
         lifespan=start_site(
             config_source=MappingConfigSource({"app": {"modules": ()}}),
@@ -377,16 +368,17 @@ def test_session_middleware_persists_request_session_between_requests() -> None:
     async def get_session(request: Request) -> dict[str, object]:
         return {"value": request.session.get("value")}
 
-    with TestClient(app) as client:
-        set_response = client.get("/set")
-        get_response = client.get("/get")
+    async with WybraTestClient(app) as client:
+        set_response = await client.get("/set")
+        get_response = await client.get("/get")
 
     assert set_response.status_code == 200
     assert get_response.json() == {"value": "saved"}
     assert "wybra_session" in set_response.cookies
 
 
-def test_session_middleware_clears_session_cookie() -> None:
+@pytest.mark.anyio
+async def test_session_middleware_clears_session_cookie() -> None:
     app = FastAPI(
         lifespan=start_site(
             config_source=MappingConfigSource({"app": {"modules": ()}}),
@@ -408,10 +400,10 @@ def test_session_middleware_clears_session_cookie() -> None:
     async def get_session(request: Request) -> dict[str, object]:
         return {"value": request.session.get("value")}
 
-    with TestClient(app) as client:
-        client.get("/set")
-        clear_response = client.get("/clear")
-        get_response = client.get("/get")
+    async with WybraTestClient(app) as client:
+        await client.get("/set")
+        clear_response = await client.get("/clear")
+        get_response = await client.get("/get")
 
     assert clear_response.status_code == 200
     assert get_response.json() == {"value": None}
@@ -463,7 +455,8 @@ async def test_session_cleanup_runs_at_most_once_per_interval() -> None:
     assert storage.cleanup_count == 2
 
 
-def test_cookie_session_backend_round_trips_through_middleware() -> None:
+@pytest.mark.anyio
+async def test_cookie_session_backend_round_trips_through_middleware() -> None:
     app = FastAPI(
         lifespan=start_site(
             config_source=MappingConfigSource(
@@ -487,9 +480,9 @@ def test_cookie_session_backend_round_trips_through_middleware() -> None:
     async def get_session(request: Request) -> dict[str, object]:
         return {"value": request.session.get("value")}
 
-    with TestClient(app) as client:
-        response = client.get("/set")
-        repeated = client.get("/get")
+    async with WybraTestClient(app) as client:
+        response = await client.get("/set")
+        repeated = await client.get("/get")
 
     assert response.status_code == 200
     assert repeated.json() == {"value": "cookie"}
