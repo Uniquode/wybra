@@ -26,6 +26,61 @@ If `[app.database]` and `[app].database_url` are both configured,
 `AUTH_DATABASE_URL` is not supported. Authentication uses the same application
 database configuration as the rest of the app.
 
+## Read And Write Routing
+
+`[app.database]` defines the base connection and is the default logical
+database. With no role-specific instances, ordinary, explicit-read, and
+explicit-write work all use that one connection.
+
+For a writer and one or more read replicas, add named instances under
+`[app.database.<name>]`. They inherit every connection setting from the base
+instance, and may override instance-specific settings such as `host`, `port`,
+`database`, credentials, TLS, or AWS metadata. Secondary instances must not
+set `backend`: every configured route uses the base database family.
+
+```toml
+[app.database]
+backend = "postgresql"
+host = "writer.db.internal"
+database = "uniquode"
+credential_source = "keychain"
+writer_rotation = "queue"
+reader_rotation = "weighted"
+
+[app.database.replica_sydney]
+role = "reader"
+host = "reader-sydney.db.internal"
+weight = 2
+
+[app.database.replica_melbourne]
+role = "reader"
+host = "reader-melbourne.db.internal"
+weight = 1
+```
+
+`role` accepts a comma-separated combination of `default`, `reader`, and
+`writer`. The base instance implicitly has the `default` role when `role` is
+omitted; it participates in reader or writer selection only when those roles
+are explicitly declared. A reader or writer selection with no eligible role
+instance falls back to a selection from the default pool.
+
+Each role is selected independently with `default_rotation`,
+`reader_rotation`, and `writer_rotation`. The supported policies are
+`default`, `queue` (the default), `random`, `weighted`, `load`, and
+`adaptive`. Weights are positive relative capacities. `load` uses active
+client-side work relative to weight, while `adaptive` uses that load with
+rolling statement latency as a secondary signal.
+
+Application code selects its intent through the opaque database capability:
+`database().default()` for ordinary work, `for_read()` only for data that may
+be replica-stale, and `for_write()` for mutations or writer-consistent reads.
+A selected route remains fixed for the caller's managed work. An explicit
+transaction additionally pins one physical connection until it ends. Wybra
+does not automatically retry or replay a failed write through another writer.
+Model forms receive a selected writer route for rendering, relation validation,
+and persistence so a replica cannot make a submitted mutation inconsistent
+with its rendered state.
+
 ## Local SQLite
 
 For local development, a URL is still acceptable:

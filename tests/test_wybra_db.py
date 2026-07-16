@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.exceptions import OperationalError
 from tortoise.models import Model
 from tortoise.transactions import in_transaction
 
@@ -516,7 +517,7 @@ class TestDatabaseConfigurationAndRuntime:
         registry = routing.build_registry()
         assert registry.connection().default().role == "default"
         assert registry.connection().for_read().role == "reader"
-        assert registry.connection().for_write().role == "default"
+        assert registry.connection().for_write().role == "writer"
 
     def test_structured_database_routing_rejects_secondary_backend_override(
         self,
@@ -630,6 +631,8 @@ class TestDatabaseConfigurationAndRuntime:
         assert registry.alias_for(first_default) == "first"
         assert registry.alias_for(reader_fallback) == "second"
         assert registry.alias_for(writer_fallback) == "first"
+        assert reader_fallback.role == "reader"
+        assert writer_fallback.role == "writer"
 
     def test_weighted_selection_uses_configured_weights_without_expansion(
         self,
@@ -656,6 +659,200 @@ class TestDatabaseConfigurationAndRuntime:
             assert registry.alias_for(registry.connection().for_read()) == "primary"
         assert registry.alias_for(registry.connection().for_read()) == "secondary"
         assert registry.alias_for(registry.connection().for_read()) == "primary"
+
+    def test_reader_and_writer_policies_select_independently(self) -> None:
+        registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="reader_one",
+                    roles=frozenset({"reader"}),
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="reader_two",
+                    roles=frozenset({"reader"}),
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="writer_one",
+                    roles=frozenset({"writer"}),
+                    weight=2,
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="writer_two",
+                    roles=frozenset({"writer"}),
+                ),
+            ),
+            reader_rotation="queue",
+            writer_rotation="weighted",
+        )
+
+        assert registry.alias_for(registry.connection().for_read()) == "reader_one"
+        assert registry.alias_for(registry.connection().for_write()) == "writer_one"
+        assert registry.alias_for(registry.connection().for_read()) == "reader_two"
+        assert registry.alias_for(registry.connection().for_write()) == "writer_one"
+        assert registry.alias_for(registry.connection().for_write()) == "writer_two"
+
+    @pytest.mark.anyio
+    async def test_failed_write_is_not_replayed_on_another_writer(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.db",),
+                        "project_root": tmp_path,
+                    },
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "default.sqlite3",
+                    },
+                    "app.database.writer_one": {
+                        "role": "writer",
+                        "database": "writer-one.sqlite3",
+                    },
+                    "app.database.writer_two": {
+                        "role": "writer",
+                        "database": "writer-two.sqlite3",
+                    },
+                }
+            ),
+        )
+        database = site.require_capability(DatabaseCapability)
+        try:
+            first_writer = database.database().for_write()
+            second_writer = database.database().for_write()
+
+            with pytest.raises(OperationalError):
+                await tortoise_connection(database, first_writer).execute_query(
+                    "insert into missing_records values (1)"
+                )
+
+            _row_count, rows = await tortoise_connection(
+                database, second_writer
+            ).execute_query(
+                "select name from sqlite_master where type = 'table' "
+                "and name = 'missing_records'"
+            )
+
+            assert rows == []
+        finally:
+            await database.close()
+
+    @pytest.mark.anyio
+    async def test_route_bound_transaction_keeps_its_selected_writer(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.db",),
+                        "project_root": tmp_path,
+                    },
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "default.sqlite3",
+                    },
+                    "app.database.writer_one": {
+                        "role": "writer",
+                        "database": "writer-one.sqlite3",
+                    },
+                    "app.database.writer_two": {
+                        "role": "writer",
+                        "database": "writer-two.sqlite3",
+                    },
+                }
+            ),
+        )
+        database = site.require_capability(DatabaseCapability)
+        try:
+            selected_writer = database.database().for_write()
+            later_writer = database.database().for_write()
+
+            async with tortoise_transaction(database, selected_writer) as connection:
+                await connection.execute_script(
+                    "create table transaction_records (value text not null)"
+                )
+                await connection.execute_query(
+                    "insert into transaction_records values (?)", ["pinned"]
+                )
+
+            _row_count, selected_rows = await tortoise_connection(
+                database, selected_writer
+            ).execute_query("select value from transaction_records")
+            _row_count, later_rows = await tortoise_connection(
+                database, later_writer
+            ).execute_query(
+                "select name from sqlite_master where type = 'table' "
+                "and name = 'transaction_records'"
+            )
+
+            assert [row["value"] for row in selected_rows] == ["pinned"]
+            assert later_rows == []
+        finally:
+            await database.close()
+
+    @pytest.mark.anyio
+    async def test_explicit_writer_route_overrides_the_default_read_route(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "modules": ("wybra.db",),
+                        "project_root": tmp_path,
+                    },
+                    "app.database": {
+                        "backend": "sqlite",
+                        "database": "default.sqlite3",
+                    },
+                    "app.database.reader": {
+                        "role": "reader",
+                        "database": "reader.sqlite3",
+                    },
+                    "app.database.writer": {
+                        "role": "writer",
+                        "database": "writer.sqlite3",
+                    },
+                }
+            ),
+        )
+        database = site.require_capability(DatabaseCapability)
+        try:
+            reader_route = database.database().for_read()
+            writer_route = database.database().for_write()
+
+            await tortoise_connection(database, writer_route).execute_script(
+                "create table writer_records (value text not null)"
+            )
+            await tortoise_connection(database, writer_route).execute_query(
+                "insert into writer_records values (?)", ["writer"]
+            )
+            _row_count, writer_rows = await tortoise_connection(
+                database, writer_route
+            ).execute_query("select value from writer_records")
+            _row_count, reader_rows = await tortoise_connection(
+                database, reader_route
+            ).execute_query(
+                "select name from sqlite_master where type = 'table' "
+                "and name = 'writer_records'"
+            )
+
+            assert [row["value"] for row in writer_rows] == ["writer"]
+            assert reader_rows == []
+        finally:
+            await database.close()
 
     def test_load_and_adaptive_selection_use_route_metrics(self) -> None:
         registry = DatabaseRouteRegistry(

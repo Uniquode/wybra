@@ -12,6 +12,7 @@ from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
 from wybra.core.resources import PackageResourceSource, first_existing_resource
 from wybra.core.runtime import normalise_deployment_environment
+from wybra.db.routing import DatabaseRouteInstance, DatabaseRouteRegistry
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
@@ -408,6 +409,97 @@ class TestForms:
 
         with pytest.raises(ModelFormDeclarationError, match="Unknown binding field"):
             UnknownBindingForm()
+
+    def test_model_form_retains_one_explicit_writer_route(self) -> None:
+        registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="reader",
+                    roles=frozenset({"reader"}),
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="writer",
+                    roles=frozenset({"default", "writer"}),
+                ),
+            )
+        )
+        writer_route = registry.connection().for_write()
+
+        form = ExampleModelForm(connection=writer_route)
+
+        assert form.connection is writer_route
+        assert registry.alias_for(form.connection) == "writer"
+
+    def test_model_form_accepts_a_writer_route_falling_back_to_default(self) -> None:
+        registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="default",
+                    roles=frozenset({"default"}),
+                ),
+            )
+        )
+        writer_route = registry.connection().for_write()
+
+        form = ExampleModelForm(connection=writer_route)
+
+        assert writer_route.role == "writer"
+        assert form.connection is writer_route
+        assert registry.alias_for(form.connection) == "default"
+
+    def test_model_form_rejects_a_reader_route(self) -> None:
+        registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="reader",
+                    roles=frozenset({"reader"}),
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="writer",
+                    roles=frozenset({"default", "writer"}),
+                ),
+            )
+        )
+
+        with pytest.raises(ModelFormDeclarationError, match="writer route"):
+            ExampleModelForm(connection=registry.connection().for_read())
+
+    def test_model_form_renders_and_mutates_with_its_writer_route(self) -> None:
+        registry = DatabaseRouteRegistry(
+            (
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="reader",
+                    roles=frozenset({"reader"}),
+                ),
+                DatabaseRouteInstance(
+                    name="default",
+                    alias="writer",
+                    roles=frozenset({"default", "writer"}),
+                ),
+            )
+        )
+        reader_snapshot = ExampleRecord(preferred_name="Replica value")
+        writer_record = ExampleRecord(preferred_name="Writer value")
+        form = ExampleModelForm(
+            instance=writer_record,
+            connection=registry.connection().for_write(),
+        )
+
+        assert registry.alias_for(form.connection) == "writer"
+        assert form.fields["preferred_name"].value == "Writer value"
+
+        result = form.parse({"preferred_name": "Updated writer value"})
+
+        assert result.is_valid
+        assert form.apply() is writer_record
+        assert writer_record.preferred_name == "Updated writer value"
+        assert reader_snapshot.preferred_name == "Replica value"
 
     def test_model_form_loads_instance_values_with_explicit_value_precedence(
         self,

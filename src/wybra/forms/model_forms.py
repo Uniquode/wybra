@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
+from wybra.db.routing import DbRoute
 from wybra.forms.fields import Form, FormError, UnknownFieldPolicy
 
 
@@ -149,12 +150,14 @@ class ModelForm(Form):
         self,
         *,
         instance: object | None = None,
+        connection: DbRoute | None = None,
         defaults: Mapping[str, object] | None = None,
         values: Mapping[str, object] | None = None,
         options: Mapping[str, Mapping[str, str]] | None = None,
         unknown_fields: UnknownFieldPolicy = "ignore",
     ) -> None:
         self.instance = instance
+        self.connection = self._writer_connection(connection)
         self._declared_model()
         self.bindings = self._declared_bindings()
         bound_defaults = self._bound_defaults(defaults or {}, instance)
@@ -164,6 +167,14 @@ class ModelForm(Form):
             options=options,
             unknown_fields=unknown_fields,
         )
+
+    @staticmethod
+    def _writer_connection(connection: DbRoute | None) -> DbRoute | None:
+        if connection is not None and connection.role != "writer":
+            raise ModelFormDeclarationError(
+                "ModelForm connection must be a writer route."
+            )
+        return connection
 
     def apply(self, instance: object | None = None) -> object:
         target = instance if instance is not None else self.instance

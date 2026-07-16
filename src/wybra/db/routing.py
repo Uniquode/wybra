@@ -130,17 +130,19 @@ class DatabaseRouteRegistry:
 
     def select(self, database_name: str, role: DatabaseRouteRole) -> DbRoute:
         candidates = self._candidates(database_name, role)
+        selection_role = role
         if not candidates and role != "default":
-            return self.select(database_name, "default")
+            candidates = self._candidates(database_name, "default")
+            selection_role = "default"
         if not candidates:
             raise ConfigurationError(
                 f"No eligible {role} database route is configured for {database_name}."
             )
         selected = self._select_candidate(
             database_name,
-            role,
+            selection_role,
             candidates,
-            self._policy_for(role),
+            self._policy_for(selection_role),
         )
         return DbRoute(database_name=database_name, role=role, _alias=selected.alias)
 
