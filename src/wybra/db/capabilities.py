@@ -53,6 +53,32 @@ def tortoise_connection(
     return _tortoise_adapter(capability)._connection_for(route)
 
 
+def tortoise_connection_for_route(
+    connection: DbConnection,
+    route: DbRoute,
+) -> BaseDBAsyncClient:
+    """Resolve a route through the capability bound to a database connection."""
+    capability = connection._capability
+    if not isinstance(capability, DatabaseCapability):
+        raise DatabaseCapabilityError(
+            "Database connection has no resolvable database capability."
+        )
+    return tortoise_connection(capability, route)
+
+
+def tortoise_transaction_for_route(
+    connection: DbConnection,
+    route: DbRoute,
+) -> AbstractAsyncContextManager[BaseDBAsyncClient]:
+    """Open a route-pinned transaction through a bound database capability."""
+    capability = connection._capability
+    if not isinstance(capability, DatabaseCapability):
+        raise DatabaseCapabilityError(
+            "Database connection has no resolvable database capability."
+        )
+    return tortoise_transaction(capability, route)
+
+
 def tortoise_transaction(
     capability: DatabaseCapability,
     route: DbRoute,
@@ -83,7 +109,8 @@ class TortoiseDatabaseCapability:
     def database(self, name: str = "default") -> DbConnection:
         self._require_open()
         try:
-            return self._database.routes.connection(name)
+            connection = self._database.routes.connection(name)
+            return DbConnection(connection._registry, connection.name, self)
         except ConfigurationError as exc:
             raise DatabaseCapabilityError(str(exc)) from exc
 

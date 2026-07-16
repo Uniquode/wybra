@@ -945,7 +945,9 @@ class TestProfile:
             settings=ProfileSettings(),
             values={"phone_country_code": "AU", "phone_number": "not-a-number"},
         )
-        profile_form.parse({"phone_country_code": "AU", "phone_number": "not-a-number"})
+        await profile_form.parse(
+            {"phone_country_code": "AU", "phone_number": "not-a-number"}
+        )
 
         html = templates.render_template(
             "profile/pages/edit.html",
@@ -973,7 +975,7 @@ class TestProfile:
     ) -> None:
         form = ProfileEditForm(settings=ProfileSettings())
 
-        result = form.parse(
+        result = await form.parse(
             {
                 "phone_country_code": "AU",
                 "phone_subdivision_code": "AU-VIC",

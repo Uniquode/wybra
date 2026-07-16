@@ -113,6 +113,7 @@ dev = [
 line-length = 88
 src = ["src", "tests", "tests_integration", "tests_support"]
 target-version = "py314"
+extend-exclude = ["**/migrations/*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

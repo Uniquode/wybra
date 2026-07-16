@@ -30,6 +30,7 @@ from wybra.db.urls import (
     is_supported_database_url,
     sqlite_database_path,
 )
+from wybra.db.versioning import VersionFieldError, validate_version_fields
 from wybra.diagnostics.tortoise import instrument_tortoise_context
 
 TORTOISE_PRIVATE_API_ERROR = (
@@ -145,6 +146,7 @@ async def create_database(
         config=config,
         _enable_global_fallback=enable_global_fallback,
     )
+    _validate_version_field_declarations(context)
     instrument_tortoise_context(context)
     create_connection_restore, tracked_connections = _track_created_connections(
         context.connections,
@@ -158,6 +160,21 @@ async def create_database(
         _create_connection_restore=create_connection_restore,
         _connections=tracked_connections,
     )
+
+
+def _validate_version_field_declarations(context: TortoiseContext) -> None:
+    apps = context.apps
+    if apps is None:
+        return
+    models = tuple(
+        model
+        for registered_models in apps.values()
+        for model in registered_models.values()
+    )
+    try:
+        validate_version_fields(models)
+    except VersionFieldError as exc:
+        raise ConfigurationError(str(exc)) from exc
 
 
 async def close_database(database: Database) -> None:

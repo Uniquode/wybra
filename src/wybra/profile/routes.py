@@ -70,7 +70,7 @@ async def edit_profile(
                     phone_contact=current_phone_contact,
                 ),
             )
-            profile_form.parse(form_data)
+            await profile_form.parse(form_data)
             if profile_form.is_valid():
                 profile_data = profile_form.profile_field_data()
                 phone_contact = (

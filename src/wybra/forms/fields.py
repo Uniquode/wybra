@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
-from copy import deepcopy
+from collections.abc import Mapping, MutableMapping, Sequence
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date, datetime, time
 from types import MappingProxyType
-from typing import Any, Literal, Protocol, Self, runtime_checkable
+from typing import Any, Literal, Protocol, Self, cast, runtime_checkable
 
 type UnknownFieldPolicy = Literal["ignore", "error"]
 type FormErrorKey = str | None
@@ -18,6 +18,7 @@ _MARKUP_PATTERN = re.compile(
     r"<!--|--!?>|<![A-Za-z]|<\?|\?>|</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>"
 )
 _ALLOWED_CONTROL_CHARACTERS = {"\t", "\n", "\r"}
+_MISSING = object()
 
 
 @runtime_checkable
@@ -86,6 +87,29 @@ class FormResult:
     def is_valid(self) -> bool:
         return not self.form_errors and all(
             result.is_valid for result in self.fields.values()
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SaveResult:
+    """Backend-neutral outcome of one form persistence operation."""
+
+    primary: object
+    original: object | None = None
+    changed_fields: tuple[str, ...] = ()
+    created: bool = False
+    updated: bool = False
+    deleted: bool = False
+    affected_count: int = 0
+    member_results: tuple[SaveResult, ...] = ()
+
+    @property
+    def changed(self) -> bool:
+        return (
+            bool(self.changed_fields)
+            or self.created
+            or self.deleted
+            or any(result.changed for result in self.member_results)
         )
 
 
@@ -208,7 +232,7 @@ class HiddenField(TextField):
         return "hidden"
 
 
-class PositiveIntegerField(Field):
+class IntegerField(Field):
     @property
     def default_widget(self) -> str:
         return "number"
@@ -217,9 +241,25 @@ class PositiveIntegerField(Field):
         try:
             value = int(text_value(raw_value))
         except ValueError as exc:
-            raise ValueError("Enter a positive integer.") from exc
+            raise ValueError("Enter a valid integer.") from exc
+        return value
+
+
+class PositiveIntegerField(IntegerField):
+    def to_python(self, raw_value: object) -> int:
+        value = super().to_python(raw_value)
         if value <= 0:
             raise ValueError("Enter a positive integer.")
+        return value
+
+
+class NonNegativeIntegerField(PositiveIntegerField):
+    """Integer control that accepts zero as its smallest value."""
+
+    def to_python(self, raw_value: object) -> int:
+        value = IntegerField.to_python(self, raw_value)
+        if value < 0:
+            raise ValueError("Enter a non-negative integer.")
         return value
 
 
@@ -340,6 +380,14 @@ class CheckboxField(Field):
     def to_python(self, raw_value: object) -> bool:
         return bool_value(raw_value)
 
+    def parse(self, raw_value: object) -> FieldResult:
+        if self.disabled:
+            return self._accepted(None, raw_value=None)
+        value = bool_value(raw_value)
+        if self.required and not value:
+            return self._rejected(raw_value, "This field requires affirmation.")
+        return self._accepted(value, raw_value=raw_value)
+
 
 class SwitchField(CheckboxField):
     @property
@@ -411,13 +459,19 @@ class Form:
     def __init__(
         self,
         *,
+        target: object | None = None,
         defaults: Mapping[str, object] | None = None,
         values: Mapping[str, object] | None = None,
         options: Mapping[str, Mapping[str, str]] | None = None,
         unknown_fields: UnknownFieldPolicy = "ignore",
     ) -> None:
+        self.target = target
         self.unknown_fields = unknown_fields
-        self.fields = self._bind_fields(defaults or {}, values or {}, options or {})
+        self.fields = self._bind_fields(
+            self._target_defaults(target, defaults or {}),
+            values or {},
+            options or {},
+        )
         self.errors: dict[FormErrorKey, list[str]] = {}
         self.values: dict[str, object] = {
             name: form_field.value
@@ -446,7 +500,7 @@ class Form:
                     fields[name] = value
         return fields
 
-    def parse(self, data: Mapping[str, object]) -> FormResult:
+    async def parse(self, data: Mapping[str, object]) -> FormResult:
         results: dict[str, FieldResult] = {}
         self.errors = {}
         self.raw_values = {}
@@ -469,8 +523,8 @@ class Form:
         self._defer_result_sync = True
         try:
             for name in self.fields:
-                self.validate(name)
-            self.validate(None)
+                await self.validate(name)
+            await self.validate(None)
         finally:
             self._defer_result_sync = False
         results = self._results_with_errors(results)
@@ -482,7 +536,7 @@ class Form:
         del self._pending_form_errors
         return self.result
 
-    def validate(self, field_name: str | None = None) -> bool:
+    async def validate(self, field_name: str | None = None) -> bool:
         if field_name is None:
             for message in getattr(self, "_pending_form_errors", ()):
                 self.add_error(None, message)
@@ -503,6 +557,44 @@ class Form:
 
     def is_valid(self) -> bool:
         return not self.errors
+
+    @property
+    def bound_values(self) -> dict[str, object]:
+        return {
+            name: result.value
+            for name, result in self.result.fields.items()
+            if result.is_valid and not self.fields[name].disabled
+        }
+
+    async def save(self) -> SaveResult:
+        if not self.result.is_valid:
+            raise FormError("Cannot save an invalid form.")
+
+        target = self.target
+        if target is None:
+            values = self.bound_values
+            return SaveResult(
+                primary=values,
+                changed_fields=tuple(values),
+                created=True,
+                affected_count=1,
+            )
+
+        original = _snapshot(target)
+        changed_fields = tuple(
+            name
+            for name, value in self.bound_values.items()
+            if self._read_target_value(target, name) != value
+        )
+        for name in changed_fields:
+            self._write_target_value(target, name, self.bound_values[name])
+        return SaveResult(
+            primary=target,
+            original=original,
+            changed_fields=changed_fields,
+            updated=bool(changed_fields),
+            affected_count=int(bool(changed_fields)),
+        )
 
     @property
     def result(self) -> FormResult:
@@ -527,6 +619,37 @@ class Form:
                 bound.choices = dict(options[name])
             fields[name] = bound
         return fields
+
+    def _target_defaults(
+        self,
+        target: object | None,
+        defaults: Mapping[str, object],
+    ) -> dict[str, object]:
+        bound_defaults = dict(defaults)
+        if target is None:
+            return bound_defaults
+
+        for name in self.declared_fields():
+            value = self._read_target_value(target, name)
+            if value is not _MISSING:
+                bound_defaults[name] = value
+        return bound_defaults
+
+    @staticmethod
+    def _read_target_value(target: object, name: str) -> object:
+        if isinstance(target, Mapping):
+            return target.get(name, _MISSING)
+        return getattr(target, name, _MISSING)
+
+    @staticmethod
+    def _write_target_value(target: object, name: str, value: object) -> None:
+        if isinstance(target, MutableMapping):
+            mapping = cast(MutableMapping[str, object], target)
+            mapping[name] = value
+            return
+        if not hasattr(target, name):
+            raise FormError(f"Binding target has no field: {name}.")
+        setattr(target, name, value)
 
     def _results_with_errors(
         self,
@@ -610,6 +733,12 @@ def form_raw_value(data: Mapping[str, object], name: str) -> object:
     return data.get(name)
 
 
+def _snapshot(value: object) -> object:
+    if isinstance(value, Mapping):
+        return dict(value)
+    return copy(value)
+
+
 __all__ = (
     "CheckboxField",
     "ChoiceField",
@@ -622,10 +751,13 @@ __all__ = (
     "FormError",
     "FormResult",
     "HiddenField",
+    "IntegerField",
     "MultiSelectField",
+    "NonNegativeIntegerField",
     "Option",
     "PositiveIntegerField",
     "RadioField",
+    "SaveResult",
     "SelectField",
     "SliderField",
     "SwitchField",

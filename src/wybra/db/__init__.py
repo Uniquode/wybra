@@ -30,6 +30,7 @@ from wybra.db.validation import (
     PersistenceValidationSettings,
     validate_persistence,
 )
+from wybra.db.versioning import PositiveIntField, VersionField, VersionFieldError
 from wybra.site import Site, SiteCapabilityError
 from wybra.site_config import app_config_from_site
 
@@ -63,6 +64,7 @@ __all__ = (
     "EffectiveDatabaseConfig",
     "module_config",
     "PersistenceValidationSettings",
+    "PositiveIntField",
     "ResolvedDatabaseConnection",
     "ResolvedDatabaseRouting",
     "StructuredDatabaseConfig",
@@ -76,4 +78,6 @@ __all__ = (
     "sqlite_file_url",
     "supported_database_url_schemes",
     "validate_persistence",
+    "VersionField",
+    "VersionFieldError",
 )
