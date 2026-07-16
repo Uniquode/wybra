@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager, contextmanager, redirect_stdout
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
+from importlib.util import find_spec
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Protocol, cast
@@ -1562,11 +1563,17 @@ async def _run_tortoise_config(
 @asynccontextmanager
 async def generated_temporary_migrations(
     config: dict[str, Any],
+    *,
+    app_labels: tuple[str, ...] | None = None,
 ) -> AsyncIterator[GeneratedTemporaryMigrations]:
     """Generate test migrations in an isolated root and remove them afterwards."""
     with TemporaryDirectory(prefix="wybra-migrations-") as directory:
         root = Path(directory)
-        generated_config = _config_with_migrations_root(config, root)
+        generated_config = _config_with_migrations_root(
+            config,
+            root,
+            app_labels=app_labels,
+        )
         await _generate_model_migrations(
             generated_config,
             root,
@@ -1645,6 +1652,8 @@ async def _destroy_command_lifecycle(
 def _config_with_migrations_root(
     config: dict[str, Any],
     migrations_root: Path,
+    *,
+    app_labels: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     apps = config.get("apps")
     if not isinstance(apps, dict):
@@ -1652,16 +1661,54 @@ def _config_with_migrations_root(
     if not all(isinstance(app_config, dict) for app_config in apps.values()):
         raise MigrationConfigurationError("Tortoise configuration has invalid apps.")
     migrations_package = tortoise_migrations_package(migrations_root)
+    temporary_labels = set(apps) if app_labels is None else set(app_labels)
+    unknown_labels = temporary_labels - set(apps)
+    if unknown_labels:
+        raise MigrationConfigurationError(
+            "Temporary migration apps are not configured: "
+            f"{', '.join(sorted(unknown_labels))}."
+        )
     return {
         **config,
         "apps": {
             app_label: {
                 **app_config,
-                "migrations": f"{migrations_package}.{app_label}",
+                "migrations": (
+                    f"{migrations_package}.{app_label}"
+                    if app_label in temporary_labels
+                    else app_config["migrations"]
+                ),
             }
             for app_label, app_config in apps.items()
         },
     }
+
+
+def apps_requiring_temporary_migrations(config: dict[str, Any]) -> tuple[str, ...]:
+    """Return configured apps whose migration package is absent from source."""
+    apps = config.get("apps")
+    if not isinstance(apps, dict):
+        raise MigrationConfigurationError("Tortoise configuration has no apps.")
+    labels = []
+    for app_label, app_config in apps.items():
+        if not isinstance(app_config, dict):
+            raise MigrationConfigurationError(
+                "Tortoise configuration has invalid apps."
+            )
+        migrations_module = app_config.get("migrations")
+        if not isinstance(migrations_module, str):
+            raise MigrationConfigurationError(
+                f"Tortoise app has no migrations module: {app_label}."
+            )
+        spec = find_spec(migrations_module)
+        locations = () if spec is None else spec.submodule_search_locations
+        has_migration_source = bool(locations) and any(
+            any(path.glob("[0-9][0-9][0-9][0-9]_*.py"))
+            for path in (Path(location) for location in locations)
+        )
+        if not has_migration_source:
+            labels.append(app_label)
+    return tuple(labels)
 
 
 def _register_tortoise_config_module(config: dict[str, Any]) -> str:

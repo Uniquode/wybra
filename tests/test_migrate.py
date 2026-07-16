@@ -1253,7 +1253,11 @@ class TestMigrationCommands:
             for path in generated_files
             if path.parent.name == "tests_support_form_binding"
         )
-        assert "CheckConstraint" in form_binding_migration.read_text(encoding="utf-8")
+        generated_source = form_binding_migration.read_text(encoding="utf-8")
+        assert "from wybra.db.versioning import VersionField" in generated_source
+        assert "('version', VersionField(default=0))" in generated_source
+        assert "test_form_versioned_record_version_non_negative" in generated_source
+        assert "version >= 0" in generated_source
 
     @pytest.mark.anyio
     async def test_model_migration_plan_uses_relations_not_configured_order(
