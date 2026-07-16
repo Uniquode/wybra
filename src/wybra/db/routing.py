@@ -46,6 +46,7 @@ class DbConnection:
 
     _registry: DatabaseRouteRegistry = field(repr=False, compare=False)
     name: str = "default"
+    _capability: object | None = field(default=None, repr=False, compare=False)
 
     def default(self) -> DbRoute:
         """Select an ordinary default route."""

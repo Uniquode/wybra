@@ -20,7 +20,10 @@ from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.cli import cli as tortoise_cli
 from tortoise.cli import utils as tortoise_cli_utils
 from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
+from tortoise.migrations.autodetector import MigrationAutodetector
+from tortoise.migrations.constraints import CheckConstraint
 from tortoise.migrations.executor import MigrationExecutor
+from tortoise.migrations.operations import AddConstraint, CreateModel
 from tortoise.migrations.recorder import MigrationRecorder
 from tortoise.models import Model
 
@@ -50,6 +53,11 @@ from wybra.db.urls import (
     database_url_support_error,
     is_supported_database_url,
     safe_database_error_message,
+)
+from wybra.db.versioning import (
+    VersionField,
+    version_column_check_constraint,
+    version_field_check_constraint,
 )
 from wybra.tools.app_startup import (
     CONFIG_SOURCE_CONTEXT_KEY,
@@ -986,10 +994,106 @@ def _database_connection_for_settings(
     return ResolvedDatabaseConnection.from_url(settings.database_url, backend=backend)
 
 
+class _VersionFieldMigrationAutodetector(MigrationAutodetector):
+    """Teach Tortoise's normal migration generation about ``VersionField``."""
+
+    def _current_state(self):  # type: ignore[no-untyped-def]
+        state = super()._current_state()
+        for app_label, models in self.apps.items():
+            for model in models.values():
+                model_state = state.models[(app_label, model.__name__)]
+                constraints = list(model_state.options.get("constraints", ()))
+                for field_name, field in model._meta.fields_map.items():
+                    if not isinstance(field, VersionField):
+                        continue
+                    constraint = version_field_check_constraint(model, field_name)
+                    if any(
+                        isinstance(existing, CheckConstraint)
+                        and existing.check == constraint.check
+                        for existing in constraints
+                    ):
+                        continue
+                    constraints.append(constraint)
+                if constraints:
+                    model_state.options["constraints"] = tuple(constraints)
+        return state
+
+    async def changes(self):  # type: ignore[no-untyped-def]
+        writers = await super().changes()
+        for writer in writers:
+            operations = []
+            for operation in writer.operations:
+                operations.append(operation)
+                if not isinstance(operation, CreateModel):
+                    continue
+                constraints = list((operation.options or {}).get("constraints", ()))
+                version_constraints = _version_constraints_for_create_model(operation)
+                if not version_constraints:
+                    continue
+                operation.options = {
+                    **(operation.options or {}),
+                    "constraints": tuple(
+                        constraint
+                        for constraint in constraints
+                        if constraint not in version_constraints
+                    ),
+                }
+                operations.extend(
+                    AddConstraint(model_name=operation.name, constraint=constraint)
+                    for constraint in version_constraints
+                )
+            writer.operations = operations
+        return writers
+
+
+def _version_constraints_for_create_model(
+    operation: CreateModel,
+) -> tuple[CheckConstraint, ...]:
+    """Extract generated version constraints so Tortoise emits ``AddConstraint``."""
+    table_name = str((operation.options or {}).get("table", operation.name.lower()))
+    constraints = tuple((operation.options or {}).get("constraints", ()))
+    version_constraints = []
+    for field_name, field in operation.fields:
+        if not isinstance(field, VersionField):
+            continue
+        constraint = _version_check_constraint_for_create_field(
+            table_name,
+            field_name,
+            field,
+        )
+        if constraint in constraints:
+            version_constraints.append(constraint)
+    return tuple(version_constraints)
+
+
+def _version_check_constraint_for_create_field(
+    table_name: str,
+    field_name: str,
+    field: VersionField,
+) -> CheckConstraint:
+    column_name = field.source_field or field_name
+    return version_column_check_constraint(table_name, column_name)
+
+
+@contextmanager
+def _version_field_migration_autodetector() -> Iterator[None]:
+    """Install the generated-constraint extension for one CLI invocation."""
+    cli_module = cast(Any, tortoise_cli)
+    original = cli_module.MigrationAutodetector
+    cli_module.MigrationAutodetector = _VersionFieldMigrationAutodetector
+    try:
+        yield
+    finally:
+        cli_module.MigrationAutodetector = original
+
+
 async def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
     config_module = _register_tortoise_config_module(context.config)
     try:
-        with _tortoise_migration_recorder_compatibility():
+        with (
+            _tortoise_migration_recorder_compatibility(),
+            _version_field_migration_autodetector(),
+        ):
             exit_code = await tortoise_cli.run_cli_async(
                 [
                     "--config",

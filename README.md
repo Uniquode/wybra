@@ -212,8 +212,8 @@ class ProfileForm(Form):
     pronouns = ChoiceField(choices=PRONOUNS, required=False)
     avatar = FileUploadField(required=False)
 
-    def validate(self, field_name: str | None = None) -> bool:
-        inherited = super().validate(field_name)
+    async def validate(self, field_name: str | None = None) -> bool:
+        inherited = await super().validate(field_name)
         local = True
         if field_name == "preferred_name" and self.values.get(field_name) == "admin":
             self.add_error(field_name, "This preferred name is reserved.")
@@ -226,11 +226,18 @@ class ProfileForm(Form):
 
 Forms can be constructed with defaults and explicit field values, then parsed
 back into structured results containing raw submitted values, parsed values,
-field errors, and form-level validity. Form subclasses can add validation with
-`validate(field_name: str | None = None) -> bool`; `None` is used for
-form-level validation and form-level errors are stored in `errors[None]`.
+field errors, and form-level validity. Form subclasses can add asynchronous
+validation with `async validate(field_name: str | None = None) -> bool`; `None`
+is used for form-level validation and form-level errors are stored in
+`errors[None]`.
 Wybra intentionally does not support Django-style `clean` or
 `clean_<field_name>` hooks.
+
+Every declared field participates in parsing, even when the browser omits its
+control. An omitted optional checkbox or switch becomes `False`, an omitted
+optional multi-select becomes `()`, and another omitted optional field becomes
+`None`. Required checkboxes and switches require an affirmative submission.
+This makes an unchecked control reliably clear a previously stored value.
 
 Text-like fields are plain text by default. `TextField`, `TextAreaField`, and
 `HiddenField` reject HTML or markup-like input and unsafe control characters
@@ -242,10 +249,15 @@ the consuming feature.
 
 ```python
 form = ProfileForm(values={"preferred_name": "David"})
-result = form.parse(await forms.request_form_data(request))
-if form.is_valid():
-    values = form.values
+result = await form.parse(await forms.request_form_data(request))
+if result.is_valid:
+    values = (await form.save()).primary
 ```
+
+Pass `target=` to bind a plain form to a dataclass or ordinary object. Without
+a target, `save()` returns a `SaveResult` whose `primary` value is a
+dictionary-shaped value containing the writable declared fields. Invalid input
+never mutates a supplied target.
 
 Template helpers can render a complete form, an individual field inside a
 custom application-owned form, or an explicit CSRF hidden field. Complete form
@@ -256,10 +268,10 @@ semantics. Forms containing `FileUploadField` render with
 
 ### Model Forms
 
-`ModelForm` layers declarative field binding onto `Form` without owning
-persistence. It can read initial values from a caller-owned record and apply
-validated values back to that record, but it does not add, flush, commit, or
-roll back anything.
+`ModelForm` layers declarative field binding and writer-bound Tortoise
+persistence onto `Form`. Construct it with the application's selected
+`DbConnection`; it retains one writer route for relation loading, validation,
+create, update, and delete operations.
 
 ```python
 from wybra.forms import Attr, JsonPath, ModelForm, ReadOnly, TextAreaField, TextField
@@ -280,23 +292,51 @@ class ProfileForm(ModelForm):
 ```
 
 Fields bind to same-named record attributes by default. `Meta.bindings` is only
-needed for overrides such as JSON mapping paths or read-only fields. Construct
-the form with `instance=record` when editing an existing record; explicit
-`values` still take precedence over instance-derived values when re-rendering a
-submitted form.
+needed for overrides such as JSON mapping paths or read-only fields.
+`Meta.fields` is an explicit allowlist; recognised Tortoise fields are generated
+when named there, while declared fields override their presentation.
 
 ```python
-form = ProfileForm(instance=profile)
-form.parse(await forms.request_form_data(request))
+form = ProfileForm(instance=profile, connection=connection)
+await form.parse(await forms.request_form_data(request))
 if form.is_valid():
-    form.apply()
-    await profile_repository.save(profile)
+    saved = await form.save()
+    profile = saved.primary
 ```
 
-For create flows, construct the form without an instance, then pass the new
-record to `apply(record)` after validation. This keeps the API independent of
-the persistence backend; records only need normal readable and writable Python
-attributes.
+`save()` and `delete()` return backend-neutral `SaveResult` values. They expose
+the primary and original objects, changed fields, operation flags, and an
+affected-record count. An unchanged existing record returns a successful no-op
+result without an update. `VersionField` opts a model into atomic stale-update
+detection; a conflict adds a form-level error without overwriting stored data.
+Include the generated or declared hidden version field in a versioned form's
+`Meta.fields` and submit its rendered value; it is a concurrency token, not an
+editable model value. Wybra's `PositiveIntField` model base accepts the initial
+version `0`, because the installed Tortoise release does not provide that field
+itself.
+Wybra's normal `makemigrations` command automatically generates a named native
+database check constraint for every `VersionField`, so direct SQL and other
+non-ORM writers cannot store a negative version either. No additional model
+metadata or migration editing is required.
+Unversioned models remain supported with last-write-wins semantics. Override
+the asynchronous `deletion_action(instance)` hook to return `"soft"` after
+marking an instance for application-defined soft deletion; physical deletion
+is the default.
+
+For a generated relation field, use `Meta.form_options` rather than a
+Tortoise-field subclass. Its optional asynchronous `relation_query`,
+`relation_value`, and `option_format` callables scope a paged option query,
+authorise and resolve a submitted value, and produce each plain-text option
+label. When omitted, Wybra uses the writer route to load records, resolves
+primary keys, and formats options with `str(record)`.
+
+`CompositeForm` is one transactional fixed-member form. Its ordered
+`Meta.models` tuple can infer unique forward relations from its final primary
+model; generated related fields use names such as `address__street`. Declared
+fields override generated controls. Repeated or M2M collection members require
+a future formset API and are rejected by this fixed-member form.
+Fixed members can only use the declared relation chain; independent relation
+selectors on a member are not supported by `CompositeForm` yet.
 
 ### Phone Contact Widgets
 

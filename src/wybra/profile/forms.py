@@ -110,8 +110,8 @@ class ProfileEditForm(Form):
         self._apply_editability()
         self.phone_contact.apply_state(self, phone_country_code)
 
-    def validate(self, field_name: str | None = None) -> bool:
-        base_result = super().validate(field_name)
+    async def validate(self, field_name: str | None = None) -> bool:
+        base_result = await super().validate(field_name)
         local_result = True
         match field_name:
             case "preferred_name":
@@ -139,13 +139,13 @@ class ProfileEditForm(Form):
                 local_result = self._validate_phone_contact()
         return base_result and local_result
 
-    def parse(self, data: Mapping[str, object]) -> FormResult:
+    async def parse(self, data: Mapping[str, object]) -> FormResult:
         self._profile_field_data = {}
         self._phone_contact_validation = None
         self._apply_phone_country_options(
             normalise_form_text(data.get("phone_country_code"))
         )
-        return super().parse(data)
+        return await super().parse(data)
 
     def profile_field_data(self) -> dict[str, object]:
         return dict(self._profile_field_data)

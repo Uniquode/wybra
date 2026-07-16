@@ -53,7 +53,7 @@ class FormPostHandler[FormT: Form]:
         data: Mapping[str, object] | None = None,
     ) -> FormPostResult[FormT]:
         form_data = data if data is not None else await request_form_data(request)
-        result = self.form.parse(form_data)
+        result = await self.form.parse(form_data)
         if not result.is_valid:
             await self.add_failure_message(request)
             return FormPostResult(
