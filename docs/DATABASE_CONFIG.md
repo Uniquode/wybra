@@ -150,9 +150,11 @@ must be safe as one key-path segment. If the configured database name contains
 path separators, whitespace, or control characters, configure explicit
 credential keys instead.
 
-Service-account credentials are used for database lifecycle work such as
-`wybra-migrate init`, `wybra-migrate destroy`, and schema-changing migration
-commands. Runtime credentials are for application access and should not need
+`wybra-migrate init` and `wybra-migrate destroy` resolve both identities: the
+runtime identity is retained for application-role creation and grants, while a
+separate service-account connection performs database lifecycle work. Schema
+changing migration commands connect to the application database as the service
+account. Runtime credentials are for application access and should not need
 broad DDL permissions.
 
 ## Maintenance Tasks

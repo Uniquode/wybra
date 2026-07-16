@@ -579,6 +579,20 @@ review the generated operations, run `wybra-migrate migrate`, then validate.
 Use `wybra-migrate sqlmigrate <app_label> <migration>` to inspect the SQL for a
 specific migration before applying it.
 
+Generated migration files must never be edited. When a development or test
+database can be explicitly reset, `wybra-migrate destroy --confirm <target>
+--reset-migrations` removes replaceable migration history only after the
+confirmed destroy succeeds; follow it with `wybra-migrate makemigrations` and
+`wybra-migrate migrate`. A non-model-generated migration must declare
+`not_generated = True` and a non-empty `not_generated_description` on its
+`Migration` class. Such a migration stops reset until it has a reviewed,
+baseline-compatible provenance plan.
+
+Tests can generate migrations into an isolated root without modifying committed
+output: `wybra-migrate makemigrations --module package.models
+--migrations-root .wybra-test-migrations`. The test helpers use this path and
+remove their temporary output automatically.
+
 ## Route Inspection
 
 Inspect the installed route tree:

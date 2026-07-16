@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import ast
 import inspect
+import io
 import logging
 import sys
 import types
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager, redirect_stdout
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Protocol, cast
 
 import anyio
@@ -28,6 +31,7 @@ from tortoise.migrations.recorder import MigrationRecorder
 from tortoise.models import Model
 
 from wybra.core.composition import AppConfig
+from wybra.core.conventions import MODEL_SURFACE_MODULE
 from wybra.core.logging import LoggingConfigurationError
 from wybra.db.provisioning import (
     DatabaseMaintenanceRequest,
@@ -46,8 +50,16 @@ from wybra.db.provisioning import (
 from wybra.db.provisioning.mysql import quote_mysql_identifier
 from wybra.db.settings import CredentialPurpose, ResolvedDatabaseConnection
 from wybra.db.sql import ident, param, render_sql
-from wybra.db.surfaces import DataCompositionError
-from wybra.db.tortoise import build_tortoise_config as build_config
+from wybra.db.surfaces import (
+    DataCompositionError,
+    migration_version_locations_from_modules,
+)
+from wybra.db.tortoise import (
+    build_tortoise_config as build_config,
+)
+from wybra.db.tortoise import (
+    tortoise_migrations_package,
+)
 from wybra.db.urls import (
     database_backend_for_url,
     database_url_support_error,
@@ -122,6 +134,55 @@ class MigrationStateError(RuntimeError):
     """Raised when a migration operation is invalid for the database state."""
 
 
+def special_migration_description(migration_path: Path) -> str | None:
+    """Return the declared rationale for an explicit special migration."""
+    try:
+        module = ast.parse(migration_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise MigrationStateError(
+            f"Cannot read migration source: {migration_path}."
+        ) from exc
+    except SyntaxError as exc:
+        raise MigrationStateError(
+            f"Cannot parse migration source: {migration_path}."
+        ) from exc
+
+    migration_class = next(
+        (
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef) and node.name == "Migration"
+        ),
+        None,
+    )
+    if migration_class is None:
+        return None
+    declarations = {
+        target.id: statement.value
+        for statement in migration_class.body
+        if isinstance(statement, ast.Assign)
+        for target in statement.targets
+        if isinstance(target, ast.Name)
+    }
+    marker = declarations.get("not_generated")
+    if not isinstance(marker, ast.Constant) or marker.value is not True:
+        return None
+    description = declarations.get("not_generated_description")
+    if not isinstance(description, ast.Constant) or not isinstance(
+        description.value, str
+    ):
+        raise MigrationStateError(
+            "Special migration requires a non-empty not_generated_description: "
+            f"{migration_path}."
+        )
+    if not (value := description.value.strip()):
+        raise MigrationStateError(
+            "Special migration requires a non-empty not_generated_description: "
+            f"{migration_path}."
+        )
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationContext:
     """Resolved migration command context passed to migration backends."""
@@ -130,6 +191,24 @@ class MigrationContext:
     config: dict[str, Any]
     database_connection: ResolvedDatabaseConnection
     provisioning_connection: ResolvedDatabaseConnection | None = None
+    migrations_root: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedTemporaryMigrations:
+    """Generated migrations and their import configuration for one test lifecycle."""
+
+    config: dict[str, Any]
+    root: Path
+    paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationResetPlan:
+    """Preflight result for replacing model-derived migration history."""
+
+    generated_baseline: tuple[Path, ...]
+    migration_locations: tuple[Path, ...]
 
 
 class MigrationBackend(Protocol):
@@ -369,19 +448,28 @@ def create_migrate_command(
         required=True,
         help="Confirm the target database/schema name before destructive work runs.",
     )
+    @click.option(
+        "--reset-migrations",
+        is_flag=True,
+        help=(
+            "Remove replaceable migration history after the confirmed database destroy."
+        ),
+    )
     @click.pass_context
     def destroy_command(
         ctx: click.Context,
         database_url: str | None,
         confirm: str,
+        reset_migrations: bool,
     ) -> int:
         return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             include_provisioning_connection=True,
-            operation=lambda _backend, context: destroy_database_lifecycle(
+            operation=lambda _backend, context: _destroy_command_lifecycle(
                 context,
-                DestroyDatabaseRequest(confirm=confirm),
+                confirm=confirm,
+                reset_migrations=reset_migrations,
             ),
         )
 
@@ -440,6 +528,17 @@ def create_migrate_command(
     @click.argument("app_labels", nargs=-1)
     @click.option("--empty", is_flag=True, help="Create an empty migration.")
     @click.option("-n", "--name", help="Use this name for the migration file.")
+    @click.option(
+        "--module",
+        "model_modules",
+        multiple=True,
+        help="Generate from a model-owning module or its .models surface.",
+    )
+    @click.option(
+        "--migrations-root",
+        type=click.Path(path_type=Path),
+        help="Write generated migrations under an isolated importable root.",
+    )
     @click.pass_context
     def makemigrations_command(
         ctx: click.Context,
@@ -447,14 +546,21 @@ def create_migrate_command(
         app_labels: tuple[str, ...],
         empty: bool,
         name: str | None,
+        model_modules: tuple[str, ...],
+        migrations_root: Path | None,
     ) -> int:
         return migration_runner(
             _database_url_for_command(ctx, database_url),
             _config_source_for_command(ctx),
             lambda backend, context: backend.makemigrations(
-                context,
+                _migration_context_with_overrides(
+                    context,
+                    model_modules=model_modules,
+                    migrations_root=migrations_root,
+                ),
                 MakeMigrationsRequest(app_labels=app_labels, empty=empty, name=name),
             ),
+            database_credential_purpose="service_account",
         )
 
     @migrate_command.command(
@@ -874,6 +980,7 @@ def build_migration_context(settings: MigrationSettings) -> MigrationContext:
         config=build_tortoise_config(settings),
         database_connection=database_connection,
         provisioning_connection=getattr(settings, "provisioning_connection", None),
+        migrations_root=settings.migrations_root,
     )
 
 
@@ -883,10 +990,52 @@ def build_tortoise_config(settings: MigrationSettings) -> dict[str, Any]:
         return build_config(
             database_connection=database_connection,
             modules=settings.modules,
+            migrations_root=settings.migrations_root,
         )
     if settings.database_url is None:
         raise MigrationConfigurationError("Database URL is required.")
-    return build_config(database_url=settings.database_url, modules=settings.modules)
+    return build_config(
+        database_url=settings.database_url,
+        modules=settings.modules,
+        migrations_root=settings.migrations_root,
+    )
+
+
+def _migration_context_with_overrides(
+    context: MigrationContext,
+    *,
+    model_modules: tuple[str, ...],
+    migrations_root: Path | None,
+) -> MigrationContext:
+    modules = (
+        tuple(_model_owner_module(module_name) for module_name in model_modules)
+        if model_modules
+        else context.settings.modules
+    )
+    root = migrations_root or context.settings.migrations_root
+    database_connection = getattr(context.settings, "database_connection", None)
+    if database_connection is not None:
+        config = build_config(
+            database_connection=database_connection,
+            modules=modules,
+            migrations_root=root,
+        )
+    else:
+        if context.settings.database_url is None:
+            raise MigrationConfigurationError("Database URL is required.")
+        config = build_config(
+            database_url=context.settings.database_url,
+            modules=modules,
+            migrations_root=root,
+        )
+    return replace(context, config=config, migrations_root=root)
+
+
+def _model_owner_module(module_name: str) -> str:
+    model_surface_suffix = f".{MODEL_SURFACE_MODULE}"
+    if module_name.endswith(model_surface_suffix):
+        return module_name.removesuffix(model_surface_suffix)
+    return module_name
 
 
 async def initialise_migration_lifecycle(
@@ -1088,21 +1237,35 @@ def _version_field_migration_autodetector() -> Iterator[None]:
 
 
 async def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> None:
-    config_module = _register_tortoise_config_module(context.config)
-    try:
-        with (
-            _tortoise_migration_recorder_compatibility(),
-            _version_field_migration_autodetector(),
-        ):
-            exit_code = await tortoise_cli.run_cli_async(
-                [
+    await _run_tortoise_config(context.config, context.migrations_root, args)
+
+
+async def _run_tortoise_config(
+    config: dict[str, Any],
+    migrations_root: Path | None,
+    args: Sequence[str],
+    *,
+    quiet: bool = False,
+) -> None:
+    with _temporary_migrations_package(migrations_root):
+        config_module = _register_tortoise_config_module(config)
+        try:
+            with (
+                _tortoise_migration_recorder_compatibility(),
+                _version_field_migration_autodetector(),
+            ):
+                arguments = [
                     "--config",
                     f"{config_module}.{TORTOISE_CONFIG_VARIABLE}",
                     *args,
                 ]
-            )
-    finally:
-        sys.modules.pop(config_module, None)
+                if quiet:
+                    with redirect_stdout(io.StringIO()):
+                        exit_code = await tortoise_cli.run_cli_async(arguments)
+                else:
+                    exit_code = await tortoise_cli.run_cli_async(arguments)
+        finally:
+            sys.modules.pop(config_module, None)
 
     if exit_code:
         command_name = args[0] if args else "<unknown>"
@@ -1110,6 +1273,111 @@ async def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> N
             "Tortoise migration command failed: "
             f"command={command_name}, exit_code={exit_code}."
         )
+
+
+@asynccontextmanager
+async def generated_temporary_migrations(
+    config: dict[str, Any],
+) -> AsyncIterator[GeneratedTemporaryMigrations]:
+    """Generate test migrations in an isolated root and remove them afterwards."""
+    with TemporaryDirectory(prefix="wybra-migrations-") as directory:
+        root = Path(directory)
+        generated_config = _config_with_migrations_root(config, root)
+        await _run_tortoise_config(
+            generated_config,
+            root,
+            ["makemigrations"],
+            quiet=True,
+        )
+        paths = tuple(sorted(root.glob("*/[0-9][0-9][0-9][0-9]_*.py")))
+        yield GeneratedTemporaryMigrations(
+            config=generated_config,
+            root=root,
+            paths=paths,
+        )
+
+
+async def plan_migration_reset(context: MigrationContext) -> MigrationResetPlan:
+    """Generate a disposable model baseline and reject unplanned exceptions."""
+    migration_locations = migration_version_locations_from_modules(
+        context.settings.modules
+    )
+    special_migrations = tuple(
+        migration_path
+        for location in migration_locations
+        for migration_path in location.glob("*.py")
+        if migration_path.name != "__init__.py"
+        and special_migration_description(migration_path) is not None
+    )
+    if special_migrations:
+        paths = ", ".join(str(path) for path in special_migrations)
+        raise MigrationStateError(
+            "Migration reset requires a reviewed baseline-compatible provenance "
+            f"plan for special migrations: {paths}."
+        )
+
+    async with generated_temporary_migrations(context.config) as baseline:
+        return MigrationResetPlan(
+            generated_baseline=baseline.paths,
+            migration_locations=migration_locations,
+        )
+
+
+async def reset_migrations_lifecycle(
+    context: MigrationContext,
+    *,
+    confirm: str,
+) -> MigrationResetPlan:
+    """Destroy a confirmed database then remove replaceable migration files."""
+    plan = await plan_migration_reset(context)
+    if not plan.generated_baseline:
+        raise MigrationStateError(
+            "Migration reset generated no baseline migrations; refusing to remove "
+            "committed migration history."
+        )
+    await destroy_database_lifecycle(context, DestroyDatabaseRequest(confirm=confirm))
+    for location in plan.migration_locations:
+        for migration_path in location.glob("*.py"):
+            if migration_path.name != "__init__.py":
+                migration_path.unlink()
+    return plan
+
+
+async def _destroy_command_lifecycle(
+    context: MigrationContext,
+    *,
+    confirm: str,
+    reset_migrations: bool,
+) -> None:
+    if reset_migrations:
+        await reset_migrations_lifecycle(context, confirm=confirm)
+        return
+    await destroy_database_lifecycle(
+        context,
+        DestroyDatabaseRequest(confirm=confirm),
+    )
+
+
+def _config_with_migrations_root(
+    config: dict[str, Any],
+    migrations_root: Path,
+) -> dict[str, Any]:
+    apps = config.get("apps")
+    if not isinstance(apps, dict):
+        raise MigrationConfigurationError("Tortoise configuration has no apps.")
+    if not all(isinstance(app_config, dict) for app_config in apps.values()):
+        raise MigrationConfigurationError("Tortoise configuration has invalid apps.")
+    migrations_package = tortoise_migrations_package(migrations_root)
+    return {
+        **config,
+        "apps": {
+            app_label: {
+                **app_config,
+                "migrations": f"{migrations_package}.{app_label}",
+            }
+            for app_label, app_config in apps.items()
+        },
+    }
 
 
 def _register_tortoise_config_module(config: dict[str, Any]) -> str:
@@ -1120,13 +1388,46 @@ def _register_tortoise_config_module(config: dict[str, Any]) -> str:
     return module_name
 
 
+@contextmanager
+def _temporary_migrations_package(migrations_root: Path | None) -> Iterator[None]:
+    """Make an isolated migration root importable for one Tortoise command."""
+    if migrations_root is None:
+        yield
+        return
+
+    migrations_root.mkdir(parents=True, exist_ok=True)
+    package_name = tortoise_migrations_package(migrations_root)
+    if package_name in sys.modules:
+        raise MigrationStateError(
+            f"Temporary migrations package is already active: {package_name}."
+        )
+
+    package = types.ModuleType(package_name)
+    package.__dict__.update(
+        __package__=package_name,
+        __path__=[str(migrations_root)],
+    )
+    sys.modules[package_name] = package
+    try:
+        yield
+    finally:
+        for module_name in tuple(sys.modules):
+            if module_name == package_name or module_name.startswith(
+                f"{package_name}."
+            ):
+                sys.modules.pop(module_name, None)
+
+
 async def apply_tortoise_migrations(
     connection: BaseDBAsyncClient,
     apps: dict[str, dict[str, object]],
+    *,
+    migrations_root: Path | None = None,
 ) -> None:
     """Apply native Tortoise migrations using an existing database connection."""
-    with _tortoise_migration_recorder_compatibility():
-        await MigrationExecutor(connection, apps).migrate()
+    with _temporary_migrations_package(migrations_root):
+        with _tortoise_migration_recorder_compatibility():
+            await MigrationExecutor(connection, apps).migrate()
 
 
 @contextmanager
