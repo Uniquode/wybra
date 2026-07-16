@@ -14,7 +14,7 @@ import wybra.tools.migrate as tools_migrate
 from support_database import sqlite_file_url
 from wybra.core.composition import AppConfig, load_app_config
 from wybra.db.surfaces import model_package_name
-from wybra.db.tortoise import tortoise_migrations_package
+from wybra.db.tortoise import build_tortoise_config, tortoise_migrations_package
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +169,30 @@ class TestMigrationCommands:
             match="not_generated_description",
         ):
             migrate_module.special_migration_description(migration_path)
+
+    def test_special_migration_marker_supports_annotated_declarations(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        migration_path = tmp_path / "0002_special.py"
+        migration_path.write_text(
+            dedent(
+                """
+                from tortoise import migrations
+
+
+                class Migration(migrations.Migration):
+                    not_generated: bool = True
+                    not_generated_description: str = "Carries an operational repair."
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        assert (
+            migrate_module.special_migration_description(migration_path)
+            == "Carries an operational repair."
+        )
 
     def test_wybra_migrate_main_delegates_to_async_entry_point(
         self,
@@ -1230,6 +1254,63 @@ class TestMigrationCommands:
             if path.parent.name == "tests_support_form_binding"
         )
         assert "CheckConstraint" in form_binding_migration.read_text(encoding="utf-8")
+
+    @pytest.mark.anyio
+    async def test_model_migration_plan_uses_relations_not_configured_order(
+        self,
+    ) -> None:
+        config = build_tortoise_config(
+            database_url="sqlite://:memory:",
+            modules=("wybra.auth", "wybra.media", "wybra.profile"),
+        )
+        apps = config["apps"]
+        assert isinstance(apps, dict)
+        config["apps"] = {
+            "wybra_profile": apps["wybra_profile"],
+            "wybra_media": apps["wybra_media"],
+            "wybra_auth": apps["wybra_auth"],
+            "wybra_sessions": apps["wybra_sessions"],
+        }
+
+        plan = await migrate_module.model_migration_plan(config)
+
+        assert plan.app_labels.index("wybra_auth") < plan.app_labels.index(
+            "wybra_profile"
+        )
+        assert plan.app_labels.index("wybra_media") < plan.app_labels.index(
+            "wybra_profile"
+        )
+        assert plan.dependencies_for("wybra_profile") == (
+            "wybra_auth",
+            "wybra_media",
+        )
+
+    @pytest.mark.anyio
+    async def test_generated_profile_initial_migration_has_model_dependencies(
+        self,
+    ) -> None:
+        config = build_tortoise_config(
+            database_url="sqlite://:memory:",
+            modules=("wybra.auth", "wybra.media", "wybra.profile"),
+        )
+
+        async with migrate_module.generated_temporary_migrations(config) as generated:
+            profile_migration = next(
+                path for path in generated.paths if path.parent.name == "wybra_profile"
+            )
+            dependencies = set(migrate_module.migration_dependencies(profile_migration))
+
+        assert dependencies >= {
+            ("wybra_auth", "0001_initial"),
+            ("wybra_media", "0001_initial"),
+        }
+
+    def test_model_migration_plan_rejects_cross_app_cycle(self) -> None:
+        with pytest.raises(migrate_module.MigrationStateError, match="cycle"):
+            migrate_module._topological_migration_app_order(
+                ("app_a", "app_b"),
+                {"app_a": {"app_b"}, "app_b": {"app_a"}},
+            )
 
     @pytest.mark.anyio
     async def test_generated_temporary_migrations_are_removed_after_failure(

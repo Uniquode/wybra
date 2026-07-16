@@ -22,10 +22,17 @@ from tortoise import fields
 from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.cli import cli as tortoise_cli
 from tortoise.cli import utils as tortoise_cli_utils
+from tortoise.context import TortoiseContext
 from tortoise.exceptions import ConfigurationError as TortoiseConfigurationError
-from tortoise.migrations.autodetector import MigrationAutodetector
+from tortoise.fields.relational import (
+    ForeignKeyFieldInstance,
+    ManyToManyFieldInstance,
+    OneToOneFieldInstance,
+)
+from tortoise.migrations.autodetector import RELATION_FIELDS, MigrationAutodetector
 from tortoise.migrations.constraints import CheckConstraint
 from tortoise.migrations.executor import MigrationExecutor
+from tortoise.migrations.graph import MigrationKey
 from tortoise.migrations.operations import AddConstraint, CreateModel
 from tortoise.migrations.recorder import MigrationRecorder
 from tortoise.models import Model
@@ -147,23 +154,7 @@ def special_migration_description(migration_path: Path) -> str | None:
             f"Cannot parse migration source: {migration_path}."
         ) from exc
 
-    migration_class = next(
-        (
-            node
-            for node in module.body
-            if isinstance(node, ast.ClassDef) and node.name == "Migration"
-        ),
-        None,
-    )
-    if migration_class is None:
-        return None
-    declarations = {
-        target.id: statement.value
-        for statement in migration_class.body
-        if isinstance(statement, ast.Assign)
-        for target in statement.targets
-        if isinstance(target, ast.Name)
-    }
+    declarations = _migration_class_declarations(module)
     marker = declarations.get("not_generated")
     if not isinstance(marker, ast.Constant) or marker.value is not True:
         return None
@@ -181,6 +172,66 @@ def special_migration_description(migration_path: Path) -> str | None:
             f"{migration_path}."
         )
     return value
+
+
+def migration_dependencies(migration_path: Path) -> tuple[tuple[str, str], ...]:
+    """Read literal Tortoise migration dependencies without importing source."""
+    try:
+        module = ast.parse(migration_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise MigrationStateError(
+            f"Cannot read migration source: {migration_path}."
+        ) from exc
+    except SyntaxError as exc:
+        raise MigrationStateError(
+            f"Cannot parse migration source: {migration_path}."
+        ) from exc
+
+    declaration = _migration_class_declarations(module).get("dependencies")
+    if declaration is None:
+        return ()
+    try:
+        value = ast.literal_eval(declaration)
+    except ValueError as exc:
+        raise MigrationStateError(
+            f"Migration dependencies must be literal values: {migration_path}."
+        ) from exc
+    if not isinstance(value, list | tuple) or not all(
+        isinstance(dependency, tuple)
+        and len(dependency) == 2
+        and all(isinstance(item, str) for item in dependency)
+        for dependency in value
+    ):
+        raise MigrationStateError(
+            f"Migration dependencies are invalid: {migration_path}."
+        )
+    return tuple(value)
+
+
+def _migration_class_declarations(module: ast.Module) -> dict[str, ast.expr]:
+    migration_class = next(
+        (
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef) and node.name == "Migration"
+        ),
+        None,
+    )
+    if migration_class is None:
+        return {}
+    declarations: dict[str, ast.expr] = {}
+    for statement in migration_class.body:
+        if isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    declarations[target.id] = statement.value
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.value is not None
+        ):
+            declarations[statement.target.id] = statement.value
+    return declarations
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +260,17 @@ class MigrationResetPlan:
 
     generated_baseline: tuple[Path, ...]
     migration_locations: tuple[Path, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ModelMigrationPlan:
+    """Dependency-ordered migration generation derived from current models."""
+
+    app_labels: tuple[str, ...]
+    dependencies: tuple[tuple[str, tuple[str, ...]], ...]
+
+    def dependencies_for(self, app_label: str) -> tuple[str, ...]:
+        return dict(self.dependencies).get(app_label, ())
 
 
 class MigrationBackend(Protocol):
@@ -296,12 +358,14 @@ class TortoiseMigrationBackend:
         context: MigrationContext,
         request: MakeMigrationsRequest,
     ) -> None:
-        args = ["makemigrations", *request.app_labels]
-        if request.empty:
-            args.append("--empty")
-        if request.name is not None:
-            args.extend(("-n", request.name))
-        await _run_tortoise_cli(context, args)
+        if request.app_labels or request.empty:
+            await _run_tortoise_cli(context, _makemigrations_arguments(request))
+            return
+        await _generate_model_migrations(
+            context.config,
+            context.migrations_root,
+            request,
+        )
 
     async def migrate(
         self,
@@ -1146,6 +1210,45 @@ def _database_connection_for_settings(
 class _VersionFieldMigrationAutodetector(MigrationAutodetector):
     """Teach Tortoise's normal migration generation about ``VersionField``."""
 
+    def _relation_dependencies(self, app_label, new_state):  # type: ignore[no-untyped-def]
+        """Include new cross-app initial migrations absent from Tortoise's graph.
+
+        Tortoise only discovers related-app leaf migrations that already exist in
+        its loader graph. During a fresh multi-app baseline, every initial
+        migration is new, so model-derived cross-app edges would otherwise be
+        lost. The current model state is authoritative: when the related app
+        has models but no leaf migration, its generated initial migration is
+        the dependency target.
+        """
+        dependencies = super()._relation_dependencies(app_label, new_state)
+        for (model_app, _model_name), model_state in new_state.models.items():
+            if model_app != app_label:
+                continue
+            for field in model_state.fields.values():
+                if not isinstance(field, RELATION_FIELDS):
+                    continue
+                model_name = field.model_name
+                if isinstance(model_name, str):
+                    related_app, _related_model = model_name.split(".", 1)
+                else:
+                    related_app = getattr(
+                        getattr(model_name, "_meta", None), "app", None
+                    )
+                    if not isinstance(related_app, str):
+                        continue
+                if related_app == app_label or related_app not in self.apps_config:
+                    continue
+                if self._leaf_nodes(related_app):
+                    continue
+                if any(
+                    related_model_app == related_app
+                    for related_model_app, _ in new_state.models
+                ):
+                    dependencies.add(
+                        MigrationKey(app_label=related_app, name="0001_initial")
+                    )
+        return dependencies
+
     def _current_state(self):  # type: ignore[no-untyped-def]
         state = super()._current_state()
         for app_label, models in self.apps.items():
@@ -1240,6 +1343,187 @@ async def _run_tortoise_cli(context: MigrationContext, args: Sequence[str]) -> N
     await _run_tortoise_config(context.config, context.migrations_root, args)
 
 
+async def _generate_model_migrations(
+    config: dict[str, Any],
+    migrations_root: Path | None,
+    request: MakeMigrationsRequest,
+    *,
+    quiet: bool = False,
+) -> ModelMigrationPlan | None:
+    """Generate a fresh model baseline from current-model dependencies.
+
+    Full generation validates the finalised model graph before invoking
+    Tortoise. The Wybra autodetector extension adds missing dependencies between
+    simultaneously-created initial migrations; Tortoise cannot target one app
+    at a time because it omits the other apps needed to resolve its relations.
+    """
+    if request.app_labels or request.empty:
+        await _run_tortoise_config(
+            config,
+            migrations_root,
+            _makemigrations_arguments(request),
+            quiet=quiet,
+        )
+        return None
+
+    plan = await model_migration_plan(config)
+    locations = _migration_locations_by_app(config, migrations_root)
+    before = {
+        app_label: _migration_source_paths(location)
+        for app_label, location in locations.items()
+    }
+    await _run_tortoise_config(
+        config,
+        migrations_root,
+        _makemigrations_arguments(request),
+        quiet=quiet,
+    )
+    for app_label in plan.app_labels:
+        _verify_generated_initial_dependencies(
+            app_label,
+            plan.dependencies_for(app_label),
+            _migration_source_paths(locations[app_label]) - before[app_label],
+        )
+    return plan
+
+
+def _makemigrations_arguments(request: MakeMigrationsRequest) -> list[str]:
+    args = ["makemigrations", *request.app_labels]
+    if request.empty:
+        args.append("--empty")
+    if request.name is not None:
+        args.extend(("-n", request.name))
+    return args
+
+
+async def model_migration_plan(config: dict[str, Any]) -> ModelMigrationPlan:
+    """Return a stable app plan derived solely from finalised Tortoise models."""
+    apps_config = config.get("apps")
+    if not isinstance(apps_config, dict):
+        raise MigrationConfigurationError("Tortoise configuration has no apps mapping.")
+    app_labels = tuple(apps_config)
+    dependencies: dict[str, set[str]] = {app_label: set() for app_label in app_labels}
+
+    async with TortoiseContext() as tortoise_context:
+        await tortoise_context.init(config=config, init_connections=False)
+        apps = tortoise_context.apps
+        if apps is None:  # pragma: no cover - TortoiseContext.init guarantees apps
+            raise MigrationStateError("Tortoise did not initialise model apps.")
+        relation_fields = (
+            ForeignKeyFieldInstance,
+            ManyToManyFieldInstance,
+            OneToOneFieldInstance,
+        )
+        for app_label, models in apps.items():
+            if app_label not in dependencies:
+                continue
+            for model in models.values():
+                for field in model._meta.fields_map.values():
+                    if not isinstance(field, relation_fields):
+                        continue
+                    related_model = field.related_model
+                    related_app = getattr(
+                        getattr(related_model, "_meta", None), "app", None
+                    )
+                    if (
+                        isinstance(related_app, str)
+                        and related_app in dependencies
+                        and related_app != app_label
+                    ):
+                        dependencies[app_label].add(related_app)
+
+    ordered_apps = _topological_migration_app_order(app_labels, dependencies)
+    return ModelMigrationPlan(
+        app_labels=ordered_apps,
+        dependencies=tuple(
+            (app_label, tuple(sorted(dependencies[app_label])))
+            for app_label in app_labels
+        ),
+    )
+
+
+def _topological_migration_app_order(
+    app_labels: tuple[str, ...],
+    dependencies: dict[str, set[str]],
+) -> tuple[str, ...]:
+    """Topologically order apps, preserving configured order when independent."""
+    remaining = {app_label: set(dependencies[app_label]) for app_label in app_labels}
+    ordered: list[str] = []
+    while ready := [
+        app_label
+        for app_label in app_labels
+        if app_label in remaining and not remaining[app_label]
+    ]:
+        app_label = ready[0]
+        ordered.append(app_label)
+        remaining.pop(app_label)
+        for app_dependencies in remaining.values():
+            app_dependencies.discard(app_label)
+    if remaining:
+        participants = ", ".join(sorted(remaining))
+        raise MigrationStateError(
+            "Cross-app model relations form a migration dependency cycle: "
+            f"{participants}. Use deliberate staged schema work for the cycle."
+        )
+    return tuple(ordered)
+
+
+def _migration_locations_by_app(
+    config: dict[str, Any],
+    migrations_root: Path | None,
+) -> dict[str, Path]:
+    apps = config.get("apps")
+    if not isinstance(apps, dict):
+        raise MigrationConfigurationError("Tortoise configuration has no apps mapping.")
+    if migrations_root is not None:
+        return {app_label: migrations_root / app_label for app_label in apps}
+    locations: dict[str, Path] = {}
+    for app_label, app_config in apps.items():
+        if not isinstance(app_config, dict):
+            raise MigrationConfigurationError(
+                f"Tortoise app configuration is invalid: {app_label}."
+            )
+        migrations_module = app_config.get("migrations")
+        if not isinstance(migrations_module, str):
+            raise MigrationConfigurationError(
+                f"Tortoise app has no migrations module: {app_label}."
+            )
+        module = __import__(migrations_module, fromlist=["__path__"])
+        paths = getattr(module, "__path__", ())
+        if not paths:
+            raise MigrationConfigurationError(
+                f"Tortoise migrations module is not a package: {migrations_module}."
+            )
+        locations[app_label] = Path(next(iter(paths)))
+    return locations
+
+
+def _migration_source_paths(location: Path) -> set[Path]:
+    return {
+        path for path in location.glob("[0-9][0-9][0-9][0-9]_*.py") if path.is_file()
+    }
+
+
+def _verify_generated_initial_dependencies(
+    app_label: str,
+    required_apps: tuple[str, ...],
+    generated_paths: set[Path],
+) -> None:
+    for migration_path in generated_paths:
+        if migration_path.stem != "0001_initial":
+            continue
+        actual_apps = {
+            dependency_app
+            for dependency_app, _name in migration_dependencies(migration_path)
+        }
+        missing_apps = sorted(set(required_apps) - actual_apps)
+        if missing_apps:
+            raise MigrationStateError(
+                "Generated initial migration is missing model-derived dependencies: "
+                f"app={app_label}, missing={', '.join(missing_apps)}."
+            )
+
+
 async def _run_tortoise_config(
     config: dict[str, Any],
     migrations_root: Path | None,
@@ -1283,10 +1567,10 @@ async def generated_temporary_migrations(
     with TemporaryDirectory(prefix="wybra-migrations-") as directory:
         root = Path(directory)
         generated_config = _config_with_migrations_root(config, root)
-        await _run_tortoise_config(
+        await _generate_model_migrations(
             generated_config,
             root,
-            ["makemigrations"],
+            MakeMigrationsRequest(app_labels=(), empty=False, name=None),
             quiet=True,
         )
         paths = tuple(sorted(root.glob("*/[0-9][0-9][0-9][0-9]_*.py")))

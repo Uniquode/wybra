@@ -8,6 +8,8 @@ from tortoise import fields
 from tortoise.indexes import Index
 
 class Migration(migrations.Migration):
+    dependencies = [('wybra_auth', '0001_initial'), ('wybra_media', '0001_initial')]
+
     initial = True
 
     operations = [
