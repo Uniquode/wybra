@@ -1128,6 +1128,25 @@ class TestForms:
             assert form.fields["media"].options()[0].label == "Configured media"
             assert calls == ["query", "format", "value:" + str(media.id)]
 
+    async def test_model_form_rejects_relation_callbacks_on_non_relation_field(
+        self,
+    ) -> None:
+        async def query(context: RelationQueryContext) -> RelationPage:
+            return RelationPage(())
+
+        class InvalidMediaForm(ModelForm):
+            class Meta:
+                model = MediaItem
+                fields = ("storage_key",)
+                form_options = {"storage_key": FormFieldOptions(relation_query=query)}
+
+        async with migrated_test_database(modules=("wybra.media",)) as database:
+            with pytest.raises(
+                ModelFormDeclarationError,
+                match="Relation form options require a relation field: storage_key",
+            ):
+                InvalidMediaForm(connection=database.capability().database())
+
     async def test_model_form_delete_physically_removes_bound_instance(self) -> None:
         class MediaResourceForm(ModelForm):
             class Meta:
