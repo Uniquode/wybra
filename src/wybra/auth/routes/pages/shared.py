@@ -6,8 +6,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
-from starlette.datastructures import FormData
 
+from wybra.auth.forms import (
+    SecurityAssertionCommandForm,
+    VerificationConfirmCommandForm,
+    VerificationRequestCommandForm,
+    command_text,
+)
 from wybra.auth.ids import parse_uuid
 from wybra.auth.mfa.recovery import RECOVERY_CODE_LENGTH
 from wybra.auth.mfa.webauthn import passkeys_effectively_enabled
@@ -59,11 +64,6 @@ logger = logging.getLogger(__name__)
 def _identity_context(request: Request, **extra: Any) -> dict[str, Any]:
     del request
     return dict(extra)
-
-
-def _form_value(form_data: FormData, name: str, default: str = "") -> str:
-    value = form_data.get(name, default)
-    return value if isinstance(value, str) else default
 
 
 def _identity_options(request: Request) -> IdentityOptions:
@@ -165,8 +165,9 @@ async def _fresh_primary_assertion_satisfied(
     request: Request,
     user: User,
 ) -> bool:
-    form_data = await request_form_data(request)
-    password = _form_value(form_data, "password")
+    form = SecurityAssertionCommandForm()
+    await form.parse(await request_form_data(request))
+    password = command_text(form, "password")
     if not password:
         return False
 
@@ -181,14 +182,15 @@ async def _fresh_security_assertion_satisfied(
     *,
     active_credential_id: str | None,
 ) -> bool:
-    form_data = await request_form_data(request)
-    password = _form_value(form_data, "password")
+    form = SecurityAssertionCommandForm()
+    await form.parse(await request_form_data(request))
+    password = command_text(form, "password")
     if password:
         asserted_user = await authenticate_user(request, user.email, password)
         if asserted_user is not None and asserted_user.id == user.id:
             return True
 
-    totp_code = _form_value(form_data, "totp_code").strip()
+    totp_code = command_text(form, "totp_code").strip()
     if totp_code and active_credential_id is not None:
         store = totp_credential_store(request, scope)
         accepted, _counter, _error = await verify_totp_code_for_credential(
@@ -201,7 +203,7 @@ async def _fresh_security_assertion_satisfied(
         if accepted:
             return True
 
-    recovery_code = _form_value(form_data, "recovery_code").strip().upper()
+    recovery_code = command_text(form, "recovery_code").strip().upper()
     if recovery_code and len(recovery_code) == RECOVERY_CODE_LENGTH:
         store = recovery_code_store(request, scope)
         return await store.consume_recovery_code(str(user.id), recovery_code)
@@ -216,8 +218,9 @@ async def _fresh_single_security_assertion_satisfied(
     *,
     active_credential_id: str | None,
 ) -> bool:
-    form_data = await request_form_data(request)
-    credential = _form_value(form_data, "confirmation").strip()
+    form = SecurityAssertionCommandForm()
+    await form.parse(await request_form_data(request))
+    credential = command_text(form, "confirmation").strip()
     if not credential:
         return False
 
@@ -379,6 +382,8 @@ def _verification_required_response(
         page_title="Verify email",
         email=email,
         form_error="Verify your email before signing in.",
+        request_form=VerificationRequestCommandForm(values={"email": email}),
+        confirm_form=VerificationConfirmCommandForm(),
     )
     return render_page(
         request,

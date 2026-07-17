@@ -4,6 +4,16 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
 from wybra.auth.capabilities import login_required
+from wybra.auth.forms import (
+    PasskeyRevokeCommandForm,
+    PasswordResetConfirmCommandForm,
+    PasswordResetRequestCommandForm,
+    ProviderUnlinkCommandForm,
+    SignupCommandForm,
+    VerificationConfirmCommandForm,
+    VerificationRequestCommandForm,
+    command_text,
+)
 from wybra.auth.mfa.webauthn import (
     passkeys_effectively_enabled as _passkeys_effectively_enabled,
 )
@@ -47,7 +57,6 @@ from wybra.providers.google import GOOGLE_PROVIDER_NAME
 from wybra.template import render_page
 
 from .shared import (
-    _form_value,
     _identity_context,
     _identity_options,
     _load_active_totp_credential_id,
@@ -71,12 +80,17 @@ async def signup(request: Request) -> Response:
         raise HTTPException(status_code=404)
 
     if request.method == "GET":
-        context = _identity_context(request, page_title="Create account")
+        context = _identity_context(
+            request,
+            page_title="Create account",
+            form=SignupCommandForm(),
+        )
         return render_page(request, "identity/pages/signup.html", context)
 
-    form_data = await request_form_data(request)
-    email = _form_value(form_data, "email").strip()
-    password = _form_value(form_data, "password")
+    form = SignupCommandForm()
+    await form.parse(await request_form_data(request))
+    email = command_text(form, "email").strip()
+    password = command_text(form, "password")
     creation_result = await create_local_user_from_signup(
         request,
         email,
@@ -91,6 +105,7 @@ async def signup(request: Request) -> Response:
         form_error=(
             None if created else "Unable to create account with those details."
         ),
+        form=form,
     )
     return render_page(
         request,
@@ -200,8 +215,9 @@ async def _unlink_provider_response(
     provider_name: str,
     provider_label: str,
 ) -> Response:
-    form_data = await request_form_data(request)
-    provider_id = _form_value(form_data, "provider_id")
+    form = ProviderUnlinkCommandForm()
+    await form.parse(await request_form_data(request))
+    provider_id = command_text(form, "provider_id")
     scope_factory = _persistence_scope_from_request(request)
     error: str | None = None
     async with scope_factory() as scope:
@@ -379,6 +395,9 @@ async def _security_passkey_section(
                     "created_at": credential.created_at,
                     "last_used_at": credential.last_used_at,
                     "backed_up": credential.credential_backed_up,
+                    "form": PasskeyRevokeCommandForm(
+                        values={"credential_id": credential.id}
+                    ),
                 }
             )
         email_verified = db_user.is_verified
@@ -483,6 +502,9 @@ async def _security_named_provider_section(
                 {
                     "id": str(provider.id),
                     "account_email": provider.account_email,
+                    "form": ProviderUnlinkCommandForm(
+                        values={"provider_id": str(provider.id)}
+                    ),
                 }
             )
 
@@ -505,17 +527,25 @@ async def _security_named_provider_section(
 )
 async def password_reset(request: Request) -> Response:
     if request.method == "GET":
-        context = _identity_context(request, page_title="Reset password")
+        context = _identity_context(
+            request,
+            page_title="Reset password",
+            request_form=PasswordResetRequestCommandForm(),
+            confirm_form=PasswordResetConfirmCommandForm(),
+        )
         return render_page(request, "identity/pages/password_reset.html", context)
 
-    form_data = await request_form_data(request)
-    email = _form_value(form_data, "email").strip()
+    form = PasswordResetRequestCommandForm()
+    await form.parse(await request_form_data(request))
+    email = command_text(form, "email").strip()
     await request_password_reset(request, email)
     context = _identity_context(
         request,
         page_title="Reset password",
         email=email,
         form_message="If the account exists, a reset link has been queued.",
+        request_form=form,
+        confirm_form=PasswordResetConfirmCommandForm(),
     )
     return render_page(request, "identity/pages/password_reset.html", context)
 
@@ -526,15 +556,18 @@ async def password_reset(request: Request) -> Response:
     name="auth:password-reset-confirm",
 )
 async def password_reset_confirm(request: Request) -> Response:
-    form_data = await request_form_data(request)
-    token = _form_value(form_data, "token")
-    password = _form_value(form_data, "password")
+    form = PasswordResetConfirmCommandForm()
+    await form.parse(await request_form_data(request))
+    token = command_text(form, "token")
+    password = command_text(form, "password")
     did_reset = await reset_password(request, token, password)
     context = _identity_context(
         request,
         page_title="Reset password",
         form_message="Password reset complete." if did_reset else None,
         form_error=None if did_reset else "The reset token is invalid or expired.",
+        request_form=PasswordResetRequestCommandForm(),
+        confirm_form=form,
     )
     return render_page(
         request,
@@ -552,11 +585,17 @@ async def password_reset_confirm(request: Request) -> Response:
 )
 async def verify(request: Request) -> Response:
     if request.method == "GET":
-        context = _identity_context(request, page_title="Verify email")
+        context = _identity_context(
+            request,
+            page_title="Verify email",
+            request_form=VerificationRequestCommandForm(),
+            confirm_form=VerificationConfirmCommandForm(),
+        )
         return render_page(request, "identity/pages/verify.html", context)
 
-    form_data = await request_form_data(request)
-    email = _form_value(form_data, "email").strip()
+    form = VerificationRequestCommandForm()
+    await form.parse(await request_form_data(request))
+    email = command_text(form, "email").strip()
     await request_verification(request, email)
     context = _identity_context(
         request,
@@ -565,6 +604,8 @@ async def verify(request: Request) -> Response:
         form_message=(
             "If the account can be verified, a verification link has been queued."
         ),
+        request_form=form,
+        confirm_form=VerificationConfirmCommandForm(),
     )
     return render_page(request, "identity/pages/verify.html", context)
 
@@ -575,8 +616,9 @@ async def verify(request: Request) -> Response:
     name="auth:verify-confirm",
 )
 async def verify_confirm(request: Request) -> Response:
-    form_data = await request_form_data(request)
-    token = _form_value(form_data, "token")
+    form = VerificationConfirmCommandForm()
+    await form.parse(await request_form_data(request))
+    token = command_text(form, "token")
     verification_result = await verify_user(request, token)
     did_verify = verification_result.is_ok()
     options = _identity_options(request)
@@ -597,6 +639,8 @@ async def verify_confirm(request: Request) -> Response:
         ),
         totp_setup_required=totp_setup_required,
         totp_login_path=request.url_for("auth:login"),
+        request_form=VerificationRequestCommandForm(),
+        confirm_form=form,
     )
     return render_page(
         request,

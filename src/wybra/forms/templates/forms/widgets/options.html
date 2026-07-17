@@ -10,6 +10,7 @@
         {% if option.selected %}checked{% endif %}
         {% if field.required %}required{% endif %}
         {% if field.disabled %}disabled{% endif %}
+        {% for name, value in attr.items() %}{% if value is sameas true %} {{ name }}{% elif value is not sameas false %} {{ name }}="{{ value }}"{% endif %}{% endfor %}
       >
       <span>{{ option.label }}</span>
     </label>

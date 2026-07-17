@@ -301,6 +301,24 @@ async def _save_phone_contact(
     return contact
 
 
+async def save_phone_contact_in_transaction(
+    connection: Any,
+    user_id: uuid.UUID,
+    *,
+    number: str,
+    country_code: str | None,
+    subdivision_code: str | None = None,
+) -> UserPhoneContact:
+    """Persist one phone contact within the caller's writer transaction."""
+    return await _save_phone_contact(
+        connection,
+        user_id,
+        number=number,
+        country_code=country_code,
+        subdivision_code=subdivision_code,
+    )
+
+
 async def _phone_contact(
     connection: Any,
     user_id: uuid.UUID,

@@ -13,24 +13,27 @@
   <p role="alert">{{ form_error }}</p>
   {% endif %}
   <form class="wybra-form" method="post" action="" data-wybra-profile-form>
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}" />
+    {{ render_csrf_field() }}
     {% if "return_to" in profile_form.fields %}
     {{ render_field(profile_form, "return_to") }}
     {% endif %}
-    {% if "preferred_name" in profile_form.fields %}
-    {{ render_field(profile_form, "preferred_name") }}
+    {% if "preferred_name" in profile_details_form.fields %}
+    {{ render_field(profile_details_form, "preferred_name") }}
     {% endif %}
-    {% if "display_name" in profile_form.fields %}
-    {{ render_field(profile_form, "display_name") }}
+    {% if "display_name" in profile_details_form.fields %}
+    {{ render_field(profile_details_form, "display_name") }}
     {% endif %}
-    {% if "pronoun_pair" in profile_form.fields %}
-    {{ render_field(profile_form, "pronoun_pair") }}
+    {% if "pronouns" in profile_details_form.fields %}
+    {{ render_field(profile_details_form, "pronouns") }}
     {% endif %}
-    {% if "profile_link_website" in profile_form.fields %}
-    {{ render_field(profile_form, "profile_link_website") }}
+    {% if "website_links" in profile_details_form.fields %}
+    {{ render_field(profile_details_form, "website_links") }}
     {% endif %}
-    {% if "bio" in profile_form.fields %}
-    {{ render_field(profile_form, "bio") }}
+    {% if "bio" in profile_details_form.fields %}
+    {{ render_field(profile_details_form, "bio") }}
+    {% endif %}
+    {% if "version" in profile_details_form.fields %}
+    {{ render_field(profile_details_form, "version") }}
     {% endif %}
     {% if "phone_country_code" in profile_form.fields or "phone_number" in profile_form.fields %}
     {{ render_phone_contact(

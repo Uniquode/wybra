@@ -20,7 +20,7 @@
   <p class="muted-copy">Username/password login is enabled for this account.</p>
   {% if password_login.disable_available %}
   <form action="{{ password_login.disable_path }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    {{ render_csrf_field() }}
     <button type="submit">Disable username/password login</button>
   </form>
   {% endif %}
@@ -41,8 +41,8 @@
       Passkey sign-in is enabled{% if passkey.backed_up %} and backed up{% endif %}.
     </p>
     <form action="{{ passkeys.revoke_path }}" method="post">
-      <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-      <input name="credential_id" type="hidden" value="{{ passkey.id }}">
+      {{ render_csrf_field() }}
+      {{ render_field(passkey.form, "credential_id") }}
       <button type="submit">Remove passkey</button>
     </form>
   </section>
@@ -57,7 +57,7 @@
     data-csrf-header="{{ csrf_header_name }}"
     data-options-path="{{ passkeys.register_options_path }}"
   >
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    {{ render_csrf_field() }}
     <label>
       Passkey name
       <input autocomplete="off" name="label" placeholder="This device" type="text">
@@ -84,8 +84,8 @@
       {{ provider.label }} sign-in is linked{% if linked_account.account_email %} as {{ linked_account.account_email }}{% endif %}.
     </p>
     <form action="{{ provider.unlink_path }}" method="post">
-      <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-      <input name="provider_id" type="hidden" value="{{ linked_account.id }}">
+    {{ render_csrf_field() }}
+      {{ render_field(linked_account.form, "provider_id") }}
       <button type="submit">Unlink {{ provider.label }}</button>
     </form>
     {% endfor %}

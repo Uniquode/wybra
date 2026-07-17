@@ -151,6 +151,27 @@ async def save_model_update(
     setattr(target, version_name, expected_version + 1)
 
 
+async def ensure_model_version(
+    target: Model,
+    *,
+    client: BaseDBAsyncClient,
+    expected_version: int | None = None,
+) -> None:
+    """Raise when a versioned record no longer matches its submitted version."""
+    version_name = version_field_name(type(target))
+    if version_name is None:
+        return
+    if expected_version is None:
+        raise VersionFieldError("Versioned updates require a submitted version.")
+    if not await (
+        type(target)
+        .filter(pk=target.pk, **{version_name: expected_version})
+        .using_db(client)
+        .exists()
+    ):
+        raise OptimisticLockConflict()
+
+
 async def delete_model_instance(
     target: Model,
     *,
@@ -181,6 +202,7 @@ __all__ = (
     "VersionFieldError",
     "OptimisticLockConflict",
     "delete_model_instance",
+    "ensure_model_version",
     "save_model_update",
     "validate_version_fields",
     "version_column_check_constraint",

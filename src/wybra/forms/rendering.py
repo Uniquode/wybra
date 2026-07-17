@@ -6,7 +6,9 @@ from typing import Any
 
 from markupsafe import Markup
 
-from wybra.forms.fields import FileUploadField, Form, FormError
+from wybra.forms.csrf import CsrfField
+from wybra.forms.field_renderers import FieldRenderer, FormRenderContext
+from wybra.forms.fields import Field, FileUploadField, Form, FormError
 from wybra.forms.phone_contact import PhoneContactControl, UrlForContext
 from wybra.forms.phone_contact_rendering import (
     PhoneContactWidgetError,
@@ -33,15 +35,43 @@ DEFAULT_FIELD_WIDGETS: dict[str, str] = {
     "checkbox": "forms/widgets/checkbox.html",
     "switch": "forms/widgets/checkbox.html",
     "slider": "forms/widgets/text.html",
+    "email": "forms/widgets/text.html",
+    "password": "forms/widgets/text.html",
     "hidden": "forms/widgets/hidden.html",
     "file": "forms/widgets/file.html",
 }
 
 CSRF_RENDERING_CONTEXT_KEYS = frozenset(("csrf_field_name", "csrf_token"))
+type CsrfRenderable = CsrfField | Mapping[str, str]
 
 
 class UnknownWidgetError(FormError):
     """Raised when a form field references an unknown widget."""
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateFieldRenderer:
+    """Default renderer that resolves a field's widget template."""
+
+    def render(self, field: Field, context: FormRenderContext) -> Markup:
+        template_name = context.widget or context.renderer._widget_template(
+            field.widget_name,
+            field_name=field.name,
+        )
+        return _trusted_template_markup(
+            context.renderer.templates.render_template(
+                template_name,
+                {
+                    "form": context.form,
+                    "field": field,
+                    "result": context.form.result,
+                    "attr": context.attr or {},
+                },
+            )
+        )
+
+
+DEFAULT_FIELD_RENDERER = TemplateFieldRenderer()
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,17 +88,20 @@ class TemplateFormRenderer:
         field_name: str,
         *,
         widget: str | None = None,
+        attr: Mapping[str, str | bool] | None = None,
     ) -> Markup:
         field = form.fields[field_name]
-        template_name = widget or self._widget_template(
-            field.widget_name,
-            field_name=field.name,
-        )
-        return _trusted_template_markup(
-            self.templates.render_template(
-                template_name,
-                {"form": form, "field": field, "result": form.result},
-            )
+        if attr is not None and not isinstance(attr, Mapping):
+            raise FormError("Field render attr must be a mapping.")
+        field_renderer: FieldRenderer = field.renderer or DEFAULT_FIELD_RENDERER
+        return field_renderer.render(
+            field,
+            FormRenderContext(
+                form=form,
+                renderer=self,
+                widget=widget,
+                attr=field.attr | dict(attr or {}),
+            ),
         )
 
     def render_form(
@@ -78,7 +111,7 @@ class TemplateFormRenderer:
         action: str = "",
         method: str = "post",
         enctype: str | None = None,
-        csrf: Mapping[str, str] | None = None,
+        csrf: CsrfRenderable | None = None,
         actions: Sequence[str] = ("submit",),
     ) -> Markup:
         resolved_enctype = enctype or _default_enctype(form)
@@ -111,10 +144,11 @@ class TemplateFormRenderer:
             )
         )
 
-    def render_csrf_field(self, csrf: Mapping[str, str]) -> Markup:
-        validate_csrf_rendering_context(csrf)
+    def render_csrf_field(self, csrf: CsrfRenderable) -> Markup:
+        context = _csrf_rendering_context(csrf)
+        validate_csrf_rendering_context(context)
         return _trusted_template_markup(
-            self.templates.render_template(self.csrf_template, dict(csrf))
+            self.templates.render_template(self.csrf_template, dict(context))
         )
 
     def render_phone_contact(
@@ -226,6 +260,7 @@ def render_field(
     field_name: str,
     *,
     widget: str | None = None,
+    attr: Mapping[str, str | bool] | None = None,
     widgets: Mapping[str, str] | None = None,
     url_context: UrlForContext | None = None,
 ) -> Markup:
@@ -234,7 +269,7 @@ def render_field(
         widgets=widgets,
         url_context=url_context,
     )
-    return renderer.render_field(form, field_name, widget=widget)
+    return renderer.render_field(form, field_name, widget=widget, attr=attr)
 
 
 def render_form(
@@ -244,7 +279,7 @@ def render_form(
     action: str = "",
     method: str = "post",
     enctype: str | None = None,
-    csrf: Mapping[str, str] | None = None,
+    csrf: CsrfRenderable | None = None,
     actions: Sequence[str] = ("submit",),
     widgets: Mapping[str, str] | None = None,
     url_context: UrlForContext | None = None,
@@ -267,7 +302,7 @@ def render_form(
 def render_csrf_field(
     templates: TemplateCapability,
     *,
-    csrf: Mapping[str, str],
+    csrf: CsrfRenderable,
 ) -> Markup:
     return TemplateFormRenderer(templates).render_csrf_field(csrf)
 
@@ -341,11 +376,11 @@ def render_phone_contact_fields(
 
 def forms_rendering_context(
     templates: TemplateCapability,
-    csrf: Mapping[str, str] | None = None,
+    csrf: CsrfRenderable | None = None,
     url_context: UrlForContext | None = None,
 ) -> dict[str, Any]:
     if csrf is not None:
-        validate_csrf_rendering_context(csrf)
+        validate_csrf_rendering_context(_csrf_rendering_context(csrf))
     renderer = TemplateFormRenderer(templates, url_context=url_context)
     return {
         "render_form": lambda form, **kwargs: renderer.render_form(
@@ -369,6 +404,12 @@ def validate_csrf_rendering_context(csrf: Mapping[str, str]) -> None:
         raise ValueError(f"CSRF rendering context is missing required keys: {missing}")
 
 
+def _csrf_rendering_context(csrf: CsrfRenderable) -> Mapping[str, str]:
+    if isinstance(csrf, CsrfField):
+        return csrf.rendering_context()
+    return csrf
+
+
 def _trusted_template_markup(html: str) -> Markup:
     return Markup(html)  # nosec B704 - rendered by Jinja with autoescaping enabled.
 
@@ -382,8 +423,10 @@ def _default_enctype(form: Form) -> str | None:
 __all__ = (
     "DEFAULT_FIELD_WIDGETS",
     "CSRF_RENDERING_CONTEXT_KEYS",
+    "DEFAULT_FIELD_RENDERER",
     "PhoneContactWidgetError",
     "TemplateFormRenderer",
+    "TemplateFieldRenderer",
     "UnknownWidgetError",
     "forms_rendering_context",
     "render_csrf_field",

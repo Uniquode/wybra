@@ -13,7 +13,7 @@
     <dd>{{ "Yes" if user.is_active else "No" }}</dd>
   </dl>
   <form action="{{ request.url_for('auth:logout') }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    {{ render_csrf_field() }}
     <button type="submit">Sign out</button>
   </form>
   {% else %}

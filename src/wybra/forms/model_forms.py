@@ -20,6 +20,7 @@ from wybra.db.versioning import (
     VersionField,
     VersionFieldError,
     delete_model_instance,
+    ensure_model_version,
     save_model_update,
     version_field_name,
 )
@@ -164,131 +165,6 @@ class _TortoiseRelationQueryService(RelationQueryService):
         )
 
 
-class Binding:
-    """Base class for model form field bindings."""
-
-    writable = True
-
-    def for_field(self, field_name: str) -> Binding:
-        return self
-
-    def read(self, instance: object) -> object:
-        raise NotImplementedError
-
-    def write(self, instance: object, value: object) -> None:
-        raise NotImplementedError
-
-
-@dataclass(frozen=True, slots=True)
-class Attr(Binding):
-    name: str
-
-    def read(self, instance: object) -> object:
-        try:
-            return getattr(instance, self.name)
-        except AttributeError as exc:
-            raise ModelBindingError(
-                f"Model instance has no attribute for binding: {self.name}."
-            ) from exc
-
-    def write(self, instance: object, value: object) -> None:
-        if not hasattr(instance, self.name):
-            raise ModelBindingError(
-                f"Model instance has no attribute for binding: {self.name}."
-            )
-        setattr(instance, self.name, value)
-
-
-@dataclass(frozen=True, slots=True)
-class JsonPath(Binding):
-    attribute: str
-    keys: tuple[str, ...]
-
-    def __init__(self, attribute: str, *keys: str) -> None:
-        if not keys:
-            raise ModelFormDeclarationError("JsonPath requires at least one key.")
-        object.__setattr__(self, "attribute", attribute)
-        object.__setattr__(self, "keys", keys)
-
-    def read(self, instance: object) -> object:
-        value = Attr(self.attribute).read(instance)
-        if value is None:
-            return None
-        if not isinstance(value, Mapping):
-            raise ModelBindingError(
-                f"Model attribute is not a mapping for JsonPath: {self.attribute}."
-            )
-        return self._read_path(cast(Mapping[str, object], value))
-
-    def write(self, instance: object, value: object) -> None:
-        if not hasattr(instance, self.attribute):
-            raise ModelBindingError(
-                f"Model instance has no attribute for binding: {self.attribute}."
-            )
-        current = getattr(instance, self.attribute)
-        if current is None:
-            current = {}
-        if not isinstance(current, Mapping):
-            raise ModelBindingError(
-                f"Model attribute is not a mapping for JsonPath: {self.attribute}."
-            )
-        current_mapping = cast(Mapping[str, object], current)
-        setattr(instance, self.attribute, self._updated_mapping(current_mapping, value))
-
-    def _read_path(self, value: Mapping[str, object]) -> object:
-        current: object = value
-        for key in self.keys:
-            if not isinstance(current, Mapping):
-                raise ModelBindingError(
-                    f"Model JsonPath segment is not a mapping: {key}."
-                )
-            current_mapping = cast(Mapping[str, object], current)
-            if key not in current_mapping:
-                return None
-            current = current_mapping[key]
-        return current
-
-    def _updated_mapping(
-        self,
-        source: Mapping[str, object],
-        value: object,
-    ) -> dict[str, object]:
-        updated: dict[str, object] = dict(source)
-        cursor = updated
-        for key in self.keys[:-1]:
-            nested = cursor.get(key)
-            if nested is None:
-                nested = {}
-            if not isinstance(nested, Mapping):
-                raise ModelBindingError(
-                    f"Model JsonPath segment is not a mapping: {key}."
-                )
-            copied = dict(nested)
-            cursor[key] = copied
-            cursor = copied
-        cursor[self.keys[-1]] = value
-        return updated
-
-
-@dataclass(frozen=True, slots=True)
-class ReadOnly(Binding):
-    binding: Binding | None = None
-    writable = False
-
-    def for_field(self, field_name: str) -> ReadOnly:
-        if self.binding is None:
-            return ReadOnly(Attr(field_name))
-        return self
-
-    def read(self, instance: object) -> object:
-        if self.binding is None:
-            raise ModelFormDeclarationError("ReadOnly binding is not attached.")
-        return self.binding.read(instance)
-
-    def write(self, instance: object, value: object) -> None:
-        return None
-
-
 class ModelForm(Form):
     @classmethod
     def declared_fields(cls) -> dict[str, Field]:
@@ -377,7 +253,6 @@ class ModelForm(Form):
         ):
             raise ModelBindingError("ModelForm instance must be a Tortoise model.")
         self._validate_declared_model_fields()
-        self.bindings = self._declared_bindings()
         bound_defaults = self._bound_defaults(defaults or {}, instance)
         super().__init__(
             defaults=bound_defaults,
@@ -385,6 +260,7 @@ class ModelForm(Form):
             options=options,
             unknown_fields=unknown_fields,
         )
+        self._apply_form_options()
 
     @staticmethod
     def _select_writer_route(connection: DbConnection | None) -> DbRoute | None:
@@ -410,7 +286,11 @@ class ModelForm(Form):
         query = _TortoiseRelationQueryService(self.connection, self._writer_route)
         for name, related_model in self._relation_fields().items():
             raw_selected = (
-                form_raw_value(selected_values, name)
+                form_raw_value(
+                    selected_values,
+                    name,
+                    multiple=isinstance(self.fields[name], MultiSelectField),
+                )
                 if name in selected_values
                 else self.fields[name].value
             )
@@ -454,16 +334,14 @@ class ModelForm(Form):
 
         for name, result in self.result.fields.items():
             form_field = self.fields[name]
-            binding = self.bindings[name]
             if (
                 form_field.disabled
-                or not binding.writable
                 or not result.is_valid
                 or name in self._many_to_many_fields()
                 or name == version_name
             ):
                 continue
-            binding.write(target, result.value)
+            setattr(target, name, form_field.to_model_value(result.value))
         return target
 
     async def save(self) -> SaveResult:
@@ -472,46 +350,51 @@ class ModelForm(Form):
             return await super().save()
         if self.connection is None or self._writer_route is None:
             raise ModelBindingError("ModelForm persistence requires DbConnection.")
+        async with self._writer_transaction() as client:
+            return await self._save_with_client(client)
+
+    def _writer_transaction(self):
+        if self.connection is None or self._writer_route is None:
+            raise ModelBindingError("ModelForm persistence requires DbConnection.")
+        return tortoise_transaction_for_route(self.connection, self._writer_route)
+
+    async def _save_with_client(self, client: BaseDBAsyncClient) -> SaveResult:
+        """Persist through an already-selected internal writer transaction."""
+        model = self._declared_model()
+        if not isinstance(model, type) or not issubclass(model, Model):
+            raise ModelBindingError("ModelForm persistence requires a Tortoise model.")
         created = self.instance is None
-        target = model() if self.instance is None else cast(Model, self.instance)
+        target = self.create_instance(model) if created else cast(Model, self.instance)
         original = None if created else copy(target)
         self.apply(target)
         if not self.result.is_valid:
             raise FormError("Cannot save an invalid form.")
         changed_fields = self._changed_model_fields(original, target, created)
-        has_submitted_many_to_many = any(
-            self.result.fields[name].value is not None
-            for name in self._many_to_many_fields()
-        )
-        if not created and not changed_fields and not has_submitted_many_to_many:
-            return SaveResult(primary=target, original=original)
         try:
-            async with tortoise_transaction_for_route(
-                self.connection, self._writer_route
-            ) as client:
-                many_to_many_changes = (
-                    tuple(
-                        name
-                        for name in self._many_to_many_fields()
-                        if self.result.fields[name].value is not None
-                    )
-                    if created
-                    else await self._changed_many_to_many_fields(target, client)
+            many_to_many_changes = (
+                tuple(
+                    name
+                    for name in self._many_to_many_fields()
+                    if self.result.fields[name].value is not None
                 )
-                changed_fields += many_to_many_changes
-                if not created and not changed_fields:
-                    return SaveResult(primary=target, original=original)
-                if created:
-                    await target.save(using_db=client)
-                else:
-                    await save_model_update(
-                        target,
-                        client=client,
-                        expected_version=self._submitted_version(),
-                    )
-                await self._save_many_to_many_relations(
-                    target, client, many_to_many_changes
+                if created
+                else await self._changed_many_to_many_fields(target, client)
+            )
+            changed_fields += many_to_many_changes
+            if not created and not changed_fields:
+                await ensure_model_version(
+                    target, client=client, expected_version=self._submitted_version()
                 )
+                return SaveResult(primary=target, original=original)
+            if created:
+                await target.save(using_db=client)
+            else:
+                await save_model_update(
+                    target, client=client, expected_version=self._submitted_version()
+                )
+            await self._save_many_to_many_relations(
+                target, client, many_to_many_changes
+            )
         except OptimisticLockConflict:
             self.add_error(None, "This record was changed by another user.")
             return SaveResult(primary=target, original=original)
@@ -579,6 +462,14 @@ class ModelForm(Form):
         del instance
         return "physical"
 
+    def create_instance(self, model: type[Model]) -> Model:
+        """Create a new model instance for this form.
+
+        Model forms for models with required values outside their editable
+        fields can override this hook to supply those values.
+        """
+        return model()
+
     def _changed_model_fields(
         self,
         original: Model | None,
@@ -588,15 +479,14 @@ class ModelForm(Form):
         changed: list[str] = []
         for name, result in self.result.fields.items():
             form_field = self.fields[name]
-            binding = self.bindings[name]
-            if form_field.disabled or not binding.writable or not result.is_valid:
+            if form_field.disabled or not result.is_valid:
                 continue
             if name in self._many_to_many_fields():
                 continue
             if (
                 created
                 or original is None
-                or binding.read(original) != binding.read(target)
+                or getattr(original, name) != getattr(target, name)
             ):
                 changed.append(name)
         return tuple(changed)
@@ -782,12 +672,14 @@ class ModelForm(Form):
     ) -> dict[str, object]:
         bound_defaults = dict(defaults)
         if instance is not None:
-            bound_defaults.update(
-                {
-                    name: binding.read(instance)
-                    for name, binding in self.bindings.items()
-                }
-            )
+            for name, field in self.declared_fields().items():
+                try:
+                    value = getattr(instance, name)
+                except AttributeError as exc:
+                    raise ModelBindingError(
+                        f"Model instance has no attribute for field: {name}."
+                    ) from exc
+                bound_defaults[name] = field.from_model_value(value)
         return bound_defaults
 
     @classmethod
@@ -802,6 +694,10 @@ class ModelForm(Form):
     @classmethod
     def _validate_declared_model_fields(cls) -> None:
         model = cls._declared_model()
+        if hasattr(getattr(cls, "Meta", None), "bindings"):
+            raise ModelFormDeclarationError(
+                "Meta.bindings is no longer supported; use field value adapters."
+            )
         if not isinstance(model, type) or not issubclass(model, Model):
             return
         try:
@@ -839,28 +735,6 @@ class ModelForm(Form):
         return relation_fields
 
     @classmethod
-    def _declared_bindings(cls) -> dict[str, Binding]:
-        fields = cls.declared_fields()
-        raw_bindings = getattr(getattr(cls, "Meta", None), "bindings", {}) or {}
-        if not isinstance(raw_bindings, Mapping):
-            raise ModelFormDeclarationError("Meta.bindings must be a mapping.")
-
-        unknown = set(raw_bindings) - set(fields)
-        if unknown:
-            raise ModelFormDeclarationError(
-                "Unknown binding field(s): " + ", ".join(sorted(unknown))
-            )
-
-        options = cls._declared_form_options(fields)
-        return {
-            name: cls._binding_with_options(
-                cls._binding_for(name, raw_bindings.get(name, Attr(name))),
-                options[name],
-            )
-            for name in fields
-        }
-
-    @classmethod
     def _declared_form_options(
         cls, fields: Mapping[str, object]
     ) -> dict[str, FormFieldOptions]:
@@ -880,31 +754,18 @@ class ModelForm(Form):
             )
         return {name: raw_options.get(name, FormFieldOptions()) for name in fields}
 
-    @staticmethod
-    def _binding_with_options(binding: Binding, options: FormFieldOptions) -> Binding:
-        return binding if options.editable else ReadOnly(binding)
-
-    @staticmethod
-    def _binding_for(field_name: str, binding: object) -> Binding:
-        if isinstance(binding, str):
-            return Attr(binding)
-        if isinstance(binding, Binding):
-            return binding.for_field(field_name)
-        raise ModelFormDeclarationError(
-            f"Unsupported binding declaration for field: {field_name}."
-        )
+    def _apply_form_options(self) -> None:
+        for name, options in self._declared_form_options(self.fields).items():
+            if not options.editable:
+                self.fields[name].disabled = True
 
 
 __all__ = (
-    "Attr",
-    "Binding",
-    "JsonPath",
     "FormFieldOptions",
     "ModelBindingError",
     "ModelForm",
     "ModelFormDeclarationError",
     "ModelFormError",
-    "ReadOnly",
     "RelationPage",
     "RelationQueryContext",
     "RelationQueryService",

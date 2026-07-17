@@ -26,30 +26,13 @@
   {% else %}
   <p class="muted-copy">{{ confirmation_message }}</p>
   <form action="{{ action_path }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    {{ render_csrf_field() }}
     {% if single_confirmation_field %}
-    <label>
-      Password, authenticator code, or recovery code
-      <input
-        autocomplete="one-time-code"
-        name="confirmation"
-        required
-        type="text"
-      >
-    </label>
+    {{ render_field(form, "confirmation") }}
     {% else %}
-    <label>
-      Password
-      <input autocomplete="current-password" name="password" type="password">
-    </label>
-    <label>
-      Authenticator code
-      <input autocomplete="one-time-code" inputmode="numeric" name="totp_code" type="text">
-    </label>
-    <label>
-      Recovery code
-      <input autocomplete="one-time-code" name="recovery_code" type="text">
-    </label>
+    {{ render_field(form, "password") }}
+    {{ render_field(form, "totp_code") }}
+    {{ render_field(form, "recovery_code") }}
     {% endif %}
     <button type="submit">{{ button_label }}</button>
   </form>

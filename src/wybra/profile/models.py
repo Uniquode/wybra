@@ -7,6 +7,8 @@ from tortoise import fields
 from tortoise.indexes import Index
 from tortoise.models import Model
 
+from wybra.db import VersionField
+
 
 class UserProfile(Model):
     """App-facing profile data linked one-to-one with an auth user."""
@@ -49,6 +51,7 @@ class UserProfile(Model):
     marketing_consent = fields.BooleanField(default=False)
     terms_accepted_at = fields.FloatField(null=True)
     data_deletion_requested = fields.BooleanField(default=False)
+    version = VersionField()
 
     class Meta:
         table = "profile_user_profile"

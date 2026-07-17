@@ -11,6 +11,7 @@ from tortoise.models import Model
 from wybra.auth.email_normalisation import normalise_email
 from wybra.auth.session_tokens import SESSION_TOKEN_MAX_LENGTH
 from wybra.auth.timestamps import current_timestamp
+from wybra.db import VersionField
 
 
 def current_datetime() -> datetime:
@@ -116,6 +117,7 @@ class User(Model):
     expires_at = fields.FloatField(null=True)
     email_verification_sent_at = fields.FloatField(null=True)
     preferred_timezone = fields.CharField(max_length=64, null=True)
+    version = VersionField()
 
     class Meta:
         table = "identity_user"

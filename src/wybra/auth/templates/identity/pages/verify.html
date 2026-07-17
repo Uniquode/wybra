@@ -15,21 +15,15 @@
   <p><a href="{{ totp_login_path }}">Continue to sign in</a></p>
   {% endif %}
   <form action="{{ request.url_for('auth:verify') }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-    <label>
-      Email
-      <input autocomplete="email" name="email" required type="email" value="{{ email or '' }}">
-    </label>
+    {{ render_csrf_field() }}
+    {{ render_field(request_form, "email") }}
     <button type="submit">Request verification link</button>
   </form>
   <details>
     <summary>Have a verification token?</summary>
     <form action="{{ request.url_for('auth:verify-confirm') }}" method="post">
-      <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-      <label>
-        Verification token
-        <input autocomplete="one-time-code" name="token" required type="text">
-      </label>
+      {{ render_csrf_field() }}
+      {{ render_field(confirm_form, "token") }}
       <button type="submit">Verify email</button>
     </form>
   </details>

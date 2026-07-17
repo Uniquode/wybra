@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from wybra.auth.capabilities import login_required
+from wybra.auth.forms import PasskeyRevokeCommandForm, command_text
 from wybra.auth.mfa.storage import (
     WEBAUTHN_ACTIVE_STATUS,
 )
@@ -47,7 +48,6 @@ from wybra.forms import request_form_data
 
 from .account import _security_page_response
 from .shared import (
-    _form_value,
     _identity_options,
     _is_effectively_active_user,
     _load_user_by_id,
@@ -415,8 +415,9 @@ async def revoke_passkey(
     user: User = LOGIN_REQUIRED,
 ) -> Response:
     _ensure_passkeys_supported(request)
-    form_data = await request_form_data(request)
-    credential_row_id = _form_value(form_data, "credential_id")
+    form = PasskeyRevokeCommandForm()
+    await form.parse(await request_form_data(request))
+    credential_row_id = command_text(form, "credential_id")
     if not credential_row_id:
         return RedirectResponse(
             url=_route_path(request, "auth:security"), status_code=303

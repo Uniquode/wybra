@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import PlainTextResponse
+from markupsafe import Markup
 from tests_support.form_binding.models import (
     FormAddress,
     FormContact,
@@ -35,23 +36,25 @@ from wybra.forms import (
     CSRF_FIELD_NAME,
     CSRF_TOKEN_SECRET_KEY_CURRENT,
     CSRF_TOKEN_SECRET_KEY_PREVIOUS,
-    Attr,
     CheckboxField,
     ChoiceField,
     CompositeForm,
     DateField,
     DateTimeField,
+    Field,
     FieldHandler,
+    FieldRenderer,
     FieldResult,
     FileUploadField,
     Form,
     FormError,
     FormFieldOptions,
     FormPostHandler,
+    FormRenderContext,
     FormsCapability,
     FormsSettings,
     HiddenField,
-    JsonPath,
+    JsonField,
     ModelBindingError,
     ModelForm,
     ModelFormDeclarationError,
@@ -62,7 +65,6 @@ from wybra.forms import (
     PhoneContactWidgetError,
     PositiveIntegerField,
     RadioField,
-    ReadOnly,
     RelationPage,
     RelationQueryContext,
     SaveResult,
@@ -133,7 +135,7 @@ class ExampleRecord:
     preferred_name: str = ""
     bio: str = ""
     website_links: dict[str, object] | None = None
-    created_by: str = "system"
+    owner: str = "system"
     disabled_value: str = "stored"
 
 
@@ -303,16 +305,12 @@ class TestFormsTestDoubles:
 class ExampleModelForm(ModelForm):
     preferred_name = TextField(max_length=64)
     bio = TextAreaField(required=False)
-    website = TextField(required=False)
-    owner = TextField(required=False)
+    website_links = JsonField(required=False)
+    owner = TextField(disabled=True, required=False)
     disabled_value = TextField(disabled=True, required=False)
 
     class Meta:
         model = ExampleRecord
-        bindings = {
-            "website": JsonPath("website_links", "website"),
-            "owner": ReadOnly(Attr("created_by")),
-        }
 
 
 def csrf_request(
@@ -387,6 +385,30 @@ def _forms_templates() -> DefaultTemplateCapability:
 
 @pytest.mark.anyio
 class TestForms:
+    async def test_text_fields_trim_but_hidden_fields_preserve_opaque_values(
+        self,
+    ) -> None:
+        class AdaptedForm(Form):
+            name = TextField()
+            token = HiddenField()
+            metadata = JsonField(required=False)
+
+        form = AdaptedForm()
+        result = await form.parse(
+            {
+                "name": "  David  ",
+                "token": " token-with-spaces ",
+                "metadata": '{"enabled": true}',
+            }
+        )
+
+        assert result.is_valid
+        assert form.values == {
+            "name": "David",
+            "token": " token-with-spaces ",
+            "metadata": {"enabled": True},
+        }
+
     async def test_form_discovers_class_variable_fields_with_names_and_labels(
         self,
     ) -> None:
@@ -878,17 +900,6 @@ class TestForms:
             with pytest.raises(ModelFormDeclarationError, match="fixed forward"):
                 CollectionContactForm(connection=database.capability().database())
 
-    async def test_model_form_rejects_unknown_binding_field(self) -> None:
-        class UnknownBindingForm(ModelForm):
-            name = TextField()
-
-            class Meta:
-                model = ExampleRecord
-                bindings = {"missing": Attr("missing")}
-
-        with pytest.raises(ModelFormDeclarationError, match="Unknown binding field"):
-            UnknownBindingForm()
-
     async def test_model_form_meta_fields_and_options_control_editability(self) -> None:
         class RestrictedModelForm(ModelForm):
             preferred_name = TextField()
@@ -1317,7 +1328,9 @@ class TestForms:
 
         assert form.fields["preferred_name"].value == "Submitted"
         assert form.fields["bio"].value == "Model bio"
-        assert form.fields["website"].value == "https://example.test"
+        assert form.fields["website_links"].value == (
+            '{"other": "preserved", "website": "https://example.test"}'
+        )
         assert form.fields["owner"].value == "system"
 
     async def test_model_form_applies_valid_values_to_existing_instance(self) -> None:
@@ -1332,7 +1345,7 @@ class TestForms:
             {
                 "preferred_name": "After",
                 "bio": "After bio",
-                "website": "https://new.example",
+                "website_links": '{"website": "https://new.example"}',
                 "owner": "attacker",
                 "disabled_value": "submitted",
             }
@@ -1343,11 +1356,8 @@ class TestForms:
         assert applied is record
         assert record.preferred_name == "After"
         assert record.bio == "After bio"
-        assert record.website_links == {
-            "website": "https://new.example",
-            "other": "preserved",
-        }
-        assert record.created_by == "system"
+        assert record.website_links == {"website": "https://new.example"}
+        assert record.owner == "system"
         assert record.disabled_value == "stored"
 
     async def test_model_form_applies_valid_values_to_new_instance_for_create_flow(
@@ -1360,7 +1370,7 @@ class TestForms:
             {
                 "preferred_name": "Created",
                 "bio": "Created bio",
-                "website": "https://created.example",
+                "website_links": '{"website": "https://created.example"}',
             }
         )
 
@@ -1410,7 +1420,7 @@ class TestForms:
                 model = ExampleRecord
                 bindings = {"name": object()}
 
-        with pytest.raises(ModelFormDeclarationError, match="Unsupported binding"):
+        with pytest.raises(ModelFormDeclarationError, match="no longer supported"):
             UnsupportedBindingForm()
 
     async def test_model_form_does_not_manage_persistence_transactions(self) -> None:
@@ -2134,6 +2144,34 @@ class TestForms:
         assert "she/her" in choice_html
         assert result is form.result
 
+    async def test_field_renderer_merges_declared_programmatic_and_local_attr(
+        self,
+    ) -> None:
+        class AttrForm(Form):
+            value = TextField(attr={"class": "declared", "data-source": "field"})
+
+        form = AttrForm()
+        form.fields["value"].attr["data-state"] = "programmatic"
+        renderer = TemplateFormRenderer(_forms_templates())
+
+        overridden_html = renderer.render_field(
+            form,
+            "value",
+            attr={"class": "local", "data-source": "render"},
+        )
+        ordinary_html = renderer.render_field(form, "value")
+
+        assert 'class="wybra-form-control local"' in overridden_html
+        assert 'data-source="render"' in overridden_html
+        assert 'data-state="programmatic"' in overridden_html
+        assert 'class="wybra-form-control declared"' in ordinary_html
+        assert 'data-source="field"' in ordinary_html
+        assert form.fields["value"].attr == {
+            "class": "declared",
+            "data-source": "field",
+            "data-state": "programmatic",
+        }
+
     async def test_form_renderer_outputs_form_actions_and_csrf_hidden_field(
         self,
     ) -> None:
@@ -2224,6 +2262,65 @@ class TestForms:
 
         assert 'name="value"' in html
         assert 'value="custom"' in html
+
+    async def test_field_renderers_resolve_field_then_meta_then_default(self) -> None:
+        class Renderer:
+            def __init__(self, marker: str) -> None:
+                self.marker = marker
+                self.contexts: list[FormRenderContext] = []
+
+            def render(self, field: Field, context: FormRenderContext) -> Markup:
+                self.contexts.append(context)
+                return Markup(
+                    f'<output data-renderer="{self.marker}">{field.name}</output>'
+                )
+
+        meta_renderer: FieldRenderer = Renderer("meta")
+        explicit_renderer: FieldRenderer = Renderer("explicit")
+
+        class RendererForm(Form):
+            configured = TextField()
+            explicit = TextField(renderer=explicit_renderer)
+            defaulted = TextField()
+
+            class Meta:
+                renderers = {
+                    "configured": meta_renderer,
+                    "explicit": meta_renderer,
+                }
+
+        form = RendererForm(values={"defaulted": "ordinary"})
+        renderer = TemplateFormRenderer(_forms_templates())
+
+        assert 'data-renderer="meta">configured' in renderer.render_field(
+            form, "configured"
+        )
+        assert 'data-renderer="explicit">explicit' in renderer.render_field(
+            form, "explicit"
+        )
+        assert 'name="defaulted"' in renderer.render_field(form, "defaulted")
+        assert isinstance(meta_renderer, Renderer)
+        assert meta_renderer.contexts[0].form is form
+
+    async def test_form_rejects_unknown_meta_renderer_field(self) -> None:
+        class RendererForm(Form):
+            value = TextField()
+
+            class Meta:
+                renderers = {"missing": object()}
+
+        with pytest.raises(FormError, match="Unknown form renderer field.*missing"):
+            RendererForm()
+
+    async def test_form_rejects_invalid_meta_renderer(self) -> None:
+        class RendererForm(Form):
+            value = TextField()
+
+            class Meta:
+                renderers = {"value": object()}
+
+        with pytest.raises(FormError, match="Meta.renderers values.*render"):
+            RendererForm()
 
     async def test_template_rendering_helpers_return_safe_html(self) -> None:
         form = ExampleForm(values={"preferred_name": "David"})
@@ -2791,7 +2888,7 @@ class TestForms:
             context = forms_context(request, TemplateContext()).as_dict()
             csrf_html = context["render_csrf_field"]()
             return {
-                "field_name": context["csrf_field_name"],
+                "field_name": context["csrf_field"].name,
                 "csrf_html": str(csrf_html),
             }
 
