@@ -1336,6 +1336,66 @@ class TestMigrationCommands:
                 for path in generated.paths
             )
 
+    @pytest.mark.anyio
+    async def test_temporary_relation_targets_retained_migration_leaf(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        package = tmp_path / "committed_sessions" / "migrations"
+        package.mkdir(parents=True)
+        for path in (package.parent / "__init__.py", package / "__init__.py"):
+            path.write_text("", encoding="utf-8")
+        (package / "0001_initial.py").write_text(
+            dedent(
+                """\
+                from tortoise import migrations
+
+
+                class Migration(migrations.Migration):
+                    initial = True
+                    dependencies = []
+                    operations = []
+                """
+            ),
+            encoding="utf-8",
+        )
+        (package / "0002_add_name.py").write_text(
+            dedent(
+                """\
+                from tortoise import migrations
+
+
+                class Migration(migrations.Migration):
+                    dependencies = [("wybra_sessions", "0001_initial")]
+                    operations = []
+                """
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        config = build_tortoise_config(
+            database_url="sqlite://:memory:",
+            modules=("wybra.sessions", "tests_support.migration_dependency"),
+        )
+        apps = config["apps"]
+        assert isinstance(apps, dict)
+        apps["wybra_sessions"]["migrations"] = "committed_sessions.migrations"
+
+        async with migrate_module.generated_temporary_migrations(
+            config,
+            app_labels=("tests_support_migration_dependency",),
+        ) as generated:
+            migration = next(
+                path
+                for path in generated.paths
+                if path.parent.name == "tests_support_migration_dependency"
+            )
+            dependencies = set(migrate_module.migration_dependencies(migration))
+
+        assert ("wybra_sessions", "0002_add_name") in dependencies
+        assert ("wybra_sessions", "0001_initial") not in dependencies
+
     def test_model_migration_plan_rejects_cross_app_cycle(self) -> None:
         with pytest.raises(migrate_module.MigrationStateError, match="cycle"):
             migrate_module._topological_migration_app_order(
