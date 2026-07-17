@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Final, Literal, Protocol, TypeGuard, runtime_checkable
 
 SecretSource = Literal["environment", "kms", "keychain", "vault"]
 
@@ -170,13 +170,17 @@ def normalise_secret_source(
     *,
     name: str = "secret source",
 ) -> SecretSource:
-    if isinstance(value, str) and value in SECRET_SOURCES:
-        return cast(SecretSource, value)
+    if isinstance(value, str) and _is_secret_source(value):
+        return value
     allowed = ", ".join(sorted(SECRET_SOURCES))
     raise UnsupportedSecretSourceError(
         source=value,
         message=f"{name} must be one of: {allowed}.",
     )
+
+
+def _is_secret_source(value: str) -> TypeGuard[SecretSource]:
+    return value in SECRET_SOURCES
 
 
 def secret_key_value(value: object, *, name: str = "secret key") -> str:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Final, Literal, cast, get_args
+from typing import Final, Literal, TypeGuard, cast, get_args
 
 from wybra.core.exceptions import ConfigurationError
 
@@ -23,9 +23,13 @@ def normalise_deployment_environment(
 ) -> DeploymentEnvironment:
     if deployment_environment is None:
         return DEFAULT_DEPLOYMENT_ENVIRONMENT
-    if deployment_environment in ALLOWED_DEPLOYMENT_ENVIRONMENTS:
-        return cast(DeploymentEnvironment, deployment_environment)
+    if _is_deployment_environment(deployment_environment):
+        return deployment_environment
     raise ConfigurationError(DEPLOYMENT_ENVIRONMENT_ERROR)
+
+
+def _is_deployment_environment(value: str) -> TypeGuard[DeploymentEnvironment]:
+    return value in ALLOWED_DEPLOYMENT_ENVIRONMENTS
 
 
 __all__ = (

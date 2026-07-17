@@ -40,7 +40,8 @@ ENVIRONMENT_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 @runtime_checkable
 class SecretSourceDriver(Protocol):
-    source: SecretSource
+    @property
+    def source(self) -> SecretSource: ...
 
     def resolve(self, key: str) -> SecretValue: ...
 

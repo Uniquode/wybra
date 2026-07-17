@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Final, Literal, TypeGuard
 
 DiagnosticLevel = Literal["info", "debug", "trace"]
 
@@ -14,9 +14,13 @@ DIAGNOSTIC_LEVEL_VALUES: Final[dict[DiagnosticLevel, int]] = {
 def normalise_diagnostics_level(value: object) -> DiagnosticLevel:
     if isinstance(value, str):
         normalised = value.strip().lower()
-        if normalised in DIAGNOSTIC_LEVEL_VALUES:
-            return normalised  # ty: ignore[invalid-return-type]
+        if _is_diagnostic_level(normalised):
+            return normalised
     raise ValueError("Diagnostics level must be one of: info, debug, trace.")
+
+
+def _is_diagnostic_level(value: str) -> TypeGuard[DiagnosticLevel]:
+    return value in DIAGNOSTIC_LEVEL_VALUES
 
 
 def to_diagnostics_level(value: object) -> DiagnosticLevel:
