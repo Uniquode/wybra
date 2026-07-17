@@ -21,7 +21,11 @@ from wybra.auth.persistence.contracts import LocalUserRecord
 from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability
 from wybra.db.capabilities import TortoiseDatabaseCapability, tortoise_connection
-from wybra.db.migrate import apply_tortoise_migrations
+from wybra.db.migrate import (
+    apply_tortoise_migrations,
+    apps_requiring_temporary_migrations,
+    generated_temporary_migrations,
+)
 from wybra.db.persistence import (
     Database,
     close_database,
@@ -134,13 +138,29 @@ async def create_test_database(
 
 async def migrate_test_database(database: Database) -> None:
     """Apply native migrations to an existing test database."""
-    apps = database.config.get("apps")
-    if not isinstance(apps, dict):
-        raise RuntimeError("Tortoise test database configuration has no apps.")
-    await apply_tortoise_migrations(
-        database.connection(),
-        cast(dict[str, dict[str, object]], apps),
-    )
+    config = cast(dict[str, Any], database.config)
+    temporary_apps = apps_requiring_temporary_migrations(config)
+    if not temporary_apps:
+        apps = config.get("apps")
+        if not isinstance(apps, dict):
+            raise RuntimeError("Tortoise test database configuration has no apps.")
+        await apply_tortoise_migrations(
+            database.connection(),
+            cast(dict[str, dict[str, object]], apps),
+        )
+        return
+    async with generated_temporary_migrations(
+        config,
+        app_labels=temporary_apps,
+    ) as generated:
+        apps = generated.config.get("apps")
+        if not isinstance(apps, dict):
+            raise RuntimeError("Tortoise test database configuration has no apps.")
+        await apply_tortoise_migrations(
+            database.connection(),
+            cast(dict[str, dict[str, object]], apps),
+            migrations_root=generated.root,
+        )
 
 
 def _migrated_application_table_names(database: Database) -> tuple[str, ...]:

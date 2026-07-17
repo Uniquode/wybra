@@ -41,8 +41,24 @@ class PositiveIntField(fields.IntField):
         return value
 
 
-class VersionField(PositiveIntField):
-    """Non-null, non-negative model version counter starting at zero."""
+class PositiveBigIntField(fields.BigIntField):
+    """Tortoise-compatible non-negative 64-bit integer model field."""
+
+    def to_db_value(self, value: Any, instance: type[Model] | Model) -> int:
+        return self._validated_value(super().to_db_value(value, instance))
+
+    def to_python_value(self, value: Any) -> int:
+        return self._validated_value(super().to_python_value(value))
+
+    @staticmethod
+    def _validated_value(value: int) -> int:
+        if value < 0:
+            raise VersionFieldError("PositiveBigIntField values must be non-negative.")
+        return value
+
+
+class VersionField(PositiveBigIntField):
+    """Non-null, non-negative 64-bit model version counter starting at zero."""
 
     def __init__(self, **kwargs: Any) -> None:
         if kwargs.get("null"):
@@ -161,6 +177,7 @@ async def delete_model_instance(
 __all__ = (
     "VersionField",
     "PositiveIntField",
+    "PositiveBigIntField",
     "VersionFieldError",
     "OptimisticLockConflict",
     "delete_model_instance",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 from wybra.db.settings import ResolvedDatabaseConnection
@@ -16,6 +18,7 @@ def build_tortoise_config(
     default_connection: str = "default",
     routers: Sequence[type[object]] = (),
     modules: Sequence[str],
+    migrations_root: Path | None = None,
 ) -> dict[str, Any]:
     if database_connections is not None:
         if database_url is not None or database_connection is not None:
@@ -44,7 +47,10 @@ def build_tortoise_config(
         "apps": {
             tortoise_app_label(module_name): {
                 "models": list(model_packages),
-                "migrations": tortoise_migrations_module(module_name),
+                "migrations": tortoise_migrations_module(
+                    module_name,
+                    migrations_root=migrations_root,
+                ),
                 "default_connection": default_connection,
             }
             for module_name, model_packages in model_packages_by_module(
@@ -77,5 +83,19 @@ def tortoise_app_label(module_name: str) -> str:
     return module_name.replace(".", "_")
 
 
-def tortoise_migrations_module(module_name: str) -> str:
+def tortoise_migrations_module(
+    module_name: str,
+    *,
+    migrations_root: Path | None = None,
+) -> str:
+    if migrations_root is not None:
+        migrations_package = tortoise_migrations_package(migrations_root)
+        return f"{migrations_package}.{tortoise_app_label(module_name)}"
     return f"{module_name}.migrations"
+
+
+def tortoise_migrations_package(migrations_root: Path) -> str:
+    """Return the stable import package name for an isolated migration root."""
+    resolved_root = migrations_root.resolve()
+    digest = sha256(str(resolved_root).encode()).hexdigest()[:16]
+    return f"_wybra_migrations_{digest}"

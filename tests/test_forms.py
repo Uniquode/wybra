@@ -25,7 +25,7 @@ from wybra.core.runtime import normalise_deployment_environment
 from wybra.db.capabilities import DatabaseCapabilityError
 from wybra.db.routing import DatabaseRouteInstance, DatabaseRouteRegistry
 from wybra.db.versioning import (
-    PositiveIntField,
+    PositiveBigIntField,
     VersionField,
     VersionFieldError,
     version_field_check_constraint,
@@ -514,9 +514,16 @@ class TestForms:
     ) -> None:
         field = VersionField()
 
-        assert isinstance(field, PositiveIntField)
+        assert isinstance(field, PositiveBigIntField)
+        assert field.SQL_TYPE == "BIGINT"
         assert field.default == 0
         assert not field.null
+        with pytest.raises(VersionFieldError, match="non-negative"):
+            field.to_python_value(-1)
+
+    async def test_positive_big_int_field_rejects_negative_values(self) -> None:
+        field = PositiveBigIntField()
+
         with pytest.raises(VersionFieldError, match="non-negative"):
             field.to_python_value(-1)
 

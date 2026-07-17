@@ -27,6 +27,9 @@ build/
 *.sqlite3
 *.db
 
+# Locally inspected test migrations are generated from test models.
+.wybra-test-migrations/
+
 
 .guide.yaml
 .openspec-*.*

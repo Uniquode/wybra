@@ -14,6 +14,7 @@ import wybra.tools.migrate as tools_migrate
 from support_database import sqlite_file_url
 from wybra.core.composition import AppConfig, load_app_config
 from wybra.db.surfaces import model_package_name
+from wybra.db.tortoise import build_tortoise_config, tortoise_migrations_package
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +126,74 @@ def _write_test_app_config(config_path: Path, modules: tuple[str, ...]) -> Path:
 
 
 class TestMigrationCommands:
+    def test_special_migration_marker_requires_non_empty_description(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        migration_path = tmp_path / "0002_special.py"
+        migration_path.write_text(
+            dedent(
+                """
+            from tortoise import migrations
+
+
+            class Migration(migrations.Migration):
+                not_generated = True
+                not_generated_description = "Carries an operational data repair."
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        assert (
+            migrate_module.special_migration_description(migration_path)
+            == "Carries an operational data repair."
+        )
+
+        migration_path.write_text(
+            dedent(
+                """
+            from tortoise import migrations
+
+
+            class Migration(migrations.Migration):
+                not_generated = True
+                not_generated_description = " "
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(
+            migrate_module.MigrationStateError,
+            match="not_generated_description",
+        ):
+            migrate_module.special_migration_description(migration_path)
+
+    def test_special_migration_marker_supports_annotated_declarations(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        migration_path = tmp_path / "0002_special.py"
+        migration_path.write_text(
+            dedent(
+                """
+                from tortoise import migrations
+
+
+                class Migration(migrations.Migration):
+                    not_generated: bool = True
+                    not_generated_description: str = "Carries an operational repair."
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        assert (
+            migrate_module.special_migration_description(migration_path)
+            == "Carries an operational repair."
+        )
+
     def test_wybra_migrate_main_delegates_to_async_entry_point(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -694,6 +763,49 @@ class TestMigrationCommands:
             "database": "database URL: sqlite://<redacted>",
         }
 
+    def test_migrate_destroy_keeps_runtime_credentials_for_role_cleanup(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        observed: dict[str, object] = {}
+
+        def load_settings(
+            database_url: str | None,
+            *,
+            database_credential_purpose="runtime",
+            **_kwargs: object,
+        ) -> MigrationTestSettings:
+            observed["database_credential_purpose"] = database_credential_purpose
+            return MigrationTestSettings(
+                database_url=database_url or "sqlite://:memory:"
+            )
+
+        async def record_destroy(
+            _context: migrate_module.MigrationContext,
+            _request: migrate_module.DestroyDatabaseRequest,
+        ) -> None:
+            return None
+
+        command = migrate_module.create_migrate_command(load_settings)
+        monkeypatch.setattr(
+            migrate_module, "destroy_database_lifecycle", record_destroy
+        )
+
+        assert (
+            migrate_module.run_migrate_command(
+                command,
+                [
+                    "--database-url",
+                    "sqlite://:memory:",
+                    "destroy",
+                    "--confirm",
+                    ":memory:",
+                ],
+            )
+            == 0
+        )
+        assert observed["database_credential_purpose"] == "runtime"
+
     def test_migrate_tasks_lists_database_maintenance_tasks(
         self,
         tmp_path: Path,
@@ -1035,6 +1147,390 @@ class TestMigrationCommands:
                 },
             },
         }
+
+    def test_tortoise_config_routes_migrations_to_configured_root(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        migrations_root = tmp_path / "generated-migrations"
+        settings = MigrationTestSettings(
+            database_url="sqlite:///app.sqlite3",
+            project_root=tmp_path,
+            migrations_root=migrations_root,
+            modules=("wybra.messages",),
+        )
+
+        config = migrate_module.build_tortoise_config(settings)
+
+        migrations_package = tortoise_migrations_package(migrations_root)
+        assert config["apps"] == {
+            "wybra_sessions": {
+                "models": [model_package_name("wybra.sessions")],
+                "migrations": f"{migrations_package}.wybra_sessions",
+                "default_connection": "default",
+            },
+            "wybra_messages": {
+                "models": [model_package_name("wybra.messages")],
+                "migrations": f"{migrations_package}.wybra_messages",
+                "default_connection": "default",
+            },
+        }
+
+    def test_temporary_migrations_root_is_importable_only_during_command(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        migrations_root = tmp_path / "generated-migrations"
+        package_name = tortoise_migrations_package(migrations_root)
+
+        with migrate_module._temporary_migrations_package(migrations_root):
+            package = sys.modules[package_name]
+            assert package.__path__ == [str(migrations_root)]
+
+        assert package_name not in sys.modules
+
+    def test_migration_context_overrides_model_surface_and_root(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        settings = MigrationTestSettings(
+            database_url="sqlite:///app.sqlite3",
+            project_root=tmp_path,
+        )
+        context = migrate_module.build_migration_context(settings)
+        migrations_root = tmp_path / "generated-migrations"
+
+        overridden = migrate_module._migration_context_with_overrides(
+            context,
+            model_modules=("wybra.messages.models",),
+            migrations_root=migrations_root,
+        )
+
+        package = tortoise_migrations_package(migrations_root)
+        assert overridden.config["apps"] == {
+            "wybra_sessions": {
+                "models": [model_package_name("wybra.sessions")],
+                "migrations": f"{package}.wybra_sessions",
+                "default_connection": "default",
+            },
+            "wybra_messages": {
+                "models": [model_package_name("wybra.messages")],
+                "migrations": f"{package}.wybra_messages",
+                "default_connection": "default",
+            },
+        }
+
+    @pytest.mark.anyio
+    async def test_makemigrations_writes_selected_models_to_temporary_root(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        settings = MigrationTestSettings(
+            database_url=sqlite_file_url(tmp_path / "database.sqlite3"),
+            project_root=tmp_path,
+        )
+        context = migrate_module._migration_context_with_overrides(
+            migrate_module.build_migration_context(settings),
+            model_modules=("tests_support.form_binding.models",),
+            migrations_root=tmp_path / "generated-migrations",
+        )
+
+        await migrate_module.TortoiseMigrationBackend().makemigrations(
+            context,
+            migrate_module.MakeMigrationsRequest(
+                app_labels=(),
+                empty=False,
+                name=None,
+            ),
+        )
+
+        generated_files = tuple(
+            (tmp_path / "generated-migrations").glob("*/[0-9][0-9][0-9][0-9]_*.py")
+        )
+        assert generated_files
+        form_binding_migration = next(
+            path
+            for path in generated_files
+            if path.parent.name == "tests_support_form_binding"
+        )
+        generated_source = form_binding_migration.read_text(encoding="utf-8")
+        assert "from wybra.db.versioning import VersionField" in generated_source
+        assert "('version', VersionField(default=0))" in generated_source
+        assert "test_form_versioned_record_version_non_negative" in generated_source
+        assert "version >= 0" in generated_source
+
+    @pytest.mark.anyio
+    async def test_model_migration_plan_uses_relations_not_configured_order(
+        self,
+    ) -> None:
+        config = build_tortoise_config(
+            database_url="sqlite://:memory:",
+            modules=("wybra.auth", "wybra.media", "wybra.profile"),
+        )
+        apps = config["apps"]
+        assert isinstance(apps, dict)
+        config["apps"] = {
+            "wybra_profile": apps["wybra_profile"],
+            "wybra_media": apps["wybra_media"],
+            "wybra_auth": apps["wybra_auth"],
+            "wybra_sessions": apps["wybra_sessions"],
+        }
+
+        plan = await migrate_module.model_migration_plan(config)
+
+        assert plan.app_labels.index("wybra_auth") < plan.app_labels.index(
+            "wybra_profile"
+        )
+        assert plan.app_labels.index("wybra_media") < plan.app_labels.index(
+            "wybra_profile"
+        )
+        assert plan.dependencies_for("wybra_profile") == (
+            "wybra_auth",
+            "wybra_media",
+        )
+
+    @pytest.mark.anyio
+    async def test_generated_profile_initial_migration_has_model_dependencies(
+        self,
+    ) -> None:
+        config = build_tortoise_config(
+            database_url="sqlite://:memory:",
+            modules=("wybra.auth", "wybra.media", "wybra.profile"),
+        )
+
+        async with migrate_module.generated_temporary_migrations(config) as generated:
+            profile_migration = next(
+                path for path in generated.paths if path.parent.name == "wybra_profile"
+            )
+            dependencies = set(migrate_module.migration_dependencies(profile_migration))
+
+        assert dependencies >= {
+            ("wybra_auth", "0001_initial"),
+            ("wybra_media", "0001_initial"),
+        }
+
+    @pytest.mark.anyio
+    async def test_temporary_generation_redirects_committed_apps_before_detection(
+        self,
+    ) -> None:
+        config = build_tortoise_config(
+            database_url="sqlite://:memory:",
+            modules=("wybra.sessions", "tests_support.form_binding"),
+        )
+        apps = config["apps"]
+        assert isinstance(apps, dict)
+        committed_sessions_migrations = apps["wybra_sessions"]["migrations"]
+
+        async with migrate_module.generated_temporary_migrations(
+            config,
+            app_labels=("tests_support_form_binding",),
+        ) as generated:
+            generated_apps = generated.config["apps"]
+            assert isinstance(generated_apps, dict)
+            assert generated_apps["wybra_sessions"]["migrations"] == (
+                committed_sessions_migrations
+            )
+            assert any(path.parent.name == "wybra_sessions" for path in generated.paths)
+            assert any(
+                path.parent.name == "tests_support_form_binding"
+                for path in generated.paths
+            )
+
+    @pytest.mark.anyio
+    async def test_temporary_relation_targets_retained_migration_leaf(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        package = tmp_path / "committed_sessions" / "migrations"
+        package.mkdir(parents=True)
+        for path in (package.parent / "__init__.py", package / "__init__.py"):
+            path.write_text("", encoding="utf-8")
+        (package / "0001_initial.py").write_text(
+            dedent(
+                """\
+                from tortoise import migrations
+
+
+                class Migration(migrations.Migration):
+                    initial = True
+                    dependencies = []
+                    operations = []
+                """
+            ),
+            encoding="utf-8",
+        )
+        (package / "0002_add_name.py").write_text(
+            dedent(
+                """\
+                from tortoise import migrations
+
+
+                class Migration(migrations.Migration):
+                    dependencies = [("wybra_sessions", "0001_initial")]
+                    operations = []
+                """
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        config = build_tortoise_config(
+            database_url="sqlite://:memory:",
+            modules=("wybra.sessions", "tests_support.migration_dependency"),
+        )
+        apps = config["apps"]
+        assert isinstance(apps, dict)
+        apps["wybra_sessions"]["migrations"] = "committed_sessions.migrations"
+
+        async with migrate_module.generated_temporary_migrations(
+            config,
+            app_labels=("tests_support_migration_dependency",),
+        ) as generated:
+            migration = next(
+                path
+                for path in generated.paths
+                if path.parent.name == "tests_support_migration_dependency"
+            )
+            dependencies = set(migrate_module.migration_dependencies(migration))
+
+        assert ("wybra_sessions", "0002_add_name") in dependencies
+        assert ("wybra_sessions", "0001_initial") not in dependencies
+
+    def test_model_migration_plan_rejects_cross_app_cycle(self) -> None:
+        with pytest.raises(migrate_module.MigrationStateError, match="cycle"):
+            migrate_module._topological_migration_app_order(
+                ("app_a", "app_b"),
+                {"app_a": {"app_b"}, "app_b": {"app_a"}},
+            )
+
+    @pytest.mark.anyio
+    async def test_generated_temporary_migrations_are_removed_after_failure(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        settings = MigrationTestSettings(
+            database_url=sqlite_file_url(tmp_path / "database.sqlite3"),
+            project_root=tmp_path,
+            modules=("tests_support.form_binding",),
+        )
+        root: Path | None = None
+
+        with pytest.raises(RuntimeError, match="test failure"):
+            async with migrate_module.generated_temporary_migrations(
+                migrate_module.build_tortoise_config(settings)
+            ) as generated:
+                root = generated.root
+                assert generated.paths
+                raise RuntimeError("test failure")
+
+        assert root is not None
+        assert not root.exists()
+
+    @pytest.mark.anyio
+    async def test_generated_temporary_migrations_are_removed_after_success(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        settings = MigrationTestSettings(
+            database_url=sqlite_file_url(tmp_path / "database.sqlite3"),
+            project_root=tmp_path,
+            modules=("tests_support.form_binding",),
+        )
+
+        async with migrate_module.generated_temporary_migrations(
+            migrate_module.build_tortoise_config(settings)
+        ) as generated:
+            root = generated.root
+            assert generated.paths
+
+        assert not root.exists()
+
+    @pytest.mark.anyio
+    async def test_reset_plan_rejects_unplanned_special_migration(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        migrations = tmp_path / "migrations"
+        migrations.mkdir()
+        special = migrations / "0002_special.py"
+        special.write_text(
+            dedent(
+                """
+                from tortoise import migrations
+
+
+                class Migration(migrations.Migration):
+                    not_generated = True
+                    not_generated_description = "Backfill historical values."
+                """
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            migrate_module,
+            "migration_version_locations_from_modules",
+            lambda _modules: (migrations,),
+        )
+        context = migrate_module.build_migration_context(
+            MigrationTestSettings(
+                database_url="sqlite://:memory:",
+                project_root=tmp_path,
+            )
+        )
+
+        with pytest.raises(migrate_module.MigrationStateError, match="provenance"):
+            await migrate_module.plan_migration_reset(context)
+
+    @pytest.mark.anyio
+    async def test_reset_migrations_destroys_database_before_removing_history(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        migrations = tmp_path / "migrations"
+        migrations.mkdir()
+        initialiser = migrations / "__init__.py"
+        initialiser.write_text("", encoding="utf-8")
+        generated = migrations / "0001_initial.py"
+        generated.write_text("generated", encoding="utf-8")
+        plan = migrate_module.MigrationResetPlan(
+            generated_baseline=(tmp_path / "baseline.py",),
+            migration_locations=(migrations,),
+        )
+        events: list[str] = []
+
+        async def plan_reset(
+            _context: migrate_module.MigrationContext,
+        ) -> migrate_module.MigrationResetPlan:
+            return plan
+
+        async def destroy(
+            _context: migrate_module.MigrationContext,
+            _request: migrate_module.DestroyDatabaseRequest,
+        ) -> None:
+            events.append("destroy")
+            assert generated.exists()
+
+        monkeypatch.setattr(migrate_module, "plan_migration_reset", plan_reset)
+        monkeypatch.setattr(migrate_module, "destroy_database_lifecycle", destroy)
+        context = migrate_module.build_migration_context(
+            MigrationTestSettings(
+                database_url="sqlite://:memory:",
+                project_root=tmp_path,
+            )
+        )
+
+        assert (
+            await migrate_module.reset_migrations_lifecycle(
+                context,
+                confirm="database",
+            )
+            == plan
+        )
+        assert events == ["destroy"]
+        assert initialiser.exists()
+        assert not generated.exists()
 
     @pytest.mark.anyio
     async def test_run_tortoise_cli_uses_transient_config_module_and_removes_it(
