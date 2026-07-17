@@ -16,8 +16,8 @@ from support_database import sqlite_file_url
 from wybra.auth import models as auth_models  # noqa: F401
 from wybra.config import ConfigService, MappingConfigSource
 from wybra.core import InputValidationError
-from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
-from wybra.db.capabilities import tortoise_transaction
+from wybra.db import DatabaseCapability
+from wybra.db.capabilities import WybraDatabaseCapability, tortoise_transaction
 from wybra.db.surfaces import discover_model_package
 from wybra.media import (
     FilesystemMediaCapability,
@@ -102,7 +102,7 @@ async def _site_with_media_database(tmp_path: Path) -> Site:
     )
     site.provide_capability(
         DatabaseCapability,
-        TortoiseDatabaseCapability(database),
+        WybraDatabaseCapability(database),
     )
     return site
 

@@ -19,7 +19,8 @@ from wybra.auth.models import User
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
 from wybra.core import InputValidationError
 from wybra.core.resources import PackageResourceSource
-from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
+from wybra.db import DatabaseCapability
+from wybra.db.capabilities import WybraDatabaseCapability
 from wybra.db.surfaces import discover_model_package
 from wybra.forms import (
     CsrfProtector,
@@ -221,7 +222,7 @@ async def _site_with_database(tmp_path: Path) -> Site:
     )
     site.provide_capability(
         DatabaseCapability,
-        TortoiseDatabaseCapability(database),
+        WybraDatabaseCapability(database),
     )
     _CREATED_SITES.append(site)
     return site
@@ -256,7 +257,7 @@ async def _profile_route_site(
     )
     site.provide_capability(
         DatabaseCapability,
-        TortoiseDatabaseCapability(database),
+        WybraDatabaseCapability(database),
     )
     site.provide_capability(
         ProfileCapability,
@@ -308,7 +309,7 @@ def _widget_site(
 
 async def _create_site_schema(site: Site) -> None:
     capability = site.require_capability(DatabaseCapability)
-    assert isinstance(capability, TortoiseDatabaseCapability)
+    assert isinstance(capability, WybraDatabaseCapability)
     await migrate_test_database(capability._database)
     user = getattr(site.app.state, "profile_test_user", None)
     if isinstance(user, ProfileUser):

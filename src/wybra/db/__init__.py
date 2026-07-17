@@ -7,7 +7,9 @@ not import host application settings, route modules, or startup code.
 from wybra.db.capabilities import (
     DatabaseCapability,
     DatabaseCapabilityError,
-    TortoiseDatabaseCapability,
+)
+from wybra.db.capabilities import (
+    WybraDatabaseCapability as _WybraDatabaseCapability,
 )
 from wybra.db.config import module_config
 from wybra.db.routing import DbConnection, DbRoute
@@ -54,7 +56,7 @@ async def setup_site(site: Site) -> None:
         )
     site.provide_capability(
         DatabaseCapability,
-        await TortoiseDatabaseCapability.from_database_routing(
+        await _WybraDatabaseCapability.from_database_routing(
             database_routing,
             modules=site.modules,
         ),
@@ -74,7 +76,6 @@ __all__ = (
     "ResolvedDatabaseConnection",
     "ResolvedDatabaseRouting",
     "StructuredDatabaseConfig",
-    "TortoiseDatabaseCapability",
     "available_database_url_schemes",
     "resolve_database_connection_from_config",
     "resolve_database_routing_from_config",

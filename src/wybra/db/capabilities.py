@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from tortoise.backends.base.client import BaseDBAsyncClient
+from tortoise.models import Model
 
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.persistence import Database, close_database, create_database
@@ -29,6 +30,8 @@ class DatabaseCapability(Protocol):
     """Public database capability exposed through ``Site``."""
 
     def database(self, name: str = "default") -> DbConnection: ...
+
+    def models(self) -> tuple[type[Model], ...]: ...
 
     async def close(self) -> None: ...
 
@@ -88,7 +91,7 @@ def tortoise_transaction(
 
 
 @dataclass(frozen=True, slots=True)
-class TortoiseDatabaseCapability:
+class WybraDatabaseCapability:
     _database: Database
     _closed: bool = field(default=False, init=False, repr=False)
 
@@ -98,7 +101,7 @@ class TortoiseDatabaseCapability:
         database_routing: ResolvedDatabaseRouting,
         *,
         modules: Sequence[str],
-    ) -> TortoiseDatabaseCapability:
+    ) -> WybraDatabaseCapability:
         database = await create_database(
             database_routing.instances[0].connection,
             modules=modules,
@@ -113,6 +116,19 @@ class TortoiseDatabaseCapability:
             return DbConnection(connection._registry, connection.name, self)
         except ConfigurationError as exc:
             raise DatabaseCapabilityError(str(exc)) from exc
+
+    def models(self) -> tuple[type[Model], ...]:
+        """Return the finalised configured Tortoise model classes."""
+        self._require_open()
+        apps = self._database.context.apps
+        if apps is None:
+            raise DatabaseCapabilityError("Database model context is not finalised.")
+        return tuple(
+            model
+            for app_models in apps.values()
+            for model in app_models.values()
+            if isinstance(model, type) and issubclass(model, Model)
+        )
 
     def _connection_for(self, route: DbRoute) -> BaseDBAsyncClient:
         self._require_open()

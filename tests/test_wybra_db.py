@@ -26,7 +26,7 @@ from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability
 from wybra.db.capabilities import (
     DatabaseCapabilityError,
-    TortoiseDatabaseCapability,
+    WybraDatabaseCapability,
     tortoise_connection,
     tortoise_transaction,
 )
@@ -915,7 +915,7 @@ class TestDatabaseConfigurationAndRuntime:
         )
         database = site.require_capability(DatabaseCapability)
         try:
-            assert isinstance(database, TortoiseDatabaseCapability)
+            assert isinstance(database, WybraDatabaseCapability)
             applications = database._database.config["apps"]
             assert isinstance(applications, dict)
             assert {
@@ -933,7 +933,7 @@ class TestDatabaseConfigurationAndRuntime:
         site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
         database = site.require_capability(DatabaseCapability)
         try:
-            assert isinstance(database, TortoiseDatabaseCapability)
+            assert isinstance(database, WybraDatabaseCapability)
             route = database.database().for_write()
             connection = tortoise_connection(database, route)
 
@@ -2597,7 +2597,7 @@ class TestDatabaseConfigurationAndRuntime:
             "wybra.db.capabilities.close_database",
             close_or_fail,
         )
-        database = TortoiseDatabaseCapability(first_database)
+        database = WybraDatabaseCapability(first_database)
 
         with pytest.raises(DatabaseCapabilityError, match="error_count=1"):
             await database.close()
