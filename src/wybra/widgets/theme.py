@@ -1,5 +1,5 @@
 import json
-from typing import Literal, cast
+from typing import Literal, TypeGuard
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import Request
@@ -24,10 +24,14 @@ THEME_MODE_ICONS: dict[ThemeMode, str] = {
 
 
 def normalise_theme_mode(value: str | None) -> ThemeMode:
-    if value in THEME_MODES:
-        return cast(ThemeMode, value)
+    if value is not None and _is_theme_mode(value):
+        return value
 
     return "auto"
+
+
+def _is_theme_mode(value: str) -> TypeGuard[ThemeMode]:
+    return value in THEME_MODES
 
 
 def normalise_theme_return_path(value: str | None, default: str = "/") -> str:

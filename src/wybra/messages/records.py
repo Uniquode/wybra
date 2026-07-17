@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, Self, cast
+from typing import Final, Literal, Self, TypeGuard
 
 from wybra.messages.exceptions import InvalidAlertError
 
@@ -69,10 +69,14 @@ def normalise_alert_severity(value: object) -> AlertSeverity:
     if not isinstance(value, str):
         raise InvalidAlertError("Alert severity must be a string.")
     severity = value.strip().lower()
-    if severity not in ALERT_SEVERITIES:
+    if not _is_alert_severity(severity):
         allowed = ", ".join(sorted(ALERT_SEVERITIES))
         raise InvalidAlertError(f"Alert severity must be one of: {allowed}.")
-    return cast(AlertSeverity, severity)
+    return severity
+
+
+def _is_alert_severity(value: str) -> TypeGuard[AlertSeverity]:
+    return value in ALERT_SEVERITIES
 
 
 def normalise_alert_message(value: object, *, max_message_length: int) -> str:
