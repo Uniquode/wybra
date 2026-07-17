@@ -248,7 +248,7 @@ class MigrationContext:
 
 @dataclass(frozen=True, slots=True)
 class GeneratedTemporaryMigrations:
-    """Generated migrations and their import configuration for one test lifecycle."""
+    """Generated migrations and application configuration for one test lifecycle."""
 
     config: dict[str, Any]
     root: Path
@@ -1566,23 +1566,31 @@ async def generated_temporary_migrations(
     *,
     app_labels: tuple[str, ...] | None = None,
 ) -> AsyncIterator[GeneratedTemporaryMigrations]:
-    """Generate test migrations in an isolated root and remove them afterwards."""
+    """Generate test migrations safely in an isolated root and remove them.
+
+    Tortoise's autodetector examines every configured app, regardless of which
+    app migration paths the test lifecycle will ultimately apply.  Therefore
+    every app is redirected to the disposable root while generating.  The
+    yielded configuration restores committed migration paths for apps that do
+    not require generated test migrations.
+    """
     with TemporaryDirectory(prefix="wybra-migrations-") as directory:
         root = Path(directory)
-        generated_config = _config_with_migrations_root(
+        generation_config = _config_with_migrations_root(config, root)
+        application_config = _config_with_migrations_root(
             config,
             root,
             app_labels=app_labels,
         )
         await _generate_model_migrations(
-            generated_config,
+            generation_config,
             root,
             MakeMigrationsRequest(app_labels=(), empty=False, name=None),
             quiet=True,
         )
         paths = tuple(sorted(root.glob("*/[0-9][0-9][0-9][0-9]_*.py")))
         yield GeneratedTemporaryMigrations(
-            config=generated_config,
+            config=application_config,
             root=root,
             paths=paths,
         )

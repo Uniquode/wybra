@@ -1309,6 +1309,33 @@ class TestMigrationCommands:
             ("wybra_media", "0001_initial"),
         }
 
+    @pytest.mark.anyio
+    async def test_temporary_generation_redirects_committed_apps_before_detection(
+        self,
+    ) -> None:
+        config = build_tortoise_config(
+            database_url="sqlite://:memory:",
+            modules=("wybra.sessions", "tests_support.form_binding"),
+        )
+        apps = config["apps"]
+        assert isinstance(apps, dict)
+        committed_sessions_migrations = apps["wybra_sessions"]["migrations"]
+
+        async with migrate_module.generated_temporary_migrations(
+            config,
+            app_labels=("tests_support_form_binding",),
+        ) as generated:
+            generated_apps = generated.config["apps"]
+            assert isinstance(generated_apps, dict)
+            assert generated_apps["wybra_sessions"]["migrations"] == (
+                committed_sessions_migrations
+            )
+            assert any(path.parent.name == "wybra_sessions" for path in generated.paths)
+            assert any(
+                path.parent.name == "tests_support_form_binding"
+                for path in generated.paths
+            )
+
     def test_model_migration_plan_rejects_cross_app_cycle(self) -> None:
         with pytest.raises(migrate_module.MigrationStateError, match="cycle"):
             migrate_module._topological_migration_app_order(
