@@ -1,7 +1,7 @@
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
-from starlette.datastructures import FormData
 
+from wybra.auth.forms import LoginCommandForm, command_flag, command_text
 from wybra.auth.ids import log_safe_uuid
 from wybra.auth.mfa.recovery import RECOVERY_CODE_LENGTH
 from wybra.auth.mfa.storage import TOTP_ACTIVE_STATUS
@@ -17,7 +17,6 @@ from wybra.auth.result import (
 )
 from wybra.auth.routes.paths import normalise_return_to
 from wybra.auth.routes.totp import (
-    TOTP_SETUP_BYPASS_TOKEN,
     clear_totp_login_nonce_cookie,
     clear_totp_setup_nonce_cookie,
     is_totp_setup_challenge,
@@ -47,7 +46,6 @@ from .shared import (
     _complete_login_ceremony,
     _create_totp_login_challenge,
     _create_totp_setup_challenge,
-    _form_value,
     _identity_options,
     _is_effectively_active_user,
     _load_active_totp_credential_id,
@@ -89,17 +87,15 @@ async def login(request: Request) -> Response:
             ),
         )
 
-    form_data = await request_form_data(request)
-    email = _form_value(form_data, "email").strip()
-    password = _form_value(form_data, "password")
-    return_to = normalise_return_to(_form_value(form_data, "return_to"))
-    challenge_id = _form_value(form_data, "challenge_id")
+    form = LoginCommandForm()
+    await form.parse(await request_form_data(request))
+    email = command_text(form, "email").strip()
+    password = command_text(form, "password")
+    return_to = normalise_return_to(command_text(form, "return_to"))
+    challenge_id = command_text(form, "challenge_id")
     if not challenge_id:
-        challenge_id = _form_value(form_data, "setup_challenge_id")
-    setup_bypass = _form_value(form_data, TOTP_SETUP_BYPASS_TOKEN).lower() in (
-        "1",
-        "true",
-    )
+        challenge_id = command_text(form, "setup_challenge_id")
+    setup_bypass = command_flag(form, "bypass_totp_setup")
 
     if challenge_id:
         return await _handle_login_totp_challenge(
@@ -108,7 +104,7 @@ async def login(request: Request) -> Response:
             return_to=return_to,
             email=email,
             password=password,
-            submitted_code=_submitted_totp_code_value(form_data),
+            submitted_code=_submitted_totp_code_value(form),
             setup_bypass=setup_bypass,
         )
 
@@ -120,12 +116,12 @@ async def login(request: Request) -> Response:
     )
 
 
-def _submitted_totp_code_value(form_data: FormData) -> str:
-    totp_code = _form_value(form_data, "totp_code").strip()
+def _submitted_totp_code_value(form: LoginCommandForm) -> str:
+    totp_code = command_text(form, "totp_code").strip()
     if totp_code:
         return totp_code
 
-    return _form_value(form_data, "recovery_code").strip()
+    return command_text(form, "recovery_code").strip()
 
 
 async def _handle_primary_login(

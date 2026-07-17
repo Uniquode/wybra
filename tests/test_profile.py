@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from tortoise.exceptions import IntegrityError
 
 from support_database import database_write_transaction, sqlite_file_url
 from wybra.auth import AuthCapability, login_required  # noqa: F401
@@ -50,7 +51,7 @@ from wybra.profile import (
     render_profile_bio,
     subdivision_choices,
 )
-from wybra.profile.forms import ProfileEditForm
+from wybra.profile.forms import ProfileDetailsForm, ProfileEditForm
 from wybra.profile.models import UserPhoneContact, UserProfile
 from wybra.profile.persistence import TortoiseProfileRepository
 from wybra.profile.routes import profile_router
@@ -127,31 +128,34 @@ class ProfileTemplateStub:
 
     def _render(self, template_name: str, context: dict[str, object]) -> str:
         profile_form = context.get("profile_form") or context["form"]
+        profile_details_form = context.get("profile_details_form")
         preferred_name = ""
         field_errors = ""
         phone_states = ""
-        if isinstance(profile_form, ProfileEditForm):
-            preferred_name = str(profile_form.fields["preferred_name"].value or "")
+        if isinstance(profile_details_form, ProfileDetailsForm):
+            preferred_name = str(
+                profile_details_form.fields["preferred_name"].value or ""
+            )
             field_errors = ",".join(
                 f"{field}:{'|'.join(errors)}"
-                for field, errors in profile_form.errors.items()
+                for field, errors in profile_details_form.errors.items()
                 if field is not None
             )
-            phone_subdivision = profile_form.fields.get("phone_subdivision_code")
-            phone_number = profile_form.fields.get("phone_number")
-            if phone_subdivision is not None:
-                phone_states += "|subdivisions=" + ",".join(
-                    option.label for option in phone_subdivision.options()
-                )
-            if phone_number is not None and phone_number.disabled:
-                phone_states += "|phone_disabled"
-            if phone_number is not None:
-                phone_states += f"|phone_number={phone_number.value or ''}"
-            country = profile_form.fields.get("phone_country_code")
-            if country is not None:
-                phone_states += f"|country={country.value or ''}"
-            if phone_subdivision is not None:
-                phone_states += f"|subdivision={phone_subdivision.value or ''}"
+        phone_subdivision = profile_form.fields.get("phone_subdivision_code")
+        phone_number = profile_form.fields.get("phone_number")
+        if phone_subdivision is not None:
+            phone_states += "|subdivisions=" + ",".join(
+                option.label for option in phone_subdivision.options()
+            )
+        if phone_number is not None and phone_number.disabled:
+            phone_states += "|phone_disabled"
+        if phone_number is not None:
+            phone_states += f"|phone_number={phone_number.value or ''}"
+        country = profile_form.fields.get("phone_country_code")
+        if country is not None:
+            phone_states += f"|country={country.value or ''}"
+        if phone_subdivision is not None:
+            phone_states += f"|subdivision={phone_subdivision.value or ''}"
         phone_status = context.get("phone_contact_status")
         if phone_status:
             phone_states += f"|status={phone_status}"
@@ -678,9 +682,11 @@ class TestProfile:
                 "/profile",
                 data={
                     "csrf_token": token,
+                    "version": "0",
                     "preferred_name": "David",
                     "display_name": "David Nugent",
-                    "pronoun_pair": "they|their",
+                    "pronouns": "they|their",
+                    "website_links": "https://example.test",
                     "bio": "Profile text",
                 },
                 follow_redirects=False,
@@ -693,6 +699,7 @@ class TestProfile:
         assert profile.preferred_name == "David"
         assert profile.display_name == "David Nugent"
         assert profile.pronouns == {"direct": "they", "possessive": "their"}
+        assert profile.website_links == {"website": "https://example.test"}
         assert profile.bio == "Profile text"
         await site.close()
 
@@ -712,11 +719,12 @@ class TestProfile:
                 "/profile",
                 data={
                     "csrf_token": token,
+                    "version": "0",
                     "return_to": "/account",
                     "preferred_name": "",
                     "display_name": "",
-                    "pronoun_pair": "",
-                    "profile_link_website": "",
+                    "pronouns": "",
+                    "website_links": "",
                     "bio": "",
                 },
                 follow_redirects=False,
@@ -724,6 +732,78 @@ class TestProfile:
 
         assert response.status_code == 303
         assert response.headers["location"] == "/account"
+        assert (
+            await site.require_capability(ProfileCapability).get_profile(user.id)
+            is None
+        )
+        await site.close()
+
+    @pytest.mark.anyio
+    async def test_profile_edit_route_phone_only_does_not_create_profile(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+        site = await _profile_route_site(tmp_path, user)
+        await _create_site_schema(site)
+        nonce = "a" * 32
+        token = site.app.state.csrf.create_token(nonce)
+        async with _test_client(site.app) as client:
+            client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+            response = await client.post(
+                "/profile",
+                data={
+                    "csrf_token": token,
+                    "version": "0",
+                    "phone_country_code": "AU",
+                    "phone_number": "0412 345 678",
+                },
+                follow_redirects=False,
+            )
+
+        assert response.status_code == 303
+        assert (
+            await site.require_capability(ProfileCapability).get_profile(user.id)
+            is None
+        )
+        contacts = await site.require_capability(ProfileCapability).list_phone_contacts(
+            user.id
+        )
+        assert len(contacts) == 1
+        await site.close()
+
+    @pytest.mark.anyio
+    async def test_profile_edit_rolls_back_details_when_phone_save_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def fail_phone_save(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            raise ProfileInputError("Phone persistence failed.")
+
+        monkeypatch.setattr(
+            "wybra.profile.forms.save_phone_contact_in_transaction", fail_phone_save
+        )
+        user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+        site = await _profile_route_site(tmp_path, user)
+        await _create_site_schema(site)
+        nonce = "a" * 32
+        token = site.app.state.csrf.create_token(nonce)
+        async with _test_client(site.app) as client:
+            client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+            response = await client.post(
+                "/profile",
+                data={
+                    "csrf_token": token,
+                    "version": "0",
+                    "preferred_name": "David",
+                    "phone_country_code": "AU",
+                    "phone_number": "0412 345 678",
+                },
+            )
+
+        assert response.status_code == 400
         assert (
             await site.require_capability(ProfileCapability).get_profile(user.id)
             is None
@@ -758,10 +838,11 @@ class TestProfile:
                 "/profile",
                 data={
                     "csrf_token": token,
+                    "version": "0",
                     "preferred_name": "",
                     "display_name": "",
-                    "pronoun_pair": "",
-                    "profile_link_website": "",
+                    "pronouns": "",
+                    "website_links": "",
                     "bio": "",
                 },
                 follow_redirects=False,
@@ -775,6 +856,90 @@ class TestProfile:
         assert profile.bio is None
         assert profile.pronouns is None
         assert profile.website_links is None
+        await site.close()
+
+    @pytest.mark.anyio
+    async def test_profile_edit_rejects_a_stale_version_without_overwriting(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+        site = await _profile_route_site(tmp_path, user)
+        await _create_site_schema(site)
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
+            await UserProfile.create(
+                user_id=user.id,
+                preferred_name="Before",
+                using_db=connection,
+            )
+        nonce = "a" * 32
+        token = site.app.state.csrf.create_token(nonce)
+        async with _test_client(site.app) as client:
+            client.cookies.set(site.app.state.csrf.cookie_name, nonce)
+            current = await client.post(
+                "/profile",
+                data={
+                    "csrf_token": token,
+                    "version": "0",
+                    "preferred_name": "Current",
+                },
+                follow_redirects=False,
+            )
+            stale = await client.post(
+                "/profile",
+                data={
+                    "csrf_token": token,
+                    "version": "0",
+                    "preferred_name": "Stale",
+                },
+                follow_redirects=False,
+            )
+            stale_noop = await client.post(
+                "/profile",
+                data={
+                    "csrf_token": token,
+                    "version": "0",
+                    "preferred_name": "Current",
+                },
+                follow_redirects=False,
+            )
+
+        assert current.status_code == 303
+        assert stale.status_code == 400
+        assert stale_noop.status_code == 400
+        profile = await site.require_capability(ProfileCapability).get_profile(user.id)
+        assert profile is not None
+        assert profile.preferred_name == "Current"
+        assert profile.version == 1
+        await site.close()
+
+    @pytest.mark.anyio
+    async def test_generated_version_constraints_reject_negative_version_values(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
+        site = await _profile_route_site(tmp_path, user)
+        await _create_site_schema(site)
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as connection:
+            profile = await UserProfile.create(user_id=user.id, using_db=connection)
+            with pytest.raises(IntegrityError):
+                await connection.execute_query(
+                    "UPDATE identity_user SET version = -1 WHERE id = ?",
+                    [str(user.id)],
+                )
+            with pytest.raises(IntegrityError):
+                await connection.execute_query(
+                    "UPDATE profile_user_profile SET version = -1 WHERE id = ?",
+                    [str(profile.id)],
+                )
+
+        assert (await User.get(id=user.id)).version == 0
+        assert (await UserProfile.get(id=profile.id)).version == 0
         await site.close()
 
     @pytest.mark.anyio
@@ -794,13 +959,13 @@ class TestProfile:
                 data={
                     "csrf_token": token,
                     "preferred_name": "David",
-                    "profile_link_website": "javascript:alert(1)",
+                    "website_links": "javascript:alert(1)",
                 },
             )
 
         assert response.status_code == 400
         assert "preferred_name=David" in response.text
-        assert "profile_link_website:Profile link URL scheme" in response.text
+        assert "website_links:Profile link URL scheme" in response.text
         assert (
             await site.require_capability(ProfileCapability).get_profile(user.id)
             is None
@@ -836,6 +1001,7 @@ class TestProfile:
                 "/profile",
                 data={
                     "csrf_token": token,
+                    "version": "0",
                     "preferred_name": "David",
                     "bio": "Submitted bio",
                 },
@@ -860,7 +1026,13 @@ class TestProfile:
         csrf = {"csrf_field_name": "csrf_token", "csrf_token": "token"}
         profile_form = ProfileEditForm(
             settings=ProfileSettings(),
-            values={"preferred_name": "David", "phone_country_code": "AU"},
+            values={"phone_country_code": "AU"},
+        )
+        profile_details_form = ProfileDetailsForm(
+            settings=ProfileSettings(),
+            user_id=uuid.uuid4(),
+            instance=UserProfile(user_id=uuid.uuid4(), preferred_name="David"),
+            connection=None,
         )
 
         class ProfileUrlContext:
@@ -881,6 +1053,7 @@ class TestProfile:
                 "page_title": "Edit profile",
                 "phone_contact_status": "Not verified",
                 "phone_contacts": (),
+                "profile_details_form": profile_details_form,
                 "profile_form": profile_form,
                 "profile_settings": ProfileSettings(),
                 "route_name": "profile:edit",
@@ -949,6 +1122,12 @@ class TestProfile:
         await profile_form.parse(
             {"phone_country_code": "AU", "phone_number": "not-a-number"}
         )
+        profile_details_form = ProfileDetailsForm(
+            settings=ProfileSettings(),
+            user_id=uuid.uuid4(),
+            instance=None,
+            connection=None,
+        )
 
         html = templates.render_template(
             "profile/pages/edit.html",
@@ -961,6 +1140,7 @@ class TestProfile:
                 "page_title": "Edit profile",
                 "phone_contact_status": "Not verified",
                 "phone_contacts": (),
+                "profile_details_form": profile_details_form,
                 "profile_form": profile_form,
                 "profile_settings": ProfileSettings(),
                 "route_name": "profile:edit",
@@ -1239,19 +1419,29 @@ class TestProfile:
         templates = DefaultTemplateCapability(
             template_sources=(
                 PackageResourceSource(package="wybra.widgets", directory="templates"),
+                PackageResourceSource(package="wybra.forms", directory="templates"),
             )
         )
-        context = {
-            "login_widget": SimpleNamespace(
-                authenticated=True,
-                login_path=None,
-                logout_path=logout_path,
-                profile_image=None,
-                profile_path=None,
-                settings_menu=None,
-            ),
-            "route_name": "home",
-        } | csrf_context
+        rendering_context = (
+            forms_rendering_context(templates, csrf_context)
+            if {"csrf_field_name", "csrf_token"}.issubset(csrf_context)
+            else {}
+        )
+        context = (
+            {
+                "login_widget": SimpleNamespace(
+                    authenticated=True,
+                    login_path=None,
+                    logout_path=logout_path,
+                    profile_image=None,
+                    profile_path=None,
+                    settings_menu=None,
+                ),
+                "route_name": "home",
+            }
+            | csrf_context
+            | rendering_context
+        )
 
         html = templates.render_template(
             "components/login_control.html",
@@ -1269,7 +1459,7 @@ class TestProfile:
                 '<form class="login-widget__logout-form" '
                 'method="post" action="/logout">'
             ) in html
-            assert 'type="hidden" name="csrf_token" value="secure-token"' in html
+            assert 'name="csrf_token" type="hidden" value="secure-token"' in html
             assert 'href="/logout"' not in html
         else:
             assert (

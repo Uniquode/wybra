@@ -11,15 +11,9 @@
   <p role="alert">{{ form_error }}</p>
   {% endif %}
   <form action="{{ request.url_for('auth:signup') }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-    <label>
-      Email
-      <input autocomplete="email" name="email" required type="email" value="{{ email or '' }}">
-    </label>
-    <label>
-      Password
-      <input autocomplete="new-password" name="password" required type="password">
-    </label>
+    {{ render_csrf_field() }}
+    {{ render_field(form, "email") }}
+    {{ render_field(form, "password") }}
     <button type="submit">Create account</button>
   </form>
   <p class="muted-copy">

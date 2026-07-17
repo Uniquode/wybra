@@ -229,6 +229,11 @@ _.authenticated
 _.profile_image
 _.profile_path
 _.settings_menu
+
+# Declarative form fields collected from class namespaces by Form.
+_.bypass_totp_setup
+_.setup_totp_code
+_.confirmation
 _.root
 _.mount_path
 _.serve

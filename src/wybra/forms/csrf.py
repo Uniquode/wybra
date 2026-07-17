@@ -71,6 +71,23 @@ def csrf_response_finalisation_requested(request: Request) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class CsrfField:
+    """Opaque CSRF input prepared for template rendering.
+
+    This is intentionally not a declarative ``Form`` field: request CSRF
+    validation occurs before ordinary form parsing. Future signed action data
+    or one-time nonce metadata belongs here rather than in application forms.
+    """
+
+    name: str
+    token: str = field(repr=False)
+
+    def rendering_context(self) -> dict[str, str]:
+        """Return the compatibility context consumed by the CSRF widget."""
+        return {"csrf_field_name": self.name, "csrf_token": self.token}
+
+
+@dataclass(frozen=True, slots=True)
 class CsrfProtector:
     secret: str = field(repr=False)
     previous_secrets: tuple[str, ...] = field(default=(), repr=False)
@@ -105,12 +122,20 @@ class CsrfProtector:
         object.__setattr__(self, "secret", self.secret.strip())
         object.__setattr__(self, "previous_secrets", tuple(previous_secrets))
 
-    def token_context(self, request: Request) -> dict[str, str]:
+    def token_context(self, request: Request) -> dict[str, Any]:
+        csrf_field = self.create_field(request)
         return {
-            "csrf_field_name": self.field_name,
+            **csrf_field.rendering_context(),
+            "csrf_field": csrf_field,
             "csrf_header_name": CSRF_HEADER_NAME,
-            "csrf_token": self.create_token(self._request_nonce(request)),
         }
+
+    def create_field(self, request: Request) -> CsrfField:
+        """Create the opaque CSRF field rendered by protected POST forms."""
+        return CsrfField(
+            name=self.field_name,
+            token=self.create_token(self._request_nonce(request)),
+        )
 
     def set_cookie(self, request: Request, response: Response) -> None:
         response.set_cookie(
@@ -271,6 +296,7 @@ __all__ = (
     "CSRF_TOKEN_BYTES",
     "CSRF_TOKEN_MAX_AGE_SECONDS",
     "CSRF_TOKEN_SEPARATOR",
+    "CsrfField",
     "CsrfProtector",
     "csrf_exempt",
     "csrf_response_finalisation_requested",

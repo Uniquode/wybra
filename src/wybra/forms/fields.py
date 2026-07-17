@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from copy import copy, deepcopy
@@ -8,6 +9,8 @@ from dataclasses import field as dataclass_field
 from datetime import date, datetime, time
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, Self, cast, runtime_checkable
+
+from wybra.forms.field_renderers import FieldRenderer
 
 type UnknownFieldPolicy = Literal["ignore", "error"]
 type FormErrorKey = str | None
@@ -120,10 +123,21 @@ class Field:
     disabled: bool = False
     help_text: str | None = None
     widget: str | None = None
+    renderer: FieldRenderer | None = None
+    attr: dict[str, str | bool] = dataclass_field(default_factory=dict)
     name: str = dataclass_field(default="", init=False)
     value: object = dataclass_field(default=None, init=False)
     raw_value: object = dataclass_field(default=None, init=False)
     errors: tuple[str, ...] = dataclass_field(default=(), init=False)
+
+    def __post_init__(self) -> None:
+        if self.renderer is not None and not callable(
+            getattr(self.renderer, "render", None)
+        ):
+            raise FormError("Field renderer must provide a render() method.")
+        if not isinstance(self.attr, Mapping):
+            raise FormError("Field attr must be a mapping.")
+        self.attr = dict(self.attr)
 
     @property
     def widget_name(self) -> str:
@@ -134,7 +148,9 @@ class Field:
         return "text"
 
     def bind(self, name: str, value: object = None) -> Self:
+        renderer = self.renderer
         bound = deepcopy(self)
+        bound.renderer = renderer
         bound.name = name
         bound.label = self.label or label_from_name(name)
         bound.value = value
@@ -154,6 +170,14 @@ class Field:
 
     def to_python(self, raw_value: object) -> object:
         return text_value(raw_value)
+
+    def from_model_value(self, value: object) -> object:
+        """Adapt a stored model value for initial form presentation."""
+        return value
+
+    def to_model_value(self, value: object) -> object:
+        """Adapt a parsed form value before ModelForm writes it."""
+        return value
 
     def options(self) -> tuple[Option, ...]:
         return ()
@@ -189,6 +213,8 @@ class TextField(Field):
 
     def to_python(self, raw_value: object) -> str:
         value = text_value(raw_value)
+        if self.strip:
+            value = value.strip()
         if has_unsafe_control_character(value):
             raise ValueError(UNSAFE_CONTROL_CHARACTER_ERROR)
         if not self.allow_html and has_markup(value):
@@ -206,8 +232,11 @@ class TextField(Field):
         disabled: bool = False,
         help_text: str | None = None,
         widget: str | None = None,
+        renderer: FieldRenderer | None = None,
+        attr: Mapping[str, str | bool] | None = None,
         max_length: int | None = None,
         allow_html: bool = False,
+        strip: bool = True,
     ) -> None:
         super().__init__(
             label=label,
@@ -215,9 +244,12 @@ class TextField(Field):
             disabled=disabled,
             help_text=help_text,
             widget=widget,
+            renderer=renderer,
+            attr=dict(attr or {}),
         )
         self.max_length = max_length
         self.allow_html = allow_html
+        self.strip = strip
 
 
 class TextAreaField(TextField):
@@ -227,9 +259,63 @@ class TextAreaField(TextField):
 
 
 class HiddenField(TextField):
+    def __init__(
+        self,
+        *,
+        label: str | None = None,
+        required: bool = True,
+        disabled: bool = False,
+        help_text: str | None = None,
+        widget: str | None = None,
+        renderer: FieldRenderer | None = None,
+        attr: Mapping[str, str | bool] | None = None,
+        max_length: int | None = None,
+        allow_html: bool = False,
+        strip: bool = False,
+    ) -> None:
+        super().__init__(
+            label=label,
+            required=required,
+            disabled=disabled,
+            help_text=help_text,
+            widget=widget,
+            renderer=renderer,
+            attr=attr,
+            max_length=max_length,
+            allow_html=allow_html,
+            strip=strip,
+        )
+
     @property
     def default_widget(self) -> str:
         return "hidden"
+
+
+class JsonField(Field):
+    """A form control for a complete JSON object or array value."""
+
+    @property
+    def default_widget(self) -> str:
+        return "textarea"
+
+    def to_python(self, raw_value: object) -> object:
+        value = text_value(raw_value).strip()
+        if has_unsafe_control_character(value):
+            raise ValueError(UNSAFE_CONTROL_CHARACTER_ERROR)
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Enter valid JSON.") from exc
+        if not isinstance(parsed, dict | list):
+            raise ValueError("Enter a JSON object or array.")
+        return parsed
+
+    def from_model_value(self, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, dict | list):
+            raise ValueError("Model JSON value must be an object or array.")
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 class IntegerField(Field):
@@ -311,6 +397,8 @@ class ChoiceField(Field):
         disabled: bool = False,
         help_text: str | None = None,
         widget: str | None = None,
+        renderer: FieldRenderer | None = None,
+        attr: Mapping[str, str | bool] | None = None,
     ) -> None:
         super().__init__(
             label=label,
@@ -318,6 +406,8 @@ class ChoiceField(Field):
             disabled=disabled,
             help_text=help_text,
             widget=widget,
+            renderer=renderer,
+            attr=dict(attr or {}),
         )
         self.choices = dict(choices)
 
@@ -428,6 +518,8 @@ class SliderField(PositiveIntegerField):
         disabled: bool = False,
         help_text: str | None = None,
         widget: str | None = None,
+        renderer: FieldRenderer | None = None,
+        attr: Mapping[str, str | bool] | None = None,
     ) -> None:
         super().__init__(
             label=label,
@@ -435,6 +527,8 @@ class SliderField(PositiveIntegerField):
             disabled=disabled,
             help_text=help_text,
             widget=widget,
+            renderer=renderer,
+            attr=dict(attr or {}),
         )
         self.min_value = min_value
         self.max_value = max_value
@@ -512,7 +606,11 @@ class Form:
             else ()
         )
         for name, form_field in self.fields.items():
-            raw_value = form_raw_value(data, name)
+            raw_value = form_raw_value(
+                data,
+                name,
+                multiple=isinstance(form_field, MultiSelectField),
+            )
             result = form_field.parse(raw_value)
             form_field.with_result(result)
             results[name] = result
@@ -608,6 +706,7 @@ class Form:
     ) -> dict[str, Field]:
         fields: dict[str, Field] = {}
         declared = self.declared_fields()
+        renderers = self._declared_renderers(declared)
         unknown_values = (set(defaults) | set(values) | set(options)) - set(declared)
         if unknown_values and self.unknown_fields == "error":
             unknown = ", ".join(sorted(unknown_values))
@@ -615,10 +714,34 @@ class Form:
         for name, form_field in declared.items():
             value = values.get(name, defaults.get(name))
             bound = form_field.bind(name, value)
+            if bound.renderer is None:
+                bound.renderer = renderers.get(name)
             if isinstance(bound, SelectField) and name in options:
                 bound.choices = dict(options[name])
             fields[name] = bound
         return fields
+
+    @classmethod
+    def _declared_renderers(
+        cls,
+        declared_fields: Mapping[str, Field],
+    ) -> Mapping[str, FieldRenderer]:
+        renderers = getattr(getattr(cls, "Meta", None), "renderers", {})
+        if renderers is None:
+            return {}
+        if not isinstance(renderers, Mapping):
+            raise FormError("Meta.renderers must be a mapping of field names.")
+        unknown = set(renderers) - set(declared_fields)
+        if unknown:
+            raise FormError(
+                "Unknown form renderer field(s): " + ", ".join(sorted(unknown))
+            )
+        if any(
+            not callable(getattr(renderer, "render", None))
+            for renderer in renderers.values()
+        ):
+            raise FormError("Meta.renderers values must provide a render() method.")
+        return cast(Mapping[str, FieldRenderer], renderers)
 
     def _target_defaults(
         self,
@@ -648,7 +771,7 @@ class Form:
             mapping[name] = value
             return
         if not hasattr(target, name):
-            raise FormError(f"Binding target has no field: {name}.")
+            raise FormError(f"Form target has no field: {name}.")
         setattr(target, name, value)
 
     def _results_with_errors(
@@ -725,11 +848,17 @@ def list_values(raw_value: object) -> tuple[object, ...]:
     return (raw_value,)
 
 
-def form_raw_value(data: Mapping[str, object], name: str) -> object:
+def form_raw_value(
+    data: Mapping[str, object],
+    name: str,
+    *,
+    multiple: bool = True,
+) -> object:
     if isinstance(data, HasGetList):
         values = data.getlist(name)
-        if len(values) > 1:
+        if multiple:
             return tuple(values)
+        return values[-1] if values else None
     return data.get(name)
 
 

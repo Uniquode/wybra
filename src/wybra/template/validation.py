@@ -131,7 +131,10 @@ def validate_template(settings: TemplateValidationSettings) -> ValidationResult:
             record_check(
                 checks,
                 errors,
-                passed='name="{{ csrf_field_name }}"' in template_content,
+                passed=(
+                    'name="{{ csrf_field_name }}"' in template_content
+                    or "render_csrf_field(" in template_content
+                ),
                 description=f"POST form CSRF field exists: {template_name}",
                 error=(
                     "POST form template must include CSRF field: "

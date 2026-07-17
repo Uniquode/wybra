@@ -6,7 +6,7 @@
   <h1>Sign out</h1>
   <p class="muted-copy">End the current browser session.</p>
   <form action="{{ request.url_for('auth:logout') }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
+    {{ render_csrf_field() }}
     <button type="submit">Sign out</button>
   </form>
 </section>

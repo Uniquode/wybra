@@ -1,6 +1,11 @@
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
+from wybra.auth.forms import (
+    SecurityAssertionCommandForm,
+    TotpSetupCommandForm,
+    command_text,
+)
 from wybra.auth.ids import log_safe_uuid
 from wybra.auth.mfa.recovery import generate_recovery_codes
 from wybra.auth.mfa.storage import TOTP_PENDING_STATUS
@@ -39,7 +44,6 @@ from wybra.forms import request_form_data
 from wybra.template import render_page
 
 from .shared import (
-    _form_value,
     _fresh_primary_assertion_satisfied,
     _fresh_security_assertion_satisfied,
     _fresh_single_security_assertion_satisfied,
@@ -79,17 +83,16 @@ async def totp_setup(request: Request) -> Response:
     setup_code = ""
 
     if request.method == "POST":
-        form_data = await request_form_data(request)
+        form = TotpSetupCommandForm()
+        await form.parse(await request_form_data(request))
         return_to = normalise_return_to(
-            _form_value(form_data, "return_to"),
+            command_text(form, "return_to"),
             default=return_to,
         )
-        setup_challenge_id = _form_value(
-            form_data,
-            "setup_challenge_id",
-            default=setup_challenge_id,
+        setup_challenge_id = (
+            command_text(form, "setup_challenge_id") or setup_challenge_id
         )
-        setup_code = _form_value(form_data, "setup_totp_code").strip()
+        setup_code = command_text(form, "setup_totp_code").strip()
 
     scope_factory = _persistence_scope_from_request(request)
     async with scope_factory() as scope:
@@ -406,6 +409,7 @@ def _totp_action_confirmation_page(
             "confirmation_message": TOTP_CONFIRMATION_MESSAGE,
             "confirmation_error": error,
             "single_confirmation_field": single_confirmation_field,
+            "form": SecurityAssertionCommandForm(),
             "recovery_codes": recovery_codes,
             "recovery_codes_download_href": recovery_codes_download_href(
                 recovery_codes

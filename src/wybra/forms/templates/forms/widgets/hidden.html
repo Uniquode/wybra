@@ -1,1 +1,1 @@
-<input type="hidden" id="{{ field.name }}" name="{{ field.name }}" value="{{ field.value or '' }}">
+<input type="hidden" id="{{ field.name }}" name="{{ field.name }}" value="{{ field.value or '' }}"{% for name, value in attr.items() %}{% if value is sameas true %} {{ name }}{% elif value is not sameas false %} {{ name }}="{{ value }}"{% endif %}{% endfor %}>

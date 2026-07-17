@@ -274,25 +274,28 @@ persistence onto `Form`. Construct it with the application's selected
 create, update, and delete operations.
 
 ```python
-from wybra.forms import Attr, JsonPath, ModelForm, ReadOnly, TextAreaField, TextField
+from wybra.forms import JsonField, ModelForm, TextAreaField, TextField
 
 
 class ProfileForm(ModelForm):
     preferred_name = TextField(max_length=64)
     bio = TextAreaField(max_length=1024, required=False)
-    website = TextField(required=False)
+    website_links = JsonField(required=False)
     created_by = TextField(disabled=True, required=False)
 
     class Meta:
         model = Profile
-        bindings = {
-            "website": JsonPath("website_links", "website"),
-            "created_by": ReadOnly(Attr("created_by")),
-        }
 ```
 
-Fields bind to same-named record attributes by default. `Meta.bindings` is only
-needed for overrides such as JSON mapping paths or read-only fields.
+Fields always bind to same-named record attributes. Field classes adapt a
+stored value for presentation and a parsed value for persistence; `JsonField`
+accepts a complete JSON object or array. Use `disabled=True` or
+`FormFieldOptions(editable=False)` for non-editable controls.
+
+For presentation, a field can supply a renderer directly, or a form can map
+existing fields to renderer objects through `Meta.renderers`. Explicit field
+renderers take precedence; otherwise Wybra uses the field's standard widget
+renderer.
 `Meta.fields` is an explicit allowlist; recognised Tortoise fields are generated
 when named there, while declared fields override their presentation.
 

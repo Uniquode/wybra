@@ -12,6 +12,7 @@ from wybra.forms import (
     CSRF_TOKEN_MAX_AGE_SECONDS,
     CSRF_TOKEN_SECRET_KEY_CURRENT,
     CSRF_TOKEN_SECRET_KEY_PREVIOUS,
+    CsrfField,
     CsrfProtector,
     csrf_exempt,
     request_form_data,
@@ -116,6 +117,24 @@ def test_csrf_tokens_include_signed_issue_time() -> None:
     assert issued_at == "1000"
     assert signature
     assert protector.validate_token(token, nonce)
+
+
+def test_csrf_protector_creates_an_opaque_rendering_field() -> None:
+    nonce = "a" * 32
+    protector = CsrfProtector("current-secret", clock=lambda: 1_000.0)
+    request = csrf_request(
+        method="GET",
+        headers={"cookie": f"{CSRF_COOKIE_NAME}={nonce}"},
+    )
+
+    csrf_field = protector.create_field(request)
+
+    assert isinstance(csrf_field, CsrfField)
+    assert csrf_field.rendering_context() == {
+        "csrf_field_name": CSRF_FIELD_NAME,
+        "csrf_token": protector.create_token(nonce),
+    }
+    assert csrf_field.token not in repr(csrf_field)
 
 
 def test_csrf_token_validation_rejects_expired_current_secret_token() -> None:

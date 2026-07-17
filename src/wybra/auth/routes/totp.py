@@ -13,6 +13,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from markupsafe import Markup
 
+from wybra.auth.forms import LoginCommandForm, TotpSetupCommandForm
 from wybra.auth.ids import parse_uuid
 from wybra.auth.mfa.challenges import (
     TOTP_ASSERTION_METHOD,
@@ -181,6 +182,15 @@ def login_context(
             "return_to": return_to,
         }
     )
+    login_form = LoginCommandForm(
+        values={
+            "email": email,
+            "return_to": return_to,
+            "challenge_id": challenge_id or "",
+            "setup_challenge_id": setup_challenge_id,
+            "bypass_totp_setup": "1" if setup_prompt else None,
+        }
+    )
     return _identity_context(
         request,
         page_title="Sign in",
@@ -200,6 +210,7 @@ def login_context(
         challenge_required=(challenge_step is not None),
         requires_email_password=requires_email_password,
         totp_code_length=DEFAULT_TOTP_DIGITS,
+        form=login_form,
     )
 
 
@@ -439,6 +450,12 @@ def render_totp_setup_page(
             setup_return_label=setup_return_label,
             totp_code_length=DEFAULT_TOTP_DIGITS,
             setup_messages=TOTP_SETUP_PAGE_MESSAGES,
+            form=TotpSetupCommandForm(
+                values={
+                    "return_to": return_to,
+                    "setup_challenge_id": setup_challenge_id,
+                }
+            ),
         ),
         status_code=200,
     )

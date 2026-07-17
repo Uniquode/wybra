@@ -51,21 +51,10 @@
   </details>
   {% endif %}
   <form action="{{ request.url_for('auth:totp-setup') }}" method="post">
-    <input name="{{ csrf_field_name }}" type="hidden" value="{{ csrf_token }}">
-    <input name="return_to" type="hidden" value="{{ return_to or '/account' }}">
-    <input name="setup_challenge_id" type="hidden" value="{{ setup_challenge_id }}">
-    <label>
-      {{ setup_messages.verification_code }}
-      <input
-        autocomplete="one-time-code"
-        inputmode="numeric"
-        minlength="{{ totp_code_length }}"
-        maxlength="{{ totp_code_length }}"
-        name="setup_totp_code"
-        required
-        type="text"
-      >
-    </label>
+    {{ render_csrf_field() }}
+    {{ render_field(form, "return_to") }}
+    {{ render_field(form, "setup_challenge_id") }}
+    {{ render_field(form, "setup_totp_code") }}
     <button type="submit">{{ setup_messages.confirm_setup }}</button>
   </form>
   {% endif %}
