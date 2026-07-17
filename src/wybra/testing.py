@@ -20,7 +20,7 @@ from wybra.auth.models import User
 from wybra.auth.persistence.contracts import LocalUserRecord
 from wybra.config import MappingConfigSource
 from wybra.db import DatabaseCapability
-from wybra.db.capabilities import TortoiseDatabaseCapability, tortoise_connection
+from wybra.db.capabilities import WybraDatabaseCapability, tortoise_connection
 from wybra.db.migrate import (
     apply_tortoise_migrations,
     apps_requiring_temporary_migrations,
@@ -95,7 +95,7 @@ async def migrated_test_database(
         modules=module_names,
         database_url=resolved_url,
     )
-    capability = TortoiseDatabaseCapability(database)
+    capability = WybraDatabaseCapability(database)
     try:
         yield MigratedTestDatabase(
             _connection=tortoise_connection(
@@ -497,7 +497,7 @@ async def _close_test_client_database_connections(app: FastAPI) -> None:
         database = site.require_capability(DatabaseCapability)
     except SiteCapabilityError:
         return
-    if not isinstance(database, TortoiseDatabaseCapability):
+    if not isinstance(database, WybraDatabaseCapability):
         return
     await close_database_connections(
         database._database,
@@ -514,7 +514,7 @@ async def _prepare_ad_hoc_test_client_request(app: FastAPI) -> None:
         database = site.require_capability(DatabaseCapability)
     except SiteCapabilityError:
         return
-    if not isinstance(database, TortoiseDatabaseCapability):
+    if not isinstance(database, WybraDatabaseCapability):
         return
     if _test_database_is_in_memory(database):
         raise RuntimeError(
@@ -528,7 +528,7 @@ async def _prepare_ad_hoc_test_client_request(app: FastAPI) -> None:
     )
 
 
-def _test_database_is_in_memory(database: TortoiseDatabaseCapability) -> bool:
+def _test_database_is_in_memory(database: WybraDatabaseCapability) -> bool:
     connections = database._database.config.get("connections")
     if not isinstance(connections, dict):
         return False

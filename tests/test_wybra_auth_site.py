@@ -36,7 +36,8 @@ from wybra.auth.routes.pages import passkeys as passkey_pages
 from wybra.auth.routes.pages import totp_management as totp_management_pages
 from wybra.auth.routes.totp import TOTP_LOGIN_NONCE_COOKIE
 from wybra.config import MappingConfigSource
-from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
+from wybra.db import DatabaseCapability
+from wybra.db.capabilities import WybraDatabaseCapability
 from wybra.providers.apple import (
     APPLE_ID_TOKEN_VALIDATOR_STATE_ATTRIBUTE,
     APPLE_OAUTH_STATE_COOKIE,
@@ -197,7 +198,7 @@ def _site_config_source(
 
 async def _create_auth_schema(site) -> None:
     database = site.require_capability(DatabaseCapability)
-    assert isinstance(database, TortoiseDatabaseCapability)
+    assert isinstance(database, WybraDatabaseCapability)
     await migrate_test_database(database._database)
     user_id = getattr(site.app.state, "security_test_user_id", None)
     if isinstance(user_id, uuid.UUID):

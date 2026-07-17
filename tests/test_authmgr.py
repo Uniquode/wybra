@@ -99,7 +99,8 @@ from wybra.core.composition import (
 )
 from wybra.core.config import RUNTIME_CONFIG_DEF
 from wybra.core.exceptions import ConfigurationError
-from wybra.db import DatabaseCapability, TortoiseDatabaseCapability
+from wybra.db import DatabaseCapability
+from wybra.db.capabilities import WybraDatabaseCapability
 from wybra.db.persistence import Database, close_database, create_database
 from wybra.db.urls import (
     SQLITE_MEMORY_DATABASE_URL,
@@ -261,7 +262,7 @@ async def initialise_app_identity_database(app: FastAPI) -> None:
         site = app.state.site
         site.provide_capability(
             DatabaseCapability,
-            TortoiseDatabaseCapability(database),
+            WybraDatabaseCapability(database),
         )
         site.provide_capability(
             AuthPersistenceCapability,
