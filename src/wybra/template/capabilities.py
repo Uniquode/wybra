@@ -15,6 +15,8 @@ from wybra.diagnostics import template_render_diagnostics
 from wybra.site import SiteCapabilityProxy
 from wybra.template.cache import (
     CacheExtension,
+    CacheKeyNormaliser,
+    CacheKeyNormalisers,
     CacheProvider,
     configure_cache_extension,
 )
@@ -53,6 +55,7 @@ class DefaultTemplateCapability:
     template_root: Path | None = None
     assets: SiteCapabilityProxy[StaticAssetCapability] | None = None
     cache_provider: CacheProvider | None = None
+    cache_key_normalisers: CacheKeyNormalisers | None = None
     include_request_context: bool = True
     auto_reload: bool | None = None
     cache_size: int = 400
@@ -75,8 +78,27 @@ class DefaultTemplateCapability:
             extensions=(CacheExtension,),
             **environment_options,
         )
-        configure_cache_extension(self.environment, self.cache_provider)
+        configure_cache_extension(
+            self.environment,
+            self.cache_provider,
+            cache_key_normalisers=self.cache_key_normalisers,
+        )
         self._asset_url = self._resolve_asset_url()
+
+    def register_cache_key_normaliser(
+        self,
+        value_type: type[object],
+        normaliser: CacheKeyNormaliser,
+    ) -> None:
+        """Register a canonical cache-key representation for an application type."""
+        normalisers = dict(self.cache_key_normalisers or {})
+        normalisers[value_type] = normaliser
+        configure_cache_extension(
+            self.environment,
+            self.cache_provider,
+            cache_key_normalisers=normalisers,
+        )
+        self.cache_key_normalisers = normalisers
 
     async def render_template(self, template_name: str, context: dict[str, Any]) -> str:
         with template_render_diagnostics(template_name):

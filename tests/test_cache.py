@@ -6,12 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
+from jinja2 import Environment
+from jinja2.exceptions import TemplateRuntimeError
 
 from wybra.cache import CacheCapability, CacheSettings, InMemoryCache, RedisCache
 from wybra.config import MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
 from wybra.site import start
 from wybra.template import DefaultTemplateCapability, TemplateCapability
+from wybra.template.cache import configure_cache_extension
 
 
 class TestCacheSettings:
@@ -225,6 +228,10 @@ class TestCacheModule:
 
 
 class TestTemplateFragmentCache:
+    def test_configure_cache_extension_reports_a_missing_extension(self) -> None:
+        with pytest.raises(RuntimeError, match="not registered"):
+            configure_cache_extension(Environment(), None)
+
     @pytest.mark.anyio
     async def test_template_module_resolves_cache_capability_at_render_time(
         self, tmp_path: Path
@@ -311,6 +318,74 @@ class TestTemplateFragmentCache:
             )
             == "Grace"
         )
+
+    @pytest.mark.anyio
+    async def test_cache_key_helper_normalises_registered_value_types(
+        self, tmp_path: Path
+    ) -> None:
+        class Audience:
+            def __init__(self, identifier: int) -> None:
+                self.identifier = identifier
+
+        (tmp_path / "fragment.html").write_text(
+            '{% cache "greeting" ttl=60 '
+            "vary_by=cache_key(audience=audience, locales=locales) %}"
+            "{{ value }}{% endcache %}",
+            encoding="utf-8",
+        )
+        cache = InMemoryCache()
+        templates = DefaultTemplateCapability(
+            template_root=tmp_path,
+            cache_provider=lambda: cache,
+        )
+        templates.register_cache_key_normaliser(
+            Audience,
+            lambda value: {"audience_id": value.identifier},
+        )
+
+        assert (
+            await templates.render_template(
+                "fragment.html",
+                {"audience": Audience(1), "locales": {"fr", "en-AU"}, "value": "one"},
+            )
+            == "one"
+        )
+        assert (
+            await templates.render_template(
+                "fragment.html",
+                {"audience": Audience(1), "locales": {"en-AU", "fr"}, "value": "two"},
+            )
+            == "one"
+        )
+        assert (
+            await templates.render_template(
+                "fragment.html",
+                {"audience": Audience(2), "locales": {"en-AU", "fr"}, "value": "three"},
+            )
+            == "three"
+        )
+
+    @pytest.mark.anyio
+    async def test_rejects_unsupported_fragment_variation_values(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "fragment.html").write_text(
+            '{% cache "greeting" ttl=60 vary_by=audience %}{{ value }}{% endcache %}',
+            encoding="utf-8",
+        )
+        templates = DefaultTemplateCapability(
+            template_root=tmp_path,
+            cache_provider=InMemoryCache,
+        )
+
+        with pytest.raises(
+            TemplateRuntimeError,
+            match="must be JSON-compatible or use cache_key",
+        ):
+            await templates.render_template(
+                "fragment.html",
+                {"audience": SimpleNamespace(identifier=1), "value": "one"},
+            )
 
     @pytest.mark.anyio
     async def test_fragment_keys_are_isolated_by_template_fingerprint(

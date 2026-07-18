@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
-from typing import Any
+import math
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, cast
 from weakref import WeakKeyDictionary
 
 from jinja2 import Environment, nodes
@@ -19,6 +20,8 @@ from wybra.cache import CacheCapability
 FRAGMENT_CACHE_OWNER = "template.fragment"
 type CacheProvider = Callable[[], CacheCapability | None]
 type FragmentCaller = Callable[[], Awaitable[str]]
+type CacheKeyNormaliser = Callable[[object], object]
+type CacheKeyNormalisers = Mapping[type[object], CacheKeyNormaliser]
 
 
 class CacheExtension(Extension):
@@ -29,8 +32,21 @@ class CacheExtension(Extension):
     def __init__(self, environment: Environment) -> None:
         super().__init__(environment)
         self.cache_provider: CacheProvider | None = None
+        self.cache_key_normalisers: dict[type[object], CacheKeyNormaliser] = {}
         self._template_fingerprints: WeakKeyDictionary[Template, str] = (
             WeakKeyDictionary()
+        )
+        cast(dict[str, Any], environment.globals)["cache_key"] = self.cache_key
+
+    def cache_key(
+        self,
+        *values: object,
+        **conditions: object,
+    ) -> object:
+        """Return a canonical variation value for use with ``vary_by``."""
+        return _canonical_value(
+            {"values": values, "conditions": conditions},
+            self.cache_key_normalisers,
         )
 
     def parse(self, parser: Any) -> nodes.Node:
@@ -94,13 +110,19 @@ class CacheExtension(Extension):
         fragment_name: str,
         vary_by: object,
     ) -> str:
-        variation = json.dumps(
-            vary_by,
-            default=_canonical_value,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+        try:
+            variation = json.dumps(
+                _canonical_value(vary_by, self.cache_key_normalisers),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            )
+        except TypeError as exc:
+            raise TemplateRuntimeError(
+                "Cache fragment vary_by values must be JSON-compatible or use "
+                "cache_key() with a registered cache-key normaliser."
+            ) from exc
         variation_fingerprint = hashlib.sha256(variation.encode("utf-8")).hexdigest()
         return ":".join(
             (
@@ -137,23 +159,90 @@ class CacheExtension(Extension):
 def configure_cache_extension(
     environment: Environment,
     cache_provider: CacheProvider | None,
+    *,
+    cache_key_normalisers: CacheKeyNormalisers | None = None,
 ) -> None:
-    extension = environment.extensions[CacheExtension.identifier]
+    extension = environment.extensions.get(CacheExtension.identifier)
     if not isinstance(extension, CacheExtension):
         raise RuntimeError("Jinja cache extension is not registered.")
     extension.cache_provider = cache_provider
+    extension.cache_key_normalisers = _validate_normalisers(cache_key_normalisers)
 
 
 def _hash_template_source(identity: str, source: str) -> str:
     return hashlib.sha256(f"{identity}\0{source}".encode()).hexdigest()
 
 
-def _canonical_value(value: object) -> str:
-    return str(value)
+def _canonical_value(
+    value: object,
+    normalisers: CacheKeyNormalisers,
+) -> object:
+    if value is None or isinstance(value, str | bool | int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise TypeError("Cache key floats must be finite.")
+        return value
+    if isinstance(value, Mapping):
+        canonical_mapping: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("Cache key mapping keys must be strings.")
+            canonical_mapping[key] = _canonical_value(item, normalisers)
+        return canonical_mapping
+    if isinstance(value, list | tuple):
+        return [_canonical_value(item, normalisers) for item in value]
+    if isinstance(value, set | frozenset):
+        canonical_values = [_canonical_value(item, normalisers) for item in value]
+        return sorted(
+            canonical_values,
+            key=lambda item: json.dumps(
+                item,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ),
+        )
+
+    normaliser = _normaliser_for(value, normalisers)
+    if normaliser is None:
+        raise TypeError(f"Unsupported cache-key value type: {type(value).__name__}.")
+    normalised = normaliser(value)
+    if normalised is value:
+        raise TypeError("Cache-key normalisers must return a different value.")
+    return _canonical_value(normalised, normalisers)
+
+
+def _normaliser_for(
+    value: object,
+    normalisers: CacheKeyNormalisers,
+) -> CacheKeyNormaliser | None:
+    for value_type, normaliser in normalisers.items():
+        if isinstance(value, value_type):
+            return normaliser
+    return None
+
+
+def _validate_normalisers(
+    normalisers: CacheKeyNormalisers | None,
+) -> dict[type[object], CacheKeyNormaliser]:
+    if normalisers is None:
+        return {}
+    validated: dict[type[object], CacheKeyNormaliser] = {}
+    for value_type, normaliser in normalisers.items():
+        if not isinstance(value_type, type) or not callable(normaliser):
+            raise TypeError(
+                "Cache-key normalisers must map types to callable normalisers."
+            )
+        validated[value_type] = normaliser
+    return validated
 
 
 __all__ = (
     "CacheExtension",
+    "CacheKeyNormaliser",
+    "CacheKeyNormalisers",
     "CacheProvider",
     "FRAGMENT_CACHE_OWNER",
     "configure_cache_extension",
