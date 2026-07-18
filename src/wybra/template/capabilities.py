@@ -13,15 +13,22 @@ from wybra.assets import StaticAssetCapability, require_static_asset_capability
 from wybra.core.resources import PackageResourceSource
 from wybra.diagnostics import template_render_diagnostics
 from wybra.site import SiteCapabilityProxy
+from wybra.template.cache import (
+    CacheExtension,
+    CacheProvider,
+    configure_cache_extension,
+)
 from wybra.template.context import TemplateContext, get_request_context
 from wybra.template.templating import build_template_loader
 
 
 @runtime_checkable
 class TemplateCapability(Protocol):
-    def render_template(self, template_name: str, context: dict[str, Any]) -> str: ...
+    async def render_template(
+        self, template_name: str, context: dict[str, Any]
+    ) -> str: ...
 
-    def render_page(
+    async def render_page(
         self,
         request: Request,
         template_name: str,
@@ -30,7 +37,7 @@ class TemplateCapability(Protocol):
         status_code: int = 200,
     ) -> HTMLResponse: ...
 
-    def render_partial(
+    async def render_partial(
         self,
         request: Request,
         template_name: str,
@@ -45,6 +52,7 @@ class DefaultTemplateCapability:
     template_sources: tuple[PackageResourceSource, ...] = ()
     template_root: Path | None = None
     assets: SiteCapabilityProxy[StaticAssetCapability] | None = None
+    cache_provider: CacheProvider | None = None
     include_request_context: bool = True
     auto_reload: bool | None = None
     cache_size: int = 400
@@ -63,15 +71,20 @@ class DefaultTemplateCapability:
             loader=loader,
             autoescape=select_autoescape(("html", "xml")),
             cache_size=self.cache_size,
+            enable_async=True,
+            extensions=(CacheExtension,),
             **environment_options,
         )
+        configure_cache_extension(self.environment, self.cache_provider)
         self._asset_url = self._resolve_asset_url()
 
-    def render_template(self, template_name: str, context: dict[str, Any]) -> str:
+    async def render_template(self, template_name: str, context: dict[str, Any]) -> str:
         with template_render_diagnostics(template_name):
-            return self.environment.get_template(template_name).render(context)
+            return await self.environment.get_template(template_name).render_async(
+                context
+            )
 
-    def render_page(
+    async def render_page(
         self,
         request: Request,
         template_name: str,
@@ -79,14 +92,14 @@ class DefaultTemplateCapability:
         *,
         status_code: int = 200,
     ) -> HTMLResponse:
-        return self._render_response(
+        return await self._render_response(
             request,
             template_name,
             context,
             status_code=status_code,
         )
 
-    def render_partial(
+    async def render_partial(
         self,
         request: Request,
         template_name: str,
@@ -94,14 +107,14 @@ class DefaultTemplateCapability:
         *,
         status_code: int = 200,
     ) -> HTMLResponse:
-        return self._render_response(
+        return await self._render_response(
             request,
             template_name,
             context,
             status_code=status_code,
         )
 
-    def _render_response(
+    async def _render_response(
         self,
         request: Request,
         template_name: str,
@@ -110,7 +123,7 @@ class DefaultTemplateCapability:
         status_code: int,
     ) -> HTMLResponse:
         return HTMLResponse(
-            self.render_template(
+            await self.render_template(
                 template_name,
                 self._template_context(request, context),
             ),

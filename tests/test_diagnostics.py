@@ -221,7 +221,10 @@ async def test_backend_operation_diagnostics_records_error_result() -> None:
     ] == [("backend", "operation", "error", {"safe": "yes"})]
 
 
-def test_sql_template_and_backend_diagnostics_are_collected(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_sql_template_and_backend_diagnostics_are_collected(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "page.html").write_text("Hello {{ name }}", encoding="utf-8")
     templates = DefaultTemplateCapability(template_root=tmp_path)
     app = FastAPI(lifespan=start_site(config_source=_diagnostic_app_config()))
@@ -229,7 +232,7 @@ def test_sql_template_and_backend_diagnostics_are_collected(tmp_path: Path) -> N
     @app.get("/work", name="work")
     async def work(request: Request) -> dict[str, object]:
         record_sql_query("select 1", duration_seconds=0.001)
-        templates.render_template("page.html", {"name": "diagnostics"})
+        await templates.render_template("page.html", {"name": "diagnostics"})
         diagnostics = request_diagnostics(request)
         assert diagnostics is not None
         return {

@@ -53,13 +53,13 @@ class UnknownWidgetError(FormError):
 class TemplateFieldRenderer:
     """Default renderer that resolves a field's widget template."""
 
-    def render(self, field: Field, context: FormRenderContext) -> Markup:
+    async def render(self, field: Field, context: FormRenderContext) -> Markup:
         template_name = context.widget or context.renderer._widget_template(
             field.widget_name,
             field_name=field.name,
         )
         return _trusted_template_markup(
-            context.renderer.templates.render_template(
+            await context.renderer.templates.render_template(
                 template_name,
                 {
                     "form": context.form,
@@ -82,7 +82,7 @@ class TemplateFormRenderer:
     form_template: str = "forms/form.html"
     csrf_template: str = "forms/widgets/csrf.html"
 
-    def render_field(
+    async def render_field(
         self,
         form: Form,
         field_name: str,
@@ -94,7 +94,7 @@ class TemplateFormRenderer:
         if attr is not None and not isinstance(attr, Mapping):
             raise FormError("Field render attr must be a mapping.")
         field_renderer: FieldRenderer = field.renderer or DEFAULT_FIELD_RENDERER
-        return field_renderer.render(
+        return await field_renderer.render(
             field,
             FormRenderContext(
                 form=form,
@@ -104,7 +104,7 @@ class TemplateFormRenderer:
             ),
         )
 
-    def render_form(
+    async def render_form(
         self,
         form: Form,
         *,
@@ -116,19 +116,19 @@ class TemplateFormRenderer:
     ) -> Markup:
         resolved_enctype = enctype or _default_enctype(form)
         fields = [
-            self.render_field(form, name)
+            await self.render_field(form, name)
             for name, field in form.fields.items()
             if field.widget_name != "hidden"
         ]
         hidden_fields = [
-            self.render_field(form, name)
+            await self.render_field(form, name)
             for name, field in form.fields.items()
             if field.widget_name == "hidden"
         ]
-        csrf_field = self.render_csrf_field(csrf) if csrf else Markup("")
+        csrf_field = await self.render_csrf_field(csrf) if csrf else Markup("")
         form_errors = tuple(form.errors.get(None, ()))
         return _trusted_template_markup(
-            self.templates.render_template(
+            await self.templates.render_template(
                 self.form_template,
                 {
                     "form": form,
@@ -144,14 +144,14 @@ class TemplateFormRenderer:
             )
         )
 
-    def render_csrf_field(self, csrf: CsrfRenderable) -> Markup:
+    async def render_csrf_field(self, csrf: CsrfRenderable) -> Markup:
         context = _csrf_rendering_context(csrf)
         validate_csrf_rendering_context(context)
         return _trusted_template_markup(
-            self.templates.render_template(self.csrf_template, dict(context))
+            await self.templates.render_template(self.csrf_template, dict(context))
         )
 
-    def render_phone_contact(
+    async def render_phone_contact(
         self,
         form: Form,
         *,
@@ -192,7 +192,7 @@ class TemplateFormRenderer:
             phone_field=resolved.phone_field,
         )
         return _trusted_template_markup(
-            self.templates.render_template(
+            await self.templates.render_template(
                 "forms/widgets/phone_contact.html",
                 {
                     "country_field": resolved.country_field,
@@ -210,7 +210,7 @@ class TemplateFormRenderer:
             )
         )
 
-    def render_phone_contact_fields(
+    async def render_phone_contact_fields(
         self,
         form: Form,
         *,
@@ -226,7 +226,7 @@ class TemplateFormRenderer:
             phone_field=phone_field,
         )
         return _trusted_template_markup(
-            self.templates.render_template(
+            await self.templates.render_template(
                 "forms/widgets/phone_contact_fields.html",
                 phone_contact_context(
                     form,
@@ -254,7 +254,7 @@ class TemplateFormRenderer:
         )
 
 
-def render_field(
+async def render_field(
     templates: TemplateCapability,
     form: Form,
     field_name: str,
@@ -269,10 +269,10 @@ def render_field(
         widgets=widgets,
         url_context=url_context,
     )
-    return renderer.render_field(form, field_name, widget=widget, attr=attr)
+    return await renderer.render_field(form, field_name, widget=widget, attr=attr)
 
 
-def render_form(
+async def render_form(
     templates: TemplateCapability,
     form: Form,
     *,
@@ -289,7 +289,7 @@ def render_form(
         widgets=widgets,
         url_context=url_context,
     )
-    return renderer.render_form(
+    return await renderer.render_form(
         form,
         action=action,
         method=method,
@@ -299,15 +299,15 @@ def render_form(
     )
 
 
-def render_csrf_field(
+async def render_csrf_field(
     templates: TemplateCapability,
     *,
     csrf: CsrfRenderable,
 ) -> Markup:
-    return TemplateFormRenderer(templates).render_csrf_field(csrf)
+    return await TemplateFormRenderer(templates).render_csrf_field(csrf)
 
 
-def render_phone_contact(
+async def render_phone_contact(
     templates: TemplateCapability,
     form: Form,
     *,
@@ -334,7 +334,7 @@ def render_phone_contact(
         widgets=widgets,
         url_context=url_context,
     )
-    return renderer.render_phone_contact(
+    return await renderer.render_phone_contact(
         form,
         country_field=country_field,
         subdivision_field=subdivision_field,
@@ -347,7 +347,7 @@ def render_phone_contact(
     )
 
 
-def render_phone_contact_fields(
+async def render_phone_contact_fields(
     templates: TemplateCapability,
     form: Form,
     *,
@@ -364,7 +364,7 @@ def render_phone_contact_fields(
         widgets=widgets,
         url_context=url_context,
     )
-    return renderer.render_phone_contact_fields(
+    return await renderer.render_phone_contact_fields(
         form,
         subdivision_field=subdivision_field,
         phone_field=phone_field,

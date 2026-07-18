@@ -148,7 +148,9 @@ def _first_parsed_form_value(
 
 
 async def theme_status_partial(request: Request) -> Response:
-    return render_partial(request, THEME_STATUS_TEMPLATE, theme_return_context(request))
+    return await render_partial(
+        request, THEME_STATUS_TEMPLATE, theme_return_context(request)
+    )
 
 
 async def theme_mode_partial(request: Request) -> Response:
@@ -164,7 +166,7 @@ async def theme_mode_partial(request: Request) -> Response:
     context = theme_template_context(
         request, theme_mode=theme_mode
     ) | theme_return_context(request, return_path=redirect_path)
-    response = render_partial(request, THEME_STATUS_TEMPLATE, context)
+    response = await render_partial(request, THEME_STATUS_TEMPLATE, context)
     set_theme_mode_cookie(response, theme_mode)
     set_theme_mode_trigger(response, theme_mode)
     return response

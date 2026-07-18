@@ -516,7 +516,8 @@ async def test_messages_context_peeks_until_alerts_are_rendered() -> None:
     assert SESSION_ALERTS_KEY not in session
 
 
-def test_default_alert_component_escapes_message_text() -> None:
+@pytest.mark.anyio
+async def test_default_alert_component_escapes_message_text() -> None:
     renderer = DefaultTemplateCapability(
         template_sources=(
             PackageResourceSource(package="wybra.messages", directory="templates"),
@@ -525,7 +526,7 @@ def test_default_alert_component_escapes_message_text() -> None:
         cache_size=0,
     )
 
-    content = renderer.render_template(
+    content = await renderer.render_template(
         "components/alerts.html",
         {
             "alerts": (
@@ -557,7 +558,8 @@ async def _message_alert_count(
         return await MessageAlert.all(using_db=connection).count()
 
 
-def test_widget_layout_renders_alert_component_when_context_exists() -> None:
+@pytest.mark.anyio
+async def test_widget_layout_renders_alert_component_when_context_exists() -> None:
     renderer = DefaultTemplateCapability(
         template_sources=(
             PackageResourceSource(package="wybra.widgets", directory="templates"),
@@ -567,7 +569,7 @@ def test_widget_layout_renders_alert_component_when_context_exists() -> None:
         cache_size=0,
     )
 
-    content = renderer.render_template(
+    content = await renderer.render_template(
         "layouts/page.html",
         {
             "asset_url": lambda path: f"/static/{path}",
@@ -591,7 +593,8 @@ def test_widget_layout_renders_alert_component_when_context_exists() -> None:
     assert "wybra-alert--success" in content
 
 
-def test_widget_layout_omits_alert_component_without_context() -> None:
+@pytest.mark.anyio
+async def test_widget_layout_omits_alert_component_without_context() -> None:
     renderer = DefaultTemplateCapability(
         template_sources=(
             PackageResourceSource(package="wybra.widgets", directory="templates"),
@@ -600,7 +603,7 @@ def test_widget_layout_omits_alert_component_without_context() -> None:
         cache_size=0,
     )
 
-    content = renderer.render_template(
+    content = await renderer.render_template(
         "layouts/page.html",
         {
             "asset_url": lambda path: f"/static/{path}",

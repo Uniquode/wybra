@@ -41,7 +41,7 @@ class TemplateView(View):
         if renderer is None:
             raise SiteCapabilityError("Missing capability: TemplateCapability")
         context = await resolve_context(self.context_builder, request)
-        return renderer.render_page(request, self.template_name, context)
+        return await renderer.render_page(request, self.template_name, context)
 
 
 __all__ = [

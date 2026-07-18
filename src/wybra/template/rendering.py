@@ -25,14 +25,14 @@ def template_capability_from(request: Request) -> TemplateCapability:
         ) from exc
 
 
-def render_page(
+async def render_page(
     request: Request,
     template_name: str,
     context: dict[str, Any] | None = None,
     *,
     status_code: int = 200,
 ) -> HTMLResponse:
-    return template_capability_from(request).render_page(
+    return await template_capability_from(request).render_page(
         request,
         template_name,
         context or {},
@@ -40,14 +40,14 @@ def render_page(
     )
 
 
-def render_partial(
+async def render_partial(
     request: Request,
     template_name: str,
     context: dict[str, Any] | None = None,
     *,
     status_code: int = 200,
 ) -> HTMLResponse:
-    return template_capability_from(request).render_partial(
+    return await template_capability_from(request).render_partial(
         request,
         template_name,
         context or {},

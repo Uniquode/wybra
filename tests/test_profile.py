@@ -109,10 +109,12 @@ class ProfileUser:
 
 
 class ProfileTemplateStub:
-    def render_template(self, template_name: str, context: dict[str, object]) -> str:
+    async def render_template(
+        self, template_name: str, context: dict[str, object]
+    ) -> str:
         return self._render(template_name, context)
 
-    def render_page(
+    async def render_page(
         self,
         request: Request,
         template_name: str,
@@ -166,7 +168,7 @@ class ProfileTemplateStub:
             f"phone_states={phone_states}|field_errors={field_errors}"
         )
 
-    def render_partial(
+    async def render_partial(
         self,
         request: Request,
         template_name: str,
@@ -174,7 +176,7 @@ class ProfileTemplateStub:
         *,
         status_code: int = 200,
     ) -> HTMLResponse:
-        return self.render_page(
+        return await self.render_page(
             request,
             template_name,
             context,
@@ -1040,7 +1042,7 @@ class TestProfile:
                 assert name.startswith("phone-contact-fields")
                 return "/profile/phone-contact/fields"
 
-        html = templates.render_template(
+        html = await templates.render_template(
             "profile/pages/edit.html",
             {
                 **csrf,
@@ -1129,7 +1131,7 @@ class TestProfile:
             connection=None,
         )
 
-        html = templates.render_template(
+        html = await templates.render_template(
             "profile/pages/edit.html",
             {
                 **csrf,
@@ -1333,7 +1335,7 @@ class TestProfile:
             )
         )
 
-        html = templates.render_template(
+        html = await templates.render_template(
             "components/login_control.html",
             {
                 "login_widget": SimpleNamespace(
@@ -1443,7 +1445,7 @@ class TestProfile:
             | rendering_context
         )
 
-        html = templates.render_template(
+        html = await templates.render_template(
             "components/login_control.html",
             context,
         )
@@ -1492,7 +1494,7 @@ class TestProfile:
             ),
         )
 
-        html = templates.render_template(
+        html = await templates.render_template(
             "components/login_control.html",
             {
                 "login_widget": SimpleNamespace(
@@ -1527,7 +1529,7 @@ class TestProfile:
             )
         )
 
-        html = templates.render_template(
+        html = await templates.render_template(
             "layouts/page.html",
             {
                 "asset_url": lambda path: f"/static/{path}",
@@ -1555,7 +1557,7 @@ class TestProfile:
             )
         )
 
-        html = templates.render_template(
+        html = await templates.render_template(
             "layouts/page.html",
             {
                 "asset_url": lambda path: f"/static/{path}",

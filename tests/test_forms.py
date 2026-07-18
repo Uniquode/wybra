@@ -2133,8 +2133,8 @@ class TestForms:
         result = await form.parse({"preferred_name": "", "pronouns": "she|her"})
         renderer = TemplateFormRenderer(_forms_templates())
 
-        text_html = renderer.render_field(form, "preferred_name")
-        choice_html = renderer.render_field(form, "pronouns")
+        text_html = await renderer.render_field(form, "preferred_name")
+        choice_html = await renderer.render_field(form, "pronouns")
 
         assert 'for="preferred_name"' in text_html
         assert "Preferred name" in text_html
@@ -2154,12 +2154,12 @@ class TestForms:
         form.fields["value"].attr["data-state"] = "programmatic"
         renderer = TemplateFormRenderer(_forms_templates())
 
-        overridden_html = renderer.render_field(
+        overridden_html = await renderer.render_field(
             form,
             "value",
             attr={"class": "local", "data-source": "render"},
         )
-        ordinary_html = renderer.render_field(form, "value")
+        ordinary_html = await renderer.render_field(form, "value")
 
         assert 'class="wybra-form-control local"' in overridden_html
         assert 'data-source="render"' in overridden_html
@@ -2178,7 +2178,7 @@ class TestForms:
         form = ExampleForm(values={"preferred_name": "David"})
         renderer = TemplateFormRenderer(_forms_templates())
 
-        html = renderer.render_form(
+        html = await renderer.render_form(
             form,
             action="/profile",
             method="post",
@@ -2216,7 +2216,7 @@ class TestForms:
         await form.parse({"attachment": UploadedFile(filename="document.pdf")})
         renderer = TemplateFormRenderer(_forms_templates())
 
-        html = renderer.render_form(form)
+        html = await renderer.render_form(form)
 
         assert 'enctype="multipart/form-data"' in html
         assert "Form-level upload problem." in html
@@ -2233,7 +2233,7 @@ class TestForms:
             widgets={"custom-file": "forms/widgets/file.html"},
         )
 
-        html = renderer.render_form(CustomUploadWidgetForm())
+        html = await renderer.render_form(CustomUploadWidgetForm())
 
         assert 'enctype="multipart/form-data"' in html
         assert 'type="file"' in html
@@ -2245,7 +2245,7 @@ class TestForms:
         renderer = TemplateFormRenderer(_forms_templates())
 
         with pytest.raises(UnknownWidgetError, match="missing-widget.*value"):
-            renderer.render_field(UnknownWidgetForm(), "value")
+            await renderer.render_field(UnknownWidgetForm(), "value")
 
     async def test_form_renderer_accepts_custom_widget_mapping(self) -> None:
         class CustomWidgetForm(Form):
@@ -2256,7 +2256,7 @@ class TestForms:
             widgets={"custom-text": "forms/widgets/text.html"},
         )
 
-        html = renderer.render_field(
+        html = await renderer.render_field(
             CustomWidgetForm(values={"value": "custom"}), "value"
         )
 
@@ -2269,7 +2269,7 @@ class TestForms:
                 self.marker = marker
                 self.contexts: list[FormRenderContext] = []
 
-            def render(self, field: Field, context: FormRenderContext) -> Markup:
+            async def render(self, field: Field, context: FormRenderContext) -> Markup:
                 self.contexts.append(context)
                 return Markup(
                     f'<output data-renderer="{self.marker}">{field.name}</output>'
@@ -2292,13 +2292,13 @@ class TestForms:
         form = RendererForm(values={"defaulted": "ordinary"})
         renderer = TemplateFormRenderer(_forms_templates())
 
-        assert 'data-renderer="meta">configured' in renderer.render_field(
+        assert 'data-renderer="meta">configured' in await renderer.render_field(
             form, "configured"
         )
-        assert 'data-renderer="explicit">explicit' in renderer.render_field(
+        assert 'data-renderer="explicit">explicit' in await renderer.render_field(
             form, "explicit"
         )
-        assert 'name="defaulted"' in renderer.render_field(form, "defaulted")
+        assert 'name="defaulted"' in await renderer.render_field(form, "defaulted")
         assert isinstance(meta_renderer, Renderer)
         assert meta_renderer.contexts[0].form is form
 
@@ -2326,9 +2326,9 @@ class TestForms:
         form = ExampleForm(values={"preferred_name": "David"})
         templates = _forms_templates()
 
-        field_html = render_field(templates, form, "preferred_name")
-        form_html = render_form(templates, form, action="/save")
-        csrf_html = render_csrf_field(
+        field_html = await render_field(templates, form, "preferred_name")
+        form_html = await render_form(templates, form, action="/save")
+        csrf_html = await render_csrf_field(
             templates,
             csrf={"csrf_field_name": "csrf_token", "csrf_token": "secure-token"},
         )
@@ -2352,7 +2352,7 @@ class TestForms:
         await form.parse({"country": "AU", "region": "VIC", "mobile": "<script>"})
         renderer = TemplateFormRenderer(_forms_templates())
 
-        html = renderer.render_phone_contact(
+        html = await renderer.render_phone_contact(
             form,
             country_field="country",
             subdivision_field="region",
@@ -2387,7 +2387,7 @@ class TestForms:
         )
         renderer = TemplateFormRenderer(_forms_templates())
 
-        html = renderer.render_phone_contact(
+        html = await renderer.render_phone_contact(
             form,
             country_field="country",
             subdivision_field="region",
@@ -2411,7 +2411,7 @@ class TestForms:
         form.fields["mobile"].disabled = True
         renderer = TemplateFormRenderer(_forms_templates())
 
-        html = renderer.render_phone_contact_fields(
+        html = await renderer.render_phone_contact_fields(
             form,
             subdivision_field="region",
             phone_field="mobile",
@@ -2430,14 +2430,14 @@ class TestForms:
         templates = _forms_templates()
         form = PhoneContactForm(options={"country": COUNTRY_OPTIONS})
 
-        widget_html = render_phone_contact(
+        widget_html = await render_phone_contact(
             templates,
             form,
             country_field="country",
             subdivision_field="region",
             phone_field="mobile",
         )
-        fragment_html = render_phone_contact_fields(
+        fragment_html = await render_phone_contact_fields(
             templates,
             form,
             subdivision_field="region",
@@ -2455,7 +2455,7 @@ class TestForms:
             PhoneContactWidgetError,
             match="country_field='missing_country'",
         ):
-            renderer.render_phone_contact(
+            await renderer.render_phone_contact(
                 form,
                 country_field="missing_country",
                 subdivision_field="region",
@@ -2469,7 +2469,7 @@ class TestForms:
         with pytest.raises(
             PhoneContactWidgetError, match="phone_field='missing_mobile'"
         ):
-            renderer.render_phone_contact_fields(
+            await renderer.render_phone_contact_fields(
                 form,
                 subdivision_field="region",
                 phone_field="missing_mobile",
@@ -2484,7 +2484,7 @@ class TestForms:
         renderer = TemplateFormRenderer(_forms_templates())
 
         with pytest.raises(PhoneContactWidgetError, match="country.*SelectField"):
-            renderer.render_phone_contact(
+            await renderer.render_phone_contact(
                 WrongPhoneContactForm(),
                 country_field="country",
                 subdivision_field="region",
@@ -2495,7 +2495,7 @@ class TestForms:
         renderer = TemplateFormRenderer(_forms_templates())
         form = PhoneContactForm()
 
-        html = renderer.render_phone_contact_fields(
+        html = await renderer.render_phone_contact_fields(
             form,
             subdivision_field="region",
             phone_field="mobile",
@@ -2772,7 +2772,7 @@ class TestForms:
                     "country": PhoneContactForm.phone_contact.country_options(),
                 },
             )
-            html = TemplateFormRenderer(
+            html = await TemplateFormRenderer(
                 _forms_templates(),
                 url_context=request,
             ).render_phone_contact(form, control=PhoneContactForm.phone_contact)
@@ -2823,7 +2823,7 @@ class TestForms:
 
         @router.get("/delivery")
         async def delivery_view(request: Request) -> PlainTextResponse:
-            html = TemplateFormRenderer(
+            html = await TemplateFormRenderer(
                 _forms_templates(),
                 url_context=request,
             ).render_phone_contact(
@@ -2834,7 +2834,7 @@ class TestForms:
 
         @router.get("/billing")
         async def billing_view(request: Request) -> PlainTextResponse:
-            html = TemplateFormRenderer(
+            html = await TemplateFormRenderer(
                 _forms_templates(),
                 url_context=request,
             ).render_phone_contact(
@@ -2886,7 +2886,7 @@ class TestForms:
         @app.get("/form")
         async def form_view(request: Request) -> dict[str, str]:
             context = forms_context(request, TemplateContext()).as_dict()
-            csrf_html = context["render_csrf_field"]()
+            csrf_html = await context["render_csrf_field"]()
             return {
                 "field_name": context["csrf_field"].name,
                 "csrf_html": str(csrf_html),

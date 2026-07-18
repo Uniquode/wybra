@@ -135,7 +135,7 @@ async def totp_setup(request: Request) -> Response:
             raise HTTPException(status_code=401, detail="Account is inactive.")
 
         if not user.is_verified:
-            return setup_totp_error_page(
+            return await setup_totp_error_page(
                 request,
                 return_to=return_to,
                 setup_challenge_id=setup_challenge_id or "",
@@ -166,7 +166,7 @@ async def totp_setup(request: Request) -> Response:
         setup_totp_secret = store.decrypt_totp_secret(credential)
 
         if request.method != "POST":
-            return render_totp_setup_page(
+            return await render_totp_setup_page(
                 request,
                 return_to=return_to,
                 setup_challenge_id=setup_challenge_id or "",
@@ -175,7 +175,7 @@ async def totp_setup(request: Request) -> Response:
             )
 
         if not setup_code:
-            return setup_totp_error_page(
+            return await setup_totp_error_page(
                 request,
                 return_to=return_to,
                 setup_challenge_id=setup_challenge_id or "",
@@ -199,7 +199,7 @@ async def totp_setup(request: Request) -> Response:
             timestamp=verification_timestamp,
         )
         if not accepted or counter is None:
-            return setup_totp_error_page(
+            return await setup_totp_error_page(
                 request,
                 return_to=return_to,
                 setup_challenge_id=setup_challenge_id or "",
@@ -221,7 +221,7 @@ async def totp_setup(request: Request) -> Response:
         if setup_challenge is not None:
             await scope.challenges.consume_challenge(setup_challenge.id)
 
-        response = render_totp_setup_page(
+        response = await render_totp_setup_page(
             request,
             return_to=return_to,
             setup_challenge_id="",
@@ -249,7 +249,7 @@ async def totp_setup(request: Request) -> Response:
                 ),
             )
             if ceremony_result.is_failure() or ceremony_result.value is None:
-                return _login_error_response(
+                return await _login_error_response(
                     request,
                     email=user.email,
                     return_to=return_to,
@@ -289,7 +289,7 @@ async def disable_totp(request: Request) -> Response:
             )
 
         if request.method != "POST":
-            return _totp_action_confirmation_page(
+            return await _totp_action_confirmation_page(
                 request,
                 page_title="Disable authenticator",
                 action_path=str(request.url_for("auth:totp-disable")),
@@ -297,7 +297,7 @@ async def disable_totp(request: Request) -> Response:
             )
 
         if not await _user_has_usable_account_sign_in(request, scope, user):
-            return _totp_action_confirmation_page(
+            return await _totp_action_confirmation_page(
                 request,
                 page_title="Disable authenticator",
                 action_path=str(request.url_for("auth:totp-disable")),
@@ -312,7 +312,7 @@ async def disable_totp(request: Request) -> Response:
             scope,
             active_credential_id=active_credential_id,
         ):
-            return _totp_action_confirmation_page(
+            return await _totp_action_confirmation_page(
                 request,
                 page_title="Disable authenticator",
                 action_path=str(request.url_for("auth:totp-disable")),
@@ -347,7 +347,7 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
             )
 
         if request.method != "POST":
-            return _totp_action_confirmation_page(
+            return await _totp_action_confirmation_page(
                 request,
                 page_title="Generate replacement recovery codes",
                 action_path=str(request.url_for("auth:totp-recovery-codes-regenerate")),
@@ -361,7 +361,7 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
             scope,
             active_credential_id=active_credential_id,
         ):
-            return _totp_action_confirmation_page(
+            return await _totp_action_confirmation_page(
                 request,
                 page_title="Generate replacement recovery codes",
                 action_path=str(request.url_for("auth:totp-recovery-codes-regenerate")),
@@ -379,7 +379,7 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
             recovery_codes,
         )
 
-    return _totp_action_confirmation_page(
+    return await _totp_action_confirmation_page(
         request,
         page_title="Recovery codes",
         action_path=str(request.url_for("auth:totp-recovery-codes-regenerate")),
@@ -388,7 +388,7 @@ async def regenerate_totp_recovery_codes(request: Request) -> Response:
     )
 
 
-def _totp_action_confirmation_page(
+async def _totp_action_confirmation_page(
     request: Request,
     *,
     page_title: str,
@@ -399,7 +399,7 @@ def _totp_action_confirmation_page(
     single_confirmation_field: bool = False,
     status_code: int = 200,
 ) -> Response:
-    return render_page(
+    return await render_page(
         request,
         "identity/pages/totp_confirmation.html",
         {

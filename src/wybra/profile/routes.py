@@ -135,7 +135,7 @@ async def edit_profile(
         "phone_contact_status": _phone_contact_status(current_phone_contact),
         "form_error": form_error,
     }
-    return templates.render_page(
+    return await templates.render_page(
         request,
         PROFILE_EDIT_TEMPLATE,
         context,

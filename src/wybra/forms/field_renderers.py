@@ -26,7 +26,7 @@ class FormRenderContext:
 class FieldRenderer(Protocol):
     """Render one already-bound form field."""
 
-    def render(self, field: Field, context: FormRenderContext) -> Markup: ...
+    async def render(self, field: Field, context: FormRenderContext) -> Markup: ...
 
 
 __all__ = ("FieldRenderer", "FormRenderContext")

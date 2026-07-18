@@ -83,7 +83,7 @@ class CustomApiCapability:
 
 
 class CustomErrorCapability:
-    def response_for_exception(self, request, exc):
+    async def response_for_exception(self, request, exc):
         return JSONResponse(
             {
                 "custom_error": type(exc).__name__,
