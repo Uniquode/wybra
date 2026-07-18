@@ -40,6 +40,7 @@ _.setup_site
 _.finalised
 _.unavailable
 _.template_context_middleware
+_.register_cache_key_normaliser
 _.diagnostics_middleware
 _.session_cookie_cleanup_middleware
 _.wybra_messages_middleware
@@ -131,6 +132,9 @@ _.complete_challenge
 # Tortoise router hooks discovered from the configured router type.
 _.db_for_read
 _.db_for_write
+
+# Jinja extension callbacks invoked through Extension.call_method().
+_._render_fragment
 
 # Protocol, dataclass, and ORM fields used by consumers and SQLAlchemy.
 _.__call__

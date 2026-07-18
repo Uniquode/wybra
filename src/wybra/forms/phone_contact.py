@@ -288,7 +288,7 @@ def register_phone_contact_field_handlers(
         form = form_factory(request)
         country_code = request.query_params.get(control.country_field)
         return HTMLResponse(
-            render_phone_contact_fields(
+            await render_phone_contact_fields(
                 templates(request),
                 form,
                 subdivision_field=control.subdivision_field,

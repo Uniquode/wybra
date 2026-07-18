@@ -85,7 +85,7 @@ async def signup(request: Request) -> Response:
             page_title="Create account",
             form=SignupCommandForm(),
         )
-        return render_page(request, "identity/pages/signup.html", context)
+        return await render_page(request, "identity/pages/signup.html", context)
 
     form = SignupCommandForm()
     await form.parse(await request_form_data(request))
@@ -107,7 +107,7 @@ async def signup(request: Request) -> Response:
         ),
         form=form,
     )
-    return render_page(
+    return await render_page(
         request,
         "identity/pages/signup.html",
         context,
@@ -124,7 +124,7 @@ async def signup(request: Request) -> Response:
 async def logout(request: Request) -> Response:
     if request.method == "GET":
         context = _identity_context(request, page_title="Sign out")
-        return render_page(request, "identity/pages/logout.html", context)
+        return await render_page(request, "identity/pages/logout.html", context)
 
     await destroy_session_token(request)
     response = RedirectResponse(url="/", status_code=303)
@@ -140,9 +140,9 @@ async def account(request: Request) -> Response:
     )
     user = await resolve_current_user(request)
     if user is None:
-        return render_page(request, "identity/pages/account.html", context)
+        return await render_page(request, "identity/pages/account.html", context)
 
-    return render_page(request, "identity/pages/account.html", context)
+    return await render_page(request, "identity/pages/account.html", context)
 
 
 @account_router.get(
@@ -321,7 +321,7 @@ async def _security_page_response(
         providers=await _security_provider_section(request, user),
         totp=await _security_totp_section(request, user),
     )
-    return render_page(
+    return await render_page(
         request,
         "identity/pages/security.html",
         context,
@@ -533,7 +533,7 @@ async def password_reset(request: Request) -> Response:
             request_form=PasswordResetRequestCommandForm(),
             confirm_form=PasswordResetConfirmCommandForm(),
         )
-        return render_page(request, "identity/pages/password_reset.html", context)
+        return await render_page(request, "identity/pages/password_reset.html", context)
 
     form = PasswordResetRequestCommandForm()
     await form.parse(await request_form_data(request))
@@ -547,7 +547,7 @@ async def password_reset(request: Request) -> Response:
         request_form=form,
         confirm_form=PasswordResetConfirmCommandForm(),
     )
-    return render_page(request, "identity/pages/password_reset.html", context)
+    return await render_page(request, "identity/pages/password_reset.html", context)
 
 
 @account_router.post(
@@ -569,7 +569,7 @@ async def password_reset_confirm(request: Request) -> Response:
         request_form=PasswordResetRequestCommandForm(),
         confirm_form=form,
     )
-    return render_page(
+    return await render_page(
         request,
         "identity/pages/password_reset.html",
         context,
@@ -591,7 +591,7 @@ async def verify(request: Request) -> Response:
             request_form=VerificationRequestCommandForm(),
             confirm_form=VerificationConfirmCommandForm(),
         )
-        return render_page(request, "identity/pages/verify.html", context)
+        return await render_page(request, "identity/pages/verify.html", context)
 
     form = VerificationRequestCommandForm()
     await form.parse(await request_form_data(request))
@@ -607,7 +607,7 @@ async def verify(request: Request) -> Response:
         request_form=form,
         confirm_form=VerificationConfirmCommandForm(),
     )
-    return render_page(request, "identity/pages/verify.html", context)
+    return await render_page(request, "identity/pages/verify.html", context)
 
 
 @account_router.post(
@@ -642,7 +642,7 @@ async def verify_confirm(request: Request) -> Response:
         request_form=VerificationRequestCommandForm(),
         confirm_form=form,
     )
-    return render_page(
+    return await render_page(
         request,
         "identity/pages/verify.html",
         context,

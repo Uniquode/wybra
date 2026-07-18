@@ -7,6 +7,8 @@ from typing import Any
 
 _EXPORT_MODULES = {
     "DefaultTemplateCapability": "wybra.template.capabilities",
+    "CacheKeyNormaliser": "wybra.template.cache",
+    "CacheKeyNormalisers": "wybra.template.cache",
     "TemplateCapability": "wybra.template.capabilities",
     "TemplateSettings": "wybra.template.settings",
     "build_template_loader": "wybra.template.templating",
@@ -34,6 +36,8 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "DefaultTemplateCapability",
+    "CacheKeyNormaliser",
+    "CacheKeyNormalisers",
     "TemplateCapability",
     "TemplateSettings",
     "build_template_loader",

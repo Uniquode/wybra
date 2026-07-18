@@ -19,7 +19,9 @@ from wybra.site import Site, SiteCapabilityProxy
 
 @runtime_checkable
 class ErrorHandlingCapability(Protocol):
-    def response_for_exception(self, request: Request, exc: Exception) -> Response: ...
+    async def response_for_exception(
+        self, request: Request, exc: Exception
+    ) -> Response: ...
 
 
 async def setup_site(site: Site) -> None:

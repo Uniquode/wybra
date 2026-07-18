@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,7 +29,7 @@ def phone_contact_context(
     phone_prefix: str,
     phone_contact_status: str | None,
     target_id: str,
-    render_field: Callable[[Form, str], Markup],
+    render_field: Callable[[Form, str], Awaitable[Markup]],
 ) -> dict[str, Any]:
     return {
         "form": form,

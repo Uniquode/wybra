@@ -31,6 +31,8 @@ Repository: <https://github.com/Uniquode/wybra>
   URL resolution, collection, and validation.
 - `wybra.template`: template settings, source discovery, rendering capability,
   context construction, and template validation.
+- `wybra.cache`: optional process-local or Redis-backed byte cache capability,
+  including Jinja template-fragment caching.
 - `wybra.forms`: form settings, CSRF protection, request form parsing, form
   safety helpers, form response finalisation, and forms validation.
 - `wybra.security`: web-facing security policy, COOP/security headers, CORS
@@ -66,6 +68,9 @@ uv build
 Windows compatibility is validated in CI alongside Linux. See
 [`docs/WINDOWS.md`](docs/WINDOWS.md) for the Windows runner coverage, local
 check commands, SQLite URL guidance, and optional OS-service boundaries.
+
+See [`docs/CACHE.md`](docs/CACHE.md) for cache configuration and safe Jinja
+fragment-caching guidance.
 
 The framework project does not contain host application settings, `app.toml`,
 or change-management artifacts. Host-facing commands resolve the configured

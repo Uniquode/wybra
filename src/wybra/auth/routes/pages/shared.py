@@ -319,7 +319,7 @@ def _is_effectively_active_user(user: User, *, now: float | None = None) -> bool
     return expires_at > (current_timestamp() if now is None else now)
 
 
-def _totp_login_error_response(
+async def _totp_login_error_response(
     request: Request,
     *,
     email: str,
@@ -330,7 +330,7 @@ def _totp_login_error_response(
     challenge_step: str = "totp",
     challenge_error: str | None = None,
 ) -> Response:
-    return _login_error_response(
+    return await _login_error_response(
         request,
         email=email,
         return_to=return_to,
@@ -354,10 +354,10 @@ async def _complete_login_ceremony(
         ceremony_result.is_failure()
         and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
     ):
-        return _verification_required_response(request, email=user.email)
+        return await _verification_required_response(request, email=user.email)
 
     if ceremony_result.is_failure() or ceremony_result.value is None:
-        return _login_error_response(
+        return await _login_error_response(
             request,
             email=user.email,
             return_to=return_to,
@@ -371,7 +371,7 @@ async def _complete_login_ceremony(
     return response
 
 
-def _verification_required_response(
+async def _verification_required_response(
     request: Request,
     *,
     email: str,
@@ -385,7 +385,7 @@ def _verification_required_response(
         request_form=VerificationRequestCommandForm(values={"email": email}),
         confirm_form=VerificationConfirmCommandForm(),
     )
-    return render_page(
+    return await render_page(
         request,
         "identity/pages/verify.html",
         context,
@@ -393,7 +393,7 @@ def _verification_required_response(
     )
 
 
-def _login_error_response(
+async def _login_error_response(
     request: Request,
     *,
     email: str,
@@ -427,7 +427,7 @@ def _login_error_response(
         challenge_error=challenge_error,
         requires_email_password=requires_email_password,
     )
-    return render_page(
+    return await render_page(
         request,
         "identity/pages/login.html",
         context,

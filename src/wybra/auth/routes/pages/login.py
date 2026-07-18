@@ -71,14 +71,14 @@ async def login(request: Request) -> Response:
     if request.method == "GET":
         challenge_id = request.query_params.get("challenge_id", "").strip()
         if request.query_params.get("challenge_step") == "totp" and challenge_id:
-            return render_totp_login_challenge(
+            return await render_totp_login_challenge(
                 request,
                 return_to=normalise_return_to(request.query_params.get("return_to")),
                 email=request.query_params.get("email", "").strip(),
                 challenge_id=challenge_id,
             )
 
-        return render_page(
+        return await render_page(
             request,
             "identity/pages/login.html",
             _login_page_context(
@@ -133,7 +133,7 @@ async def _handle_primary_login(
 ) -> Response:
     user = await authenticate_user(request, email, password)
     if user is None:
-        return _login_error_response(
+        return await _login_error_response(
             request,
             email=email,
             return_to=return_to,
@@ -167,7 +167,7 @@ async def _handle_totp_post_authentication_decision(
                 user_id=str(user.id),
                 credential_id=credential_id,
             )
-            response = render_totp_login_challenge(
+            response = await render_totp_login_challenge(
                 request,
                 return_to=return_to,
                 email=email,
@@ -182,7 +182,7 @@ async def _handle_totp_post_authentication_decision(
                 user_id=str(user.id),
                 return_to=return_to,
             )
-            response = render_totp_setup_prompt(
+            response = await render_totp_setup_prompt(
                 request,
                 return_to=return_to,
                 email=email,
@@ -217,7 +217,7 @@ async def _handle_login_totp_challenge(
     async with scope_factory() as scope:
         challenge = await scope.challenges.get_challenge(challenge_id)
         if challenge is None:
-            return _totp_login_error_response(
+            return await _totp_login_error_response(
                 request,
                 email=email,
                 return_to=return_to,
@@ -238,7 +238,7 @@ async def _handle_login_totp_challenge(
                 )
                 or not totp_setup_nonce_valid(request, challenge)
             ):
-                return _totp_login_error_response(
+                return await _totp_login_error_response(
                     request,
                     email=email,
                     return_to=return_to,
@@ -262,7 +262,7 @@ async def _handle_login_totp_challenge(
                     ceremony_result.is_failure()
                     and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
                 ):
-                    response = _verification_required_response(
+                    response = await _verification_required_response(
                         request,
                         email=challenge_user.email,
                     )
@@ -270,7 +270,7 @@ async def _handle_login_totp_challenge(
                     return response
 
                 if ceremony_result.is_failure() or ceremony_result.value is None:
-                    return _totp_login_error_response(
+                    return await _totp_login_error_response(
                         request,
                         email=challenge_user.email,
                         return_to=challenge_return_to,
@@ -292,7 +292,7 @@ async def _handle_login_totp_challenge(
                 clear_totp_setup_nonce_cookie(response, request)
                 return response
 
-            return render_totp_setup_prompt(
+            return await render_totp_setup_prompt(
                 request,
                 return_to=challenge_return_to,
                 email=challenge_user.email,
@@ -305,7 +305,7 @@ async def _handle_login_totp_challenge(
             )
 
         if challenge.kind != "totp":
-            return _totp_login_error_response(
+            return await _totp_login_error_response(
                 request,
                 email=email,
                 return_to=return_to,
@@ -316,7 +316,7 @@ async def _handle_login_totp_challenge(
 
         user = await _load_user_by_id(scope, challenge.user_id)
         if user is None:
-            return _totp_login_error_response(
+            return await _totp_login_error_response(
                 request,
                 email=email,
                 return_to=return_to,
@@ -326,7 +326,7 @@ async def _handle_login_totp_challenge(
             )
 
         if not totp_login_nonce_valid(request, challenge):
-            return _totp_login_error_response(
+            return await _totp_login_error_response(
                 request,
                 email=email,
                 return_to=return_to,
@@ -351,7 +351,7 @@ async def _handle_login_totp_challenge(
                 credential_id = maybe_credential_id
 
         if credential_id is None:
-            return _totp_login_error_response(
+            return await _totp_login_error_response(
                 request,
                 email=email,
                 return_to=return_to,
@@ -378,7 +378,7 @@ async def _handle_login_totp_challenge(
                 credential_problem,
             )
             await scope.challenges.consume_challenge(challenge_id)
-            return _totp_login_error_response(
+            return await _totp_login_error_response(
                 request,
                 email=email,
                 return_to=return_to,
@@ -401,7 +401,7 @@ async def _handle_login_totp_challenge(
                 timestamp=verification_timestamp,
             )
             if not accepted or counter is None:
-                return _totp_login_error_response(
+                return await _totp_login_error_response(
                     request,
                     email=email,
                     return_to=return_to,
@@ -415,7 +415,7 @@ async def _handle_login_totp_challenge(
         elif code:
             recovery_code = code.upper()
             if len(recovery_code) != RECOVERY_CODE_LENGTH:
-                return _totp_login_error_response(
+                return await _totp_login_error_response(
                     request,
                     email=email,
                     return_to=return_to,
@@ -430,7 +430,7 @@ async def _handle_login_totp_challenge(
                 str(user.id),
                 recovery_code,
             ):
-                return _totp_login_error_response(
+                return await _totp_login_error_response(
                     request,
                     email=email,
                     return_to=return_to,
@@ -441,7 +441,7 @@ async def _handle_login_totp_challenge(
                 )
             totp_asserted_at = current_timestamp()
         else:
-            return _totp_login_error_response(
+            return await _totp_login_error_response(
                 request,
                 email=email,
                 return_to=return_to,
@@ -476,11 +476,11 @@ async def _handle_login_totp_challenge(
             ceremony_result.is_failure()
             and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
         ):
-            response = _verification_required_response(request, email=user.email)
+            response = await _verification_required_response(request, email=user.email)
             clear_totp_login_nonce_cookie(response, request)
             return response
 
-        return _totp_login_error_response(
+        return await _totp_login_error_response(
             request,
             email=email,
             return_to=return_to,

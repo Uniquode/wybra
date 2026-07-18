@@ -27,7 +27,9 @@ ERROR_OPTIONS_STATE_ATTRIBUTE = "wybra_errors_options"
 
 
 class _ErrorHandlingCapability(Protocol):
-    def response_for_exception(self, request: Request, exc: Exception) -> Response: ...
+    async def response_for_exception(
+        self, request: Request, exc: Exception
+    ) -> Response: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,14 +58,16 @@ class ErrorHandlerOptions:
 class DefaultErrorHandlingCapability:
     """Default exception-to-response translator."""
 
-    def response_for_exception(self, request: Request, exc: Exception) -> Response:
+    async def response_for_exception(
+        self, request: Request, exc: Exception
+    ) -> Response:
         if isinstance(exc, EmptyBodyResponseException):
             return Response(status_code=exc.status_code)
         if isinstance(exc, StarletteHTTPException):
-            return _response_for_http_exception(request, exc)
+            return await _response_for_http_exception(request, exc)
         if isinstance(exc, RequestValidationError):
-            return _response_for_validation_error(request, exc)
-        return _response_for_unexpected_exception(request, exc)
+            return await _response_for_validation_error(request, exc)
+        return await _response_for_unexpected_exception(request, exc)
 
 
 def register_error_handlers(
@@ -82,17 +86,17 @@ def register_error_handlers(
     app.add_exception_handler(Exception, _handle_exception)
 
 
-def _handle_exception(request: Request, exc: Exception) -> Response:
+async def _handle_exception(request: Request, exc: Exception) -> Response:
     translated = translate_exception(exc, mappings=_error_options(request).mappings)
-    return _error_capability(request).response_for_exception(request, translated)
+    return await _error_capability(request).response_for_exception(request, translated)
 
 
-def _handle_http_exception(request: Request, exc: Exception) -> Response:
+async def _handle_http_exception(request: Request, exc: Exception) -> Response:
     http_exc = cast(StarletteHTTPException, exc)
-    return _response_for_http_exception(request, http_exc)
+    return await _response_for_http_exception(request, http_exc)
 
 
-def _response_for_http_exception(
+async def _response_for_http_exception(
     request: Request,
     http_exc: StarletteHTTPException,
 ) -> Response:
@@ -100,15 +104,15 @@ def _response_for_http_exception(
         http_exc.status_code,
         detail=_normalise_http_detail(http_exc.status_code, http_exc.detail),
     )
-    return _build_error_response(request, presentation, headers=http_exc.headers)
+    return await _build_error_response(request, presentation, headers=http_exc.headers)
 
 
-def _handle_validation_error(request: Request, exc: Exception) -> Response:
+async def _handle_validation_error(request: Request, exc: Exception) -> Response:
     validation_exc = cast(RequestValidationError, exc)
-    return _response_for_validation_error(request, validation_exc)
+    return await _response_for_validation_error(request, validation_exc)
 
 
-def _response_for_validation_error(
+async def _response_for_validation_error(
     request: Request,
     validation_exc: RequestValidationError,
 ) -> Response:
@@ -127,20 +131,22 @@ def _response_for_validation_error(
             form_errors=_summarise_validation_errors(validation_exc),
         )
 
-    return _build_error_response(request, presentation)
+    return await _build_error_response(request, presentation)
 
 
-def _handle_unexpected_exception(request: Request, exc: Exception) -> Response:
-    return _response_for_unexpected_exception(request, exc)
+async def _handle_unexpected_exception(request: Request, exc: Exception) -> Response:
+    return await _response_for_unexpected_exception(request, exc)
 
 
-def _response_for_unexpected_exception(request: Request, exc: Exception) -> Response:
+async def _response_for_unexpected_exception(
+    request: Request, exc: Exception
+) -> Response:
     logger.exception("Unhandled application error", exc_info=exc)
     presentation = _build_error_presentation(500)
-    return _build_error_response(request, presentation)
+    return await _build_error_response(request, presentation)
 
 
-def _build_error_response(
+async def _build_error_response(
     request: Request,
     presentation: ErrorPresentation,
     *,
@@ -176,14 +182,14 @@ def _build_error_response(
 
     try:
         if response_kind == "partial":
-            response = templates.render_partial(
+            response = await templates.render_partial(
                 request,
                 _error_options(request).partial_template,
                 context,
                 status_code=presentation.status_code,
             )
         else:
-            response = templates.render_page(
+            response = await templates.render_page(
                 request,
                 _error_options(request).page_template,
                 context,
