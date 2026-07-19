@@ -9,6 +9,16 @@ Ordinary text controls trim outer whitespace. Passwords retain it exactly;
 codes and tokens intentionally trim pasted outer whitespace before their
 owning security service validates them.
 
+## Native method overrides
+
+The forms module supports native browser `POST` forms that carry one `_method`
+value of `PATCH`, `PUT`, or `DELETE` in JSON, URL-encoded, or multipart input.
+For safe body replay, override inspection only occurs when the request declares
+a valid `Content-Length` no greater than the configured form-body limit.
+Lengthless or oversized requests are passed through unchanged, including
+chunked uploads; applications that need an override must ensure the client or
+proxy supplies a bounded `Content-Length`.
+
 | Surface | Classification | Notes |
 | --- | --- | --- |
 | Sign-up | Command | Email and password are parsed before the existing account-creation service is called. |

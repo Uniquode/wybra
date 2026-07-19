@@ -61,7 +61,7 @@ def _request(method: str = "GET", *, app: FastAPI | None = None) -> Request:
 
 
 def _json_request(
-    values: dict[str, object],
+    values: object,
     *,
     method: str,
     app: FastAPI,
@@ -76,17 +76,36 @@ def _json_request(
         received = True
         return {"type": "http.request", "body": body, "more_body": False}
 
-    return Request(
-        {
-            "type": "http",
-            "method": method,
-            "path": "/articles",
-            "query_string": b"",
-            "headers": [(b"content-type", b"application/json")],
-            "app": app,
-        },
-        receive,
-    )
+    return Request(_json_request_scope(app, method=method), receive)
+
+
+def _malformed_json_request(*, method: str, app: FastAPI) -> Request:
+    body = b"{"
+    received = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal received
+        if received:
+            return {"type": "http.disconnect"}
+        received = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(_json_request_scope(app, method=method), receive)
+
+
+def _json_request_scope(
+    app: FastAPI,
+    *,
+    method: str = "POST",
+) -> dict[str, object]:
+    return {
+        "type": "http",
+        "method": method,
+        "path": "/articles",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "app": app,
+    }
 
 
 @pytest.mark.anyio
@@ -580,6 +599,58 @@ async def test_model_generic_view_returns_api_validation_errors() -> None:
 
     assert response.status_code == 422
     assert json.loads(response.body)["error"]["code"] == "validation_error"
+
+
+@pytest.mark.anyio
+async def test_model_generic_view_validates_malformed_api_and_bulk_input() -> None:
+    class ArticleView(ModelGenericView):
+        model = Article
+        bulk_actions = {"delete": BulkDeleteAction()}
+
+    app = FastAPI()
+    invalid_requests: tuple[tuple[object, bool, str], ...] = (
+        ([], False, "body"),
+        ({}, True, "action"),
+        ({"action": 1}, True, "action"),
+        ({"action": "archive"}, True, "action"),
+        ({"action": "delete", "selected": "article-1"}, True, "selected"),
+        ({"action": "delete", "selected": [{}]}, True, "selected"),
+    )
+    async with migrated_test_database(
+        modules=("tests_support.content_types",)
+    ) as database:
+        site = create_test_site(
+            {"app": {"modules": ("tests_support.content_types",)}},
+            app=app,
+        )
+        site.provide_capability(DatabaseCapability, database.capability())
+        site.provide_capability(
+            ContentTypesCapability,
+            ContentTypeRegistry.from_models(database.capability().models()),
+        )
+        site.provide_capability(ApiCapability, DefaultApiCapability(ApiSettings()))
+
+        for values, bulk, field in invalid_requests:
+            response = await ArticleView().dispatch(
+                _json_request(values, method="POST", app=app),
+                _route_type=RouteType.API,
+                bulk=bulk,
+            )
+            payload = json.loads(response.body)
+
+            assert response.status_code == 422
+            assert payload["error"]["code"] == "validation_error"
+            assert payload["error"]["details"][0]["field"] == field
+            assert payload["error"]["details"][0]["messages"]
+
+        malformed_response = await ArticleView().dispatch(
+            _malformed_json_request(method="POST", app=app),
+            _route_type=RouteType.API,
+        )
+
+        malformed_payload = json.loads(malformed_response.body)
+        assert malformed_response.status_code == 422
+        assert malformed_payload["error"]["details"][0]["field"] == "body"
 
 
 @pytest.mark.anyio

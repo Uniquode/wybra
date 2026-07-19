@@ -27,6 +27,14 @@ from wybra.views.bulk import BulkAction, BulkActionResult, BulkDeleteAction
 from wybra.views.templates import TemplateResponse
 
 
+class _RequestValidationError(ValueError):
+    """Invalid client input that should become a representation-aware response."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
 @dataclass(frozen=True, slots=True)
 class _ApiResponse:
     """Deferred API rendering without imposing a representation on views."""
@@ -135,6 +143,13 @@ class ModelGenericView(GenericView):
     _transient_collection_parameters = frozenset(
         {"edit", "delete", "confirm_delete", "highlight"}
     )
+
+    async def dispatch(self, request: Request, **kwargs: Any) -> Response:
+        """Translate client input validation failures to the active representation."""
+        try:
+            return await super().dispatch(request, **kwargs)
+        except _RequestValidationError as exc:
+            return await self._request_validation_response(request, exc)
 
     async def list_objects(self, request: Request) -> HandlerResult:
         """Render or represent the configured model collection."""
@@ -265,10 +280,14 @@ class ModelGenericView(GenericView):
         action_name = values.get("action")
         selected = _selected_values(values)
         if not isinstance(action_name, str):
-            raise ValueError("Bulk actions require an action name.")
+            raise _RequestValidationError(
+                "action", "Bulk actions require an action name."
+            )
         action = self.bulk_actions.get(action_name)
         if action is None:
-            raise ValueError(f"Bulk action is not registered: {action_name}.")
+            raise _RequestValidationError(
+                "action", f"Bulk action is not registered: {action_name}."
+            )
         if isinstance(action, BulkDeleteAction) and not _is_confirmed(values):
             return await self._bulk_confirmation_error(request)
         selected_ids = tuple(dict.fromkeys(str(value) for value in selected))
@@ -410,11 +429,40 @@ class ModelGenericView(GenericView):
     async def request_values(self, request: Request) -> Mapping[str, object]:
         """Read mapping input for either the API or HTML representation."""
         if self.is_api_request(request):
-            values = await request.json()
+            try:
+                values = await request.json()
+            except ValueError as exc:
+                raise _RequestValidationError(
+                    "body", "Generic API request body must be valid JSON."
+                ) from exc
             if isinstance(values, Mapping):
                 return values
-            raise ValueError("Generic API request bodies must be JSON objects.")
+            raise _RequestValidationError(
+                "body", "Generic API request body must be a JSON object."
+            )
         return await request_form_data(request)
+
+    async def _request_validation_response(
+        self,
+        request: Request,
+        error: _RequestValidationError,
+    ) -> Response:
+        if self.is_api_request(request):
+            return (
+                get_site(request.app)
+                .require_capability(ApiCapability)
+                .validation_error_response(
+                    [{"field": error.field, "messages": [str(error)]}]
+                )
+            )
+        context = await self._collection_context(request)
+        context["bulk_error"] = str(error)
+        return await TemplateResponse(
+            request,
+            self.template,
+            await self.get_context(context, request),
+            status_code=422,
+        ).render_response()
 
     async def _invalid_form_response(
         self,
@@ -626,8 +674,21 @@ def _selected_values(values: Mapping[str, object]) -> tuple[object, ...]:
     getlist = getattr(values, "getlist", None)
     if callable(getlist):
         return tuple(getlist("selected"))
-    selected = values.get("selected", ())
-    return tuple(selected) if isinstance(selected, (list, tuple)) else ()
+    if "selected" not in values:
+        return ()
+    selected = values["selected"]
+    if not isinstance(selected, (list, tuple)):
+        raise _RequestValidationError(
+            "selected", "Bulk action selections must be an array."
+        )
+    if not all(
+        isinstance(value, (str, int)) and not isinstance(value, bool)
+        for value in selected
+    ):
+        raise _RequestValidationError(
+            "selected", "Bulk action selections must contain string or integer IDs."
+        )
+    return tuple(selected)
 
 
 def _is_confirmed(values: Mapping[str, object]) -> bool:
