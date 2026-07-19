@@ -1,7 +1,7 @@
 """Test-only models with relations into a committed migration app."""
 
-from tortoise import fields
-from tortoise.models import Model
+from wybra.db import fields
+from wybra.db.models import Model
 
 
 class SessionReference(Model):

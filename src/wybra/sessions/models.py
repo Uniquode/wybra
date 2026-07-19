@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from tortoise import fields
-from tortoise.models import Model
+from wybra.db import fields
+from wybra.db.models import Model
 
 
 class SessionRecordModel(Model):

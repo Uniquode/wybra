@@ -1,0 +1,95 @@
+{% extends "layouts/page.html" %}
+
+{% block styles %}
+<style>
+  [data-wybra-generic-record]:is(:hover, :focus-within, [data-highlighted]) {
+    background: var(--pico-primary-focus);
+  }
+  [data-wybra-generic-record] { padding: 0.5rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<section aria-labelledby="generic-view-title" data-wybra-generic-view>
+  <h1 id="generic-view-title">{{ content_type.verbose_name_plural }}</h1>
+  {% if bulk_error is defined %}
+  <p role="alert" data-wybra-generic-bulk-error>{{ bulk_error }}</p>
+  {% endif %}
+  {% if bulk_result is defined %}
+  <p data-wybra-generic-bulk-result>
+    {{ bulk_result.affected_ids|length }} affected,
+    {{ bulk_result.skipped_ids|length }} skipped,
+    {{ bulk_result.failed_ids|length }} failed.
+  </p>
+  {% endif %}
+  {% if create_form is defined %}
+  <details>
+    <summary>Add {{ content_type.verbose_name }}</summary>
+    {{ render_form(create_form, action=collection_url, method="post") }}
+  </details>
+  {% endif %}
+  {% if objects is defined %}
+  {% if bulk_actions is defined and bulk_actions %}
+  <form id="wybra-generic-bulk" method="post" action="{{ bulk_action_url }}" data-wybra-generic-bulk>
+    {{ render_csrf_field() }}
+    {% for action_name, action in bulk_actions.items() %}
+    <button name="action" type="submit" value="{{ action_name }}">{{ action_name|replace("_", " ")|title }}</button>
+    {% endfor %}
+    <label><input name="confirm" type="checkbox" value="true"> Confirm destructive actions</label>
+  </form>
+  {% endif %}
+  <ul aria-label="{{ content_type.verbose_name_plural }}" data-wybra-generic-records>
+    {% for object in objects %}
+    <li
+      data-wybra-generic-record
+      tabindex="0"
+      {% if request.query_params.get("highlight") == object.pk|string %}data-highlighted{% endif %}
+    >
+      {% if bulk_actions is defined and bulk_actions %}
+      <input aria-label="Select {{ content_type.verbose_name }}" form="wybra-generic-bulk" name="selected" type="checkbox" value="{{ object.pk }}">
+      {% endif %}
+      <a
+        href="{{ collection_url }}{% if '?' in collection_url %}&amp;{% else %}?{% endif %}edit={{ object.pk }}"
+        hx-get="{{ collection_url }}{% if '?' in collection_url %}&amp;{% else %}?{% endif %}edit={{ object.pk }}"
+        hx-target="#wybra-generic-dialog"
+        hx-swap="innerHTML"
+        aria-label="Edit {{ content_type.verbose_name }}"
+        data-wybra-generic-edit-link
+      >{{ object }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if form is defined and object is defined %}
+  <section aria-label="Edit {{ content_type.verbose_name }}" data-wybra-generic-edit>
+    <h2>Edit {{ content_type.verbose_name }}</h2>
+    {% include "views/generic/editor.html" %}
+  </section>
+  {% elif object is defined and delete_action is defined %}
+  <section aria-label="Delete {{ content_type.verbose_name }}" data-wybra-generic-delete>
+    {% include "views/generic/delete.html" %}
+  </section>
+  {% endif %}
+  <dialog id="wybra-generic-dialog" aria-labelledby="wybra-generic-dialog-title"></dialog>
+</section>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const dialog = document.getElementById("wybra-generic-dialog");
+    if (!dialog || !window.htmx) return;
+    let invoker = null;
+    document.body.addEventListener("htmx:beforeRequest", (event) => {
+      if (event.detail.elt.matches("[data-wybra-generic-edit-link]")) invoker = event.detail.elt;
+    });
+    document.body.addEventListener("htmx:afterSwap", (event) => {
+      if (event.detail.target === dialog) dialog.showModal();
+    });
+    dialog.addEventListener("close", () => invoker?.focus());
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target.closest("[data-wybra-generic-cancel]")) dialog.close();
+    });
+  });
+</script>
+{% endblock %}

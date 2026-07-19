@@ -136,6 +136,10 @@ _.db_for_write
 # Jinja extension callbacks invoked through Extension.call_method().
 _._render_fragment
 
+# Generic view members selected dynamically by HTTP dispatch and form generation.
+_.patch
+_._generated_form
+
 # Protocol, dataclass, and ORM fields used by consumers and SQLAlchemy.
 _.__call__
 _.additive_route_names

@@ -5,6 +5,7 @@ import logging
 from wybra.core.exceptions import ConfigurationError
 from wybra.forms import context as _context  # noqa: F401
 from wybra.forms.capabilities import DefaultFormsCapability, FormsCapability
+from wybra.forms.method_override import MethodOverrideMiddleware
 from wybra.forms.middleware import register_forms_response_finalisation_middleware
 from wybra.forms.rotation import normalise_csrf_token_previous_secrets
 from wybra.forms.settings import FormsSettings
@@ -26,6 +27,7 @@ async def setup_site(site: Site) -> None:
     site.app.state.csrf = csrf
     site.provide_capability(FormsCapability, DefaultFormsCapability(csrf))
     register_forms_response_finalisation_middleware(site)
+    site.app.add_middleware(MethodOverrideMiddleware)
 
 
 def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:

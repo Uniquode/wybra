@@ -1,9 +1,7 @@
 """Models that exercise form persistence against native migrations."""
 
-from tortoise import fields
-from tortoise.models import Model
-
-from wybra.db import VersionField
+from wybra.db import VersionField, fields
+from wybra.db.models import Model
 
 
 class FormAddress(Model):

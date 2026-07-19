@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from inspect import isawaitable
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
 from fastapi import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
@@ -18,13 +18,20 @@ type JsonValue = Mapping[str, Any] | Sequence[Any] | str | int | float | bool | 
 HTTP_METHOD_HANDLERS = ("get", "post", "put", "patch", "delete", "head", "options")
 
 
+@runtime_checkable
+class _DeferredViewResponse(Protocol):
+    """A view result that asynchronously resolves to an HTTP response."""
+
+    async def render_response(self) -> Response: ...
+
+
 @dataclass(frozen=True, slots=True)
 class APIResult:
     data: Any
     paging: ApiPaging | None = None
 
 
-type HandlerResult = Response | JsonValue | APIResult
+type HandlerResult = Response | JsonValue | APIResult | _DeferredViewResponse
 type ViewHandler = Callable[..., HandlerResult | Awaitable[HandlerResult]]
 
 
@@ -39,6 +46,8 @@ class View:
         result = handler(request, **kwargs)
         if isawaitable(result):
             result = await result
+        if isinstance(result, _DeferredViewResponse):
+            return await result.render_response()
         return self.response_from_result(cast(HandlerResult, result))
 
     def _handler_for(self, method: str) -> ViewHandler:
@@ -71,12 +80,16 @@ class View:
 class HTMLView(View):
     """View base for literal HTML endpoint responses."""
 
-    def response_from_result(self, result: HandlerResult) -> Response:
-        if isinstance(result, Response):
-            return result
-        if isinstance(result, str):
-            return HTMLResponse(result)
-        return HTMLResponse(str(result))
+    page_name: ClassVar[str | None] = None
+
+    async def get(self, _request: Request, **_kwargs: Any) -> HTMLResponse:
+        return HTMLResponse(self.get_page())
+
+    def get_page(self) -> str:
+        """Return the literal HTML page rendered by this view."""
+        if self.page_name is None:
+            raise ValueError("HTMLView requires page_name or an overridden get_page().")
+        return self.page_name
 
 
 @dataclass(slots=True)
