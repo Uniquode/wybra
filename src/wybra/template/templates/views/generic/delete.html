@@ -1,0 +1,15 @@
+<section aria-labelledby="wybra-generic-dialog-title" data-wybra-generic-delete>
+  <h2 id="wybra-generic-dialog-title">Delete {{ content_type.verbose_name }}</h2>
+  <p>Delete {{ object }}? This cannot be undone.</p>
+  <form
+    method="post"
+    action="{{ delete_action }}"
+    hx-delete="{{ delete_action }}"
+  >
+    {{ render_csrf_field() }}
+    <input name="_method" type="hidden" value="DELETE">
+    <input name="confirm" type="hidden" value="true">
+    <button type="submit">Delete {{ content_type.verbose_name }}</button>
+    <a href="{{ collection_url }}" data-wybra-generic-cancel>Cancel</a>
+  </form>
+</section>

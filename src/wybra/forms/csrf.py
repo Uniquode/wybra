@@ -14,13 +14,17 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from starlette.datastructures import FormData
 
-from wybra.forms.security import is_form_content_type, is_safe_method
+from wybra.forms.security import (
+    FORM_BODY_MAX_BYTES,
+    is_form_content_type,
+    is_safe_method,
+)
 
 CSRF_COOKIE_NAME = "wybra_forms_csrf"
 CSRF_FIELD_NAME = "csrf_token"
 CSRF_HEADER_NAME = "x-csrf-token"
 CSRF_FORM_DATA_STATE_ATTR = "csrf_form_data"
-CSRF_MAX_FORM_BODY_BYTES = 1_048_576
+CSRF_MAX_FORM_BODY_BYTES = FORM_BODY_MAX_BYTES
 CSRF_NONCE_MAX_LENGTH = 256
 CSRF_NONCE_MIN_LENGTH = 32
 CSRF_RESPONSE_FINALISATION_STATE_ATTR = "wybra_forms_csrf_finalise_response"
@@ -165,7 +169,7 @@ class CsrfProtector:
             return False
 
         try:
-            form_data = await request.form()
+            form_data = await request_form_data(request)
         except Exception:
             return self._reject(request, "form_parse_failed")
         setattr(request.state, CSRF_FORM_DATA_STATE_ATTR, form_data)

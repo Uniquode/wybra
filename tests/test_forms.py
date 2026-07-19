@@ -91,7 +91,7 @@ from wybra.forms import (
     request_csrf_response_finalisation,
 )
 from wybra.forms.context import forms_context
-from wybra.forms.csrf import CsrfProtector
+from wybra.forms.csrf import CsrfProtector, request_form_data
 from wybra.forms.setup import setup_site as setup_forms_site
 from wybra.media.models import MediaItem, MediaResourceKey
 from wybra.messages import (
@@ -2198,6 +2198,21 @@ class TestForms:
         assert 'type="reset"' in html
         assert "data-wybra-form-cancel" in html
 
+    async def test_form_renderer_uses_native_post_with_method_override(self) -> None:
+        form = ExampleForm(values={"preferred_name": "David"})
+        renderer = TemplateFormRenderer(_forms_templates())
+
+        html = await renderer.render_form(
+            form,
+            action="/profile/42",
+            method="patch",
+            attr={"hx-patch": "/profile/42"},
+        )
+
+        assert '<form class="wybra-form" method="post" action="/profile/42"' in html
+        assert 'name="_method" type="hidden" value="PATCH"' in html
+        assert 'hx-patch="/profile/42"' in html
+
     async def test_form_renderer_outputs_form_level_errors_and_upload_encoding(
         self,
     ) -> None:
@@ -3199,6 +3214,195 @@ class TestForms:
         assert CSRF_COOKIE_NAME in response.cookies
         assert partial_response.status_code == 200
         assert CSRF_COOKIE_NAME not in partial_response.cookies
+
+    @pytest.mark.anyio
+    async def test_forms_method_override_routes_urlencoded_post_as_patch(
+        self, tmp_path
+    ) -> None:
+        app = FastAPI()
+
+        @app.patch("/record")
+        async def update(request: Request) -> PlainTextResponse:
+            return PlainTextResponse(request.method)
+
+        await start(
+            app,
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("wybra.forms",),
+                    },
+                }
+            ),
+        )
+
+        with WybraTestClient(app) as client:
+            response = client.post("/record", data={"_method": "PATCH"})
+
+        assert response.status_code == 200
+        assert response.text == "PATCH"
+
+    @pytest.mark.anyio
+    async def test_forms_method_override_preserves_ordinary_urlencoded_body(
+        self, tmp_path
+    ) -> None:
+        app = FastAPI()
+
+        @app.post("/record")
+        async def post(request: Request) -> PlainTextResponse:
+            return PlainTextResponse(str((await request.form())["title"]))
+
+        await start(
+            app,
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("wybra.forms",),
+                    },
+                }
+            ),
+        )
+
+        with WybraTestClient(app) as client:
+            response = client.post("/record", data={"title": "Readable"})
+
+        assert response.status_code == 200
+        assert response.text == "Readable"
+
+    @pytest.mark.anyio
+    async def test_forms_method_override_routes_json_post_as_delete(
+        self, tmp_path
+    ) -> None:
+        app = FastAPI()
+
+        @app.delete("/record")
+        async def delete(request: Request) -> PlainTextResponse:
+            return PlainTextResponse(request.method)
+
+        await start(
+            app,
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("wybra.forms",),
+                    },
+                }
+            ),
+        )
+
+        with WybraTestClient(app) as client:
+            response = client.post("/record", json={"_method": "DELETE"})
+
+        assert response.status_code == 200
+        assert response.text == "DELETE"
+
+    @pytest.mark.anyio
+    async def test_forms_method_override_leaves_text_plain_post_untouched(
+        self, tmp_path
+    ) -> None:
+        app = FastAPI()
+
+        @app.post("/record")
+        async def post(request: Request) -> PlainTextResponse:
+            return PlainTextResponse((await request.body()).decode("utf-8"))
+
+        await start(
+            app,
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("wybra.forms",),
+                    },
+                }
+            ),
+        )
+
+        with WybraTestClient(app) as client:
+            response = client.post(
+                "/record",
+                content="_method=DELETE\nlarge content remains untouched",
+                headers={"content-type": "text/plain"},
+            )
+
+        assert response.status_code == 200
+        assert response.text.startswith("_method=DELETE")
+
+    @pytest.mark.anyio
+    async def test_forms_method_override_preserves_multipart_form_data(
+        self, tmp_path
+    ) -> None:
+        app = FastAPI()
+
+        @app.patch("/record")
+        async def update(request: Request) -> PlainTextResponse:
+            form_data = await request_form_data(request)
+            return PlainTextResponse(str(form_data["title"]))
+
+        await start(
+            app,
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("wybra.forms",),
+                    },
+                }
+            ),
+        )
+
+        with WybraTestClient(app) as client:
+            response = client.post(
+                "/record",
+                files={
+                    "_method": (None, "PATCH"),
+                    "title": (None, "Updated"),
+                    "upload": ("example.txt", b"contents"),
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.text == "Updated"
+
+    @pytest.mark.anyio
+    async def test_forms_method_override_preserves_ordinary_multipart_body(
+        self, tmp_path
+    ) -> None:
+        app = FastAPI()
+
+        @app.post("/record")
+        async def post(request: Request) -> PlainTextResponse:
+            return PlainTextResponse(str((await request.form())["title"]))
+
+        await start(
+            app,
+            config_source=MappingConfigSource(
+                {
+                    "app": {
+                        "config_path": tmp_path / "app.toml",
+                        "project_root": tmp_path,
+                        "modules": ("wybra.forms",),
+                    },
+                }
+            ),
+        )
+
+        with WybraTestClient(app) as client:
+            response = client.post(
+                "/record",
+                files={"title": (None, "Readable")},
+            )
+
+        assert response.status_code == 200
+        assert response.text == "Readable"
 
     async def test_validate_forms_target_is_available(
         self, monkeypatch, tmp_path

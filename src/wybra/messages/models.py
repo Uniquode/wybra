@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import time
 
-from tortoise import fields
-from tortoise.indexes import Index
-from tortoise.models import Model
+from wybra.db import fields
+from wybra.db.indexes import Index
+from wybra.db.models import Model
 
 
 class MessageAlert(Model):

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-
-from tortoise import fields
-from tortoise.indexes import Index
-from tortoise.models import Model
 
 from wybra.auth.email_normalisation import normalise_email
 from wybra.auth.session_tokens import SESSION_TOKEN_MAX_LENGTH
 from wybra.auth.timestamps import current_timestamp
-from wybra.db import VersionField
+from wybra.db import VersionField, fields
+from wybra.db.indexes import Index
+from wybra.db.models import Model
+
+if TYPE_CHECKING:
+    import uuid
 
 
 def current_datetime() -> datetime:
@@ -30,7 +30,7 @@ class InitialAdminBootstrap(Model):
 class IdentityProvider(Model):
     """Canonical provider identity row used by external login flows."""
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     provider_name = fields.CharField(max_length=100)
     provider_subject = fields.CharField(max_length=320)
     crypt_access_token = fields.CharField(max_length=1024)
@@ -80,7 +80,7 @@ class IdentityUserEmail(Model):
     if TYPE_CHECKING:
         user_id: uuid.UUID
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     user = fields.ForeignKeyField(
         "wybra_auth.User",
         related_name=False,
@@ -103,7 +103,7 @@ class User(Model):
     """Canonical local user account."""
 
     # Store Unix timestamps as `float` for cross-database consistency.
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     email = fields.CharField(max_length=320, unique=True, db_index=True)
     hashed_password = fields.CharField(max_length=1024, null=True)
     is_active = fields.BooleanField(default=True)
@@ -148,7 +148,7 @@ class IdentityTotpCredential(Model):
     if TYPE_CHECKING:
         user_id: uuid.UUID
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     user = fields.ForeignKeyField(
         "wybra_auth.User",
         related_name=False,
@@ -193,7 +193,7 @@ class IdentityWebAuthnCredential(Model):
     if TYPE_CHECKING:
         user_id: uuid.UUID
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     user = fields.ForeignKeyField(
         "wybra_auth.User",
         related_name=False,
@@ -226,7 +226,7 @@ class IdentityTotpRecoveryCode(Model):
     if TYPE_CHECKING:
         credential_id: uuid.UUID
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     credential = fields.ForeignKeyField(
         "wybra_auth.IdentityTotpCredential",
         related_name=False,
@@ -245,7 +245,7 @@ class IdentityTotpRecoveryCode(Model):
 class Group(Model):
     """Authorisation group used to collect reusable scopes."""
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     abbrev = fields.CharField(max_length=120, unique=True)
     description = fields.TextField(default="")
 

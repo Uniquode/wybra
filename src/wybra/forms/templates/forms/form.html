@@ -1,4 +1,7 @@
-<form class="wybra-form" method="{{ method }}" action="{{ action }}"{% if enctype %} enctype="{{ enctype }}"{% endif %}>
+<form class="wybra-form" method="{{ method }}" action="{{ action }}"{% if enctype %} enctype="{{ enctype }}"{% endif %}{% for name, value in attr.items() %}{% if value is sameas true %} {{ name }}{% elif value is not sameas false %} {{ name }}="{{ value }}"{% endif %}{% endfor %}>
+  {% if method_override %}
+    <input name="_method" type="hidden" value="{{ method_override }}">
+  {% endif %}
   {% if form_errors %}
     <ul class="wybra-form-errors wybra-form-errors--form">
       {% for error in form_errors %}

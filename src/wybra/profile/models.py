@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
 
-from tortoise import fields
-from tortoise.indexes import Index
-from tortoise.models import Model
+from wybra.db import VersionField, fields
+from wybra.db.indexes import Index
+from wybra.db.models import Model
 
-from wybra.db import VersionField
+if TYPE_CHECKING:
+    import uuid
 
 
 class UserProfile(Model):
@@ -17,7 +17,7 @@ class UserProfile(Model):
         user_id: uuid.UUID
         profile_picture_media_id: uuid.UUID | None
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     user = fields.OneToOneField(
         "wybra_auth.User",
         related_name=False,
@@ -63,7 +63,7 @@ class UserPhoneContact(Model):
     if TYPE_CHECKING:
         user_id: uuid.UUID
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     user = fields.ForeignKeyField(
         "wybra_auth.User",
         related_name=False,

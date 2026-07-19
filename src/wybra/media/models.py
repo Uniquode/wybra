@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import time
-import uuid
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from tortoise import fields
 from tortoise.backends.base.client import BaseDBAsyncClient
-from tortoise.indexes import Index
-from tortoise.models import Model
+
+from wybra.db import fields
+from wybra.db.indexes import Index
+from wybra.db.models import Model
+
+if TYPE_CHECKING:
+    import uuid
 
 
 class MediaItem(Model):
     """Catalogued media item stored under the configured media root."""
 
-    id = fields.UUIDField(primary_key=True, default=uuid.uuid4)
+    id = fields.UUIDField(primary_key=True)
     category = fields.CharField(max_length=120)
     storage_key = fields.CharField(max_length=1024, unique=True)
     content_type = fields.CharField(max_length=255, null=True)

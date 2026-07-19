@@ -42,6 +42,8 @@ DEFAULT_FIELD_WIDGETS: dict[str, str] = {
 }
 
 CSRF_RENDERING_CONTEXT_KEYS = frozenset(("csrf_field_name", "csrf_token"))
+NATIVE_FORM_METHODS = frozenset(("get", "post"))
+METHOD_OVERRIDE_FORM_METHODS = frozenset(("patch", "put", "delete"))
 type CsrfRenderable = CsrfField | Mapping[str, str]
 
 
@@ -110,10 +112,14 @@ class TemplateFormRenderer:
         *,
         action: str = "",
         method: str = "post",
+        attr: Mapping[str, str | bool] | None = None,
         enctype: str | None = None,
         csrf: CsrfRenderable | None = None,
         actions: Sequence[str] = ("submit",),
     ) -> Markup:
+        resolved_method, method_override = _native_form_method(method)
+        if attr is not None and not isinstance(attr, Mapping):
+            raise FormError("Form render attr must be a mapping.")
         resolved_enctype = enctype or _default_enctype(form)
         fields = [
             await self.render_field(form, name)
@@ -133,7 +139,9 @@ class TemplateFormRenderer:
                 {
                     "form": form,
                     "action": action,
-                    "method": method,
+                    "method": resolved_method,
+                    "method_override": method_override,
+                    "attr": dict(attr or {}),
                     "enctype": resolved_enctype,
                     "fields": fields,
                     "hidden_fields": hidden_fields,
@@ -254,6 +262,15 @@ class TemplateFormRenderer:
         )
 
 
+def _native_form_method(method: str) -> tuple[str, str | None]:
+    normalised = method.lower()
+    if normalised in NATIVE_FORM_METHODS:
+        return normalised, None
+    if normalised in METHOD_OVERRIDE_FORM_METHODS:
+        return "post", normalised.upper()
+    raise FormError(f"Unsupported form method: {method}.")
+
+
 async def render_field(
     templates: TemplateCapability,
     form: Form,
@@ -278,6 +295,7 @@ async def render_form(
     *,
     action: str = "",
     method: str = "post",
+    attr: Mapping[str, str | bool] | None = None,
     enctype: str | None = None,
     csrf: CsrfRenderable | None = None,
     actions: Sequence[str] = ("submit",),
@@ -293,6 +311,7 @@ async def render_form(
         form,
         action=action,
         method=method,
+        attr=attr,
         enctype=enctype,
         csrf=csrf,
         actions=actions,
