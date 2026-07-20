@@ -131,6 +131,7 @@ Configured secret-source keys may also point at environment variables:
 
 | Name | Description |
 | --- | --- |
+| `WYBRA_EVENT_DELIVERY_ENABLED` | Boolean override for the core in-process event service, disabled by default. |
 | `WYBRA_EVENTS_ENABLED` | Boolean override for runtime event collection. |
 | `WYBRA_EVENTS_FILTER` | Comma-separated diagnostic event selectors, defaulting to `sql,template,events.errors`. |
 | `WYBRA_DIAG_ENABLED` | Boolean override for the disabled-by-default debug WebSocket endpoint. |

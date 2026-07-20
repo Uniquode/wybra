@@ -854,9 +854,9 @@ class TestSiteComposition:
         site.provide_capability(ExampleCapability, capability)
 
         assert proxy.available() is True
-        assert proxy.label() == "implementation"
-        assert proxy.require() is capability
-        assert proxy.label() == "implementation"
+        assert (await proxy.require()).label() == "implementation"
+        assert await proxy.require() is capability
+        assert (await proxy.require()).label() == "implementation"
         assert capability.calls == 2
 
     @pytest.mark.anyio
@@ -869,12 +869,12 @@ class TestSiteComposition:
         proxy = site.capability_proxy(ExampleCapability)
         site.provide_capability(ExampleCapability, capability)
 
-        assert proxy.label() == "implementation"
+        assert (await proxy.require()).label() == "implementation"
 
         del site._capabilities[ExampleCapability]
 
-        assert proxy.label() == "implementation"
-        assert proxy.require() is capability
+        assert (await proxy.require()).label() == "implementation"
+        assert await proxy.require() is capability
 
     @pytest.mark.anyio
     async def test_site_capability_proxy_reports_missing_required_capability(
@@ -887,7 +887,7 @@ class TestSiteComposition:
         proxy = site.capability_proxy(ExampleCapability)
 
         with pytest.raises(SiteCapabilityError, match="Missing capability"):
-            proxy.label()
+            await proxy.require()
 
     @pytest.mark.anyio
     async def test_site_capability_proxy_finalises_required_capability(self) -> None:
@@ -899,8 +899,8 @@ class TestSiteComposition:
         capability = ExampleImplementation()
         site.provide_capability(ExampleCapability, capability)
 
-        assert proxy.finalise_required() is capability
-        assert proxy.require() is capability
+        assert await proxy.finalise_required() is capability
+        assert await proxy.require() is capability
         assert proxy.finalised is True
         assert proxy.unavailable is False
 
@@ -914,11 +914,11 @@ class TestSiteComposition:
         capability = ExampleImplementation()
         site.provide_capability(ExampleCapability, capability)
 
-        assert proxy.finalise_required() is capability
+        assert await proxy.finalise_required() is capability
         del site._capabilities[ExampleCapability]
 
-        assert proxy.finalise_required() is capability
-        assert proxy.finalise_optional() is capability
+        assert await proxy.finalise_required() is capability
+        assert await proxy.finalise_optional() is capability
         assert proxy.finalised is True
         assert proxy.unavailable is False
 
@@ -933,7 +933,7 @@ class TestSiteComposition:
         proxy = site.capability_proxy(ExampleCapability)
 
         with pytest.raises(SiteCapabilityError, match="Missing capability"):
-            proxy.finalise_required()
+            await proxy.finalise_required()
 
     @pytest.mark.anyio
     async def test_site_capability_proxy_finalises_optional_capability(self) -> None:
@@ -945,8 +945,8 @@ class TestSiteComposition:
         capability = ExampleImplementation()
         site.provide_capability(ExampleCapability, capability)
 
-        assert proxy.finalise_optional() is capability
-        assert proxy.optional() is capability
+        assert await proxy.finalise_optional() is capability
+        assert await proxy.optional() is capability
         assert proxy.finalised is True
         assert proxy.unavailable is False
 
@@ -960,13 +960,13 @@ class TestSiteComposition:
         )
         proxy = site.capability_proxy(ExampleCapability)
 
-        assert proxy.finalise_optional() is None
-        assert proxy.optional() is None
+        assert await proxy.finalise_optional() is None
+        assert await proxy.optional() is None
         assert proxy.finalised is True
         assert proxy.unavailable is True
 
         with pytest.raises(SiteCapabilityError, match="Missing capability"):
-            proxy.label()
+            await proxy.require()
 
     @pytest.mark.anyio
     async def test_site_capability_proxy_reuses_unavailable_optional_finalisation(
@@ -978,12 +978,12 @@ class TestSiteComposition:
         )
         proxy = site.capability_proxy(ExampleCapability)
 
-        assert proxy.finalise_optional() is None
+        assert await proxy.finalise_optional() is None
         site.provide_capability(ExampleCapability, ExampleImplementation())
 
-        assert proxy.finalise_optional() is None
+        assert await proxy.finalise_optional() is None
         with pytest.raises(SiteCapabilityError, match="Missing capability"):
-            proxy.finalise_required()
+            await proxy.finalise_required()
         assert proxy.finalised is True
         assert proxy.unavailable is True
 
@@ -1281,7 +1281,7 @@ class TestModuleLifecycle:
             "    global proxy\n"
             "    proxy = site.capability_proxy(LateCapability)\n"
             "async def post_setup_site(site):\n"
-            "    proxy.finalise_required()\n",
+            "    await proxy.finalise_required()\n",
         )
         _write_module(
             tmp_path,

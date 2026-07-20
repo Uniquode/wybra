@@ -65,9 +65,19 @@ def test_debug_websocket_lists_scopes_and_returns_filtered_snapshot() -> None:
     assert {item["name"] for item in scopes["result"]} == {
         "sql",
         "template",
+        "cache",
+        "form",
+        "account",
+        "credential",
+        "session",
+        "security",
         "content_types",
         "events",
         "events.errors",
+        "request",
+        "site",
+        "route",
+        "view",
     }
     assert snapshot["result"][0]["events"][0]["attributes"]["statement"] == "select 1"
 

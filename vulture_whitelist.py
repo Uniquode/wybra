@@ -238,6 +238,17 @@ _.src
 _.alt
 _.fallback_text
 _.authenticated
+
+# Typed event fields selected by the diagnostics projection through dataclass
+# reflection, plus an ASGI middleware callback registered by FastAPI's decorator.
+_.model_type
+_.key_fingerprint
+_.field_count
+_.invalid_field_count
+_.model_types
+_.masked_email
+_.mechanism
+_.event_lifecycle_middleware
 _.profile_image
 _.profile_path
 _.settings_menu

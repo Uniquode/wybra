@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
 from wybra.auth.capabilities import login_required
+from wybra.auth.events import publish_credential_access
 from wybra.auth.forms import (
     PasskeyRevokeCommandForm,
     PasswordResetConfirmCommandForm,
@@ -231,6 +232,14 @@ async def _unlink_provider_response(
             provider_id=provider_id,
         )
         if provider is None or provider.provider_name != provider_name:
+            await publish_credential_access(
+                request,
+                operation="unlink",
+                provider=provider_name,
+                outcome="rejected",
+                user_id=db_user.id,
+                email=db_user.email,
+            )
             return RedirectResponse(
                 url=_route_path(request, "auth:security"),
                 status_code=303,
@@ -243,10 +252,26 @@ async def _unlink_provider_response(
             exclude_provider_id=provider.id,
         ):
             error = f"Add another sign-in method before unlinking {provider_label}."
+            await publish_credential_access(
+                request,
+                operation="unlink",
+                provider=provider_name,
+                outcome="rejected",
+                user_id=db_user.id,
+                email=db_user.email,
+            )
         else:
             await store.unlink_user_provider(
                 user_id=db_user.id,
                 provider_id=provider.id,
+            )
+            await publish_credential_access(
+                request,
+                operation="unlink",
+                provider=provider_name,
+                outcome="succeeded",
+                user_id=db_user.id,
+                email=db_user.email,
             )
 
     if error is not None:
@@ -276,6 +301,14 @@ async def disable_password_login(
             raise HTTPException(status_code=401, detail="Authentication required.")
 
         if not _local_password_login_usable(db_user):
+            await publish_credential_access(
+                request,
+                operation="disable",
+                provider="password",
+                outcome="ignored",
+                user_id=db_user.id,
+                email=db_user.email,
+            )
             return RedirectResponse(
                 url=_route_path(request, "auth:security"),
                 status_code=303,
@@ -288,9 +321,25 @@ async def disable_password_login(
             exclude_password=True,
         ):
             error = "Add another sign-in method before disabling password sign-in."
+            await publish_credential_access(
+                request,
+                operation="disable",
+                provider="password",
+                outcome="rejected",
+                user_id=db_user.id,
+                email=db_user.email,
+            )
         else:
             db_user.password_login_enabled = False
             await scope.users.save_user(db_user)
+            await publish_credential_access(
+                request,
+                operation="disable",
+                provider="password",
+                outcome="succeeded",
+                user_id=db_user.id,
+                email=db_user.email,
+            )
 
     if error is not None:
         return await _security_page_response(

@@ -192,7 +192,9 @@ class SiteProfileCapability:
         if profile is not None and profile.profile_picture_media_id is not None:
             try:
                 return ProfileImage(
-                    src=await self.media.url_for(profile.profile_picture_media_id),
+                    src=await (await self.media.require()).url_for(
+                        profile.profile_picture_media_id
+                    ),
                     alt="Profile picture",
                     fallback_text=None,
                 )

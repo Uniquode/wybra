@@ -395,7 +395,7 @@ async def test_media_item_save_refreshes_modified_timestamp_for_partial_updates(
     monkeypatch.setattr(media_models.time, "time", lambda: updated_timestamp)
 
     item.content_type = "image/jpeg"
-    database = capability.catalogue.database.require()
+    database = await capability.catalogue.database.require()
     async with tortoise_transaction(
         database,
         database.database().for_write(),

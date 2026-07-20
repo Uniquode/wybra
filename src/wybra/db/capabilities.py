@@ -17,6 +17,7 @@ from wybra.core.exceptions import ConfigurationError
 from wybra.db.persistence import Database, close_database, create_database
 from wybra.db.routing import DbConnection, DbRoute
 from wybra.db.settings import ResolvedDatabaseRouting
+from wybra.events import EventsCapability
 
 logger = logging.getLogger(__name__)
 
@@ -101,11 +102,13 @@ class WybraDatabaseCapability:
         database_routing: ResolvedDatabaseRouting,
         *,
         modules: Sequence[str],
+        events: EventsCapability,
     ) -> WybraDatabaseCapability:
         database = await create_database(
             database_routing.instances[0].connection,
             modules=modules,
             routing=database_routing,
+            events=events,
         )
         return cls(database)
 

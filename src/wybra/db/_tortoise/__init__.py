@@ -15,13 +15,13 @@ from wybra.db._tortoise.compatibility import (
 ensure_supported_tortoise_version()
 
 from wybra.db._tortoise.instrumentation import (  # noqa: E402
-    TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE,
+    TORTOISE_EVENTS_INSTRUMENTED_ATTRIBUTE,
     instrument_tortoise_connection,
     instrument_tortoise_context,
 )
 
 __all__ = (
-    "TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE",
+    "TORTOISE_EVENTS_INSTRUMENTED_ATTRIBUTE",
     "TortoiseCompatibilityError",
     "ensure_supported_tortoise_version",
     "instrument_tortoise_connection",

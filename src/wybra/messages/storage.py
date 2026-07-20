@@ -334,7 +334,7 @@ class DatabaseMessagesStorage:
 
     async def enqueue(self, request: Request, alert: AlertRecord) -> None:
         queue_key = server_side_queue_key(request, prefix="")
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.settings.database_connection_name).for_write(),
@@ -354,7 +354,7 @@ class DatabaseMessagesStorage:
         queue_key = optional_server_side_queue_key(request, prefix="")
         if queue_key is None:
             return ()
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.settings.database_connection_name).for_write(),
@@ -382,7 +382,7 @@ class DatabaseMessagesStorage:
         queue_key = optional_server_side_queue_key(request, prefix="")
         if queue_key is None:
             return
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.settings.database_connection_name).for_write(),
@@ -398,7 +398,7 @@ class DatabaseMessagesStorage:
         queue_key = server_side_queue_key_from_session_data(session_data, prefix="")
         if queue_key is None:
             return
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.settings.database_connection_name).for_write(),
@@ -406,7 +406,7 @@ class DatabaseMessagesStorage:
             await self._delete_queue(connection, queue_key)
 
     async def cleanup(self, *, now: float) -> None:
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.settings.database_connection_name).for_write(),
@@ -414,7 +414,7 @@ class DatabaseMessagesStorage:
             await self._delete_expired(connection, now)
 
     async def validate(self) -> None:
-        self.database.require()
+        await self.database.require()
 
     async def _delete_expired(self, connection: Any, now: float) -> None:
         await (

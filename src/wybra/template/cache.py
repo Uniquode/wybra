@@ -18,7 +18,7 @@ from jinja2.runtime import Context
 from wybra.cache import CacheCapability
 
 FRAGMENT_CACHE_OWNER = "template.fragment"
-type CacheProvider = Callable[[], CacheCapability | None]
+type CacheProvider = Callable[[], Awaitable[CacheCapability | None]]
 type FragmentCaller = Callable[[], Awaitable[str]]
 type CacheKeyNormaliser = Callable[[object], object]
 type CacheKeyNormalisers = Mapping[type[object], CacheKeyNormaliser]
@@ -86,7 +86,7 @@ class CacheExtension(Extension):
             raise TemplateRuntimeError("Cache fragment TTL must be a positive number.")
 
         provider = self.cache_provider
-        cache = provider() if provider is not None else None
+        cache = await provider() if provider is not None else None
         if cache is None:
             return await caller()
 

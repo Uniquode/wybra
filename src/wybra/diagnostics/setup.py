@@ -5,8 +5,10 @@ from wybra.diagnostics.capabilities import (
     activate_process_diagnostics,
 )
 from wybra.diagnostics.debug import register_debug_websocket
+from wybra.diagnostics.event_projection import register_event_projection
 from wybra.diagnostics.middleware import register_diagnostics_middleware
 from wybra.diagnostics.settings import DiagnosticsSettings
+from wybra.events import EventsCapability
 from wybra.site import Site
 
 DIAGNOSTICS_SETTINGS_STATE_ATTRIBUTE = "wybra_diagnostics_settings"
@@ -24,6 +26,10 @@ def setup_core_diagnostics(site: Site) -> DiagnosticsSettings:
         )
         site.provide_capability(DiagnosticsCapability, capability)
         activate_process_diagnostics(capability)
+        register_event_projection(
+            site.require_capability(EventsCapability),
+            settings.event_scopes,
+        )
         register_diagnostics_middleware(site, settings, capability)
         register_debug_websocket(site, settings, capability)
     return settings

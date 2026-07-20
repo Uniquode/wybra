@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from wybra.events import EventsCapability
 from wybra.sessions.cleanup import session_cleanup_registry_from_site
 from wybra.sessions.exceptions import SessionsConfigurationError
 from wybra.sessions.middleware import (
@@ -34,6 +35,7 @@ async def setup_core_sessions(site: Site) -> None:
         SessionMiddlewareContext(
             settings=settings,
             storage=storage,
+            events=site.optional_capability(EventsCapability),
             cleanup_registry=cleanup_registry,
         ),
     )

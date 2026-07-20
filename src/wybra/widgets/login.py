@@ -33,7 +33,7 @@ class LoginWidgetState:
 
 
 async def login_widget_state(request: Any) -> LoginWidgetState | None:
-    capability = _auth_capability(request)
+    capability = await _auth_capability(request)
     if capability is None:
         return None
 
@@ -70,13 +70,13 @@ async def login_widget_state(request: Any) -> LoginWidgetState | None:
     )
 
 
-def _auth_capability(request: Any) -> AuthCapability | None:
+async def _auth_capability(request: Any) -> AuthCapability | None:
     try:
         site = get_site(request.app)
     except SiteCapabilityError:
         return None
 
-    return site.capability_proxy(AuthCapability).optional()
+    return await site.capability_proxy(AuthCapability).optional()
 
 
 async def _profile_image(request: Any, user: Any) -> ProfileImage | None:
@@ -85,7 +85,7 @@ async def _profile_image(request: Any, user: Any) -> ProfileImage | None:
     except SiteCapabilityError:
         return None
 
-    capability = profile_capability.optional()
+    capability = await profile_capability.optional()
     if capability is None:
         return None
 

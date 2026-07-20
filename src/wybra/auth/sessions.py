@@ -28,6 +28,7 @@ from wybra.auth.accounts.manager import (
 from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.authorisation import is_user_effectively_active
 from wybra.auth.delivery import IdentityDelivery, NullIdentityDelivery
+from wybra.auth.events import publish_account_lifecycle, publish_credential_access
 from wybra.auth.mfa.challenges import (
     AuthenticationAssertion,
     AuthenticationMethod,
@@ -347,8 +348,23 @@ async def authenticate_user(
         now = current_timestamp()
         user = await manager.authenticate(credentials)
         if user is None or not is_user_effectively_active(user, now=now):
+            await publish_credential_access(
+                request,
+                operation="authenticate",
+                provider="password",
+                outcome="rejected",
+                email=email,
+            )
             return None
 
+        await publish_credential_access(
+            request,
+            operation="authenticate",
+            provider="password",
+            outcome="succeeded",
+            user_id=user.id,
+            email=user.email,
+        )
         return cast(User, user)
 
 
@@ -359,6 +375,12 @@ async def create_local_user_from_signup(
 ) -> Result[dict[str, str]]:
     options = _identity_options_from_request(request)
     if options.account_creation_policy != "public-signup":
+        await publish_account_lifecycle(
+            request,
+            operation="signup",
+            outcome="rejected",
+            email=email,
+        )
         return Result.failure(ERROR_POLICY_DISABLED)
 
     async with _persistence_scope_from_request(request) as scope:
@@ -374,6 +396,12 @@ async def create_local_user_from_signup(
                 password=password,
             )
         except ValidationError:
+            await publish_account_lifecycle(
+                request,
+                operation="signup",
+                outcome="rejected",
+                email=email,
+            )
             return Result.failure(ERROR_INVALID_EMAIL)
 
         try:
@@ -383,10 +411,30 @@ async def create_local_user_from_signup(
                 request=request,
             )
         except InvalidPasswordException as exc:
+            await publish_account_lifecycle(
+                request,
+                operation="signup",
+                outcome="rejected",
+                email=email,
+                error=exc,
+            )
             return Result.failure(public_password_error_type(exc))
         except UserAlreadyExists:
+            await publish_account_lifecycle(
+                request,
+                operation="signup",
+                outcome="rejected",
+                email=email,
+            )
             return Result.failure(ERROR_ALREADY_EXISTS)
 
+        await publish_account_lifecycle(
+            request,
+            operation="signup",
+            outcome="succeeded",
+            user_id=user.id,
+            email=user.email,
+        )
         return Result.ok({"id": str(user.id), "email": user.email})
 
 
@@ -456,12 +504,32 @@ async def request_password_reset(request: Request, email: str) -> None:
         try:
             user = await manager.get_by_email(email)
         except UserNotExists:
+            await publish_account_lifecycle(
+                request,
+                operation="password_reset_requested",
+                outcome="ignored",
+                email=email,
+            )
             return
 
         now = current_timestamp()
         if not is_user_effectively_active(user, now=now):
+            await publish_account_lifecycle(
+                request,
+                operation="password_reset_requested",
+                outcome="ignored",
+                user_id=user.id,
+                email=user.email,
+            )
             return
         if not user.password_login_enabled or not user.hashed_password:
+            await publish_account_lifecycle(
+                request,
+                operation="password_reset_requested",
+                outcome="ignored",
+                user_id=user.id,
+                email=user.email,
+            )
             return
 
         try:
@@ -471,7 +539,21 @@ async def request_password_reset(request: Request, email: str) -> None:
                 "Password reset request was rejected by the identity backend.",
                 exc_info=True,
             )
+            await publish_account_lifecycle(
+                request,
+                operation="password_reset_requested",
+                outcome="rejected",
+                user_id=user.id,
+                email=user.email,
+            )
             return
+        await publish_account_lifecycle(
+            request,
+            operation="password_reset_requested",
+            outcome="succeeded",
+            user_id=user.id,
+            email=user.email,
+        )
 
 
 async def reset_password(request: Request, token: str, password: str) -> bool:
@@ -484,14 +566,36 @@ async def reset_password(request: Request, token: str, password: str) -> bool:
             _profile_lookup_from_request(request),
         )
         if not await _reset_token_user_is_effectively_active(manager, token):
+            await publish_account_lifecycle(
+                request,
+                operation="password_reset",
+                outcome="rejected",
+            )
             return False
 
         try:
             user = await manager.reset_password(token, password, request)
-        except InvalidResetPasswordToken, UserInactive, InvalidPasswordException:
+        except (
+            InvalidResetPasswordToken,
+            UserInactive,
+            InvalidPasswordException,
+        ) as exc:
+            await publish_account_lifecycle(
+                request,
+                operation="password_reset",
+                outcome="rejected",
+                error=exc,
+            )
             return False
 
         await scope.session_tokens.delete_for_user(user)
+        await publish_account_lifecycle(
+            request,
+            operation="password_reset",
+            outcome="succeeded",
+            user_id=user.id,
+            email=user.email,
+        )
         return True
 
 
@@ -506,18 +610,45 @@ async def request_verification(request: Request, email: str) -> None:
         try:
             user = await manager.get_by_email(email)
         except UserNotExists:
+            await publish_account_lifecycle(
+                request,
+                operation="verification_requested",
+                outcome="ignored",
+                email=email,
+            )
             return
 
         now = current_timestamp()
         if not is_user_effectively_active(user, now=now):
+            await publish_account_lifecycle(
+                request,
+                operation="verification_requested",
+                outcome="ignored",
+                user_id=user.id,
+                email=user.email,
+            )
             return
 
         if user.is_verified:
+            await publish_account_lifecycle(
+                request,
+                operation="verification_requested",
+                outcome="ignored",
+                user_id=user.id,
+                email=user.email,
+            )
             return
 
         if user.email_verification_sent_at is not None:
             elapsed_seconds = now - user.email_verification_sent_at
             if elapsed_seconds < EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS:
+                await publish_account_lifecycle(
+                    request,
+                    operation="verification_requested",
+                    outcome="ignored",
+                    user_id=user.id,
+                    email=user.email,
+                )
                 return
 
         try:
@@ -527,10 +658,24 @@ async def request_verification(request: Request, email: str) -> None:
                 "Verification request was rejected by the identity backend.",
                 exc_info=True,
             )
+            await publish_account_lifecycle(
+                request,
+                operation="verification_requested",
+                outcome="rejected",
+                user_id=user.id,
+                email=user.email,
+            )
             return
 
         user.email_verification_sent_at = now
         await scope.users.save_user(user)
+        await publish_account_lifecycle(
+            request,
+            operation="verification_requested",
+            outcome="succeeded",
+            user_id=user.id,
+            email=user.email,
+        )
 
 
 async def _active_user_from_verification_token(
@@ -602,13 +747,28 @@ async def verify_user(request: Request, token: str) -> Result[str]:
         )
         token_result = await _active_user_from_verification_token(manager, token)
         if token_result.is_failure():
+            await publish_account_lifecycle(
+                request,
+                operation="verify",
+                outcome="rejected",
+            )
             return token_result
 
         try:
             verified_user = await manager.verify(token, request)
         except InvalidVerifyToken:
+            await publish_account_lifecycle(
+                request,
+                operation="verify",
+                outcome="rejected",
+            )
             return Result.failure(ERROR_INVALID_TOKEN)
         except UserAlreadyVerified:
+            await publish_account_lifecycle(
+                request,
+                operation="verify",
+                outcome="rejected",
+            )
             return Result.failure(ERROR_ALREADY_VERIFIED)
         except (UserInactive, InvalidPasswordException) as exc:
             logger.warning(
@@ -616,6 +776,19 @@ async def verify_user(request: Request, token: str) -> Result[str]:
                 type(exc).__name__,
                 exc_info=True,
             )
+            await publish_account_lifecycle(
+                request,
+                operation="verify",
+                outcome="rejected",
+                error=exc,
+            )
             return Result.failure(ERROR_TOKEN_REJECTED)
 
+        await publish_account_lifecycle(
+            request,
+            operation="verify",
+            outcome="succeeded",
+            user_id=verified_user.id,
+            email=verified_user.email,
+        )
         return Result.ok(str(verified_user.id))

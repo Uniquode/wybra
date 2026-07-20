@@ -31,6 +31,7 @@ from wybra.db.versioning import (
     VersionFieldError,
     version_field_check_constraint,
 )
+from wybra.events import EVT_FORM, Event, EventDispatcher, FormPersistenceCompletedEvent
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
@@ -589,6 +590,13 @@ class TestForms:
             InvalidVersionedForm()
 
     async def test_model_form_detects_stale_versioned_update(self) -> None:
+        events = EventDispatcher()
+        observed: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            observed.append(event)
+
+        events.subscribe(EVT_FORM, handler)
         async with migrated_test_database(
             modules=("tests_support.form_binding",)
         ) as database:
@@ -606,6 +614,7 @@ class TestForms:
             current_form = VersionedForm(
                 instance=current,
                 connection=database.capability().database(),
+                events=events,
             )
             await current_form.parse({"data": "current", "version": "0"})
             current_result = await current_form.save()
@@ -614,12 +623,14 @@ class TestForms:
             stale_form = VersionedForm(
                 instance=fresh,
                 connection=database.capability().database(),
+                events=events,
             )
             await stale_form.parse({"data": "stale", "version": "0"})
             stale_result = await stale_form.save()
             stale_delete_form = VersionedForm(
                 instance=stale_delete,
                 connection=database.capability().database(),
+                events=events,
             )
             await stale_delete_form.parse({"data": "before", "version": "0"})
             stale_delete_result = await stale_delete_form.delete()
@@ -637,6 +648,22 @@ class TestForms:
             )
             assert persisted.data == "current"
             assert persisted.version == 1
+
+        persistence_events = [
+            event
+            for event in observed
+            if isinstance(event, FormPersistenceCompletedEvent)
+        ]
+        assert [event.operation for event in persistence_events] == [
+            "save",
+            "save",
+            "delete",
+        ]
+        assert [event.stale_conflict for event in persistence_events] == [
+            False,
+            True,
+            True,
+        ]
 
     async def test_generated_boolean_model_field_accepts_false(self) -> None:
         class EnabledForm(ModelForm):
@@ -705,6 +732,13 @@ class TestForms:
             assert (await FormAddress.get(id=address.id)).street == "After"
 
     async def test_composite_form_reports_stale_version_conflicts(self) -> None:
+        events = EventDispatcher()
+        observed: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            observed.append(event)
+
+        events.subscribe(EVT_FORM, handler)
         async with migrated_test_database(
             modules=("tests_support.form_binding",)
         ) as database:
@@ -724,6 +758,7 @@ class TestForms:
             current_form = VersionedCompositeForm(
                 connection=database.capability().database(),
                 instances={None: current},
+                events=events,
             )
             await current_form.parse({"data": "current", "version": "0"})
             await current_form.save()
@@ -732,6 +767,7 @@ class TestForms:
             stale_form = VersionedCompositeForm(
                 connection=database.capability().database(),
                 instances={None: fresh},
+                events=events,
             )
             await stale_form.parse({"data": "stale", "version": "0"})
 
@@ -742,6 +778,14 @@ class TestForms:
                 "This record was changed by another user.",
             )
             assert (await FormVersionedRecord.get(id=record.id)).data == "current"
+
+        persistence_events = [
+            event
+            for event in observed
+            if isinstance(event, FormPersistenceCompletedEvent)
+        ]
+        assert [event.stale_conflict for event in persistence_events] == [False, True]
+        assert all(event.model_types for event in persistence_events)
 
     async def test_model_form_saves_many_to_many_multi_select(self) -> None:
         async with migrated_test_database(

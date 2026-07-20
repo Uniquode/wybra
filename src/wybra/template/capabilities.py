@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -12,6 +13,14 @@ from jinja2 import Environment, select_autoescape
 from wybra.assets import StaticAssetCapability, require_static_asset_capability
 from wybra.core.resources import PackageResourceSource
 from wybra.diagnostics import template_render_diagnostics
+from wybra.events import (
+    EVT_TEMPLATE,
+    TEMPLATE_RENDER,
+    EventsCapability,
+    TemplateRenderCompletedEvent,
+    publish_observation,
+    scoped,
+)
 from wybra.site import SiteCapabilityProxy
 from wybra.template.cache import (
     CacheExtension,
@@ -56,11 +65,12 @@ class DefaultTemplateCapability:
     assets: SiteCapabilityProxy[StaticAssetCapability] | None = None
     cache_provider: CacheProvider | None = None
     cache_key_normalisers: CacheKeyNormalisers | None = None
+    events: EventsCapability | None = None
     include_request_context: bool = True
     auto_reload: bool | None = None
     cache_size: int = 400
     environment: Environment = field(init=False)
-    _asset_url: Callable[[str], str] = field(init=False)
+    _asset_url: Callable[[str], Awaitable[str]] = field(init=False)
 
     def __post_init__(self) -> None:
         loader = build_template_loader(
@@ -101,10 +111,28 @@ class DefaultTemplateCapability:
         self.cache_key_normalisers = normalisers
 
     async def render_template(self, template_name: str, context: dict[str, Any]) -> str:
-        with template_render_diagnostics(template_name):
-            return await self.environment.get_template(template_name).render_async(
-                context
-            )
+        started = time.perf_counter()
+        error_type: str | None = None
+        try:
+            with template_render_diagnostics(template_name):
+                return await self.environment.get_template(template_name).render_async(
+                    context
+                )
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            if self.events is not None:
+                with scoped(EVT_TEMPLATE(TEMPLATE_RENDER)):
+                    await publish_observation(
+                        self.events,
+                        TemplateRenderCompletedEvent(
+                            template_name=template_name,
+                            duration_seconds=time.perf_counter() - started,
+                            error_type=error_type,
+                        ),
+                        message="template render event",
+                    )
 
     async def render_page(
         self,
@@ -173,17 +201,17 @@ class DefaultTemplateCapability:
             protected_context["request"] = request
         return protected_context
 
-    def _resolve_asset_url(self) -> Callable[[str], str]:
+    def _resolve_asset_url(self) -> Callable[[str], Awaitable[str]]:
         capability: StaticAssetCapability | None = None
 
-        def asset_url(logical_path: str) -> str:
+        async def asset_url(logical_path: str) -> str:
             nonlocal capability
             if capability is None:
                 if self.assets is None:
                     raise RuntimeError(
                         "Static asset capability proxy is not configured."
                     )
-                capability = require_static_asset_capability(self.assets)
+                capability = await require_static_asset_capability(self.assets)
             return capability.url(logical_path)
 
         return asset_url

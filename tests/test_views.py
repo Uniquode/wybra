@@ -19,6 +19,16 @@ from wybra.core.resources import PackageResourceSource
 from wybra.core.routes import RouteType, route
 from wybra.db import DatabaseCapability, fields
 from wybra.db.models import Model
+from wybra.events import (
+    EVT_FORM,
+    EVT_VIEW,
+    GENERIC,
+    Event,
+    EventDispatcher,
+    EventsCapability,
+    FormPersistenceCompletedEvent,
+    GenericViewCompletedEvent,
+)
 from wybra.forms import (
     Form,
     FormFieldOptions,
@@ -732,6 +742,97 @@ async def test_model_generic_view_bulk_delete_uses_visible_selected_records() ->
         "skipped_ids": ["999"],
         "failed_ids": [],
     }
+
+
+@pytest.mark.anyio
+async def test_model_generic_view_publishes_collection_item_and_bulk_outcomes() -> None:
+    class ArticleView(ModelGenericView):
+        model = Article
+        bulk_actions = {"delete": BulkDeleteAction()}
+
+    app = FastAPI()
+    async with migrated_test_database(
+        modules=("tests_support.content_types",)
+    ) as database:
+        site = create_test_site(
+            {"app": {"modules": ("tests_support.content_types",)}},
+            app=app,
+        )
+        site.provide_capability(DatabaseCapability, database.capability())
+        site.provide_capability(
+            ContentTypesCapability,
+            ContentTypeRegistry.from_models(database.capability().models()),
+        )
+        site.provide_capability(ApiCapability, DefaultApiCapability(ApiSettings()))
+        events = EventDispatcher()
+        site.provide_capability(EventsCapability, events)
+        observed: list[Event] = []
+        persistence_observed: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            observed.append(event)
+
+        async def persistence_handler(event: Event) -> None:
+            persistence_observed.append(event)
+
+        events.subscribe(EVT_VIEW(GENERIC), handler)
+        events.subscribe(EVT_FORM, persistence_handler)
+        selected = await Article.create(title="Selected")
+        retained = await Article.create(title="Retained")
+
+        await ArticleView().dispatch(
+            _request(app=app),
+            _route_type=RouteType.API,
+        )
+        await ArticleView().dispatch(
+            _request(app=app),
+            _route_type=RouteType.API,
+            id=str(retained.id),
+        )
+        await ArticleView().dispatch(
+            _json_request(
+                {"action": "delete", "selected": [selected.id, 999], "confirm": True},
+                method="POST",
+                app=app,
+            ),
+            _route_type=RouteType.API,
+            bulk=True,
+        )
+        invalid = await ArticleView().dispatch(
+            _json_request({}, method="POST", app=app),
+            _route_type=RouteType.API,
+        )
+
+    assert [str(event.scope) for event in observed] == [
+        "view.generic.collection.completed",
+        "view.generic.item.completed",
+        "view.generic.bulk.completed",
+        "view.generic.collection.completed",
+    ]
+    collection, item, bulk, invalid_event = observed
+    assert isinstance(collection, GenericViewCompletedEvent)
+    assert collection.status_code == 200
+    assert collection.content_type is not None
+    assert isinstance(item, GenericViewCompletedEvent)
+    assert item.status_code == 200
+    assert isinstance(bulk, GenericViewCompletedEvent)
+    assert bulk.status_code == 200
+    assert (bulk.affected_count, bulk.skipped_count, bulk.failed_count) == (1, 1, 0)
+    assert invalid.status_code == 422
+    assert isinstance(invalid_event, GenericViewCompletedEvent)
+    assert invalid_event.status_code == 422
+    assert invalid_event.error_type is None
+    persistence_events = [
+        event
+        for event in persistence_observed
+        if isinstance(event, FormPersistenceCompletedEvent)
+    ]
+    assert len(persistence_events) == 1
+    persistence_event = persistence_events[0]
+    assert isinstance(persistence_event, FormPersistenceCompletedEvent)
+    assert persistence_event.operation == "delete"
+    assert persistence_event.deleted is True
+    assert persistence_event.affected_count == 1
 
 
 @pytest.mark.anyio

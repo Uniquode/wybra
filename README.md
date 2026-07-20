@@ -119,13 +119,13 @@ async def setup_site(site: Site) -> None:
 
 
 async def post_setup_site(site: Site) -> None:
-    database.finalise_required()
+    await database.finalise_required()
 ```
 
 `post_setup_site(...)` is an optional async hook that runs only after every
 configured module has completed `setup_site(...)`. Use it for final composition
 checks: hard dependencies bind to real capabilities or fail startup, while soft
-dependencies can be finalised with `finalise_optional()` and handled by the
+dependencies can be awaited with `finalise_optional()` and handled by the
 consuming module's fallback behaviour.
 
 Runtime modules should expose behaviour through Wybra-owned capabilities and

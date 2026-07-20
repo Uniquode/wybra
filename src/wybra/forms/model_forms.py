@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from copy import copy
 from dataclasses import dataclass
@@ -23,6 +24,11 @@ from wybra.db.versioning import (
     ensure_model_version,
     save_model_update,
     version_field_name,
+)
+from wybra.events import EventsCapability
+from wybra.forms.events import (
+    publish_persistence_completed,
+    publish_persistence_failed,
 )
 from wybra.forms.fields import (
     CheckboxField,
@@ -240,6 +246,7 @@ class ModelForm(Form):
         values: Mapping[str, object] | None = None,
         options: Mapping[str, Mapping[str, str]] | None = None,
         unknown_fields: UnknownFieldPolicy = "ignore",
+        events: EventsCapability | None = None,
     ) -> None:
         self.instance = instance
         self.connection = connection
@@ -259,6 +266,7 @@ class ModelForm(Form):
             values=values,
             options=options,
             unknown_fields=unknown_fields,
+            events=events,
         )
         self._apply_form_options()
 
@@ -348,10 +356,37 @@ class ModelForm(Form):
         model = self._declared_model()
         if not isinstance(model, type) or not issubclass(model, Model):
             return await super().save()
-        if self.connection is None or self._writer_route is None:
-            raise ModelBindingError("ModelForm persistence requires DbConnection.")
-        async with self._writer_transaction() as client:
-            return await self._save_with_client(client)
+        started = time.perf_counter()
+        self._stale_conflict = False
+        try:
+            if self.connection is None or self._writer_route is None:
+                raise ModelBindingError("ModelForm persistence requires DbConnection.")
+            async with self._writer_transaction() as client:
+                result = await self._save_with_client(client)
+        except Exception as exc:
+            await publish_persistence_failed(
+                self.events,
+                form=self,
+                models=(model,),
+                operation="save",
+                duration_seconds=time.perf_counter() - started,
+                error=exc,
+            )
+            raise
+        await publish_persistence_completed(
+            self.events,
+            form=self,
+            models=(model,),
+            operation="save",
+            changed_fields=result.changed_fields,
+            affected_count=result.affected_count,
+            created=result.created,
+            updated=result.updated,
+            deleted=result.deleted,
+            stale_conflict=self._stale_conflict,
+            duration_seconds=time.perf_counter() - started,
+        )
+        return result
 
     def _writer_transaction(self):
         if self.connection is None or self._writer_route is None:
@@ -396,6 +431,7 @@ class ModelForm(Form):
                 target, client, many_to_many_changes
             )
         except OptimisticLockConflict:
+            self._stale_conflict = True
             self.add_error(None, "This record was changed by another user.")
             return SaveResult(primary=target, original=original)
         self.instance = target
@@ -413,6 +449,36 @@ class ModelForm(Form):
         model = self._declared_model()
         if not isinstance(model, type) or not issubclass(model, Model):
             raise ModelBindingError("ModelForm.delete() requires a Tortoise model.")
+        started = time.perf_counter()
+        self._stale_conflict = False
+        try:
+            result = await self._delete_model(model)
+        except Exception as exc:
+            await publish_persistence_failed(
+                self.events,
+                form=self,
+                models=(model,),
+                operation="delete",
+                duration_seconds=time.perf_counter() - started,
+                error=exc,
+            )
+            raise
+        await publish_persistence_completed(
+            self.events,
+            form=self,
+            models=(model,),
+            operation="delete",
+            changed_fields=result.changed_fields,
+            affected_count=result.affected_count,
+            created=result.created,
+            updated=result.updated,
+            deleted=result.deleted,
+            stale_conflict=self._stale_conflict,
+            duration_seconds=time.perf_counter() - started,
+        )
+        return result
+
+    async def _delete_model(self, model: type[Model]) -> SaveResult:
         if self.instance is None:
             raise ModelBindingError("ModelForm.delete() requires an existing instance.")
         if self.connection is None or self._writer_route is None:
@@ -446,6 +512,7 @@ class ModelForm(Form):
                 else:
                     raise ModelBindingError(f"Unknown deletion action: {action}.")
         except OptimisticLockConflict:
+            self._stale_conflict = True
             self.add_error(None, "This record was changed by another user.")
             return SaveResult(primary=target, original=original)
         return SaveResult(

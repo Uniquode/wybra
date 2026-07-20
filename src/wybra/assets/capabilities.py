@@ -58,11 +58,11 @@ class DefaultStaticAssetCapability:
         return self._storage.url(logical_path, url_path=self.url_path)
 
 
-def require_static_asset_capability(
+async def require_static_asset_capability(
     proxy: SiteCapabilityProxy[StaticAssetCapability],
 ) -> StaticAssetCapability:
     try:
-        return proxy.require()
+        return await proxy.require()
     except SiteCapabilityError as exc:
         raise SiteCapabilityError(
             structured_error(
@@ -77,11 +77,6 @@ def require_static_asset_capability(
 
 async def setup_site(site: Site) -> None:
     settings = AssetSettings.load_settings(site.config)
-    security = (
-        site.capability_proxy(SecurityCapability)
-        if security_provider_configured(site.modules)
-        else None
-    )
     capability = DefaultStaticAssetCapability(
         settings=settings,
         sources=static_sources_from_modules(site.modules),
@@ -95,7 +90,11 @@ async def setup_site(site: Site) -> None:
                 project_root=settings.project_root,
                 static_root=None,
                 static_sources=capability.sources,
-                cors=_security_cors_resolver(security),
+                cors=(
+                    _security_cors_resolver(site)
+                    if security_provider_configured(site.modules)
+                    else None
+                ),
                 url_path=capability.url_path,
             ),
             name="static",
@@ -103,13 +102,10 @@ async def setup_site(site: Site) -> None:
 
 
 def _security_cors_resolver(
-    security: SiteCapabilityProxy[SecurityCapability] | None,
+    site: Site,
 ) -> Callable[[], CorsPolicySet | None] | None:
-    if security is None:
-        return None
-
     def resolve() -> CorsPolicySet | None:
-        security_capability = security.optional()
+        security_capability = site.optional_capability(SecurityCapability)
         if security_capability is None:
             return None
         return security_capability.asset_cors

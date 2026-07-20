@@ -15,6 +15,10 @@ from wybra.diagnostics_config import (
     ENV_WYBRA_EVENTS_ENABLED,
     ENV_WYBRA_EVENTS_FILTER,
 )
+from wybra.events_config import (
+    ENV_WYBRA_EVENT_DELIVERY_ENABLED,
+    EVENTS_CONFIG_DEF,
+)
 
 ENV_APP_ENV: Final = "APP_ENV"
 ENV_APP_DEBUG: Final = "APP_DEBUG"
@@ -34,6 +38,7 @@ RUNTIME_CONFIG_DEF: Final = ConfigDef(
                 ),
             ),
         ),
+        **EVENTS_CONFIG_DEF.sections,
         **DIAGNOSTICS_CONFIG_DEF.sections,
     }
 )
@@ -41,6 +46,7 @@ RUNTIME_CONFIG_DEF: Final = ConfigDef(
 __all__ = (
     "ENV_APP_DEBUG",
     "ENV_APP_ENV",
+    "ENV_WYBRA_EVENT_DELIVERY_ENABLED",
     "ENV_WYBRA_DIAG_ALLOWED_HOSTS",
     "ENV_WYBRA_DIAG_ENABLED",
     "ENV_WYBRA_DIAG_RETENTION_LIMIT",
