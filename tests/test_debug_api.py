@@ -21,6 +21,7 @@ debug_module = importlib.import_module("wybra.diagnostics.debug")
 def _debug_config(
     *,
     allowed_hosts: tuple[str, ...] = ("testclient",),
+    subscription_queue_limit: int = 32,
 ) -> MappingConfigSource:
     return MappingConfigSource(
         {
@@ -29,6 +30,7 @@ def _debug_config(
                 "events_enabled": True,
                 "debug_enabled": True,
                 "debug_allowed_hosts": allowed_hosts,
+                "subscription_queue_limit": subscription_queue_limit,
                 "level": "trace",
             },
         }
@@ -150,6 +152,38 @@ def test_debug_websocket_sends_a_notification_for_its_subscription() -> None:
 
     assert notification["method"] == "diagnostics.notification"
     assert notification["params"]["events"][0]["category"] == "sql"
+
+
+def test_debug_websocket_marks_a_notification_when_subscription_events_drop() -> None:
+    app = FastAPI(
+        lifespan=start_site(config_source=_debug_config(subscription_queue_limit=1))
+    )
+
+    @app.get("/burst")
+    async def burst(request: Request) -> dict[str, str]:
+        capability = request.app.state.site.require_capability(DiagnosticsCapability)
+        for statement in ("select 1", "select 2", "select 3"):
+            diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
+            diagnostics.record_sql_query(statement, duration_seconds=0.01)
+            capability.record_completed(diagnostics)
+        return {"status": "ok"}
+
+    with WybraTestClient(app) as client:
+        with client.websocket_connect("/__debug/ws") as websocket:
+            websocket.send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "diagnostics.subscribe",
+                    "params": {"scopes": ["sql"]},
+                }
+            )
+            websocket.receive_json()
+            assert client.get("/burst").status_code == 200
+            notification = websocket.receive_json()
+
+    assert notification["method"] == "diagnostics.notification"
+    assert notification["params"]["dropped"] is True
 
 
 def test_debug_websocket_is_not_registered_without_explicit_activation() -> None:
