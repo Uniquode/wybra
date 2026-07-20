@@ -60,17 +60,18 @@ Enable diagnostics explicitly:
 
 ```toml
 [wybra.diagnostics]
-enabled = true
+events_enabled = true
 level = "debug"
 logging_bridge = false
 slow_sql_threshold_seconds = 0.5
 ```
 
 Wybra initialises diagnostics from `[wybra.diagnostics]` during site startup.
-That single startup path registers request diagnostics middleware and enables
-the built-in SQL, template, session, and message instrumentation. There are no
-separate environment variables or per-backend switches for those built-in
-collectors.
+`events_enabled` registers request diagnostics middleware and enables
+collection. `event_scopes` selects the dot-notation namespaces to retain; its
+default is `sql` and `template`. A parent selector includes all of its child
+topics, so `sql` includes `sql.statement`. Wildcard selectors such as `.*` are
+not supported.
 
 Diagnostics levels are:
 
@@ -80,7 +81,7 @@ Diagnostics levels are:
 
 Diagnostics can collect:
 
-- request method, path, route name, status, exception state, and duration
+- request method, route name, status, exception state, and duration
 - SQL query count and total SQL duration
 - slow SQL metadata without SQL parameter values
 - template names and render durations without rendered content
@@ -96,7 +97,7 @@ To mirror diagnostics into Python logging, enable the bridge:
 
 ```toml
 [wybra.diagnostics]
-enabled = true
+events_enabled = true
 level = "trace"
 logging_bridge = true
 
@@ -108,6 +109,46 @@ propagate = false
 
 The bridge emits through the dedicated `wybra.diagnostics` logger. Normal
 operational logging remains configured separately through `[log]`.
+
+## Debug WebSocket
+
+The interactive control plane is separately disabled by default. Enable it
+only for a local or intentionally controlled development endpoint:
+
+```toml
+[wybra.diagnostics]
+events_enabled = true
+debug_enabled = true
+debug_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+level = "trace"
+```
+
+It registers `/__debug/ws` and accepts JSON-RPC 2.0 requests. A connection has
+no subscriptions initially. Use `diagnostics.scopes` to discover available
+scopes, `diagnostics.snapshot` to retrieve retained data, and
+`diagnostics.subscribe` / `diagnostics.unsubscribe` to control only that
+connection's notifications. The protocol cannot enable collection, broaden the
+server's collector filter, or otherwise modify server state.
+
+`debug_allowed_hosts` authorises the effective client peer, not the untrusted
+`Host` request header. The default entries resolve only to loopback addresses.
+For remote or container development, add the intended client address explicitly.
+When a trusted reverse proxy such as Nginx fronts Wybra, configure Uvicorn with
+its proxy address in `--forwarded-allow-ips` (and `--proxy-headers`); Uvicorn
+then safely normalises the ASGI peer from proxy-inserted forwarded headers.
+Wybra never reads forwarded headers itself, so a direct client cannot spoof its
+peer identity.
+
+Browser connections must also have an `Origin` matching the requested WebSocket
+host. Command-line clients may omit `Origin`. This prevents another local web
+page from reading diagnostics through the developer's browser.
+
+The endpoint provides process-local, bounded history; it is not an authenticated
+production monitoring service. It never exposes request bodies, cookies,
+credentials, sessions, CSRF values, rendered template content, SQL parameter
+values, or concrete request paths. Content-type mappings are snapshot-only;
+they cannot be subscribed to. Bounded live subscription queues report a
+`dropped: true` marker on the next delivered notification after overflow.
 
 ## TRACE Logging
 

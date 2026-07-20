@@ -250,12 +250,14 @@ class WybraTestClient(FastAPITestClient):
         base_url: str = TEST_BASE_URL,
         raise_server_exceptions: bool = True,
         follow_redirects: bool = True,
+        client: tuple[str, int] = ("testclient", 50000),
     ) -> None:
         super().__init__(
             app,
             base_url=base_url,
             raise_server_exceptions=raise_server_exceptions,
             follow_redirects=follow_redirects,
+            client=client,
         )
         self._app = app
         self._async_base_url = base_url

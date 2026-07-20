@@ -1,3 +1,8 @@
+"""Version-sensitive private Tortoise SQL instrumentation.
+
+This module is the sole location for private Tortoise client adaptation.
+"""
+
 from __future__ import annotations
 
 import time
@@ -9,7 +14,21 @@ from typing import Any, Final, cast
 from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.context import TortoiseContext
 
-from wybra.diagnostics.context import current_diagnostics, record_sql_query
+from wybra.diagnostics.context import (
+    record_sql_query,
+    record_topic,
+)
+from wybra.events import (
+    BEGIN,
+    COMMIT,
+    EVT_SQL,
+    RELEASE,
+    ROLLBACK,
+    SAVEPOINT,
+    TRANSACTION,
+    EventScope,
+    EventSegment,
+)
 
 TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE: Final = (
     "_wybra_diagnostics_tortoise_instrumented"
@@ -40,7 +59,7 @@ def instrument_tortoise_context(context: TortoiseContext) -> None:
 
 
 def instrument_tortoise_connection(connection: BaseDBAsyncClient) -> None:
-    """Wrap a Tortoise connection once so request diagnostics can observe SQL."""
+    """Wrap a Tortoise connection once so diagnostics can observe SQL."""
 
     if getattr(connection, TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE, False):
         return
@@ -51,7 +70,10 @@ def instrument_tortoise_connection(connection: BaseDBAsyncClient) -> None:
         setattr(
             connection,
             method_name,
-            _instrument_query_method(cast(_AsyncQueryMethod, method)),
+            _instrument_query_method(
+                cast(_AsyncQueryMethod, method),
+                operation=method_name.removeprefix("execute_"),
+            ),
         )
     transaction_factory = getattr(connection, _TRANSACTION_FACTORY_METHOD, None)
     if transaction_factory is not None:
@@ -65,15 +87,19 @@ def instrument_tortoise_connection(connection: BaseDBAsyncClient) -> None:
     setattr(connection, TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE, True)
 
 
-def _instrument_query_method(method: _AsyncQueryMethod) -> _AsyncQueryMethod:
+def _instrument_query_method(
+    method: _AsyncQueryMethod,
+    *,
+    operation: str,
+) -> _AsyncQueryMethod:
     async def wrapped(*args: Any, **kwargs: Any) -> Any:
-        if current_diagnostics() is None:
-            return await method(*args, **kwargs)
         statement = _statement_from_call(args, kwargs)
         started = time.perf_counter()
         result = "ok"
+        value: Any = None
         try:
-            return await method(*args, **kwargs)
+            value = await method(*args, **kwargs)
+            return value
         except Exception:
             result = "error"
             raise
@@ -82,6 +108,9 @@ def _instrument_query_method(method: _AsyncQueryMethod) -> _AsyncQueryMethod:
                 statement,
                 duration_seconds=time.perf_counter() - started,
                 result=result,
+                operation=operation,
+                result_count=_result_count(value, operation=operation),
+                inserted_id=_inserted_id(value, operation=operation),
             )
 
     return wrapped
@@ -106,10 +135,17 @@ class _InstrumentedTransactionContext(
         context: AbstractAsyncContextManager[BaseDBAsyncClient],
     ) -> None:
         self._context = context
+        self._kind = "transaction"
 
     async def __aenter__(self) -> BaseDBAsyncClient:
         connection = await self._context.__aenter__()
         instrument_tortoise_connection(connection)
+        self._kind = _transaction_kind(connection)
+        record_topic(
+            "trace",
+            _transaction_topic(self._kind, BEGIN),
+            attributes={"connection": connection.connection_name},
+        )
         return connection
 
     async def __aexit__(
@@ -118,7 +154,25 @@ class _InstrumentedTransactionContext(
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool | None:
-        return await self._context.__aexit__(exc_type, exc_value, traceback)
+        result = await self._context.__aexit__(exc_type, exc_value, traceback)
+        if exc_type is not None:
+            outcome = "rollback"
+        elif self._kind == "savepoint":
+            outcome = "release"
+        else:
+            outcome = "commit"
+        record_topic(
+            "trace",
+            _transaction_topic(
+                self._kind,
+                RELEASE
+                if outcome == "release"
+                else COMMIT
+                if outcome == "commit"
+                else ROLLBACK,
+            ),
+        )
+        return result
 
 
 def _statement_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
@@ -128,6 +182,31 @@ def _statement_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     if args and isinstance(args[0], str):
         return args[0]
     return "<unknown>"
+
+
+def _result_count(value: object, *, operation: str) -> int | None:
+    if operation == "insert":
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, tuple) and value and isinstance(value[0], int):
+        return value[0]
+    return None
+
+
+def _inserted_id(value: object, *, operation: str) -> int | None:
+    return value if operation == "insert" and isinstance(value, int) else None
+
+
+def _transaction_topic(kind: str, outcome: EventSegment) -> EventScope:
+    root = EVT_SQL(SAVEPOINT if kind == "savepoint" else TRANSACTION)
+    return root(outcome)
+
+
+def _transaction_kind(connection: BaseDBAsyncClient) -> str:
+    if getattr(connection, "_savepoint", None) is not None:
+        return "savepoint"
+    return "transaction"
 
 
 __all__ = (

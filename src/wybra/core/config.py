@@ -2,16 +2,22 @@ from __future__ import annotations
 
 from typing import Final
 
-from wybra.config import ConfigDef, ConfigField, ConfigGroup, to_bool, to_positive_float
-from wybra.diagnostics.levels import to_diagnostics_level
+from wybra.config import ConfigDef, ConfigField, ConfigGroup, to_bool
+from wybra.diagnostics_config import (
+    DIAGNOSTICS_CONFIG_DEF,
+    ENV_WYBRA_DIAG_ALLOWED_HOSTS,
+    ENV_WYBRA_DIAG_ENABLED,
+    ENV_WYBRA_DIAG_RETENTION_LIMIT,
+    ENV_WYBRA_DIAG_SUBSCRIPTION_QUEUE_LIMIT,
+    ENV_WYBRA_DIAGNOSTICS_LEVEL,
+    ENV_WYBRA_DIAGNOSTICS_LOGGING_BRIDGE,
+    ENV_WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS,
+    ENV_WYBRA_EVENTS_ENABLED,
+    ENV_WYBRA_EVENTS_FILTER,
+)
 
 ENV_APP_ENV: Final = "APP_ENV"
 ENV_APP_DEBUG: Final = "APP_DEBUG"
-ENV_WYBRA_DIAGNOSTICS_ENABLED: Final = "WYBRA_DIAGNOSTICS_ENABLED"
-ENV_WYBRA_DIAGNOSTICS_LEVEL: Final = "WYBRA_DIAGNOSTICS_LEVEL"
-ENV_WYBRA_DIAGNOSTICS_LOGGING_BRIDGE: Final = "WYBRA_DIAGNOSTICS_LOGGING_BRIDGE"
-ENV_WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS: Final = "WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS"
-
 RUNTIME_CONFIG_DEF: Final = ConfigDef(
     {
         "app": ConfigGroup(
@@ -28,44 +34,21 @@ RUNTIME_CONFIG_DEF: Final = ConfigDef(
                 ),
             ),
         ),
-        "wybra.diagnostics": ConfigGroup(
-            fields=(
-                ConfigField(
-                    name="enabled",
-                    default=False,
-                    env=ENV_WYBRA_DIAGNOSTICS_ENABLED,
-                    transform=to_bool,
-                ),
-                ConfigField(
-                    name="level",
-                    default="info",
-                    env=ENV_WYBRA_DIAGNOSTICS_LEVEL,
-                    transform=to_diagnostics_level,
-                ),
-                ConfigField(
-                    name="logging_bridge",
-                    default=False,
-                    env=ENV_WYBRA_DIAGNOSTICS_LOGGING_BRIDGE,
-                    transform=to_bool,
-                ),
-                ConfigField(
-                    name="slow_sql_threshold_seconds",
-                    default=0.5,
-                    env=ENV_WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS,
-                    transform=to_positive_float,
-                ),
-            ),
-        ),
+        **DIAGNOSTICS_CONFIG_DEF.sections,
     }
 )
 
 __all__ = (
     "ENV_APP_DEBUG",
     "ENV_APP_ENV",
-    "ENV_WYBRA_DIAGNOSTICS_ENABLED",
+    "ENV_WYBRA_DIAG_ALLOWED_HOSTS",
+    "ENV_WYBRA_DIAG_ENABLED",
+    "ENV_WYBRA_DIAG_RETENTION_LIMIT",
+    "ENV_WYBRA_DIAG_SUBSCRIPTION_QUEUE_LIMIT",
+    "ENV_WYBRA_EVENTS_ENABLED",
+    "ENV_WYBRA_EVENTS_FILTER",
     "ENV_WYBRA_DIAGNOSTICS_LEVEL",
     "ENV_WYBRA_DIAGNOSTICS_LOGGING_BRIDGE",
     "ENV_WYBRA_DIAGNOSTICS_SLOW_SQL_SECONDS",
     "RUNTIME_CONFIG_DEF",
-    "to_diagnostics_level",
 )

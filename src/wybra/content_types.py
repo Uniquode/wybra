@@ -29,6 +29,8 @@ class UnknownContentTypeError(ContentTypeError):
 class ContentTypesCapability(Protocol):
     """Public content-type metadata capability exposed through ``Site``."""
 
+    def all(self) -> tuple[ContentType, ...]: ...
+
     def for_identifier(self, identifier: str) -> ContentType: ...
 
     def for_model(self, model: type[Model]) -> ContentType: ...
@@ -81,6 +83,14 @@ class ContentTypeRegistry:
                 f"Unknown content type identifier: {identifier}."
             ) from exc
 
+    def all(self) -> tuple[ContentType, ...]:
+        """Return finalised content types in stable identifier order."""
+
+        return tuple(
+            self._by_identifier[identifier]
+            for identifier in sorted(self._by_identifier)
+        )
+
     def for_model(self, model: type[Model]) -> ContentType:
         """Return metadata for a configured model class."""
         try:
@@ -102,6 +112,9 @@ class SiteContentTypesCapability:
 
     def for_identifier(self, identifier: str) -> ContentType:
         return self._require_registry().for_identifier(identifier)
+
+    def all(self) -> tuple[ContentType, ...]:
+        return self._require_registry().all()
 
     def for_model(self, model: type[Model]) -> ContentType:
         return self._require_registry().for_model(model)

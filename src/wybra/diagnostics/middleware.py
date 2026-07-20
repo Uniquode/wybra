@@ -6,12 +6,16 @@ from collections.abc import Awaitable, Callable
 from fastapi import Request
 from fastapi.responses import Response
 
+from wybra.diagnostics.capabilities import DiagnosticsCapability
 from wybra.diagnostics.context import (
     REQUEST_DIAGNOSTICS_SCOPE_KEY,
+    reset_current_diagnostic_context,
     reset_current_diagnostics,
+    retain_completed_diagnostics,
+    set_current_diagnostic_context,
     set_current_diagnostics,
 )
-from wybra.diagnostics.events import RequestDiagnostics
+from wybra.diagnostics.events import DiagnosticContext, RequestDiagnostics
 from wybra.diagnostics.logging import emit_request_diagnostics
 from wybra.diagnostics.settings import DiagnosticsSettings
 from wybra.site import Site
@@ -22,6 +26,7 @@ DIAGNOSTICS_MIDDLEWARE_STATE_ATTRIBUTE = "wybra_diagnostics_middleware_registere
 def register_diagnostics_middleware(
     site: Site,
     settings: DiagnosticsSettings,
+    capability: DiagnosticsCapability,
 ) -> None:
     if getattr(site.app.state, DIAGNOSTICS_MIDDLEWARE_STATE_ATTRIBUTE, False):
         return
@@ -32,13 +37,19 @@ def register_diagnostics_middleware(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        context = DiagnosticContext(
+            kind="request",
+            description=f"{request.method} request",
+        )
         diagnostics = RequestDiagnostics(
             method=request.method,
-            path=request.url.path,
+            path="",
             level=settings.level,
             slow_sql_threshold_seconds=settings.slow_sql_threshold_seconds,
+            context=context,
         )
         request.scope[REQUEST_DIAGNOSTICS_SCOPE_KEY] = diagnostics
+        context_token = set_current_diagnostic_context(context)
         token = set_current_diagnostics(diagnostics)
         started = time.perf_counter()
         status_code: int | None = None
@@ -59,7 +70,9 @@ def register_diagnostics_middleware(
             )
             if settings.logging_bridge:
                 emit_request_diagnostics(diagnostics)
+            retain_completed_diagnostics(capability, diagnostics)
             reset_current_diagnostics(token)
+            reset_current_diagnostic_context(context_token)
 
 
 def _route_name(request: Request) -> str | None:

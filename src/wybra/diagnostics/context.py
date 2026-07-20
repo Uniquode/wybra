@@ -9,7 +9,16 @@ from typing import cast
 
 from fastapi import Request
 
-from wybra.diagnostics.events import DiagnosticLevel, RequestDiagnostics
+from wybra.diagnostics.capabilities import (
+    DiagnosticsCapability,
+    process_diagnostics_capability,
+)
+from wybra.diagnostics.events import (
+    DiagnosticContext,
+    DiagnosticLevel,
+    RequestDiagnostics,
+)
+from wybra.events import EventScope
 
 REQUEST_DIAGNOSTICS_SCOPE_KEY = "wybra.diagnostics"
 type DiagnosticAttributes = Mapping[str, object] | Callable[[], Mapping[str, object]]
@@ -20,10 +29,79 @@ _CURRENT_DIAGNOSTICS: ContextVar[RequestDiagnostics | None] = ContextVar(
     "wybra_current_diagnostics",
     default=None,
 )
+_CURRENT_CONTEXT: ContextVar[DiagnosticContext | None] = ContextVar(
+    "wybra_current_diagnostic_context",
+    default=None,
+)
 
 
 def current_diagnostics() -> RequestDiagnostics | None:
     return _CURRENT_DIAGNOSTICS.get()
+
+
+def current_diagnostic_context() -> DiagnosticContext | None:
+    """Return the active request, task, lifecycle, or explicit context."""
+
+    return _CURRENT_CONTEXT.get()
+
+
+def set_current_diagnostic_context(
+    context: DiagnosticContext | None,
+) -> Token[DiagnosticContext | None]:
+    """Set the active context for framework request/lifecycle integration."""
+
+    return _CURRENT_CONTEXT.set(context)
+
+
+def reset_current_diagnostic_context(
+    token: Token[DiagnosticContext | None],
+) -> None:
+    """Restore the prior active diagnostic context."""
+
+    _CURRENT_CONTEXT.reset(token)
+
+
+@asynccontextmanager
+async def diagnostic_context(
+    capability: DiagnosticsCapability,
+    *,
+    kind: str,
+    description: str,
+    level: DiagnosticLevel = "info",
+) -> AsyncIterator[DiagnosticContext]:
+    """Collect and retain explicitly scoped asynchronous diagnostic work."""
+
+    parent = current_diagnostic_context()
+    context = DiagnosticContext(
+        kind=kind,
+        description=description,
+        parent_identifier=parent.identifier if parent is not None else None,
+    )
+    diagnostics = RequestDiagnostics(
+        method="",
+        path="",
+        level=level,
+        context=context,
+    )
+    context_token = _CURRENT_CONTEXT.set(context)
+    diagnostics_token = set_current_diagnostics(diagnostics)
+    started = time.perf_counter()
+    exception_type: str | None = None
+    try:
+        yield context
+    except Exception as exc:
+        exception_type = type(exc).__name__
+        raise
+    finally:
+        diagnostics.finish(
+            route_name=None,
+            status_code=None,
+            exception_type=exception_type,
+            duration_seconds=time.perf_counter() - started,
+        )
+        retain_completed_diagnostics(capability, diagnostics)
+        reset_current_diagnostics(diagnostics_token)
+        _CURRENT_CONTEXT.reset(context_token)
 
 
 def set_current_diagnostics(
@@ -104,11 +182,7 @@ def record_event(
     duration_seconds: float | None = None,
     result: str | None = None,
 ) -> None:
-    diagnostics = current_diagnostics()
-    if diagnostics is None or not diagnostics.allows(level):
-        return
-
-    def _record() -> None:
+    def _record(diagnostics: RequestDiagnostics) -> None:
         diagnostics.record_event(
             level,
             category,
@@ -118,7 +192,28 @@ def record_event(
             result=result,
         )
 
-    _record_safely(_record)
+    _record_with_active_diagnostics(_record)
+
+
+def record_topic(
+    level: DiagnosticLevel,
+    topic: EventScope,
+    *,
+    attributes: DiagnosticAttributes | None = None,
+    duration_seconds: float | None = None,
+    result: str | None = None,
+) -> None:
+    """Record a diagnostic observation from a validated event topic."""
+
+    _record_with_active_diagnostics(
+        lambda diagnostics: diagnostics.record_topic(
+            level,
+            topic,
+            attributes=_attributes(attributes),
+            duration_seconds=duration_seconds,
+            result=result,
+        )
+    )
 
 
 @contextmanager
@@ -184,16 +279,20 @@ def record_sql_query(
     *,
     duration_seconds: float,
     result: str = "ok",
+    operation: str | None = None,
+    result_count: int | None = None,
+    inserted_id: int | None = None,
 ) -> None:
-    diagnostics = current_diagnostics()
-    if diagnostics is not None:
-        _record_safely(
-            lambda: diagnostics.record_sql_query(
-                statement,
-                duration_seconds=duration_seconds,
-                result=result,
-            )
+    _record_with_active_diagnostics(
+        lambda diagnostics: diagnostics.record_sql_query(
+            statement,
+            duration_seconds=duration_seconds,
+            result=result,
+            operation=operation,
+            result_count=result_count,
+            inserted_id=inserted_id,
         )
+    )
 
 
 def record_template_render(
@@ -202,15 +301,13 @@ def record_template_render(
     duration_seconds: float,
     result: str = "ok",
 ) -> None:
-    diagnostics = current_diagnostics()
-    if diagnostics is not None:
-        _record_safely(
-            lambda: diagnostics.record_template_render(
-                template_name,
-                duration_seconds=duration_seconds,
-                result=result,
-            )
+    _record_with_active_diagnostics(
+        lambda diagnostics: diagnostics.record_template_render(
+            template_name,
+            duration_seconds=duration_seconds,
+            result=result,
         )
+    )
 
 
 def record_backend_operation(
@@ -222,11 +319,7 @@ def record_backend_operation(
     attributes: DiagnosticAttributes | None = None,
     level: DiagnosticLevel = "debug",
 ) -> None:
-    diagnostics = current_diagnostics()
-    if diagnostics is None:
-        return
-
-    def _record() -> None:
+    def _record(diagnostics: RequestDiagnostics) -> None:
         diagnostics.record_backend_operation(
             category,
             name,
@@ -236,7 +329,32 @@ def record_backend_operation(
             level=level,
         )
 
-    _record_safely(_record)
+    _record_with_active_diagnostics(_record)
+
+
+def retain_completed_diagnostics(
+    capability: DiagnosticsCapability,
+    diagnostics: RequestDiagnostics,
+) -> None:
+    """Retain diagnostics without allowing observation failures to affect work."""
+
+    _record_safely(lambda: capability.record_completed(diagnostics))
+
+
+def _record_with_active_diagnostics(
+    record: Callable[[RequestDiagnostics], None],
+) -> None:
+    diagnostics = current_diagnostics()
+    if diagnostics is not None:
+        _record_safely(lambda: record(diagnostics))
+        return
+    capability = process_diagnostics_capability()
+    if capability is None:
+        return
+    standalone = RequestDiagnostics(method="", path="", level=capability.level)
+    _record_safely(lambda: record(standalone))
+    if capability.selects_diagnostics(standalone):
+        retain_completed_diagnostics(capability, standalone)
 
 
 def _attributes(
@@ -254,16 +372,22 @@ __all__ = (
     "REQUEST_DIAGNOSTICS_SCOPE_KEY",
     "backend_operation_diagnostics",
     "current_diagnostics",
+    "current_diagnostic_context",
     "debug",
+    "diagnostic_context",
     "diagnostic_operation",
     "info",
     "record_backend_operation",
     "record_event",
     "record_sql_query",
     "record_template_render",
+    "record_topic",
+    "retain_completed_diagnostics",
+    "reset_current_diagnostic_context",
     "request_diagnostics",
     "reset_current_diagnostics",
     "set_current_diagnostics",
+    "set_current_diagnostic_context",
     "template_render_diagnostics",
     "trace",
 )

@@ -10,6 +10,13 @@ from tortoise.transactions import in_transaction
 from wybra import start_site
 from wybra.config import MappingConfigSource
 from wybra.core.logging import TRACE_LEVEL, configure_runtime_logging, get_trace_logger
+from wybra.db._tortoise import (
+    TortoiseCompatibilityError,
+    ensure_supported_tortoise_version,
+    instrument_tortoise_context,
+)
+from wybra.db._tortoise.compatibility import _parse_version
+from wybra.db._tortoise.instrumentation import _result_count
 from wybra.db.persistence import close_database, create_database
 from wybra.diagnostics import (
     backend_operation_diagnostics,
@@ -25,7 +32,6 @@ from wybra.diagnostics.context import (
 )
 from wybra.diagnostics.events import RequestDiagnostics
 from wybra.diagnostics.logging import emit_request_diagnostics
-from wybra.diagnostics.tortoise import instrument_tortoise_context
 from wybra.site import start
 from wybra.template.capabilities import DefaultTemplateCapability
 from wybra.testing import WybraTestClient
@@ -57,7 +63,7 @@ def _diagnostic_app_config(
                 "deployment_environment": "local",
             },
             "wybra.diagnostics": {
-                "enabled": True,
+                "events_enabled": True,
                 "level": diagnostics_level,
                 "logging_bridge": logging_bridge,
                 "slow_sql_threshold_seconds": 0.001,
@@ -267,6 +273,39 @@ async def test_tortoise_instrumentation_is_idempotent() -> None:
         await close_database(database)
 
     assert diagnostics.sql_query_count == 1
+    sql_event = next(event for event in diagnostics.events if event.category == "sql")
+    assert sql_event.attributes["operation"] == "query"
+    assert sql_event.attributes["result_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1.1.7", (1, 1, 7)),
+        ("1.1.9+local", (1, 1, 9)),
+    ],
+)
+def test_tortoise_compatibility_parses_supported_release(
+    value: str,
+    expected: tuple[int, int, int],
+) -> None:
+    assert _parse_version(value) == expected
+
+
+def test_tortoise_compatibility_rejects_unsupported_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "wybra.db._tortoise.compatibility.version",
+        lambda _package: "1.2.0",
+    )
+
+    with pytest.raises(TortoiseCompatibilityError, match="supports tortoise-orm"):
+        ensure_supported_tortoise_version()
+
+
+def test_insert_identifier_is_not_reported_as_an_affected_row_count() -> None:
+    assert _result_count(42, operation="insert") is None
 
 
 @pytest.mark.anyio
@@ -289,6 +328,41 @@ async def test_tortoise_instrumentation_records_transaction_queries() -> None:
         await close_database(database)
 
     assert diagnostics.sql_query_count == 2
+    assert [
+        event.name
+        for event in diagnostics.events
+        if event.category == "sql" and "transaction" in event.name
+    ] == ["transaction.begin", "transaction.commit"]
+    assert [
+        event.name
+        for event in diagnostics.events
+        if event.category == "sql" and "savepoint" in event.name
+    ] == ["savepoint.begin", "savepoint.release"]
+
+
+@pytest.mark.anyio
+async def test_tortoise_instrumentation_records_transaction_rollback() -> None:
+    database = await create_database(
+        "sqlite://:memory:",
+        modules=("wybra.sessions",),
+    )
+    diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
+    token = set_current_diagnostics(diagnostics)
+
+    try:
+        with database.context:
+            with pytest.raises(ValueError, match="rollback"):
+                async with in_transaction("default"):
+                    raise ValueError("rollback")
+    finally:
+        reset_current_diagnostics(token)
+        await close_database(database)
+
+    assert [
+        event.name
+        for event in diagnostics.events
+        if event.category == "sql" and "transaction" in event.name
+    ] == ["transaction.begin", "transaction.rollback"]
 
 
 @pytest.mark.anyio
@@ -329,7 +403,7 @@ async def test_diagnostics_middleware_wraps_module_middleware(
                     "deployment_environment": "local",
                 },
                 "wybra.diagnostics": {
-                    "enabled": True,
+                    "events_enabled": True,
                     "level": "trace",
                 },
             }
