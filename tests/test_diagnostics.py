@@ -30,8 +30,10 @@ from wybra.diagnostics.context import (
     reset_current_diagnostics,
     set_current_diagnostics,
 )
+from wybra.diagnostics.event_projection import register_event_projection
 from wybra.diagnostics.events import RequestDiagnostics
 from wybra.diagnostics.logging import emit_request_diagnostics
+from wybra.events import EVT_SQL, EventDispatcher
 from wybra.site import start
 from wybra.template.capabilities import DefaultTemplateCapability
 from wybra.testing import WybraTestClient
@@ -257,11 +259,14 @@ async def test_sql_template_and_backend_diagnostics_are_collected(
 
 @pytest.mark.anyio
 async def test_tortoise_instrumentation_is_idempotent() -> None:
+    dispatcher = EventDispatcher()
+    register_event_projection(dispatcher, (EVT_SQL,))
     database = await create_database(
         "sqlite://:memory:",
         modules=("wybra.sessions",),
+        events=dispatcher,
     )
-    instrument_tortoise_context(database.context)
+    instrument_tortoise_context(database.context, dispatcher)
     diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
     token = set_current_diagnostics(diagnostics)
 
@@ -310,9 +315,12 @@ def test_insert_identifier_is_not_reported_as_an_affected_row_count() -> None:
 
 @pytest.mark.anyio
 async def test_tortoise_instrumentation_records_transaction_queries() -> None:
+    dispatcher = EventDispatcher()
+    register_event_projection(dispatcher, (EVT_SQL,))
     database = await create_database(
         "sqlite://:memory:",
         modules=("wybra.sessions",),
+        events=dispatcher,
     )
     diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
     token = set_current_diagnostics(diagnostics)
@@ -342,9 +350,12 @@ async def test_tortoise_instrumentation_records_transaction_queries() -> None:
 
 @pytest.mark.anyio
 async def test_tortoise_instrumentation_records_transaction_rollback() -> None:
+    dispatcher = EventDispatcher()
+    register_event_projection(dispatcher, (EVT_SQL,))
     database = await create_database(
         "sqlite://:memory:",
         modules=("wybra.sessions",),
+        events=dispatcher,
     )
     diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
     token = set_current_diagnostics(diagnostics)
@@ -411,9 +422,12 @@ async def test_diagnostics_middleware_wraps_module_middleware(
     )
 
     try:
-        # Starlette inserts newly registered middleware first; registering
-        # diagnostics after module setup makes it the outer user middleware.
+        # The core event lifecycle boundary is intentionally outermost; it wraps
+        # diagnostics, which in turn wraps configured module middleware.
         assert app.user_middleware[0].kwargs["dispatch"].__name__ == (
+            "event_lifecycle_middleware"
+        )
+        assert app.user_middleware[1].kwargs["dispatch"].__name__ == (
             "diagnostics_middleware"
         )
 

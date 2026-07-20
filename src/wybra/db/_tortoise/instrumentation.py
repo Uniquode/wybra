@@ -14,25 +14,20 @@ from typing import Any, Final, cast
 from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.context import TortoiseContext
 
-from wybra.diagnostics.context import (
-    record_sql_query,
-    record_topic,
+from wybra.db.events import (
+    DatabaseSavepointEvent,
+    DatabaseStatementEvent,
+    DatabaseTransactionEvent,
 )
 from wybra.events import (
-    BEGIN,
-    COMMIT,
     EVT_SQL,
-    RELEASE,
-    ROLLBACK,
-    SAVEPOINT,
-    TRANSACTION,
-    EventScope,
-    EventSegment,
+    EventsCapability,
+    event_delivery_enabled,
+    publish_observation,
+    scoped,
 )
 
-TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE: Final = (
-    "_wybra_diagnostics_tortoise_instrumented"
-)
+TORTOISE_EVENTS_INSTRUMENTED_ATTRIBUTE: Final = "_wybra_events_tortoise_instrumented"
 _TRANSACTION_FACTORY_METHOD: Final = "_in_transaction"
 _QUERY_METHODS: Final = (
     "execute_insert",
@@ -51,49 +46,62 @@ type _TransactionFactory = Callable[
 ]
 
 
-def instrument_tortoise_context(context: TortoiseContext) -> None:
-    """Record SQL timings for all currently configured Tortoise connections."""
+def instrument_tortoise_context(
+    context: TortoiseContext,
+    events: EventsCapability | None = None,
+) -> None:
+    """Instrument all currently configured Tortoise connections."""
 
     for connection in context.connections.all():
-        instrument_tortoise_connection(connection)
+        instrument_tortoise_connection(connection, events)
 
 
-def instrument_tortoise_connection(connection: BaseDBAsyncClient) -> None:
-    """Wrap a Tortoise connection once so diagnostics can observe SQL."""
+def instrument_tortoise_connection(
+    connection: BaseDBAsyncClient,
+    events: EventsCapability | None = None,
+) -> None:
+    """Wrap a Tortoise connection once so events can observe SQL."""
 
-    if getattr(connection, TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE, False):
+    if getattr(connection, TORTOISE_EVENTS_INSTRUMENTED_ATTRIBUTE, False):
         return
-    for method_name in _QUERY_METHODS:
-        method = getattr(connection, method_name, None)
-        if method is None:
-            continue
-        setattr(
-            connection,
-            method_name,
-            _instrument_query_method(
-                cast(_AsyncQueryMethod, method),
-                operation=method_name.removeprefix("execute_"),
-            ),
-        )
+    if events is not None:
+        for method_name in _QUERY_METHODS:
+            method = getattr(connection, method_name, None)
+            if method is None:
+                continue
+            setattr(
+                connection,
+                method_name,
+                _instrument_query_method(
+                    cast(_AsyncQueryMethod, method),
+                    connection_name=connection.connection_name,
+                    events=events,
+                    operation=method_name.removeprefix("execute_"),
+                ),
+            )
     transaction_factory = getattr(connection, _TRANSACTION_FACTORY_METHOD, None)
     if transaction_factory is not None:
         setattr(
             connection,
             _TRANSACTION_FACTORY_METHOD,
             _instrument_transaction_factory(
-                cast(_TransactionFactory, transaction_factory)
+                cast(_TransactionFactory, transaction_factory),
+                events,
             ),
         )
-    setattr(connection, TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE, True)
+    setattr(connection, TORTOISE_EVENTS_INSTRUMENTED_ATTRIBUTE, True)
 
 
 def _instrument_query_method(
     method: _AsyncQueryMethod,
     *,
+    connection_name: str,
+    events: EventsCapability,
     operation: str,
 ) -> _AsyncQueryMethod:
     async def wrapped(*args: Any, **kwargs: Any) -> Any:
-        statement = _statement_from_call(args, kwargs)
+        if not event_delivery_enabled(events):
+            return await method(*args, **kwargs)
         started = time.perf_counter()
         result = "ok"
         value: Any = None
@@ -104,25 +112,31 @@ def _instrument_query_method(
             result = "error"
             raise
         finally:
-            record_sql_query(
-                statement,
-                duration_seconds=time.perf_counter() - started,
-                result=result,
-                operation=operation,
-                result_count=_result_count(value, operation=operation),
-                inserted_id=_inserted_id(value, operation=operation),
-            )
+            with scoped(EVT_SQL):
+                await publish_observation(
+                    events,
+                    DatabaseStatementEvent(
+                        connection_name=connection_name,
+                        operation=operation,
+                        duration_seconds=time.perf_counter() - started,
+                        result=result,
+                        result_count=_result_count(value, operation=operation),
+                        inserted_id=_inserted_id(value, operation=operation),
+                    ),
+                    message="database statement event",
+                )
 
     return wrapped
 
 
 def _instrument_transaction_factory(
     method: _TransactionFactory,
+    events: EventsCapability | None,
 ) -> _TransactionFactory:
     def wrapped(
         *args: Any, **kwargs: Any
     ) -> AbstractAsyncContextManager[BaseDBAsyncClient]:
-        return _InstrumentedTransactionContext(method(*args, **kwargs))
+        return _InstrumentedTransactionContext(method(*args, **kwargs), events)
 
     return wrapped
 
@@ -133,18 +147,24 @@ class _InstrumentedTransactionContext(
     def __init__(
         self,
         context: AbstractAsyncContextManager[BaseDBAsyncClient],
+        events: EventsCapability | None,
     ) -> None:
         self._context = context
+        self._events = events
         self._kind = "transaction"
+        self._connection_name = ""
 
     async def __aenter__(self) -> BaseDBAsyncClient:
         connection = await self._context.__aenter__()
-        instrument_tortoise_connection(connection)
+        instrument_tortoise_connection(connection, self._events)
         self._kind = _transaction_kind(connection)
-        record_topic(
-            "trace",
-            _transaction_topic(self._kind, BEGIN),
-            attributes={"connection": connection.connection_name},
+        self._connection_name = connection.connection_name
+        await _publish_transaction_observation(
+            self._events,
+            connection_name=self._connection_name,
+            transaction_kind=self._kind,
+            outcome="begin",
+            message="database transaction begin event",
         )
         return connection
 
@@ -154,34 +174,27 @@ class _InstrumentedTransactionContext(
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool | None:
-        result = await self._context.__aexit__(exc_type, exc_value, traceback)
-        if exc_type is not None:
-            outcome = "rollback"
-        elif self._kind == "savepoint":
-            outcome = "release"
+        outcome = "failed"
+        try:
+            result = await self._context.__aexit__(exc_type, exc_value, traceback)
+        except BaseException:
+            raise
         else:
-            outcome = "commit"
-        record_topic(
-            "trace",
-            _transaction_topic(
-                self._kind,
-                RELEASE
-                if outcome == "release"
-                else COMMIT
-                if outcome == "commit"
-                else ROLLBACK,
-            ),
-        )
-        return result
-
-
-def _statement_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-    query = kwargs.get("query")
-    if isinstance(query, str):
-        return query
-    if args and isinstance(args[0], str):
-        return args[0]
-    return "<unknown>"
+            if exc_type is not None:
+                outcome = "rollback"
+            elif self._kind == "savepoint":
+                outcome = "release"
+            else:
+                outcome = "commit"
+            return result
+        finally:
+            await _publish_transaction_observation(
+                self._events,
+                connection_name=self._connection_name,
+                transaction_kind=self._kind,
+                outcome=outcome,
+                message="database transaction completion event",
+            )
 
 
 def _result_count(value: object, *, operation: str) -> int | None:
@@ -198,9 +211,29 @@ def _inserted_id(value: object, *, operation: str) -> int | None:
     return value if operation == "insert" and isinstance(value, int) else None
 
 
-def _transaction_topic(kind: str, outcome: EventSegment) -> EventScope:
-    root = EVT_SQL(SAVEPOINT if kind == "savepoint" else TRANSACTION)
-    return root(outcome)
+async def _publish_transaction_observation(
+    events: EventsCapability | None,
+    *,
+    connection_name: str,
+    transaction_kind: str,
+    outcome: str,
+    message: str,
+) -> None:
+    if events is None or not event_delivery_enabled(events):
+        return
+    with scoped(EVT_SQL):
+        if transaction_kind == "savepoint":
+            event = DatabaseSavepointEvent(
+                connection_name=connection_name,
+                outcome=outcome,
+            )
+        else:
+            event = DatabaseTransactionEvent(
+                connection_name=connection_name,
+                transaction_kind=transaction_kind,
+                outcome=outcome,
+            )
+        await publish_observation(events, event, message=message)
 
 
 def _transaction_kind(connection: BaseDBAsyncClient) -> str:
@@ -210,7 +243,7 @@ def _transaction_kind(connection: BaseDBAsyncClient) -> str:
 
 
 __all__ = (
-    "TORTOISE_DIAGNOSTICS_INSTRUMENTED_ATTRIBUTE",
+    "TORTOISE_EVENTS_INSTRUMENTED_ATTRIBUTE",
     "instrument_tortoise_connection",
     "instrument_tortoise_context",
 )

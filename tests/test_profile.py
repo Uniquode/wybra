@@ -269,7 +269,7 @@ async def _profile_route_site(
         ProfileCapability,
         _profile_capability(site),
     )
-    site.require_capability(ProfileCapability).media.finalise_optional()
+    await site.require_capability(ProfileCapability).media.finalise_optional()
     site.provide_capability(FormsCapability, DefaultFormsCapability(app.state.csrf))
     site.provide_capability(TemplateCapability, ProfileTemplateStub())
     app.state.site = site
@@ -1715,7 +1715,7 @@ class TestProfile:
     ) -> None:
         site = await _site_with_database(tmp_path)
         capability = _profile_capability(site)
-        capability.media.finalise_optional()
+        await capability.media.finalise_optional()
 
         image = await capability.profile_image_for_user(
             ProfileUser(id=uuid.uuid4(), email="_david@example.test")
@@ -1733,7 +1733,7 @@ class TestProfile:
     ) -> None:
         site = await _site_with_database(tmp_path)
         capability = _profile_capability(site)
-        capability.media.finalise_optional()
+        await capability.media.finalise_optional()
         await _create_site_schema(site)
         user_id = uuid.uuid4()
         await _ensure_auth_user(site, user_id)
@@ -1761,7 +1761,7 @@ class TestProfile:
     ) -> None:
         site = await _site_with_database(tmp_path)
         capability = _profile_capability(site)
-        capability.media.finalise_optional()
+        await capability.media.finalise_optional()
         await _create_site_schema(site)
         user_id = uuid.uuid4()
         await _ensure_auth_user(site, user_id)
@@ -1797,7 +1797,7 @@ class TestProfile:
     ) -> None:
         site = await _site_with_database(tmp_path)
         capability = _profile_capability(site)
-        capability.media.finalise_optional()
+        await capability.media.finalise_optional()
         await _create_site_schema(site)
 
         with pytest.raises(ProfileInputError, match="not editable"):
@@ -1815,7 +1815,7 @@ class TestProfile:
     ) -> None:
         site = await _site_with_database(tmp_path)
         capability = _profile_capability(site)
-        capability.media.finalise_optional()
+        await capability.media.finalise_optional()
         await _create_site_schema(site)
 
         with pytest.raises(ProfileInputError, match="URL scheme"):
@@ -1839,7 +1839,7 @@ class TestProfile:
     ) -> None:
         site = await _site_with_database(tmp_path)
         capability = _profile_capability(site)
-        capability.media.finalise_optional()
+        await capability.media.finalise_optional()
         await _create_site_schema(site)
         user_id = uuid.uuid4()
         await _ensure_auth_user(site, user_id)
@@ -1875,7 +1875,7 @@ class TestProfile:
     ) -> None:
         site = await _site_with_database(tmp_path)
         capability = _profile_capability(site)
-        capability.media.finalise_optional()
+        await capability.media.finalise_optional()
         await _create_site_schema(site)
         user_id = uuid.uuid4()
         other_user_id = uuid.uuid4()

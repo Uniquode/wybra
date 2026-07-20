@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time as time_module
 from collections.abc import Mapping, MutableMapping, Sequence
 from copy import copy, deepcopy
 from dataclasses import dataclass
@@ -10,6 +11,14 @@ from datetime import date, datetime, time
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, Self, cast, runtime_checkable
 
+from wybra.events import (
+    EVT_FORM,
+    VALIDATION,
+    EventsCapability,
+    FormValidationCompletedEvent,
+    publish_observation,
+    scoped,
+)
 from wybra.forms.field_renderers import FieldRenderer
 
 type UnknownFieldPolicy = Literal["ignore", "error"]
@@ -558,9 +567,11 @@ class Form:
         values: Mapping[str, object] | None = None,
         options: Mapping[str, Mapping[str, str]] | None = None,
         unknown_fields: UnknownFieldPolicy = "ignore",
+        events: EventsCapability | None = None,
     ) -> None:
         self.target = target
         self.unknown_fields = unknown_fields
+        self.events = events
         self.fields = self._bind_fields(
             self._target_defaults(target, defaults or {}),
             values or {},
@@ -595,44 +606,69 @@ class Form:
         return fields
 
     async def parse(self, data: Mapping[str, object]) -> FormResult:
-        results: dict[str, FieldResult] = {}
-        self.errors = {}
-        self.raw_values = {}
-        self.values = {}
-        unknown = tuple(name for name in data if name not in self.fields)
-        self._pending_form_errors = (
-            ("Unknown submitted field(s): " + ", ".join(sorted(unknown)),)
-            if unknown and self.unknown_fields == "error"
-            else ()
-        )
-        for name, form_field in self.fields.items():
-            raw_value = form_raw_value(
-                data,
-                name,
-                multiple=isinstance(form_field, MultiSelectField),
-            )
-            result = form_field.parse(raw_value)
-            form_field.with_result(result)
-            results[name] = result
-            self.raw_values[name] = raw_value
-            if result.is_valid and result.value is not None:
-                self.values[name] = result.value
-        self.field_results = results
-        self._defer_result_sync = True
+        started = time_module.perf_counter()
+        error_type: str | None = None
         try:
-            for name in self.fields:
-                await self.validate(name)
-            await self.validate(None)
+            results: dict[str, FieldResult] = {}
+            self.errors = {}
+            self.raw_values = {}
+            self.values = {}
+            unknown = tuple(name for name in data if name not in self.fields)
+            self._pending_form_errors = (
+                ("Unknown submitted field(s): " + ", ".join(sorted(unknown)),)
+                if unknown and self.unknown_fields == "error"
+                else ()
+            )
+            for name, form_field in self.fields.items():
+                raw_value = form_raw_value(
+                    data,
+                    name,
+                    multiple=isinstance(form_field, MultiSelectField),
+                )
+                result = form_field.parse(raw_value)
+                form_field.with_result(result)
+                results[name] = result
+                self.raw_values[name] = raw_value
+                if result.is_valid and result.value is not None:
+                    self.values[name] = result.value
+            self.field_results = results
+            self._defer_result_sync = True
+            try:
+                for name in self.fields:
+                    await self.validate(name)
+                await self.validate(None)
+            finally:
+                self._defer_result_sync = False
+            results = self._results_with_errors(results)
+            self._result = FormResult(
+                fields=results,
+                unknown_fields=unknown,
+                form_errors=tuple(self.errors.get(None, ())),
+            )
+            del self._pending_form_errors
+            return self.result
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
         finally:
-            self._defer_result_sync = False
-        results = self._results_with_errors(results)
-        self._result = FormResult(
-            fields=results,
-            unknown_fields=unknown,
-            form_errors=tuple(self.errors.get(None, ())),
-        )
-        del self._pending_form_errors
-        return self.result
+            if self.events is not None:
+                with scoped(EVT_FORM(VALIDATION)):
+                    await publish_observation(
+                        self.events,
+                        FormValidationCompletedEvent(
+                            form_type=_form_type_name(self),
+                            field_count=len(self.fields),
+                            invalid_field_count=sum(
+                                not result.is_valid
+                                for result in self.field_results.values()
+                            )
+                            + int(bool(self.errors.get(None))),
+                            valid=self.is_valid(),
+                            duration_seconds=time_module.perf_counter() - started,
+                            error_type=error_type,
+                        ),
+                        message="form validation event",
+                    )
 
     async def validate(self, field_name: str | None = None) -> bool:
         if field_name is None:
@@ -860,6 +896,11 @@ def form_raw_value(
             return tuple(values)
         return values[-1] if values else None
     return data.get(name)
+
+
+def _form_type_name(form: Form) -> str:
+    form_type = type(form)
+    return f"{form_type.__module__}.{form_type.__qualname__}"
 
 
 def _snapshot(value: object) -> object:

@@ -3,9 +3,10 @@ import logging
 from typing import Any
 
 import pytest
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
+from wybra.events import EVT_SECURITY, Event, EventsCapability, SecurityDenialEvent
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
@@ -20,6 +21,7 @@ from wybra.forms import (
 )
 from wybra.forms.rotation import plan_csrf_token_secret_rotation
 from wybra.forms.secrets import forms_keychain_secret_references
+from wybra.site import start
 from wybra.testing import WybraTestClient
 
 
@@ -283,6 +285,48 @@ async def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
         getattr(record, "csrf_reason", None) == "missing_content_length"
         for record in caplog.records
     )
+
+
+@pytest.mark.anyio
+async def test_csrf_denial_event_excludes_token_and_rejection_detail() -> None:
+    app = FastAPI()
+    site = await start(
+        app,
+        config_source=MappingConfigSource(
+            {
+                "app": {"modules": (), "deployment_environment": "local"},
+                "wybra.events": {"enabled": True},
+            }
+        ),
+    )
+    observed: list[Event] = []
+
+    async def handler(event: Event) -> None:
+        observed.append(event)
+
+    site.require_capability(EventsCapability).subscribe(EVT_SECURITY, handler)
+    token = "token-that-must-not-appear"
+    request = csrf_request(
+        method="POST",
+        headers={
+            "content-type": "application/x-www-form-urlencoded",
+            "content-length": str(len(token)),
+        },
+        body=token.encode(),
+    )
+    request.scope["app"] = app
+    app.state.csrf = CsrfProtector("test-secret")
+
+    try:
+        with pytest.raises(HTTPException):
+            await validate_csrf(request)
+    finally:
+        await site.close()
+
+    assert len(observed) == 1
+    assert isinstance(observed[0], SecurityDenialEvent)
+    assert str(observed[0].scope) == "security.csrf.denied"
+    assert token not in repr(observed[0])
 
 
 def test_csrf_dependency_allows_safe_methods_on_protected_router() -> None:

@@ -12,9 +12,20 @@ from jinja2.exceptions import TemplateRuntimeError
 from wybra.cache import CacheCapability, CacheSettings, InMemoryCache, RedisCache
 from wybra.config import MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
+from wybra.events import (
+    EVT_CACHE,
+    CacheOperationCompletedEvent,
+    CacheOperationFailedEvent,
+    Event,
+    EventDispatcher,
+)
 from wybra.site import start
 from wybra.template import DefaultTemplateCapability, TemplateCapability
 from wybra.template.cache import configure_cache_extension
+
+
+async def _cache_provider(cache: CacheCapability) -> CacheCapability:
+    return cache
 
 
 class TestCacheSettings:
@@ -26,6 +37,69 @@ class TestCacheSettings:
 
 
 class TestInMemoryCache:
+    @pytest.mark.anyio
+    async def test_publishes_safe_operation_outcomes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        now = 100.0
+        monkeypatch.setattr("wybra.cache.capabilities.time.monotonic", lambda: now)
+        events = EventDispatcher()
+        observed: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            observed.append(event)
+
+        events.subscribe(EVT_CACHE, handler)
+        cache = InMemoryCache(events=events)
+
+        assert await cache.get("template", "private-user-key") is None
+        await cache.set("template", "private-user-key", b"content", ttl=1)
+        assert await cache.get("template", "private-user-key") == b"content"
+        now = 102.0
+        assert await cache.get("template", "private-user-key") is None
+        await cache.delete("template", "private-user-key")
+
+        async def failing_factory() -> bytes:
+            raise RuntimeError("source unavailable")
+
+        with pytest.raises(RuntimeError, match="source unavailable"):
+            await cache.get_or_set(
+                "template",
+                "private-user-key",
+                ttl=60,
+                factory=failing_factory,
+            )
+
+        assert [str(event.scope) for event in observed] == [
+            "cache.read.completed",
+            "cache.set.completed",
+            "cache.read.completed",
+            "cache.read.completed",
+            "cache.delete.completed",
+            "cache.read.completed",
+            "cache.fill.failed",
+        ]
+        completed = [
+            event
+            for event in observed
+            if isinstance(event, CacheOperationCompletedEvent)
+        ]
+        assert [event.outcome for event in completed] == [
+            "miss",
+            "stored",
+            "hit",
+            "expired",
+            "deleted",
+            "miss",
+        ]
+        assert all(event.owner == "template" for event in completed)
+        assert all(
+            "private-user-key" not in event.key_fingerprint for event in completed
+        )
+        assert isinstance(observed[-1], CacheOperationFailedEvent)
+        assert observed[-1].error_type == "RuntimeError"
+
     @pytest.mark.anyio
     async def test_expires_entries_after_ttl(
         self, monkeypatch: pytest.MonkeyPatch
@@ -49,6 +123,40 @@ class TestInMemoryCache:
         assert await cache.get("other", "fragment") is None
         await cache.delete("template", "fragment")
         assert await cache.get("template", "fragment") is None
+
+    @pytest.mark.anyio
+    async def test_cancelling_event_handler_cannot_cancel_cache_operation(self) -> None:
+        events = EventDispatcher()
+
+        async def cancelling_handler(event: Event) -> None:
+            raise asyncio.CancelledError()
+
+        events.subscribe(EVT_CACHE, cancelling_handler)
+        cache = InMemoryCache(events=events)
+
+        await cache.set("template", "fragment", b"content", ttl=60)
+
+        assert await cache.get("template", "fragment") == b"content"
+
+    @pytest.mark.anyio
+    async def test_faulty_delivery_enabled_probe_cannot_break_cache_operation(
+        self,
+    ) -> None:
+        class FaultyEvents:
+            def subscribe(self, selector, handler) -> None:
+                del selector, handler
+
+            async def publish(self, event: Event) -> None:
+                del event
+
+            def enabled(self) -> bool:
+                raise RuntimeError("enabled probe failed")
+
+        cache = InMemoryCache(events=FaultyEvents())
+
+        await cache.set("template", "fragment", b"content", ttl=60)
+
+        assert await cache.get("template", "fragment") == b"content"
 
     @pytest.mark.anyio
     async def test_rejects_colons_in_owner_names(self) -> None:
@@ -112,6 +220,49 @@ class TestInMemoryCache:
         assert await first == b"value"
         assert await second == b"value"
         assert calls == 1
+
+    @pytest.mark.anyio
+    async def test_get_or_set_releases_waiters_before_slow_event_delivery(self) -> None:
+        events = EventDispatcher()
+        event_started = asyncio.Event()
+        release_event = asyncio.Event()
+
+        async def slow_handler(event: Event) -> None:
+            if (
+                isinstance(event, CacheOperationCompletedEvent)
+                and event.outcome == "filled"
+            ):
+                event_started.set()
+                await release_event.wait()
+
+        events.subscribe(EVT_CACHE, slow_handler)
+        cache = InMemoryCache(events=events)
+        factory_started = asyncio.Event()
+        release_factory = asyncio.Event()
+
+        async def factory() -> bytes:
+            factory_started.set()
+            await release_factory.wait()
+            return b"value"
+
+        first = asyncio.create_task(
+            cache.get_or_set("template", "fragment", ttl=60, factory=factory)
+        )
+        await factory_started.wait()
+        second = asyncio.create_task(
+            cache.get_or_set(
+                "template",
+                "fragment",
+                ttl=60,
+                factory=lambda: pytest.fail("A waiting cache caller must not fill."),
+            )
+        )
+        release_factory.set()
+        await event_started.wait()
+
+        assert await second == b"value"
+        release_event.set()
+        assert await first == b"value"
 
     @pytest.mark.anyio
     async def test_get_or_set_releases_waiters_after_a_failed_factory(self) -> None:
@@ -271,7 +422,7 @@ class TestTemplateFragmentCache:
         cache = InMemoryCache()
         templates = DefaultTemplateCapability(
             template_root=tmp_path,
-            cache_provider=lambda: cache,
+            cache_provider=lambda: _cache_provider(cache),
         )
 
         assert (
@@ -303,7 +454,7 @@ class TestTemplateFragmentCache:
         cache = InMemoryCache()
         templates = DefaultTemplateCapability(
             template_root=tmp_path,
-            cache_provider=lambda: cache,
+            cache_provider=lambda: _cache_provider(cache),
         )
         first_request = SimpleNamespace(user=SimpleNamespace(id=1, name="Ada"))
         second_request = SimpleNamespace(user=SimpleNamespace(id=2, name="Grace"))
@@ -336,7 +487,7 @@ class TestTemplateFragmentCache:
         cache = InMemoryCache()
         templates = DefaultTemplateCapability(
             template_root=tmp_path,
-            cache_provider=lambda: cache,
+            cache_provider=lambda: _cache_provider(cache),
         )
         templates.register_cache_key_normaliser(
             Audience,
@@ -373,9 +524,10 @@ class TestTemplateFragmentCache:
             '{% cache "greeting" ttl=60 vary_by=audience %}{{ value }}{% endcache %}',
             encoding="utf-8",
         )
+        cache = InMemoryCache()
         templates = DefaultTemplateCapability(
             template_root=tmp_path,
-            cache_provider=InMemoryCache,
+            cache_provider=lambda: _cache_provider(cache),
         )
 
         with pytest.raises(
@@ -402,7 +554,7 @@ class TestTemplateFragmentCache:
         cache = InMemoryCache()
         templates = DefaultTemplateCapability(
             template_root=tmp_path,
-            cache_provider=lambda: cache,
+            cache_provider=lambda: _cache_provider(cache),
         )
 
         assert await templates.render_template("first.html", {"value": "one"}) == (
@@ -423,7 +575,7 @@ class TestTemplateFragmentCache:
         cache = InMemoryCache()
         templates = DefaultTemplateCapability(
             template_root=tmp_path,
-            cache_provider=lambda: cache,
+            cache_provider=lambda: _cache_provider(cache),
         )
         loader = templates.environment.loader
         assert loader is not None

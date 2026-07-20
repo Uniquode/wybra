@@ -42,7 +42,7 @@ async def template_context_middleware(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
-    if _should_resolve_template_context(request):
+    if await _should_resolve_template_context(request):
         providers = getattr(
             request.app.state,
             TEMPLATE_CONTEXT_PROVIDERS_STATE_ATTRIBUTE,
@@ -53,9 +53,9 @@ async def template_context_middleware(
     return await call_next(request)
 
 
-def _should_resolve_template_context(request: Request) -> bool:
+async def _should_resolve_template_context(request: Request) -> bool:
     path = request.url.path
-    static_mount_path = _optional_static_mount_path(
+    static_mount_path = await _optional_static_mount_path(
         get_site(request.app).capability_proxy(StaticAssetCapability)
     )
     is_static_path = static_mount_path is not None and _matches_path_prefix(
@@ -69,10 +69,10 @@ def _matches_path_prefix(path: str, prefix: str) -> bool:
     return matches_path_prefix(path, prefix)
 
 
-def _optional_static_mount_path(
+async def _optional_static_mount_path(
     proxy: SiteCapabilityProxy[StaticAssetCapability],
 ) -> str | None:
-    capability = proxy.optional()
+    capability = await proxy.optional()
     if capability is None:
         return None
     return to_url_path(capability.url_path, name="StaticAssetCapability.url_path")

@@ -52,9 +52,9 @@ async def post_setup_site(site: Site) -> None:
         site.require_capability(FormsCapability)
     capability = site.require_capability(ProfileCapability)
     if isinstance(capability, SiteProfileCapability):
-        capability.media.finalise_optional()
+        await capability.media.finalise_optional()
         if isinstance(capability.repository, TortoiseProfileRepository):
-            capability.repository.database.finalise_required()
+            await capability.repository.database.finalise_required()
 
 
 __all__ = (

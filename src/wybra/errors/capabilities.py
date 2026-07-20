@@ -14,7 +14,7 @@ from wybra.errors.handlers import (
     register_error_handlers,
 )
 from wybra.errors.mappings import ErrorMapping
-from wybra.site import Site, SiteCapabilityProxy
+from wybra.site import Site
 
 
 @runtime_checkable
@@ -25,11 +25,10 @@ class ErrorHandlingCapability(Protocol):
 
 
 async def setup_site(site: Site) -> None:
-    asset_capability = site.capability_proxy(StaticAssetCapability)
     register_error_handlers(
         site.app,
         options=ErrorHandlerOptions(
-            static_mount_path=lambda: _optional_static_mount_path(asset_capability),
+            static_mount_path=lambda: _optional_static_mount_path(site),
             mappings=discover_error_mappings(site.modules),
         ),
     )
@@ -41,9 +40,9 @@ async def setup_site(site: Site) -> None:
 
 
 def _optional_static_mount_path(
-    proxy: SiteCapabilityProxy[StaticAssetCapability],
+    site: Site,
 ) -> str | None:
-    capability = proxy.optional()
+    capability = site.optional_capability(StaticAssetCapability)
     if capability is None:
         return None
     return to_url_path(capability.url_path, name="StaticAssetCapability.url_path")

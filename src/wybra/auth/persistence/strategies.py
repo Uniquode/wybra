@@ -307,7 +307,7 @@ class TortoiseAuthPersistenceCapability:
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AuthPersistenceScope]:
-        database = self.database.require()
+        database = await self.database.require()
         context_scope = getattr(database, "context", nullcontext)()
         with context_scope:
             async with tortoise_transaction(

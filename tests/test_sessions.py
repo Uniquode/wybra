@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi import FastAPI, Request
@@ -21,6 +22,7 @@ from wybra.db.surfaces import (
     migration_version_locations_from_modules,
     model_packages_from_modules,
 )
+from wybra.events import EVT_SESSION, Event, EventDispatcher, SessionLifecycleEvent
 from wybra.services.crypto import (
     ENV_WYBRA_SECRET_KEY,
     SecretEnvelopeService,
@@ -435,6 +437,43 @@ async def test_session_finalisation_skips_unchanged_sessions() -> None:
     await context.finalise_response(Response(), session, now=2.0)
 
     assert storage.save_count == 0
+
+
+@pytest.mark.anyio
+async def test_session_lifecycle_events_exclude_session_data_and_identifiers() -> None:
+    events = EventDispatcher()
+    observed: list[Event] = []
+
+    async def handler(event: Event) -> None:
+        observed.append(event)
+
+    events.subscribe(EVT_SESSION, handler)
+    context = SessionMiddlewareContext(
+        settings=_settings(),
+        storage=MemorySessionStorage(payload_max_bytes=1024),
+        events=events,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [],
+        }
+    )
+
+    session = await context.load_session(request, now=1.0)
+    session["private"] = "not-observable"
+    await context.finalise_response(Response(), session, now=2.0)
+
+    session_events = [cast(SessionLifecycleEvent, event) for event in observed]
+    assert [(event.operation, event.outcome) for event in session_events] == [
+        ("load", "succeeded"),
+        ("created", "succeeded"),
+    ]
+    assert all(isinstance(event, SessionLifecycleEvent) for event in observed)
+    assert "not-observable" not in repr(observed)
+    assert all(not hasattr(event, "session_id") for event in observed)
 
 
 @pytest.mark.anyio

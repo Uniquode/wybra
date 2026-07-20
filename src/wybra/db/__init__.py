@@ -38,6 +38,7 @@ from wybra.db.versioning import (
     VersionField,
     VersionFieldError,
 )
+from wybra.events import EventsCapability
 from wybra.site import Site, SiteCapabilityError
 from wybra.site_config import app_config_from_site
 
@@ -59,6 +60,7 @@ async def setup_site(site: Site) -> None:
         await _WybraDatabaseCapability.from_database_routing(
             database_routing,
             modules=site.modules,
+            events=site.require_capability(EventsCapability),
         ),
     )
 

@@ -125,7 +125,7 @@ async def post_setup_site(site: Site) -> None:
     site.require_capability(AuthCapability)
     persistence = site.require_capability(AuthPersistenceCapability)
     if isinstance(persistence, TortoiseAuthPersistenceCapability):
-        persistence.database.finalise_required()
+        await persistence.database.finalise_required()
     site.app.state.secret_envelope_service = _secret_envelope_service(
         site,
         _cached_secrets_settings(site),

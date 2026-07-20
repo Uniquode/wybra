@@ -58,7 +58,7 @@ class TortoiseMediaCatalogueRepository:
         resource_key: str | None = None,
     ) -> MediaItem:
         try:
-            capability = self.database.require()
+            capability = await self.database.require()
             async with tortoise_transaction(
                 capability,
                 capability.database().for_write(),
@@ -90,7 +90,7 @@ class TortoiseMediaCatalogueRepository:
         return item
 
     async def get_item(self, media_id: uuid.UUID) -> MediaItem | None:
-        capability = self.database.require()
+        capability = await self.database.require()
         return await MediaItem.get_or_none(
             id=media_id,
             using_db=tortoise_connection(
@@ -103,7 +103,7 @@ class TortoiseMediaCatalogueRepository:
         self,
         resource_key: str,
     ) -> MediaItem | None:
-        capability = self.database.require()
+        capability = await self.database.require()
         connection = tortoise_connection(
             capability,
             capability.database().default(),
@@ -124,7 +124,7 @@ class TortoiseMediaCatalogueRepository:
         media_id: uuid.UUID,
         resource_key: str,
     ) -> None:
-        capability = self.database.require()
+        capability = await self.database.require()
         async with tortoise_transaction(
             capability,
             capability.database().for_write(),

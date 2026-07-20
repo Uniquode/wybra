@@ -78,14 +78,14 @@ class TortoiseProfileRepository:
     database: SiteCapabilityProxy[DatabaseCapability]
 
     async def get_profile(self, user_id: uuid.UUID) -> UserProfile | None:
-        database = self.database.require()
+        database = await self.database.require()
         return await UserProfile.get_or_none(
             user_id=user_id,
             using_db=tortoise_connection(database, database.database().default()),
         )
 
     async def ensure_profile(self, user_id: uuid.UUID) -> UserProfile:
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database().for_write(),
@@ -97,7 +97,7 @@ class TortoiseProfileRepository:
         user_id: uuid.UUID,
         media_id: uuid.UUID | None,
     ) -> UserProfile:
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database().for_write(),
@@ -114,7 +114,7 @@ class TortoiseProfileRepository:
         *,
         field_setters: Mapping[str, ProfileFieldSetter],
     ) -> UserProfile:
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database().for_write(),
@@ -135,7 +135,7 @@ class TortoiseProfileRepository:
         subdivision_code: str | None = None,
         contact_id: uuid.UUID | None = None,
     ) -> UserPhoneContact:
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database().for_write(),
@@ -157,7 +157,7 @@ class TortoiseProfileRepository:
         field_setters: Mapping[str, ProfileFieldSetter],
         phone_contact: Mapping[str, str | None] | None = None,
     ) -> None:
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database().for_write(),
@@ -186,7 +186,7 @@ class TortoiseProfileRepository:
             await UserPhoneContact.filter(user_id=user_id)
             .using_db(
                 tortoise_connection(
-                    database := self.database.require(),
+                    database := await self.database.require(),
                     database.database().default(),
                 )
             )
@@ -205,7 +205,7 @@ class TortoiseProfileRepository:
             .filter(Q(verified_at__isnull=False))
             .using_db(
                 tortoise_connection(
-                    database := self.database.require(),
+                    database := await self.database.require(),
                     database.database().default(),
                 )
             )
@@ -227,7 +227,7 @@ class TortoiseProfileRepository:
             .exclude(user_id=user_id)
             .using_db(
                 tortoise_connection(
-                    database := self.database.require(),
+                    database := await self.database.require(),
                     database.database().default(),
                 )
             )

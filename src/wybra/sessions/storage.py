@@ -401,7 +401,7 @@ class DatabaseSessionStorage:
 
     async def load(self, session_id: str, *, now: float) -> SessionRecord | None:
         cleanup_data: dict[str, Any] | None = None
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.connection_name).for_write(),
@@ -428,7 +428,7 @@ class DatabaseSessionStorage:
 
     async def save(self, session_id: str, record: SessionRecord) -> None:
         data = _session_data_json(record.data, max_bytes=self.payload_max_bytes)
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.connection_name).for_write(),
@@ -446,7 +446,7 @@ class DatabaseSessionStorage:
 
     async def delete(self, session_id: str) -> None:
         cleanup_data: dict[str, Any] | None = None
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.connection_name).for_write(),
@@ -462,11 +462,11 @@ class DatabaseSessionStorage:
             await _cleanup_session_data(self.cleanup_registry, cleanup_data)
 
     async def validate(self) -> None:
-        self.database.require()
+        await self.database.require()
 
     async def cleanup(self, *, now: float) -> None:
         cleanup_records: list[dict[str, Any]] = []
-        database = self.database.require()
+        database = await self.database.require()
         async with tortoise_transaction(
             database,
             database.database(self.connection_name).for_write(),

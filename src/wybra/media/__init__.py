@@ -47,7 +47,7 @@ async def post_setup_site(site: Site) -> None:
     if isinstance(capability, FilesystemMediaCapability):
         catalogue = capability.catalogue
         if isinstance(catalogue, TortoiseMediaCatalogueRepository):
-            catalogue.database.finalise_required()
+            await catalogue.database.finalise_required()
 
 
 def _register_media_item_route(site: Site, capability: MediaCapability) -> None:

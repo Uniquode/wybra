@@ -8,6 +8,14 @@ from fastapi.responses import Response
 
 from wybra.auth.timestamps import current_timestamp
 from wybra.diagnostics import backend_operation_diagnostics
+from wybra.events import (
+    EVT_SESSION,
+    SESSION,
+    EventsCapability,
+    SessionLifecycleEvent,
+    publish_observation,
+    scoped,
+)
 from wybra.sessions.cleanup import SessionCleanupRegistry
 from wybra.sessions.ids import create_session_id, validate_session_id
 from wybra.sessions.settings import SessionsSettings
@@ -22,20 +30,33 @@ SESSION_CLEANUP_INTERVAL_SECONDS = 60 * 60
 class SessionMiddlewareContext:
     settings: SessionsSettings
     storage: SessionStorage
+    events: EventsCapability | None = None
     cleanup_registry: SessionCleanupRegistry | None = None
     _last_cleanup_at: float | None = field(default=None, init=False, repr=False)
 
     async def load_session(self, request: Request, *, now: float) -> RequestSession:
-        async with backend_operation_diagnostics(
-            "session",
+        try:
+            async with backend_operation_diagnostics(
+                "session",
+                "load",
+                attributes={"backend": type(self.storage).__name__},
+            ):
+                await self.cleanup_expired(now=now)
+                cookie_value = request.cookies.get(self.settings.cookie_name)
+                if isinstance(self.storage, CookieSessionStorage):
+                    session = await self._load_cookie_session(cookie_value, now=now)
+                else:
+                    session = await self._load_server_side_session(
+                        cookie_value, now=now
+                    )
+        except Exception as exc:
+            await self._publish("load", "failed", error=exc)
+            raise
+        await self._publish(
             "load",
-            attributes={"backend": type(self.storage).__name__},
-        ):
-            await self.cleanup_expired(now=now)
-            cookie_value = request.cookies.get(self.settings.cookie_name)
-            if isinstance(self.storage, CookieSessionStorage):
-                return await self._load_cookie_session(cookie_value, now=now)
-            return await self._load_server_side_session(cookie_value, now=now)
+            "invalid" if session.invalid_cookie else "succeeded",
+        )
+        return session
 
     async def cleanup_expired(self, *, now: float) -> None:
         last_cleanup_at = self._last_cleanup_at
@@ -54,41 +75,79 @@ class SessionMiddlewareContext:
         *,
         now: float,
     ) -> None:
-        async with backend_operation_diagnostics(
-            "session",
-            "finalise",
-            attributes=lambda: {
-                "backend": type(self.storage).__name__,
-                "modified": session.modified,
-            },
-        ):
-            if session.cleared or (session.modified and not session):
-                await self._cleanup_session_data(session.cleanup_data())
-                if session.session_id is not None:
-                    await self.storage.delete(session.session_id)
-                self._delete_cookie(response)
-                return
-            if not session.modified:
-                if session.invalid_cookie:
+        operation = "unchanged"
+        succeeded = False
+        try:
+            async with backend_operation_diagnostics(
+                "session",
+                "finalise",
+                attributes=lambda: {
+                    "backend": type(self.storage).__name__,
+                    "modified": session.modified,
+                },
+            ):
+                if session.cleared or (session.modified and not session):
+                    operation = "deleted"
+                    await self._cleanup_session_data(session.cleanup_data())
+                    if session.session_id is not None:
+                        await self.storage.delete(session.session_id)
                     self._delete_cookie(response)
-                return
-            session_id = session.session_id or create_session_id(now=now)
-            created_at = session.created_at if session.created_at is not None else now
-            record = SessionRecord(
-                data=dict(session.data),
-                created_at=created_at,
-                updated_at=now,
-                expires_at=now + self.settings.resolved_lifetime_seconds,
+                    succeeded = True
+                    return
+                if not session.modified:
+                    if session.invalid_cookie:
+                        operation = "invalidated"
+                        self._delete_cookie(response)
+                    succeeded = True
+                    return
+                operation = "created" if session.session_id is None else "saved"
+                session_id = session.session_id or create_session_id(now=now)
+                created_at = (
+                    session.created_at if session.created_at is not None else now
+                )
+                record = SessionRecord(
+                    data=dict(session.data),
+                    created_at=created_at,
+                    updated_at=now,
+                    expires_at=now + self.settings.resolved_lifetime_seconds,
+                )
+                if isinstance(self.storage, CookieSessionStorage):
+                    cookie_value = self.storage.dump_cookie(session_id, record)
+                else:
+                    await self.storage.save(session_id, record)
+                    cookie_value = session_id
+                session.session_id = session_id
+                session.created_at = created_at
+                session.expires_at = record.expires_at
+                self._set_cookie(response, cookie_value)
+            succeeded = True
+        except Exception as exc:
+            await self._publish(operation, "failed", error=exc)
+            raise
+        finally:
+            if succeeded and operation != "unchanged":
+                await self._publish(operation, "succeeded")
+
+    async def _publish(
+        self,
+        operation: str,
+        outcome: str,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        if self.events is None:
+            return
+        with scoped(EVT_SESSION(SESSION)):
+            await publish_observation(
+                self.events,
+                SessionLifecycleEvent(
+                    operation=operation,
+                    backend=type(self.storage).__name__,
+                    outcome=outcome,
+                    error_type=type(error).__name__ if error is not None else None,
+                ),
+                message="session lifecycle event",
             )
-            if isinstance(self.storage, CookieSessionStorage):
-                cookie_value = self.storage.dump_cookie(session_id, record)
-            else:
-                await self.storage.save(session_id, record)
-                cookie_value = session_id
-            session.session_id = session_id
-            session.created_at = created_at
-            session.expires_at = record.expires_at
-            self._set_cookie(response, cookie_value)
 
     async def _load_cookie_session(
         self,

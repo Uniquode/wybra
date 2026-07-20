@@ -11,6 +11,7 @@ from starlette.datastructures import FormData
 
 from wybra.auth.authorisation.effective import is_user_effectively_active
 from wybra.auth.capabilities import login_required
+from wybra.auth.events import publish_credential_access
 from wybra.auth.ids import parse_uuid
 from wybra.auth.models import User
 from wybra.auth.provider_credentials import (
@@ -633,31 +634,51 @@ async def _provider_resolution_response(
     return_to: str,
     purpose: ProviderOAuthPurpose,
     decision: ProviderPolicyDecision,
+    provider_name: str,
     provider_label: str,
     clear_state_cookie: ClearOAuthStateCookie,
 ) -> Response:
+    operation = "link" if purpose == PROVIDER_OAUTH_LINK_PURPOSE else "authenticate"
     if decision.outcome in {
         ProviderPolicyOutcome.CREATION_ALLOWED,
         ProviderPolicyOutcome.EMAIL_MATCH_LINK_ALLOWED,
         ProviderPolicyOutcome.LINKED_USER,
     }:
-        return await _provider_login_completion_response(
+        response = await _provider_login_completion_response(
             request,
             return_to=return_to,
             decision=decision,
             provider_label=provider_label,
             clear_state_cookie=clear_state_cookie,
         )
+        await publish_credential_access(
+            request,
+            operation=operation,
+            provider=provider_name,
+            outcome="challenge_required"
+            if response.status_code == 200
+            else "succeeded",
+            user_id=decision.user_id,
+        )
+        return response
     if decision.outcome in {
         ProviderPolicyOutcome.ALREADY_LINKED,
         ProviderPolicyOutcome.LINK_ALLOWED,
     }:
-        return _provider_redirect_response(
+        response = _provider_redirect_response(
             request,
             return_to,
             clear_state_cookie=clear_state_cookie,
         )
-    return _provider_callback_response(
+        await publish_credential_access(
+            request,
+            operation=operation,
+            provider=provider_name,
+            outcome="succeeded",
+            user_id=decision.user_id,
+        )
+        return response
+    response = _provider_callback_response(
         request,
         status_code=_provider_rejection_status(decision),
         detail=_provider_rejection_detail(
@@ -667,6 +688,14 @@ async def _provider_resolution_response(
         ),
         clear_state_cookie=clear_state_cookie,
     )
+    await publish_credential_access(
+        request,
+        operation=operation,
+        provider=provider_name,
+        outcome="rejected",
+        user_id=decision.user_id,
+    )
+    return response
 
 
 def _provider_rejection_status(decision: ProviderPolicyDecision) -> int:
@@ -889,6 +918,7 @@ async def _google_resolution_response(
         return_to=state.return_to,
         purpose=state.purpose,
         decision=decision,
+        provider_name=GOOGLE_PROVIDER_NAME,
         provider_label=provider_label(GOOGLE_PROVIDER_NAME),
         clear_state_cookie=_clear_google_oauth_state_cookie,
     )
@@ -1137,6 +1167,7 @@ async def _github_resolution_response(
         return_to=state.return_to,
         purpose=state.purpose,
         decision=decision,
+        provider_name=GITHUB_PROVIDER_NAME,
         provider_label=provider_label(GITHUB_PROVIDER_NAME),
         clear_state_cookie=_clear_github_oauth_state_cookie,
     )
@@ -1416,6 +1447,7 @@ async def _apple_resolution_response(
         return_to=state.return_to,
         purpose=state.purpose,
         decision=decision,
+        provider_name=APPLE_PROVIDER_NAME,
         provider_label=provider_label(APPLE_PROVIDER_NAME),
         clear_state_cookie=_clear_apple_oauth_state_cookie,
     )

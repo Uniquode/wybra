@@ -9,6 +9,16 @@ from typing import Literal, cast, get_args
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 
+from wybra.events import (
+    EVT_SECURITY,
+    POLICY,
+    EventsCapability,
+    SecurityPolicyEvent,
+    publish_observation,
+    scoped,
+)
+from wybra.site import SiteCapabilityError, get_site
+
 CrossOriginOpenerPolicy = Literal[
     "same-origin",
     "same-origin-allow-popups",
@@ -62,13 +72,37 @@ async def _security_header_middleware(
 ) -> Response:
     response = await call_next(request)
     if COOP_HEADER_NAME in response.headers:
+        await _publish_policy(request, outcome="preserved")
         return response
 
     policy = _effective_cross_origin_opener_policy(request)
     if policy is not None:
         response.headers[COOP_HEADER_NAME] = policy
+        await _publish_policy(request, outcome="applied")
+    else:
+        await _publish_policy(request, outcome="disabled")
 
     return response
+
+
+async def _publish_policy(request: Request, *, outcome: str) -> None:
+    """Publish a safe security-policy observation without header values."""
+
+    try:
+        events = get_site(request.app).optional_capability(EventsCapability)
+    except SiteCapabilityError:
+        return
+    if events is None:
+        return
+    with scoped(EVT_SECURITY(POLICY)):
+        await publish_observation(
+            events,
+            SecurityPolicyEvent(
+                policy="cross_origin_opener",
+                outcome=outcome,
+            ),
+            message="security policy event",
+        )
 
 
 def _effective_cross_origin_opener_policy(

@@ -137,6 +137,45 @@ class RequestDiagnostics:
         result_count: int | None = None,
         inserted_id: int | None = None,
     ) -> None:
+        self._record_sql_observation(
+            duration_seconds=duration_seconds,
+            result=result,
+            operation=operation,
+            result_count=result_count,
+            inserted_id=inserted_id,
+            attributes={"statement": _normalise_sql_statement(statement)},
+        )
+
+    def record_sql_operation(
+        self,
+        *,
+        duration_seconds: float,
+        result: str = "ok",
+        operation: str | None = None,
+        result_count: int | None = None,
+        inserted_id: int | None = None,
+    ) -> None:
+        """Record a SQL observation whose statement text is intentionally absent."""
+
+        self._record_sql_observation(
+            duration_seconds=duration_seconds,
+            result=result,
+            operation=operation,
+            result_count=result_count,
+            inserted_id=inserted_id,
+            attributes={},
+        )
+
+    def _record_sql_observation(
+        self,
+        *,
+        duration_seconds: float,
+        result: str,
+        operation: str | None,
+        result_count: int | None,
+        inserted_id: int | None,
+        attributes: dict[str, object],
+    ) -> None:
         duration = _positive_duration(duration_seconds) or 0.0
         self.sql_query_count += 1
         self.sql_total_duration_seconds += duration
@@ -147,9 +186,6 @@ class RequestDiagnostics:
         else:
             level = None
         if level is not None:
-            attributes: dict[str, object] = {
-                "statement": _normalise_sql_statement(statement),
-            }
             if operation is not None:
                 attributes["operation"] = operation
             if result_count is not None:

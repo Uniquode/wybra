@@ -295,6 +295,27 @@ def record_sql_query(
     )
 
 
+def record_sql_operation(
+    *,
+    duration_seconds: float,
+    result: str = "ok",
+    operation: str | None = None,
+    result_count: int | None = None,
+    inserted_id: int | None = None,
+) -> None:
+    """Record SQL metadata where statement text is intentionally unavailable."""
+
+    _record_with_active_diagnostics(
+        lambda diagnostics: diagnostics.record_sql_operation(
+            duration_seconds=duration_seconds,
+            result=result,
+            operation=operation,
+            result_count=result_count,
+            inserted_id=inserted_id,
+        )
+    )
+
+
 def record_template_render(
     template_name: str,
     *,
@@ -380,6 +401,7 @@ __all__ = (
     "record_backend_operation",
     "record_event",
     "record_sql_query",
+    "record_sql_operation",
     "record_template_render",
     "record_topic",
     "retain_completed_diagnostics",
