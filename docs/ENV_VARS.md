@@ -132,7 +132,7 @@ Configured secret-source keys may also point at environment variables:
 | Name | Description |
 | --- | --- |
 | `WYBRA_EVENTS_ENABLED` | Boolean override for runtime event collection. |
-| `WYBRA_EVENTS_FILTER` | Comma-separated diagnostic event selectors, defaulting to `sql,template`. |
+| `WYBRA_EVENTS_FILTER` | Comma-separated diagnostic event selectors, defaulting to `sql,template,events.errors`. |
 | `WYBRA_DIAG_ENABLED` | Boolean override for the disabled-by-default debug WebSocket endpoint. |
 | `WYBRA_DIAG_ALLOWED_HOSTS` | Comma-separated allowed effective client peers for the debug WebSocket endpoint. Trusted proxy normalisation must be configured in Uvicorn; raw forwarded headers are never trusted by Wybra. |
 | `WYBRA_DIAG_RETENTION_LIMIT` | Maximum retained completed diagnostic snapshots per process. |

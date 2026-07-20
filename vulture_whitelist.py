@@ -148,6 +148,8 @@ _.additive_route_names
 _.replaces
 _.hashed_password
 _.kind
+_.occurred_at
+_.succeeded
 _.generate
 _.create_challenge
 _.ExternalIdentityLinkRecord

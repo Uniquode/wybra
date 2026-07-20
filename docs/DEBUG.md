@@ -69,9 +69,9 @@ slow_sql_threshold_seconds = 0.5
 Wybra initialises diagnostics from `[wybra.diagnostics]` during site startup.
 `events_enabled` registers request diagnostics middleware and enables
 collection. `event_scopes` selects the dot-notation namespaces to retain; its
-default is `sql` and `template`. A parent selector includes all of its child
-topics, so `sql` includes `sql.statement`. Wildcard selectors such as `.*` are
-not supported.
+default is `sql`, `template`, and `events.errors`. A parent selector includes
+all of its child topics, so `sql` includes `sql.statement`. Wildcard selectors
+such as `.*` are not supported.
 
 Diagnostics levels are:
 
