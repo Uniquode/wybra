@@ -66,6 +66,8 @@ def test_debug_websocket_lists_scopes_and_returns_filtered_snapshot() -> None:
         "sql",
         "template",
         "content_types",
+        "events",
+        "events.errors",
     }
     assert snapshot["result"][0]["events"][0]["attributes"]["statement"] == "select 1"
 
