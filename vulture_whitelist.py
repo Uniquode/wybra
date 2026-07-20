@@ -45,6 +45,7 @@ _.diagnostics_middleware
 _.session_cookie_cleanup_middleware
 _.wybra_messages_middleware
 _.wybra_session_middleware
+_.diagnostics_websocket
 _.wybra_test_client
 _._clear_wybra_test_database
 _._before_cursor_execute
@@ -139,6 +140,7 @@ _._render_fragment
 # Generic view members selected dynamically by HTTP dispatch and form generation.
 _.patch
 _._generated_form
+_.replace_collector_scopes
 
 # Protocol, dataclass, and ORM fields used by consumers and SQLAlchemy.
 _.__call__

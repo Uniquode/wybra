@@ -5,11 +5,19 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
+from uuid import uuid7
 
 from wybra.diagnostics.levels import (
     DIAGNOSTIC_LEVEL_VALUES,
     DiagnosticLevel,
     normalise_diagnostics_level,
+)
+from wybra.events import (
+    EVT_SQL,
+    EVT_TEMPLATE,
+    SQL_STATEMENT,
+    TEMPLATE_RENDER,
+    EventScope,
 )
 
 SENSITIVE_ATTRIBUTE_PARTS: Final = (
@@ -24,6 +32,29 @@ SENSITIVE_ATTRIBUTE_PARTS: Final = (
     "token",
 )
 MAX_STRING_ATTRIBUTE_LENGTH: Final = 500
+MAX_CONTEXT_DESCRIPTION_LENGTH: Final = 200
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticContext:
+    """Correlation metadata for request, task, lifecycle, or explicit work."""
+
+    kind: str
+    description: str
+    identifier: str = field(default_factory=lambda: str(uuid7()))
+    parent_identifier: str | None = None
+
+    def __post_init__(self) -> None:
+        kind = self.kind.strip().lower()
+        description = self.description.strip()
+        if not kind or not kind.replace("_", "").isalnum():
+            raise ValueError("Diagnostic context kind must be a non-blank identifier.")
+        if not description:
+            raise ValueError("Diagnostic context description must not be blank.")
+        if len(description) > MAX_CONTEXT_DESCRIPTION_LENGTH:
+            description = f"{description[:MAX_CONTEXT_DESCRIPTION_LENGTH]}..."
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "description", description)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +98,7 @@ class RequestDiagnostics:
     template_render_count: int = 0
     template_total_duration_seconds: float = 0.0
     backend_operation_count: int = 0
+    context: DiagnosticContext | None = None
 
     def allows(self, level: DiagnosticLevel) -> bool:
         return DIAGNOSTIC_LEVEL_VALUES[level] >= DIAGNOSTIC_LEVEL_VALUES[self.level]
@@ -101,6 +133,9 @@ class RequestDiagnostics:
         *,
         duration_seconds: float,
         result: str = "ok",
+        operation: str | None = None,
+        result_count: int | None = None,
+        inserted_id: int | None = None,
     ) -> None:
         duration = _positive_duration(duration_seconds) or 0.0
         self.sql_query_count += 1
@@ -112,11 +147,19 @@ class RequestDiagnostics:
         else:
             level = None
         if level is not None:
-            self.record_event(
+            attributes: dict[str, object] = {
+                "statement": _normalise_sql_statement(statement),
+            }
+            if operation is not None:
+                attributes["operation"] = operation
+            if result_count is not None:
+                attributes["result_count"] = result_count
+            if inserted_id is not None:
+                attributes["inserted_id"] = inserted_id
+            self.record_topic(
                 level,
-                "sql",
-                "query",
-                attributes={"statement": _normalise_sql_statement(statement)},
+                EVT_SQL(SQL_STATEMENT),
+                attributes=attributes,
                 duration_seconds=duration,
                 result=result,
             )
@@ -131,10 +174,9 @@ class RequestDiagnostics:
         duration = _positive_duration(duration_seconds) or 0.0
         self.template_render_count += 1
         self.template_total_duration_seconds += duration
-        self.record_event(
+        self.record_topic(
             "trace",
-            "template",
-            "render",
+            EVT_TEMPLATE(TEMPLATE_RENDER),
             attributes={"template": template_name},
             duration_seconds=duration,
             result=result,
@@ -160,6 +202,27 @@ class RequestDiagnostics:
             result=result,
         )
 
+    def record_topic(
+        self,
+        level: DiagnosticLevel,
+        topic: EventScope,
+        *,
+        attributes: Mapping[str, object] | None = None,
+        duration_seconds: float | None = None,
+        result: str | None = None,
+    ) -> None:
+        """Record an event from a validated public topic value."""
+
+        category, *name = topic.segments
+        self.record_event(
+            level,
+            category,
+            ".".join(name),
+            attributes=attributes,
+            duration_seconds=duration_seconds,
+            result=result,
+        )
+
     def finish(
         self,
         *,
@@ -178,7 +241,6 @@ class RequestDiagnostics:
             "completed",
             attributes={
                 "method": self.method,
-                "path": self.path,
                 "route": route_name,
                 "status_code": status_code,
                 "exception_type": exception_type,
@@ -190,8 +252,17 @@ class RequestDiagnostics:
     def summary(self) -> dict[str, object]:
         event_counts = Counter(event.category for event in self.events)
         return {
+            "context": (
+                {
+                    "id": self.context.identifier,
+                    "parent_id": self.context.parent_identifier,
+                    "kind": self.context.kind,
+                    "description": self.context.description,
+                }
+                if self.context is not None
+                else None
+            ),
             "method": self.method,
-            "path": self.path,
             "route": self.route_name,
             "status_code": self.status_code,
             "exception_type": self.exception_type,
@@ -249,6 +320,7 @@ def _normalise_sql_statement(statement: str) -> str:
 
 __all__ = (
     "DIAGNOSTIC_LEVEL_VALUES",
+    "DiagnosticContext",
     "DiagnosticEvent",
     "DiagnosticLevel",
     "RequestDiagnostics",

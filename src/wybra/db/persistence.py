@@ -14,6 +14,7 @@ from tortoise.context import TortoiseContext
 from tortoise.transactions import in_transaction
 
 from wybra.core.exceptions import ConfigurationError
+from wybra.db._tortoise import instrument_tortoise_context
 from wybra.db.routing import (
     DatabaseRouteInstance,
     DatabaseRouteRegistry,
@@ -31,7 +32,6 @@ from wybra.db.urls import (
     sqlite_database_path,
 )
 from wybra.db.versioning import VersionFieldError, validate_version_fields
-from wybra.diagnostics.tortoise import instrument_tortoise_context
 
 TORTOISE_PRIVATE_API_ERROR = (
     "Wybra database shutdown requires Tortoise connection internals that are "
