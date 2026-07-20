@@ -37,10 +37,10 @@ dependencies = [
 
 [project.optional-dependencies]
 aws = [
-    "boto3>=1.43.50",
+    "boto3>=1.43.51",
 ]
 kms = [
-    "boto3>=1.43.50",
+    "boto3>=1.43.51",
 ]
 keychain = [
     "keyring>=25.7.0",
@@ -108,7 +108,7 @@ dev = [
     "redis>=8.0.1",
     "ruff>=0.15.22",
     "testcontainers[mssql,mysql]>=4.14.2",
-    "ty>=0.0.60",
+    "ty>=0.0.61",
 ]
 
 [tool.ruff]
