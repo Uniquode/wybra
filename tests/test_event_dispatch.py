@@ -276,6 +276,39 @@ class TestEventDispatcher:
         await _drain_events(dispatcher)
 
     @pytest.mark.anyio
+    async def test_close_drains_started_delivery_and_rejects_later_events(
+        self,
+    ) -> None:
+        dispatcher = EventDispatcher()
+        handler_started = asyncio.Event()
+        release_handler = asyncio.Event()
+        delivered: list[str] = []
+
+        async def waiting_handler(event: Event) -> None:
+            transaction = cast(TransactionStarted, event)
+            delivered.append(transaction.transaction_id)
+            handler_started.set()
+            await release_handler.wait()
+
+        dispatcher.subscribe(EVT_SQL, waiting_handler)
+        await dispatcher.publish(
+            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="first")
+        )
+        await handler_started.wait()
+
+        close = asyncio.create_task(dispatcher.close())
+        await asyncio.sleep(0)
+        assert not close.done()
+
+        release_handler.set()
+        await close
+        await dispatcher.publish(
+            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="second")
+        )
+
+        assert delivered == ["first"]
+
+    @pytest.mark.anyio
     async def test_pending_delivery_evicts_oldest_undelivered_events(
         self,
         monkeypatch: pytest.MonkeyPatch,

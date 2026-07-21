@@ -82,6 +82,9 @@ class _SingleFlightCache:
                     "read", owner, key, outcome=read_outcome, started=read_started
                 )
                 return value
+            await self._record_completed(
+                "read", owner, key, outcome=read_outcome, started=read_started
+            )
 
             async with self._fills_lock:
                 completed = self._fills.get(cache_key)
@@ -94,9 +97,6 @@ class _SingleFlightCache:
 
             if not is_filler:
                 await asyncio.wait_for(completed.wait(), timeout=timeout)
-                await self._record_completed(
-                    "read", owner, key, outcome=read_outcome, started=read_started
-                )
                 continue
 
             fill_started = time.perf_counter()
@@ -107,9 +107,6 @@ class _SingleFlightCache:
                 finally:
                     await self._release_fill(cache_key, completed)
             except Exception as exc:
-                await self._record_completed(
-                    "read", owner, key, outcome=read_outcome, started=read_started
-                )
                 await self._record_failed(
                     "fill",
                     owner,
@@ -119,9 +116,6 @@ class _SingleFlightCache:
                 )
                 raise
             else:
-                await self._record_completed(
-                    "read", owner, key, outcome=read_outcome, started=read_started
-                )
                 await self._record_completed(
                     "set", owner, key, outcome="stored", started=fill_started
                 )

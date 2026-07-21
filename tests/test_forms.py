@@ -3133,9 +3133,11 @@ class TestForms:
             ),
         )
 
-        assert site.require_capability(FormsCapability)
-        assert isinstance(app.state.csrf, CsrfProtector)
-        await site.close()
+        try:
+            assert site.require_capability(FormsCapability)
+            assert isinstance(app.state.csrf, CsrfProtector)
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_setup_uses_keychain_csrf_secret_before_fallback(self) -> None:
@@ -3296,15 +3298,17 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.get("/form")
-            partial_response = client.get("/partials/form")
+        try:
+            with WybraTestClient(app) as client:
+                response = client.get("/form")
+                partial_response = client.get("/partials/form")
 
-        assert response.status_code == 200
-        assert CSRF_COOKIE_NAME in response.cookies
-        assert partial_response.status_code == 200
-        assert CSRF_COOKIE_NAME not in partial_response.cookies
-        await site.close()
+            assert response.status_code == 200
+            assert CSRF_COOKIE_NAME in response.cookies
+            assert partial_response.status_code == 200
+            assert CSRF_COOKIE_NAME not in partial_response.cookies
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_routes_urlencoded_post_as_patch(
@@ -3329,12 +3333,14 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post("/record", data={"_method": "PATCH"})
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post("/record", data={"_method": "PATCH"})
 
-        assert response.status_code == 200
-        assert response.text == "PATCH"
-        await site.close()
+            assert response.status_code == 200
+            assert response.text == "PATCH"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_preserves_ordinary_urlencoded_body(
@@ -3359,12 +3365,14 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post("/record", data={"title": "Readable"})
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post("/record", data={"title": "Readable"})
 
-        assert response.status_code == 200
-        assert response.text == "Readable"
-        await site.close()
+            assert response.status_code == 200
+            assert response.text == "Readable"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_routes_json_post_as_delete(
@@ -3389,12 +3397,14 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post("/record", json={"_method": "DELETE"})
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post("/record", json={"_method": "DELETE"})
 
-        assert response.status_code == 200
-        assert response.text == "DELETE"
-        await site.close()
+            assert response.status_code == 200
+            assert response.text == "DELETE"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_leaves_text_plain_post_untouched(
@@ -3419,16 +3429,18 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post(
-                "/record",
-                content="_method=DELETE\nlarge content remains untouched",
-                headers={"content-type": "text/plain"},
-            )
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post(
+                    "/record",
+                    content="_method=DELETE\nlarge content remains untouched",
+                    headers={"content-type": "text/plain"},
+                )
 
-        assert response.status_code == 200
-        assert response.text.startswith("_method=DELETE")
-        await site.close()
+            assert response.status_code == 200
+            assert response.text.startswith("_method=DELETE")
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_preserves_multipart_form_data(
@@ -3454,19 +3466,21 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post(
-                "/record",
-                files={
-                    "_method": (None, "PATCH"),
-                    "title": (None, "Updated"),
-                    "upload": ("example.txt", b"contents"),
-                },
-            )
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post(
+                    "/record",
+                    files={
+                        "_method": (None, "PATCH"),
+                        "title": (None, "Updated"),
+                        "upload": ("example.txt", b"contents"),
+                    },
+                )
 
-        assert response.status_code == 200
-        assert response.text == "Updated"
-        await site.close()
+            assert response.status_code == 200
+            assert response.text == "Updated"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_preserves_ordinary_multipart_body(
@@ -3491,15 +3505,17 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post(
-                "/record",
-                files={"title": (None, "Readable")},
-            )
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post(
+                    "/record",
+                    files={"title": (None, "Readable")},
+                )
 
-        assert response.status_code == 200
-        assert response.text == "Readable"
-        await site.close()
+            assert response.status_code == 200
+            assert response.text == "Readable"
+        finally:
+            await site.close()
 
     async def test_validate_forms_target_is_available(
         self, monkeypatch, tmp_path

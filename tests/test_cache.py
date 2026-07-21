@@ -221,6 +221,42 @@ class TestInMemoryCache:
         assert calls == 1
 
     @pytest.mark.anyio
+    async def test_get_or_set_records_a_miss_before_waiting_for_the_factory(
+        self,
+    ) -> None:
+        factory_started = asyncio.Event()
+        release_factory = asyncio.Event()
+        read_recorded = asyncio.Event()
+
+        async def handler(event: Event) -> None:
+            if (
+                isinstance(event, CacheOperationCompletedEvent)
+                and str(event.scope) == "cache.read.completed"
+                and event.outcome == "miss"
+            ):
+                read_recorded.set()
+
+        async def factory() -> bytes:
+            factory_started.set()
+            await release_factory.wait()
+            return b"value"
+
+        async with _started_events_site() as site:
+            site.require_capability(EventsCapability).subscribe(EVT_CACHE, handler)
+            cache = InMemoryCache()
+            fill = asyncio.create_task(
+                cache.get_or_set("template", "fragment", ttl=60, factory=factory)
+            )
+            await factory_started.wait()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            assert read_recorded.is_set()
+
+            release_factory.set()
+            assert await fill == b"value"
+
+    @pytest.mark.anyio
     async def test_get_or_set_releases_waiters_before_slow_event_delivery(self) -> None:
         event_started = asyncio.Event()
         release_event = asyncio.Event()

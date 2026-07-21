@@ -98,6 +98,7 @@ class TestDatabaseEvents:
         statement_event = next(
             event for event in observed if isinstance(event, DatabaseStatementEvent)
         )
+        assert str(connection_event.scope) == "sql.connection"
         assert connection_event.connection_name == "default"
         assert statement_event.operation == "query"
         assert statement_event.result == "ok"

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 
@@ -66,6 +67,19 @@ def test_event_scope_parser_accepts_a_comma_separated_selector_list() -> None:
         "sql",
         "template.render",
     )
+
+
+def test_observe_rejects_synchronous_callables() -> None:
+    def descriptor(*_arguments: object) -> None:
+        return None
+
+    def synchronous_operation() -> None:
+        return None
+
+    with pytest.raises(TypeError, match="Observed functions must be async callables"):
+        wybra.events.observe(descriptor)(
+            cast(Callable[[], Awaitable[None]], synchronous_operation)
+        )
 
 
 @pytest.mark.anyio
