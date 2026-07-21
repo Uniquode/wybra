@@ -1,6 +1,7 @@
 import asyncio
 import json
 import signal
+import subprocess
 import sys
 from collections import deque
 from collections.abc import AsyncIterator
@@ -46,6 +47,16 @@ def test_debug_command_rejects_invalid_websocket_target(url: str) -> None:
 
     assert result.exit_code == 2
     assert "WebSocket URL" in result.output
+
+
+def test_debug_command_rejects_unencrypted_remote_websocket_target() -> None:
+    result = CliRunner().invoke(
+        debug_command,
+        ["ws://192.0.2.1:8000/__debug/ws", "--list-scopes"],
+    )
+
+    assert result.exit_code == 2
+    assert "use WSS for remote diagnostics" in result.output
 
 
 @pytest.mark.anyio
@@ -376,6 +387,12 @@ async def test_debug_command_closes_the_stream_on_sigint() -> None:
     async with serve(diagnostics_server, "127.0.0.1", 0) as server:
         socket = server.sockets[0]
         host, port = socket.getsockname()[:2]
+        creationflags = (
+            subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        )
+        interrupt_signal = (
+            signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGINT
+        )
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
@@ -385,9 +402,10 @@ async def test_debug_command_closes_the_stream_on_sigint() -> None:
             "sql",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=creationflags,
         )
         await subscribed.wait()
-        process.send_signal(signal.SIGINT)
+        process.send_signal(interrupt_signal)
         stdout, stderr = await process.communicate()
         await connection_closed.wait()
 

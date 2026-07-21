@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -151,16 +152,32 @@ def _validate_websocket_url(
         valid_port = False
     else:
         valid_port = port != 0
-    if (
-        parsed.scheme not in {"ws", "wss"}
-        or not parsed.hostname
-        or not parsed.path
-        or not valid_port
+    if not (
+        parsed.scheme in {"ws", "wss"}
+        and parsed.hostname
+        and parsed.path
+        and valid_port
     ):
         raise click.BadParameter(
-            "WebSocket URL must include a ws:// or wss:// scheme, host, and path."
+            "WebSocket URL must include a supported scheme, host, port, and path."
+        )
+    if parsed.scheme == "ws" and not _is_loopback_host(parsed.hostname):
+        raise click.BadParameter(
+            "Unencrypted WebSocket URLs are permitted only for loopback endpoints; "
+            "use WSS for remote diagnostics."
         )
     return value
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    """Return whether hostname is a literal or conventional loopback host."""
+
+    if hostname.casefold() == "localhost":
+        return True
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 @click.command(
