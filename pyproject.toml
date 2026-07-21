@@ -33,6 +33,7 @@ dependencies = [
     "tortoise-orm>=1.1.7,<1.2.0",
     "uvicorn>=0.51.0",
     "webauthn>=3.0.0",
+    "websockets>=16.1.1,<17.0",
 ]
 
 [project.optional-dependencies]
@@ -82,6 +83,7 @@ databases = [
 [project.scripts]
 wybra-authmgr = "wybra.auth.cli.authmgr:main"
 wybra-collect = "wybra.tools.collect:main"
+wybra-debug = "wybra.tools.debug:main"
 wybra-migrate = "wybra.tools.migrate:main"
 wybra-routes = "wybra.tools.routes:main"
 wybra-runserver = "wybra.tools.runserver:main"

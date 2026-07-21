@@ -150,6 +150,35 @@ values, or concrete request paths. Content-type mappings are snapshot-only;
 they cannot be subscribed to. Bounded live subscription queues report a
 `dropped: true` marker on the next delivered notification after overflow.
 
+### Debug CLI
+
+`wybra-debug` is a small client for this already-enabled endpoint. It neither
+enables diagnostics nor changes the server's collection filters or any other
+client's subscription. Its required positional argument is the complete secure
+WebSocket URL, including the exposed path. Use `wss://` for every remote,
+container, or proxy-facing endpoint. A local loopback development listener may
+use the corresponding non-TLS WebSocket scheme.
+
+```sh
+wybra-debug wss://debug.example.test/__debug/ws --list-scopes
+wybra-debug wss://debug.example.test/__debug/ws --scope sql --scope request
+wybra-debug wss://debug.example.test/__debug/ws --scope events.errors
+```
+
+`--list-scopes` invokes `diagnostics.scopes`, writes its original JSON-RPC
+response message to standard output, and exits. Streaming requires at least
+one repeatable `--scope`; the command sends one `diagnostics.subscribe` request
+for all selected scopes and then writes only received
+`diagnostics.notification` JSON-RPC messages to standard output. Each message
+is emitted unchanged on one line, making it suitable for redirection or a
+downstream JSON processor.
+
+Connection, access-control, malformed-message, and JSON-RPC errors are written
+to standard error with a non-zero status. Use `Ctrl-C` to close a live stream
+cleanly. The command supplies no authentication or access-control bypass: the
+target application's `debug_enabled` and `debug_allowed_hosts` configuration
+remain authoritative, including the proxy guidance above.
+
 ## TRACE Logging
 
 Wybra registers a `TRACE` logging level at numeric level `5`. It is available

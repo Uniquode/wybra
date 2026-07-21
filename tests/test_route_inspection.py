@@ -42,6 +42,7 @@ def test_wybra_package_command_scripts_are_prefixed() -> None:
     assert data["project"]["scripts"] == {
         "wybra-authmgr": "wybra.auth.cli.authmgr:main",
         "wybra-collect": "wybra.tools.collect:main",
+        "wybra-debug": "wybra.tools.debug:main",
         "wybra-migrate": "wybra.tools.migrate:main",
         "wybra-routes": "wybra.tools.routes:main",
         "wybra-runserver": "wybra.tools.runserver:main",
