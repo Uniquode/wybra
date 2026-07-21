@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
+import sys
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
@@ -232,11 +234,16 @@ async def _run_debug(
         raise DebugStreamError(f"Connection to {url} was lost: {exc}") from exc
 
 
-main = debug_command
+def main() -> None:
+    """Run the diagnostics CLI with platform-appropriate interrupt handling."""
+
+    if sys.platform == "win32":
+        signal.signal(signal.SIGBREAK, signal.default_int_handler)
+    debug_command()
 
 
 __all__ = ("debug_command", "main")
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by subprocess test.
-    debug_command()
+    main()
