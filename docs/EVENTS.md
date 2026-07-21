@@ -75,8 +75,8 @@ async def audit_sql(event) -> None:
     ...
 
 
-events: EventsCapability = ...
-events.subscribe(event_scope("sql"), audit_sql)
+async def setup(events: EventsCapability) -> None:
+    await events.subscribe(event_scope("sql"), audit_sql)
 ```
 
 `available_event_scopes()` returns the supported selector/description pairs for
@@ -139,11 +139,12 @@ and retains configured event scopes for `/__debug/ws`; it cannot enable event
 delivery, change producer behaviour, or alter another subscriber.
 
 Enabled event delivery retains the most recent 32 safe immutable event values
-in a process-local ring. When diagnostics installs its projection during
-startup, it explicitly replays matching retained composition events before
-receiving later events live. Application subscriptions remain live-only; this
-bounded, non-durable history is not a general event store. Disabled delivery
-does not create a dispatcher or history buffer.
+in a process-local ring. Subscriptions are asynchronous. They are live-only by
+default; an application that needs recent process-local observations can pass
+`history=True` to atomically retain its live subscription and receive matching
+history. Diagnostics does this during startup to project early composition
+events. This bounded, non-durable history is not a general event store.
+Disabled delivery does not create a dispatcher or history buffer.
 
 Database events are operation observations from Wybra's isolated Tortoise
 adapter. They do not replace or translate `wybra.db.signals`, which remains a

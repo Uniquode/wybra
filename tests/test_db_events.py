@@ -81,7 +81,7 @@ class TestDatabaseEvents:
             observed.append(event)
 
         site = await _start_events_site()
-        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
         database = await create_database(
             "sqlite://:memory:", modules=("wybra.sessions",)
         )
@@ -115,7 +115,7 @@ class TestDatabaseEvents:
             observed.append(event)
 
         site = await _start_events_site()
-        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
         database = await create_database(
             "sqlite://:memory:", modules=("wybra.sessions",)
         )
@@ -155,7 +155,7 @@ class TestDatabaseEvents:
             observed.append(event)
 
         site = await _start_events_site()
-        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
         database = await create_database(
             "sqlite://:memory:", modules=("wybra.sessions",)
         )
@@ -181,7 +181,7 @@ class TestDatabaseEvents:
             observed.append(event)
 
         site = await _start_events_site()
-        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
         database = await create_database(
             "sqlite://:memory:", modules=("wybra.sessions",)
         )

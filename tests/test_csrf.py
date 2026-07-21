@@ -305,7 +305,7 @@ async def test_csrf_denial_event_excludes_token_and_rejection_detail() -> None:
     async def handler(event: Event) -> None:
         observed.append(event)
 
-    site.require_capability(EventsCapability).subscribe(EVT_SECURITY, handler)
+    await site.require_capability(EventsCapability).subscribe(EVT_SECURITY, handler)
     token = "token-that-must-not-appear"
     request = csrf_request(
         method="POST",

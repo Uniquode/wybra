@@ -172,8 +172,8 @@ class TestEventDispatcher:
         async def transaction_handler(event: Event) -> None:
             observed.append(f"transaction:{event.scope}")
 
-        dispatcher.subscribe(EVT_SQL, root_handler)
-        dispatcher.subscribe(EVT_SQL(TRANSACTION), transaction_handler)
+        await dispatcher.subscribe(EVT_SQL, root_handler)
+        await dispatcher.subscribe(EVT_SQL(TRANSACTION), transaction_handler)
 
         await dispatcher.publish(
             TransactionStarted(
@@ -195,7 +195,7 @@ class TestEventDispatcher:
         async def transaction_handler(event: Event) -> None:
             observed.append(str(event.scope))
 
-        dispatcher.subscribe(EVT_SQL(TRANSACTION), transaction_handler)
+        await dispatcher.subscribe(EVT_SQL(TRANSACTION), transaction_handler)
 
         await dispatcher.publish(
             TransactionOnly(
@@ -219,8 +219,8 @@ class TestEventDispatcher:
         async def later_handler(event: Event) -> None:
             observed.append(str(event.scope))
 
-        dispatcher.subscribe(EVT_SQL, failing_handler)
-        dispatcher.subscribe(EVT_SQL, later_handler)
+        await dispatcher.subscribe(EVT_SQL, failing_handler)
+        await dispatcher.subscribe(EVT_SQL, later_handler)
 
         await dispatcher.publish(
             TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
@@ -242,7 +242,7 @@ class TestEventDispatcher:
             handler_started.set()
             await release_handler.wait()
 
-        dispatcher.subscribe(EVT_SQL, waiting_handler)
+        await dispatcher.subscribe(EVT_SQL, waiting_handler)
 
         publication = asyncio.create_task(
             dispatcher.publish(
@@ -265,7 +265,7 @@ class TestEventDispatcher:
 
             time.sleep(0.08)
 
-        dispatcher.subscribe(EVT_SQL, blocking_handler)
+        await dispatcher.subscribe(EVT_SQL, blocking_handler)
 
         started = asyncio.get_running_loop().time()
         await dispatcher.publish(
@@ -290,7 +290,7 @@ class TestEventDispatcher:
             handler_started.set()
             await release_handler.wait()
 
-        dispatcher.subscribe(EVT_SQL, waiting_handler)
+        await dispatcher.subscribe(EVT_SQL, waiting_handler)
         await dispatcher.publish(
             TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="first")
         )
@@ -330,7 +330,7 @@ class TestEventDispatcher:
                 first_handler_started.set()
                 await release_first_handler.wait()
 
-        dispatcher.subscribe(EVT_SQL, slow_handler)
+        await dispatcher.subscribe(EVT_SQL, slow_handler)
         await dispatcher.publish(
             TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="first")
         )
@@ -357,7 +357,7 @@ class TestEventDispatcher:
         async def failing_handler(_event: Event) -> None:
             raise RuntimeError("password=should-not-appear")
 
-        dispatcher.subscribe(EVT_SQL, failing_handler)
+        await dispatcher.subscribe(EVT_SQL, failing_handler)
 
         async with diagnostic_context(
             diagnostics,
@@ -404,7 +404,7 @@ class TestEventDispatcher:
             async def failing_handler(_event: Event) -> None:
                 raise RuntimeError("expected handler failure")
 
-            dispatcher.subscribe(EVT_EVENTS, failing_handler)
+            await dispatcher.subscribe(EVT_EVENTS, failing_handler)
 
             async with diagnostic_context(
                 diagnostics,
@@ -433,7 +433,7 @@ class TestEventDispatcher:
         async def failing_handler(_event: Event) -> None:
             raise RuntimeError("expected handler failure")
 
-        dispatcher.subscribe(EVT_EVENTS, failing_handler)
+        await dispatcher.subscribe(EVT_EVENTS, failing_handler)
 
         async with diagnostic_context(
             diagnostics,
@@ -461,7 +461,7 @@ class TestEventDispatcher:
         async def handler(event: Event) -> None:
             observed.append(str(event.scope))
 
-        dispatcher.subscribe(EVT_EVENTS, handler)
+        await dispatcher.subscribe(EVT_EVENTS, handler)
 
         await dispatcher.publish(
             TransactionStarted(topic=EVT_EVENTS(BEGIN), transaction_id="transaction-1")
@@ -470,19 +470,21 @@ class TestEventDispatcher:
 
         assert observed == ["events.begin"]
 
-    def test_rejects_synchronous_handlers(self) -> None:
+    @pytest.mark.anyio
+    async def test_rejects_synchronous_handlers(self) -> None:
         def handler(_event: Event) -> None:
             pass
 
         with pytest.raises(TypeError, match="async"):
-            EventDispatcher().subscribe(EVT_SQL, cast(EventHandler, handler))
+            await EventDispatcher().subscribe(EVT_SQL, cast(EventHandler, handler))
 
-    def test_accepts_an_object_with_an_async_call_method(self) -> None:
+    @pytest.mark.anyio
+    async def test_accepts_an_object_with_an_async_call_method(self) -> None:
         class Handler:
             async def __call__(self, _event: Event) -> None:
                 pass
 
-        EventDispatcher().subscribe(EVT_SQL, Handler())
+        await EventDispatcher().subscribe(EVT_SQL, Handler())
 
     @pytest.mark.anyio
     async def test_history_replays_only_the_latest_bounded_events(self) -> None:
@@ -500,7 +502,7 @@ class TestEventDispatcher:
                 )
             )
 
-        await dispatcher.replay(EVT_SQL, handler)
+        await dispatcher.subscribe(EVT_SQL, handler, history=True)
 
         assert replayed == [
             f"transaction-{index}" for index in range(1, EVENT_HISTORY_LIMIT + 1)
@@ -519,7 +521,7 @@ class TestEventDispatcher:
             assert isinstance(event, TransactionStarted)
             observed.append(event.transaction_id)
 
-        dispatcher.subscribe(EVT_SQL, handler)
+        await dispatcher.subscribe(EVT_SQL, handler)
         await dispatcher.publish(
             TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="after")
         )
@@ -528,7 +530,7 @@ class TestEventDispatcher:
         assert observed == ["after"]
 
     @pytest.mark.anyio
-    async def test_subscribe_and_replay_does_not_duplicate_a_concurrent_event(
+    async def test_history_subscription_does_not_duplicate_a_concurrent_event(
         self,
     ) -> None:
         dispatcher = EventDispatcher()
@@ -548,7 +550,7 @@ class TestEventDispatcher:
             observed.append(event.transaction_id)
 
         registration = asyncio.create_task(
-            dispatcher.subscribe_and_replay(EVT_SQL, handler)
+            dispatcher.subscribe(EVT_SQL, handler, history=True)
         )
         await replay_started.wait()
         await dispatcher.publish(
@@ -638,7 +640,7 @@ class TestEventsSiteIntegration:
             if isinstance(event, ObservedCacheSet):
                 observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
 
         def cache_event(
             call: BoundArguments,
@@ -743,7 +745,7 @@ class TestEventsSiteIntegration:
             async def handler(event: Event) -> None:
                 observed.append(event)
 
-            dispatcher.subscribe(EVT_SQL, handler)
+            await dispatcher.subscribe(EVT_SQL, handler)
 
             await dispatcher.publish(
                 TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
@@ -775,7 +777,7 @@ class TestEventsSiteIntegration:
             async def handler(event: Event) -> None:
                 observed.append(event)
 
-            dispatcher.subscribe(EVT_SQL, handler)
+            await dispatcher.subscribe(EVT_SQL, handler)
 
             await dispatcher.publish(
                 TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
@@ -859,7 +861,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
         try:
             with WybraTestClient(app) as client:
                 response = client.get("/events")
@@ -901,7 +903,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
         try:
             with WybraTestClient(app, raise_server_exceptions=False) as client:
                 response = client.get("/failure")
@@ -939,7 +941,7 @@ class TestEventsSiteIntegration:
         async def cancelling_handler(event: Event) -> None:
             raise asyncio.CancelledError()
 
-        site.require_capability(EventsCapability).subscribe(
+        await site.require_capability(EventsCapability).subscribe(
             EVT_REQUEST, cancelling_handler
         )
         try:
@@ -974,7 +976,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
         try:
             with WybraTestClient(app) as client:
                 response = client.post(
@@ -1019,7 +1021,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
         try:
             with WybraTestClient(app) as client:
                 response = client.get("/stream")
@@ -1052,7 +1054,9 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(EVT_CREDENTIAL, handler)
+        await site.require_capability(EventsCapability).subscribe(
+            EVT_CREDENTIAL, handler
+        )
         user_id = str(uuid7())
         try:
             result = await verify_totp_code_for_credential(
@@ -1109,7 +1113,7 @@ class TestEventsSiteIntegration:
             assert context is not None
             order.append(f"event:{event.scope}:{context.request_id}")
 
-        site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_REQUEST, handler)
         try:
             with WybraTestClient(app) as client:
                 response = client.get("/ordered")
@@ -1153,8 +1157,8 @@ class TestEventsSiteIntegration:
             observed.append(event)
 
         events = site.require_capability(EventsCapability)
-        events.subscribe(EVT_ROUTE, handler)
-        events.subscribe(EVT_VIEW, handler)
+        await events.subscribe(EVT_ROUTE, handler)
+        await events.subscribe(EVT_VIEW, handler)
         try:
             with WybraTestClient(app) as client:
                 response = client.get("/observed")
@@ -1200,7 +1204,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(EVT_VIEW, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_VIEW, handler)
         try:
             with WybraTestClient(app, raise_server_exceptions=False) as client:
                 response = client.get("/failing")
@@ -1235,7 +1239,9 @@ class TestEventsSiteIntegration:
             ),
         )
         try:
-            site.require_capability(EventsCapability).subscribe(EVT_TEMPLATE, handler)
+            await site.require_capability(EventsCapability).subscribe(
+                EVT_TEMPLATE, handler
+            )
             templates = DefaultTemplateCapability(template_root=tmp_path)
 
             assert await templates.render_template("page.html", {"name": "Wybra"}) == (
@@ -1277,7 +1283,7 @@ class TestEventsSiteIntegration:
             ),
         )
         try:
-            site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
+            await site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
             form = ObservedForm()
             result = await form.parse({"title": ""})
         finally:
@@ -1311,7 +1317,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(EVT_ACCOUNT, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_ACCOUNT, handler)
         request = Request(
             {
                 "type": "http",
@@ -1357,7 +1363,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        site.require_capability(EventsCapability).subscribe(
+        await site.require_capability(EventsCapability).subscribe(
             EVT_SITE(CAPABILITY), handler
         )
         available_proxy = site.capability_proxy(ProxyTestCapability)
@@ -1391,7 +1397,7 @@ class TestEventsSiteIntegration:
             async def handler(event: Event) -> None:
                 observed.append(str(event.scope))
 
-            capability.subscribe(EVT_SQL, handler)
+            await capability.subscribe(EVT_SQL, handler)
 
         handler_module.__dict__["setup_site"] = setup_handler_module
         monkeypatch.setitem(sys.modules, handler_module.__name__, handler_module)
@@ -1449,7 +1455,7 @@ class TestEventsSiteIntegration:
                     )
                 )
 
-            dispatcher.subscribe(EVT_SITE, handler)
+            await dispatcher.subscribe(EVT_SITE, handler)
 
         async def setup_subject(_site: Site) -> None:
             return None
@@ -1539,7 +1545,7 @@ class TestEventsSiteIntegration:
                     )
                 )
 
-            dispatcher.subscribe(EVT_SITE, handler)
+            await dispatcher.subscribe(EVT_SITE, handler)
 
         async def setup_failing(_site: Site) -> None:
             raise RuntimeError("expected failure")
@@ -1586,7 +1592,7 @@ class TestEventsSiteIntegration:
             async def handler(event: Event) -> None:
                 observed.append(event)
 
-            site.require_capability(EventsCapability).subscribe(EVT_SITE, handler)
+            await site.require_capability(EventsCapability).subscribe(EVT_SITE, handler)
 
         async def setup_capability(site: Site) -> None:
             site.provide_capability(ProxyTestCapability, ProxyTestCapability())
@@ -1648,7 +1654,7 @@ class TestEventsSiteIntegration:
             if isinstance(event, SiteLifecycleEvent) and event.phase == "shutdown":
                 raise asyncio.CancelledError()
 
-        site.require_capability(EventsCapability).subscribe(
+        await site.require_capability(EventsCapability).subscribe(
             EVT_SITE, cancelling_handler
         )
 
@@ -1676,8 +1682,8 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        events.subscribe(EVT_REQUEST, handler)
-        events.subscribe(EVT_SQL, handler)
+        await events.subscribe(EVT_REQUEST, handler)
+        await events.subscribe(EVT_SQL, handler)
         database = await create_database(
             "sqlite://:memory:",
             modules=("wybra.sessions",),
