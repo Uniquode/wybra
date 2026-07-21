@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from time import perf_counter
 from typing import Any, ClassVar
 from urllib.parse import urlencode
 from uuid import UUID
@@ -21,20 +20,11 @@ from wybra.core.routes import RouteType
 from wybra.db import DatabaseCapability
 from wybra.db.capabilities import tortoise_connection_for_route
 from wybra.errors.diagnostics import type_name
-from wybra.events import (
-    BULK,
-    COLLECTION,
-    EVT_VIEW,
-    GENERIC,
-    ITEM,
-    EventsCapability,
-    GenericViewCompletedEvent,
-    publish_observation,
-    scoped,
-)
+from wybra.events import observe
+from wybra.events.views import generic_view_event
 from wybra.forms import ModelForm
 from wybra.forms.csrf import request_form_data
-from wybra.site import SiteCapabilityError, get_site
+from wybra.site import get_site
 from wybra.views.base import HandlerResult, View
 from wybra.views.bulk import BulkAction, BulkActionResult, BulkDeleteAction
 from wybra.views.templates import TemplateResponse
@@ -158,49 +148,14 @@ class ModelGenericView(GenericView):
     )
     _event_bulk_counts: tuple[int, int, int] | None = None
 
+    @observe(generic_view_event)
     async def dispatch(self, request: Request, **kwargs: Any) -> Response:
         """Translate client input validation failures to the active representation."""
-        try:
-            events = get_site(request.app).optional_capability(EventsCapability)
-        except SiteCapabilityError:
-            events = None
-        operation = _generic_operation(kwargs)
-        started = perf_counter()
-        status_code: int | None = None
-        error_type: str | None = None
         self._event_bulk_counts = None
         try:
             response = await super().dispatch(request, **kwargs)
         except _RequestValidationError as exc:
             response = await self._request_validation_response(request, exc)
-            status_code = response.status_code
-        except Exception as exc:
-            error_type = type(exc).__name__
-            raise
-        else:
-            status_code = response.status_code
-            return response
-        finally:
-            if events is not None:
-                affected_count, skipped_count, failed_count = _event_counts(
-                    self._event_bulk_counts
-                )
-                with scoped(EVT_VIEW(GENERIC, _operation_segment(operation))):
-                    await publish_observation(
-                        events,
-                        GenericViewCompletedEvent(
-                            operation=operation,
-                            model_type=self._model_type_identity(),
-                            content_type=self._content_type_identifier(request),
-                            duration_seconds=perf_counter() - started,
-                            status_code=status_code,
-                            affected_count=affected_count,
-                            skipped_count=skipped_count,
-                            failed_count=failed_count,
-                            error_type=error_type,
-                        ),
-                        message="generic view completion event",
-                    )
         return response
 
     async def list_objects(self, request: Request) -> HandlerResult:
@@ -482,7 +437,6 @@ class ModelGenericView(GenericView):
         return self.get_form_class()(
             instance=instance,
             connection=database.database(self.database_name),
-            events=get_site(request.app).optional_capability(EventsCapability),
         )
 
     async def _save_form(
@@ -747,30 +701,6 @@ class ModelGenericView(GenericView):
 
 
 __all__ = ["GenericView", "ModelGenericView"]
-
-
-def _generic_operation(kwargs: Mapping[str, Any]) -> str:
-    if kwargs.get("bulk"):
-        return "bulk"
-    if kwargs.get("id") is not None:
-        return "item"
-    return "collection"
-
-
-def _operation_segment(operation: str):
-    return {
-        "bulk": BULK,
-        "collection": COLLECTION,
-        "item": ITEM,
-    }[operation]
-
-
-def _event_counts(
-    counts: tuple[int, int, int] | None,
-) -> tuple[int | None, int | None, int | None]:
-    if counts is None:
-        return (None, None, None)
-    return counts
 
 
 def _selected_values(values: Mapping[str, object]) -> tuple[object, ...]:

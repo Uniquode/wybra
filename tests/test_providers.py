@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import jwt
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import Response
 
 from provider_test_keys import (
     apple_private_key_pair as _apple_private_key_pair,
@@ -73,6 +74,7 @@ from wybra.providers.google import (
     google_id_token_claims_from_payload,
     google_oauth_settings_from_provider,
 )
+from wybra.providers.routes import _provider_completion_credential_outcome
 from wybra.providers.settings import (
     PROVIDER_CLIENT_ID_FIELD,
     PROVIDER_CLIENT_SECRET_KEY_FIELD,
@@ -109,6 +111,27 @@ class FailingSecretsCapability:
 
     def exists(self, source: str, key: str) -> bool:
         raise AssertionError("disabled provider must not validate secrets")
+
+
+class TestProviderCredentialOutcomes:
+    @pytest.mark.parametrize(
+        ("status_code", "expected"),
+        (
+            (200, "challenge_required"),
+            (303, "succeeded"),
+            (400, "rejected"),
+            (403, "rejected"),
+        ),
+    )
+    def test_provider_completion_uses_the_terminal_response(
+        self,
+        status_code: int,
+        expected: str,
+    ) -> None:
+        assert (
+            _provider_completion_credential_outcome(Response(status_code=status_code))
+            == expected
+        )
 
 
 class FakeGoogleJwksClient:
@@ -1289,9 +1312,14 @@ async def test_provider_capability_is_available_when_module_is_configured(
         ),
     )
 
-    providers = site.require_capability(ProvidersCapability)
+    try:
+        providers = site.require_capability(ProvidersCapability)
 
-    assert providers.settings.provider(GOOGLE_PROVIDER_NAME).client_id == "client-id"
+        assert (
+            providers.settings.provider(GOOGLE_PROVIDER_NAME).client_id == "client-id"
+        )
+    finally:
+        await site.close()
 
 
 @pytest.mark.anyio
@@ -1320,13 +1348,16 @@ async def test_missing_provider_secret_disables_provider_without_startup_failure
             },
         ),
     )
-    captured = capsys.readouterr()
+    try:
+        captured = capsys.readouterr()
 
-    providers = site.require_capability(ProvidersCapability)
+        providers = site.require_capability(ProvidersCapability)
 
-    assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is False
-    assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in captured.err
-    assert "client secret is missing" in captured.err
+        assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is False
+        assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in captured.err
+        assert "client secret is missing" in captured.err
+    finally:
+        await site.close()
 
 
 @pytest.mark.anyio
@@ -1354,14 +1385,17 @@ async def test_missing_secrets_module_disables_provider_without_startup_failure(
             },
         ),
     )
-    captured = capsys.readouterr()
+    try:
+        captured = capsys.readouterr()
 
-    providers = site.require_capability(ProvidersCapability)
+        providers = site.require_capability(ProvidersCapability)
 
-    assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is False
-    assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in captured.err
-    assert "SecretsCapability is not available" in captured.err
-    assert "wybra.secrets" in captured.err
+        assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is False
+        assert f"Provider {GOOGLE_PROVIDER_NAME!r} disabled" in captured.err
+        assert "SecretsCapability is not available" in captured.err
+        assert "wybra.secrets" in captured.err
+    finally:
+        await site.close()
 
 
 @pytest.mark.anyio
@@ -1392,9 +1426,12 @@ async def test_provider_secret_degradation_does_not_depend_on_module_order(
         ),
     )
 
-    providers = site.require_capability(ProvidersCapability)
+    try:
+        providers = site.require_capability(ProvidersCapability)
 
-    assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is True
+        assert providers.settings.provider(GOOGLE_PROVIDER_NAME).enabled is True
+    finally:
+        await site.close()
 
 
 def _providers_settings(providers: dict[str, object]) -> ProvidersSettings:

@@ -11,7 +11,6 @@ from starlette.datastructures import FormData
 
 from wybra.auth.authorisation.effective import is_user_effectively_active
 from wybra.auth.capabilities import login_required
-from wybra.auth.events import publish_credential_access
 from wybra.auth.ids import parse_uuid
 from wybra.auth.models import User
 from wybra.auth.provider_credentials import (
@@ -25,6 +24,7 @@ from wybra.auth.timestamps import current_timestamp
 from wybra.core.exceptions import ConfigurationError
 from wybra.db import DatabaseCapability
 from wybra.db.capabilities import tortoise_transaction
+from wybra.events.auth import publish_credential_access
 from wybra.providers.account_resolution import (
     ProviderAccountResolution,
     resolve_provider_account,
@@ -655,9 +655,7 @@ async def _provider_resolution_response(
             request,
             operation=operation,
             provider=provider_name,
-            outcome="challenge_required"
-            if response.status_code == 200
-            else "succeeded",
+            outcome=_provider_completion_credential_outcome(response),
             user_id=decision.user_id,
         )
         return response
@@ -696,6 +694,22 @@ async def _provider_resolution_response(
         user_id=decision.user_id,
     )
     return response
+
+
+def _provider_completion_credential_outcome(response: Response) -> str:
+    """Classify the terminal provider completion response safely.
+
+    A 200 response is the TOTP challenge page, redirects complete a successful
+    provider flow, and every other response is a rejection.  In particular,
+    accepted policy decisions whose user lookup or ceremony completion fails
+    must not be recorded as successful authentication.
+    """
+
+    if response.status_code == 200:
+        return "challenge_required"
+    if 300 <= response.status_code < 400:
+        return "succeeded"
+    return "rejected"
 
 
 def _provider_rejection_status(decision: ProviderPolicyDecision) -> int:

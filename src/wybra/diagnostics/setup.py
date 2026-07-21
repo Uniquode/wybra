@@ -14,7 +14,7 @@ from wybra.site import Site
 DIAGNOSTICS_SETTINGS_STATE_ATTRIBUTE = "wybra_diagnostics_settings"
 
 
-def setup_core_diagnostics(site: Site) -> DiagnosticsSettings:
+async def setup_core_diagnostics(site: Site) -> DiagnosticsSettings:
     settings = DiagnosticsSettings.load_settings(site.config)
     setattr(site.app.state, DIAGNOSTICS_SETTINGS_STATE_ATTRIBUTE, settings)
     if settings.events_enabled:
@@ -26,7 +26,7 @@ def setup_core_diagnostics(site: Site) -> DiagnosticsSettings:
         )
         site.provide_capability(DiagnosticsCapability, capability)
         activate_process_diagnostics(capability)
-        register_event_projection(
+        await register_event_projection(
             site.require_capability(EventsCapability),
             settings.event_scopes,
         )

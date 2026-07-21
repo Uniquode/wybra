@@ -15,28 +15,83 @@ check diagnostics settings; hot producer boundaries may skip constructing an
 observation when delivery is disabled. Event publication or handler failures
 never change the operation being observed.
 
-## Subscribing
+## Producing observations
 
-Subscribe an asynchronous handler to a typed scope from `wybra.events`.
-A selector includes all child topics: `EVT_SQL` selects `sql.statement.*` and
-`sql.transaction.*`. Selectors use dot-separated names; wildcard syntax is not
-supported.
+The root package is intentionally small:
 
 ```python
-from wybra.events import EVT_CACHE, Event, EventsCapability
+from wybra.events import (
+    Event,
+    EventsCapability,
+    available_event_scopes,
+    context,
+    event_scope,
+    observe,
+)
+```
+
+Operational code normally imports its topic-owned descriptor and adds one
+decorator to its existing async boundary. It does not construct event payloads,
+resolve an event capability, or inspect subscriptions.
+
+```python
+from wybra.events import observe
+from wybra.events.cache import cache_event
 
 
-async def observe(event: Event) -> None:
-    print(event.scope)
+@observe(cache_event)
+async def record_cache_operation(
+    operation: str,
+    owner: str,
+    key: str,
+    *,
+    outcome: str,
+    started: float,
+) -> None:
+    del operation, owner, key, outcome, started
+```
+
+`context=` adds immutable correlation levels for the wrapped call and resets
+them when it returns, raises, or is cancelled. Nested calls and child asyncio
+tasks inherit the existing context. The request middleware establishes an
+opaque UUIDv7 request identifier; it is available only as safe event
+correlation, never as request content.
+
+Topic schemas and selector construction remain topic-local rather than being
+root-package imports. This keeps raw bound arguments and payload construction
+out of ordinary producer code.
+
+## Subscribing
+
+Applications subscribe with the public `event_scope()` selector factory. The
+selector matches the named scope and its descendants; `event_scope("sql")`
+matches `sql.statement` and `sql.transaction`, but not `sqltransaction`.
+
+```python
+from wybra.events import EventsCapability, event_scope
+
+
+async def audit_sql(event) -> None:
+    ...
 
 
 events: EventsCapability = ...
-events.subscribe(EVT_CACHE, observe)
+events.subscribe(event_scope("sql"), audit_sql)
 ```
 
-Handlers execute sequentially in the application event loop. A failing handler
-is logged and recorded under `events.errors`; it cannot veto or alter the
-operation that emitted its event.
+`available_event_scopes()` returns the supported selector/description pairs for
+developer tooling and configuration UIs.
+
+Handlers execute sequentially on one dispatcher-owned task in the application
+event loop. Publishing queues the observation and does not wait for handlers,
+so a slow or failing handler cannot delay, veto, or alter the operation that
+emitted its event. At most 1,024 undelivered observations are retained; under
+sustained overload, the oldest pending observation is evicted and the drop is
+logged. This bounds memory without blocking producers. Failures are logged and
+recorded under `events.errors`. During site shutdown, accepted observations are
+drained before the dispatcher worker is released so the shutdown lifecycle
+observation is delivered. An already-running handler remains part of that
+graceful drain.
 
 ## Public producer scopes
 
@@ -65,6 +120,10 @@ challenge identifiers, provider identities, SQL statement or parameter values, o
 objects. User UUIDs may appear as opaque internal traceability identifiers;
 email values are masked.
 
+Diagnostics projects only the opaque request identifier from event context as
+`event_context_request_id`; it does not project context segments, request
+bodies, headers, cookies, paths, or raw call arguments.
+
 Capability-registration events are emitted at site composition boundaries,
 including after the optional diagnostics capability has been registered. A
 runtime capability registration is not itself an asynchronous dispatch point;
@@ -78,6 +137,13 @@ application subscribers even when diagnostics is absent or disabled.
 `[wybra.diagnostics].events_enabled` installs a passive subscriber that selects
 and retains configured event scopes for `/__debug/ws`; it cannot enable event
 delivery, change producer behaviour, or alter another subscriber.
+
+Enabled event delivery retains the most recent 32 safe immutable event values
+in a process-local ring. When diagnostics installs its projection during
+startup, it explicitly replays matching retained composition events before
+receiving later events live. Application subscriptions remain live-only; this
+bounded, non-durable history is not a general event store. Disabled delivery
+does not create a dispatcher or history buffer.
 
 Database events are operation observations from Wybra's isolated Tortoise
 adapter. They do not replace or translate `wybra.db.signals`, which remains a

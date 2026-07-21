@@ -16,7 +16,7 @@ from wybra.config import (
     to_positive_float,
     to_positive_int,
 )
-from wybra.events import DEFAULT_EVENT_SCOPES, parse_event_scopes
+from wybra.events._core import DEFAULT_EVENT_SCOPES, parse_event_scopes
 
 ENV_WYBRA_EVENTS_ENABLED: Final = "WYBRA_EVENTS_ENABLED"
 ENV_WYBRA_EVENTS_FILTER: Final = "WYBRA_EVENTS_FILTER"

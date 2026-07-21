@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from wybra.core.logging import TRACE_LEVEL, get_logger
-from wybra.diagnostics.events import (
+from wybra.diagnostics.records import (
     DiagnosticEvent,
     DiagnosticLevel,
     RequestDiagnostics,

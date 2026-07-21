@@ -18,7 +18,6 @@ from wybra.db._tortoise import (
     instrument_tortoise_connection,
     instrument_tortoise_context,
 )
-from wybra.db.events import DatabaseConnectionEvent
 from wybra.db.routing import (
     DatabaseRouteInstance,
     DatabaseRouteRegistry,
@@ -36,7 +35,7 @@ from wybra.db.urls import (
     sqlite_database_path,
 )
 from wybra.db.versioning import VersionFieldError, validate_version_fields
-from wybra.events import EVT_SQL, EventsCapability, publish_observation, scoped
+from wybra.events.db import record_database_connection
 
 TORTOISE_PRIVATE_API_ERROR = (
     "Wybra database shutdown requires Tortoise connection internals that are "
@@ -96,7 +95,6 @@ async def create_database(
     modules: Sequence[str],
     routing: ResolvedDatabaseRouting | None = None,
     enable_global_fallback: bool = False,
-    events: EventsCapability | None = None,
 ) -> Database:
     database_connection = _database_connection_from(settings_or_url)
     if routing is not None:
@@ -153,12 +151,11 @@ async def create_database(
         _enable_global_fallback=enable_global_fallback,
     )
     _validate_version_field_declarations(context)
-    instrument_tortoise_context(context, events)
-    await _publish_configured_connections(context, events)
+    instrument_tortoise_context(context)
+    await _publish_configured_connections(context)
     create_connection_restore, tracked_connections = _track_created_connections(
         context.connections,
         route_registry,
-        events,
     )
     _instrument_database_route_connections(context, route_registry)
     return Database(
@@ -213,7 +210,6 @@ async def close_database_connections(
 def _track_created_connections(
     connections: ConnectionHandler,
     route_registry: DatabaseRouteRegistry,
-    events: EventsCapability | None,
 ) -> tuple[object, list[BaseDBAsyncClient]]:
     # Tortoise close_all() calls get(), which can replace cross-loop clients
     # during shutdown. Track created clients so close never creates replacements.
@@ -234,7 +230,7 @@ def _track_created_connections(
         conn_alias: str,
     ) -> BaseDBAsyncClient:
         connection = create_connection(conn_alias)
-        instrument_tortoise_connection(connection, events)
+        instrument_tortoise_connection(connection)
         instrument_tortoise_route_connection(
             connection,
             registry=route_registry,
@@ -252,20 +248,9 @@ def _track_created_connections(
 
 async def _publish_configured_connections(
     context: TortoiseContext,
-    events: EventsCapability | None,
 ) -> None:
-    if events is None:
-        return
-    with scoped(EVT_SQL):
-        for connection in context.connections.all():
-            await publish_observation(
-                events,
-                DatabaseConnectionEvent(
-                    connection_name=connection.connection_name,
-                    outcome="configured",
-                ),
-                message="database connection configuration event",
-            )
+    for connection in context.connections.all():
+        await record_database_connection(connection.connection_name)
 
 
 def _instrument_database_route_connections(

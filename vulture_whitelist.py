@@ -246,12 +246,17 @@ _.key_fingerprint
 _.field_count
 _.invalid_field_count
 _.model_types
+_.stale_conflict
 _.masked_email
 _.mechanism
 _.event_lifecycle_middleware
 _.profile_image
 _.profile_path
 _.settings_menu
+
+# Generic view metadata accessed by the topic-owned event descriptor.
+_._content_type_identifier
+_._model_type_identity
 
 # Declarative form fields collected from class namespaces by Form.
 _.bypass_totp_setup

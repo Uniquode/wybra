@@ -3,17 +3,38 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from fastapi import FastAPI
 from tortoise.transactions import in_transaction
 
-from wybra.db.events import (
+from wybra.config import MappingConfigSource
+from wybra.db.exceptions import OperationalError
+from wybra.db.persistence import close_database, create_database
+from wybra.events._core import (
+    EVT_SQL,
+    SQL_STATEMENT,
+    TRANSACTION,
+    Event,
+    EventsCapability,
+)
+from wybra.events.db import (
     DatabaseConnectionEvent,
     DatabaseSavepointEvent,
     DatabaseStatementEvent,
     DatabaseTransactionEvent,
 )
-from wybra.db.exceptions import OperationalError
-from wybra.db.persistence import close_database, create_database
-from wybra.events import EVT_SQL, Event, EventDispatcher, scope
+from wybra.site import Site, start
+
+
+async def _start_events_site() -> Site:
+    return await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {
+                "app": {"modules": (), "deployment_environment": "local"},
+                "wybra.events": {"enabled": True},
+            }
+        ),
+    )
 
 
 class TestDatabaseEvents:
@@ -21,17 +42,14 @@ class TestDatabaseEvents:
     async def test_statement_event_uses_sql_statement_scope_and_safe_payload(
         self,
     ) -> None:
-        @scope(EVT_SQL)
-        async def create_event() -> DatabaseStatementEvent:
-            return DatabaseStatementEvent(
-                connection_name="default",
-                operation="query",
-                duration_seconds=0.01,
-                result="ok",
-                result_count=1,
-            )
-
-        event = await create_event()
+        event = DatabaseStatementEvent(
+            topic=EVT_SQL(SQL_STATEMENT),
+            connection_name="default",
+            operation="query",
+            duration_seconds=0.01,
+            result="ok",
+            result_count=1,
+        )
 
         assert str(event.scope) == "sql.statement"
         assert event.connection_name == "default"
@@ -43,15 +61,12 @@ class TestDatabaseEvents:
     async def test_transaction_event_uses_sql_transaction_scope_and_outcome(
         self,
     ) -> None:
-        @scope(EVT_SQL)
-        async def create_event() -> DatabaseTransactionEvent:
-            return DatabaseTransactionEvent(
-                connection_name="default",
-                transaction_kind="transaction",
-                outcome="commit",
-            )
-
-        event = await create_event()
+        event = DatabaseTransactionEvent(
+            topic=EVT_SQL(TRANSACTION),
+            connection_name="default",
+            transaction_kind="transaction",
+            outcome="commit",
+        )
 
         assert str(event.scope) == "sql.transaction"
         assert event.outcome == "commit"
@@ -60,23 +75,22 @@ class TestDatabaseEvents:
     async def test_database_setup_and_statement_execution_publish_safe_events(
         self,
     ) -> None:
-        dispatcher = EventDispatcher()
         observed: list[Event] = []
 
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        dispatcher.subscribe(EVT_SQL, handler)
+        site = await _start_events_site()
+        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
         database = await create_database(
-            "sqlite://:memory:",
-            modules=("wybra.sessions",),
-            events=dispatcher,
+            "sqlite://:memory:", modules=("wybra.sessions",)
         )
         try:
             with database.context:
                 await database.connection().execute_query("select 1")
         finally:
             await close_database(database)
+            await site.close()
 
         connection_event = next(
             event for event in observed if isinstance(event, DatabaseConnectionEvent)
@@ -84,7 +98,8 @@ class TestDatabaseEvents:
         statement_event = next(
             event for event in observed if isinstance(event, DatabaseStatementEvent)
         )
-        assert connection_event.outcome == "configured"
+        assert str(connection_event.scope) == "sql.connection"
+        assert connection_event.connection_name == "default"
         assert statement_event.operation == "query"
         assert statement_event.result == "ok"
         assert statement_event.result_count == 1
@@ -94,17 +109,15 @@ class TestDatabaseEvents:
     async def test_transactions_savepoints_and_rollbacks_publish_outcomes(
         self,
     ) -> None:
-        dispatcher = EventDispatcher()
         observed: list[Event] = []
 
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        dispatcher.subscribe(EVT_SQL, handler)
+        site = await _start_events_site()
+        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
         database = await create_database(
-            "sqlite://:memory:",
-            modules=("wybra.sessions",),
-            events=dispatcher,
+            "sqlite://:memory:", modules=("wybra.sessions",)
         )
         try:
             with database.context:
@@ -116,6 +129,7 @@ class TestDatabaseEvents:
                         raise ValueError("rollback")
         finally:
             await close_database(database)
+            await site.close()
 
         transactions = [
             event for event in observed if isinstance(event, DatabaseTransactionEvent)
@@ -135,15 +149,15 @@ class TestDatabaseEvents:
     async def test_cancelled_transaction_preserves_cancellation_and_records_failure(
         self,
     ) -> None:
-        dispatcher = EventDispatcher()
         observed: list[Event] = []
 
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        dispatcher.subscribe(EVT_SQL, handler)
+        site = await _start_events_site()
+        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
         database = await create_database(
-            "sqlite://:memory:", modules=("wybra.sessions",), events=dispatcher
+            "sqlite://:memory:", modules=("wybra.sessions",)
         )
         try:
             with database.context:
@@ -152,6 +166,7 @@ class TestDatabaseEvents:
                         raise asyncio.CancelledError()
         finally:
             await close_database(database)
+            await site.close()
 
         transactions = [
             event for event in observed if isinstance(event, DatabaseTransactionEvent)
@@ -160,17 +175,15 @@ class TestDatabaseEvents:
 
     @pytest.mark.anyio
     async def test_failed_statement_event_preserves_the_database_error(self) -> None:
-        dispatcher = EventDispatcher()
         observed: list[Event] = []
 
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        dispatcher.subscribe(EVT_SQL, handler)
+        site = await _start_events_site()
+        site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
         database = await create_database(
-            "sqlite://:memory:",
-            modules=("wybra.sessions",),
-            events=dispatcher,
+            "sqlite://:memory:", modules=("wybra.sessions",)
         )
         try:
             with database.context:
@@ -178,6 +191,7 @@ class TestDatabaseEvents:
                     await database.connection().execute_query("not valid sql")
         finally:
             await close_database(database)
+            await site.close()
 
         statement_event = next(
             event for event in observed if isinstance(event, DatabaseStatementEvent)

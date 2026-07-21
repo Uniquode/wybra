@@ -1,23 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 
-from wybra.events import (
+import wybra.events
+from wybra.events._core import (
     BEGIN,
     EVT_SQL,
-    EVT_TEMPLATE,
     MODEL,
     SQL_STATEMENT,
     TRANSACTION,
     Event,
+    EventContext,
     EventScopeError,
-    current_scope,
-    extend,
+    context,
+    current_context,
     parse_event_scopes,
-    scope,
 )
 
 
@@ -30,6 +32,20 @@ class TransactionStarted(Event):
 @dataclass(frozen=True, slots=True)
 class MissingKind(Event):
     identifier: str
+
+
+def test_root_event_package_exposes_core_primitives_and_subscription_selectors() -> (
+    None
+):
+    assert wybra.events.__all__ == (
+        "Event",
+        "EventScope",
+        "EventsCapability",
+        "available_event_scopes",
+        "context",
+        "event_scope",
+        "observe",
+    )
 
 
 def test_event_scope_creates_a_chainable_topic() -> None:
@@ -53,79 +69,82 @@ def test_event_scope_parser_accepts_a_comma_separated_selector_list() -> None:
     )
 
 
-@pytest.mark.anyio
-async def test_scope_decorator_propagates_and_extends_through_async_calls() -> None:
-    @extend(TRANSACTION)
-    async def nested() -> str:
-        return str(current_scope())
+def test_observe_rejects_synchronous_callables() -> None:
+    def descriptor(*_arguments: object) -> None:
+        return None
 
-    @scope(EVT_SQL)
-    async def scoped() -> str:
-        return await nested()
+    def synchronous_operation() -> None:
+        return None
 
-    assert await scoped() == "sql.transaction"
-    assert current_scope() is None
-
-
-@pytest.mark.anyio
-async def test_scope_decorator_overrides_and_restores_the_parent_scope() -> None:
-    @scope(EVT_TEMPLATE)
-    async def overridden() -> str:
-        return str(current_scope())
-
-    @scope(EVT_SQL)
-    async def scoped() -> tuple[str, str]:
-        before = str(current_scope())
-        during = await overridden()
-        return before, f"{during}:{current_scope()}"
-
-    assert await scoped() == ("sql", "template:sql")
-    assert current_scope() is None
+    with pytest.raises(TypeError, match="Observed functions must be async callables"):
+        wybra.events.observe(descriptor)(
+            cast(Callable[[], Awaitable[None]], synchronous_operation)
+        )
 
 
 @pytest.mark.anyio
-async def test_scope_decorator_restores_the_prior_scope_after_an_exception() -> None:
-    @extend(TRANSACTION)
-    async def failing() -> None:
-        assert current_scope() == EVT_SQL(TRANSACTION)
-        raise RuntimeError("expected")
-
-    @scope(EVT_SQL)
-    async def scoped() -> None:
-        with pytest.raises(RuntimeError, match="expected"):
-            await failing()
-        assert current_scope() == EVT_SQL
-
-    await scoped()
-    assert current_scope() is None
-
-
-@pytest.mark.anyio
-async def test_event_snapshots_the_resolved_scope_and_occurrence_time() -> None:
-    @extend(TRANSACTION)
-    async def create_event() -> TransactionStarted:
-        return TransactionStarted(transaction_id="transaction-1")
-
-    @scope(EVT_SQL)
-    async def scoped() -> TransactionStarted:
-        return await create_event()
-
-    event = await scoped()
+def test_event_snapshots_an_explicit_topic_and_occurrence_time() -> None:
+    event = TransactionStarted(
+        topic=EVT_SQL(TRANSACTION, BEGIN),
+        transaction_id="transaction-1",
+    )
 
     assert event.scope == EVT_SQL(TRANSACTION, BEGIN)
     assert event.occurred_at > 0
 
 
-def test_event_requires_an_active_scope() -> None:
-    with pytest.raises(EventScopeError, match="active scope"):
+def test_event_requires_an_explicit_topic_or_declared_scope() -> None:
+    with pytest.raises(EventScopeError, match="explicit event topic"):
         TransactionStarted(transaction_id="transaction-1")
 
 
-@pytest.mark.anyio
-async def test_event_requires_a_declared_kind() -> None:
-    @scope(EVT_SQL)
-    async def create_event() -> None:
-        with pytest.raises(EventScopeError, match="must declare"):
-            MissingKind(identifier="missing-kind")
+def test_event_requires_a_declared_topic() -> None:
+    with pytest.raises(EventScopeError, match="explicit event topic"):
+        MissingKind(identifier="missing-kind")
 
-    await create_event()
+
+@pytest.mark.anyio
+async def test_context_decorator_derives_and_restores_immutable_context() -> None:
+    @context("outer")
+    async def outer() -> tuple[EventContext, EventContext, EventContext]:
+        before = current_context()
+        assert before is not None
+
+        @context(["inner", "wait"])
+        async def inner() -> EventContext:
+            context_value = current_context()
+            assert context_value is not None
+            return context_value
+
+        during = await inner()
+        restored = current_context()
+        assert restored is not None
+        return before, during, restored
+
+    before, during, restored = await outer()
+
+    assert before.segments == ("outer",)
+    assert during.segments == ("outer", "inner", "wait")
+    assert restored == before
+    assert current_context() is None
+
+
+@pytest.mark.anyio
+async def test_context_is_inherited_by_child_tasks_without_leaking_to_the_caller() -> (
+    None
+):
+    @context(["request", "operation"])
+    async def create_child() -> EventContext:
+        child = asyncio.create_task(_current_context())
+        return await child
+
+    observed = await create_child()
+
+    assert observed.segments == ("request", "operation")
+    assert current_context() is None
+
+
+async def _current_context() -> EventContext:
+    context_value = current_context()
+    assert context_value is not None
+    return context_value

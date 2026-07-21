@@ -14,20 +14,13 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from starlette.datastructures import FormData
 
-from wybra.events import (
-    CSRF,
-    EVT_SECURITY,
-    EventsCapability,
-    SecurityDenialEvent,
-    publish_observation,
-    scoped,
-)
+from wybra.events import observe
+from wybra.events.security import csrf_denial_event
 from wybra.forms.security import (
     FORM_BODY_MAX_BYTES,
     is_form_content_type,
     is_safe_method,
 )
-from wybra.site import SiteCapabilityError, get_site
 
 CSRF_COOKIE_NAME = "wybra_forms_csrf"
 CSRF_FIELD_NAME = "csrf_token"
@@ -76,21 +69,11 @@ async def validate_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Invalid CSRF token.")
 
 
+@observe(csrf_denial_event, context="csrf")
 async def _publish_csrf_denial(request: Request) -> None:
     """Record a rejected CSRF request without its token or rejection detail."""
 
-    try:
-        events = get_site(request.app).optional_capability(EventsCapability)
-    except SiteCapabilityError:
-        return
-    if events is None:
-        return
-    with scoped(EVT_SECURITY(CSRF)):
-        await publish_observation(
-            events,
-            SecurityDenialEvent(mechanism="csrf"),
-            message="security denial event",
-        )
+    del request
 
 
 def request_csrf_response_finalisation(request: Request) -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping
 from copy import copy
 from dataclasses import dataclass
@@ -19,11 +18,8 @@ from wybra.db.versioning import (
     save_model_update,
     version_field_name,
 )
-from wybra.events import EventsCapability
-from wybra.forms.events import (
-    publish_persistence_completed,
-    publish_persistence_failed,
-)
+from wybra.events import observe
+from wybra.events.forms import persistence_event
 from wybra.forms.fields import Field, Form, FormError, SaveResult, UnknownFieldPolicy
 from wybra.forms.model_forms import (
     ModelBindingError,
@@ -65,7 +61,6 @@ class CompositeForm(Form):
         values: Mapping[str, object] | None = None,
         options: Mapping[str, Mapping[str, str]] | None = None,
         unknown_fields: UnknownFieldPolicy = "ignore",
-        events: EventsCapability | None = None,
     ) -> None:
         self.connection = connection
         self._writer_route = connection.for_write()
@@ -77,7 +72,6 @@ class CompositeForm(Form):
             values=values,
             options=options,
             unknown_fields=unknown_fields,
-            events=events,
         )
 
     @classmethod
@@ -116,36 +110,10 @@ class CompositeForm(Form):
             )
         return {name: fields[name] for name in allowed}
 
+    @observe(persistence_event)
     async def save(self) -> SaveResult:
-        models = tuple(member.model for member in self.members)
-        started = time.perf_counter()
         self._stale_conflict = False
-        try:
-            result = await self._save_members()
-        except Exception as exc:
-            await publish_persistence_failed(
-                self.events,
-                form=self,
-                models=models,
-                operation="save",
-                duration_seconds=time.perf_counter() - started,
-                error=exc,
-            )
-            raise
-        await publish_persistence_completed(
-            self.events,
-            form=self,
-            models=models,
-            operation="save",
-            changed_fields=result.changed_fields,
-            affected_count=result.affected_count,
-            created=result.created,
-            updated=result.updated,
-            deleted=result.deleted,
-            stale_conflict=self._stale_conflict,
-            duration_seconds=time.perf_counter() - started,
-        )
-        return result
+        return await self._save_members()
 
     async def _save_members(self) -> SaveResult:
         if not self.result.is_valid:

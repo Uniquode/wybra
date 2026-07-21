@@ -14,21 +14,21 @@ from fastapi.routing import APIRouter
 from tests_support.content_types.models import Article
 
 from wybra.api import ApiCapability, ApiPaging, ApiSettings, DefaultApiCapability
+from wybra.config import MappingConfigSource
 from wybra.content_types import ContentType, ContentTypeRegistry, ContentTypesCapability
 from wybra.core.resources import PackageResourceSource
 from wybra.core.routes import RouteType, route
 from wybra.db import DatabaseCapability, fields
 from wybra.db.models import Model
-from wybra.events import (
+from wybra.events._core import (
     EVT_FORM,
     EVT_VIEW,
     GENERIC,
     Event,
-    EventDispatcher,
     EventsCapability,
-    FormPersistenceCompletedEvent,
-    GenericViewCompletedEvent,
 )
+from wybra.events.forms import FormPersistenceCompletedEvent
+from wybra.events.views import GenericViewCompletedEvent
 from wybra.forms import (
     Form,
     FormFieldOptions,
@@ -36,7 +36,7 @@ from wybra.forms import (
     TextField,
     forms_rendering_context,
 )
-from wybra.site import SiteCapabilityError
+from wybra.site import SiteCapabilityError, start
 from wybra.template import DefaultTemplateCapability
 from wybra.testing import (
     WybraTestClient,
@@ -754,18 +754,15 @@ async def test_model_generic_view_publishes_collection_item_and_bulk_outcomes() 
     async with migrated_test_database(
         modules=("tests_support.content_types",)
     ) as database:
-        site = create_test_site(
-            {"app": {"modules": ("tests_support.content_types",)}},
+        site = await start(
             app=app,
+            config_source=MappingConfigSource(
+                {
+                    "app": {"modules": (), "deployment_environment": "local"},
+                    "wybra.events": {"enabled": True},
+                }
+            ),
         )
-        site.provide_capability(DatabaseCapability, database.capability())
-        site.provide_capability(
-            ContentTypesCapability,
-            ContentTypeRegistry.from_models(database.capability().models()),
-        )
-        site.provide_capability(ApiCapability, DefaultApiCapability(ApiSettings()))
-        events = EventDispatcher()
-        site.provide_capability(EventsCapability, events)
         observed: list[Event] = []
         persistence_observed: list[Event] = []
 
@@ -775,33 +772,47 @@ async def test_model_generic_view_publishes_collection_item_and_bulk_outcomes() 
         async def persistence_handler(event: Event) -> None:
             persistence_observed.append(event)
 
-        events.subscribe(EVT_VIEW(GENERIC), handler)
-        events.subscribe(EVT_FORM, persistence_handler)
-        selected = await Article.create(title="Selected")
-        retained = await Article.create(title="Retained")
+        try:
+            site.provide_capability(DatabaseCapability, database.capability())
+            site.provide_capability(
+                ContentTypesCapability,
+                ContentTypeRegistry.from_models(database.capability().models()),
+            )
+            site.provide_capability(ApiCapability, DefaultApiCapability(ApiSettings()))
+            events = site.require_capability(EventsCapability)
+            events.subscribe(EVT_VIEW(GENERIC), handler)
+            events.subscribe(EVT_FORM, persistence_handler)
+            selected = await Article.create(title="Selected")
+            retained = await Article.create(title="Retained")
 
-        await ArticleView().dispatch(
-            _request(app=app),
-            _route_type=RouteType.API,
-        )
-        await ArticleView().dispatch(
-            _request(app=app),
-            _route_type=RouteType.API,
-            id=str(retained.id),
-        )
-        await ArticleView().dispatch(
-            _json_request(
-                {"action": "delete", "selected": [selected.id, 999], "confirm": True},
-                method="POST",
-                app=app,
-            ),
-            _route_type=RouteType.API,
-            bulk=True,
-        )
-        invalid = await ArticleView().dispatch(
-            _json_request({}, method="POST", app=app),
-            _route_type=RouteType.API,
-        )
+            await ArticleView().dispatch(
+                _request(app=app),
+                _route_type=RouteType.API,
+            )
+            await ArticleView().dispatch(
+                _request(app=app),
+                _route_type=RouteType.API,
+                id=str(retained.id),
+            )
+            await ArticleView().dispatch(
+                _json_request(
+                    {
+                        "action": "delete",
+                        "selected": [selected.id, 999],
+                        "confirm": True,
+                    },
+                    method="POST",
+                    app=app,
+                ),
+                _route_type=RouteType.API,
+                bulk=True,
+            )
+            invalid = await ArticleView().dispatch(
+                _json_request({}, method="POST", app=app),
+                _route_type=RouteType.API,
+            )
+        finally:
+            await site.close()
 
     assert [str(event.scope) for event in observed] == [
         "view.generic.collection.completed",

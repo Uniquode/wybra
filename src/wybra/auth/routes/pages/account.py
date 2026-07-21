@@ -4,7 +4,6 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
 from wybra.auth.capabilities import login_required
-from wybra.auth.events import publish_credential_access
 from wybra.auth.forms import (
     PasskeyRevokeCommandForm,
     PasswordResetConfirmCommandForm,
@@ -51,6 +50,7 @@ from wybra.auth.sessions import (
     resolve_current_user,
     verify_user,
 )
+from wybra.events.auth import publish_credential_access
 from wybra.forms import request_form_data
 from wybra.providers.apple import APPLE_PROVIDER_NAME
 from wybra.providers.github import GITHUB_PROVIDER_NAME

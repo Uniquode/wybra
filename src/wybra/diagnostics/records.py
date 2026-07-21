@@ -12,7 +12,7 @@ from wybra.diagnostics.levels import (
     DiagnosticLevel,
     normalise_diagnostics_level,
 )
-from wybra.events import (
+from wybra.events._core import (
     EVT_SQL,
     EVT_TEMPLATE,
     SQL_STATEMENT,
@@ -154,6 +154,7 @@ class RequestDiagnostics:
         operation: str | None = None,
         result_count: int | None = None,
         inserted_id: int | None = None,
+        attributes: dict[str, object] | None = None,
     ) -> None:
         """Record a SQL observation whose statement text is intentionally absent."""
 
@@ -163,7 +164,7 @@ class RequestDiagnostics:
             operation=operation,
             result_count=result_count,
             inserted_id=inserted_id,
-            attributes={},
+            attributes=dict(attributes or {}),
         )
 
     def _record_sql_observation(

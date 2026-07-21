@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import importlib
 import time
 from collections.abc import Awaitable, Callable
@@ -9,20 +8,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from wybra.core.exceptions import ConfigurationError
-from wybra.events import (
-    CACHE_DELETE,
-    CACHE_FILL,
-    CACHE_READ,
-    CACHE_SET,
-    EVT_CACHE,
-    CacheOperationCompletedEvent,
-    CacheOperationFailedEvent,
-    EventsCapability,
-    EventSegment,
-    event_delivery_enabled,
-    publish_observation,
-    scoped,
-)
+from wybra.events import observe
+from wybra.events.cache import cache_event
 
 type CacheFactory = Callable[[], Awaitable[bytes]]
 DEFAULT_CACHE_FILL_TIMEOUT_SECONDS = 30.0
@@ -51,7 +38,6 @@ class CacheCapability(Protocol):
 class _SingleFlightCache:
     """Coordinate one in-process cache fill for each backend key."""
 
-    events: EventsCapability | None = field(default=None, kw_only=True)
     _fills: dict[str, asyncio.Event] = field(default_factory=dict, init=False)
     _fills_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
@@ -59,6 +45,16 @@ class _SingleFlightCache:
         raise NotImplementedError
 
     async def set(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
+        raise NotImplementedError
+
+    async def _get_value(self, owner: str, key: str) -> tuple[bytes | None, str]:
+        """Read a value and outcome without recording an observation."""
+        raise NotImplementedError
+
+    async def _set_value(
+        self, owner: str, key: str, value: bytes, *, ttl: float
+    ) -> None:
+        """Store a value without recording an observation."""
         raise NotImplementedError
 
     async def _get_or_set(
@@ -73,9 +69,22 @@ class _SingleFlightCache:
         cache_key = _cache_key(owner, key)
         timeout = _fill_timeout(timeout)
         while True:
-            value = await self.get(owner, key)
+            read_started = time.perf_counter()
+            try:
+                value, read_outcome = await self._get_value(owner, key)
+            except Exception as exc:
+                await self._record_failed(
+                    "read", owner, key, started=read_started, error=exc
+                )
+                raise
             if value is not None:
+                await self._record_completed(
+                    "read", owner, key, outcome=read_outcome, started=read_started
+                )
                 return value
+            await self._record_completed(
+                "read", owner, key, outcome=read_outcome, started=read_started
+            )
 
             async with self._fills_lock:
                 completed = self._fills.get(cache_key)
@@ -94,12 +103,12 @@ class _SingleFlightCache:
             try:
                 try:
                     value = await asyncio.wait_for(factory(), timeout=timeout)
-                    await self.set(owner, key, value, ttl=ttl)
+                    await self._set_value(owner, key, value, ttl=ttl)
                 finally:
                     await self._release_fill(cache_key, completed)
             except Exception as exc:
                 await self._record_failed(
-                    CACHE_FILL,
+                    "fill",
                     owner,
                     key,
                     started=fill_started,
@@ -108,7 +117,10 @@ class _SingleFlightCache:
                 raise
             else:
                 await self._record_completed(
-                    CACHE_FILL,
+                    "set", owner, key, outcome="stored", started=fill_started
+                )
+                await self._record_completed(
+                    "fill",
                     owner,
                     key,
                     outcome="filled",
@@ -124,54 +136,29 @@ class _SingleFlightCache:
                 self._fills.pop(cache_key, None)
             completed.set()
 
+    @observe(cache_event)
     async def _record_completed(
         self,
-        operation: EventSegment,
+        operation: str,
         owner: str,
         key: str,
         *,
         outcome: str,
         started: float,
     ) -> None:
-        events = self.events
-        if events is None or not event_delivery_enabled(events):
-            return
-        with scoped(EVT_CACHE(operation)):
-            await publish_observation(
-                events,
-                CacheOperationCompletedEvent(
-                    owner=owner,
-                    key_fingerprint=_key_fingerprint(owner, key),
-                    outcome=outcome,
-                    duration_seconds=time.perf_counter() - started,
-                ),
-                message="cache operation event",
-            )
+        del operation, owner, key, outcome, started
 
+    @observe(cache_event)
     async def _record_failed(
         self,
-        operation: EventSegment,
+        operation: str,
         owner: str,
         key: str,
         *,
         started: float,
         error: Exception,
     ) -> None:
-        events = self.events
-        if events is None or not event_delivery_enabled(events):
-            return
-        with scoped(EVT_CACHE(operation)):
-            await publish_observation(
-                events,
-                CacheOperationFailedEvent(
-                    owner=owner,
-                    key_fingerprint=_key_fingerprint(owner, key),
-                    operation=str(operation),
-                    duration_seconds=time.perf_counter() - started,
-                    error_type=type(error).__name__,
-                ),
-                message="cache operation failure event",
-            )
+        del operation, owner, key, started, error
 
 
 @dataclass(slots=True)
@@ -181,46 +168,48 @@ class InMemoryCache(_SingleFlightCache):
 
     async def get(self, owner: str, key: str) -> bytes | None:
         started = time.perf_counter()
-        cache_key = _cache_key(owner, key)
         try:
-            async with self._lock:
-                entry = self._entries.get(cache_key)
-                if entry is None:
-                    value = None
-                    outcome = "miss"
-                else:
-                    expires_at, value = entry
-                    if expires_at <= time.monotonic():
-                        self._entries.pop(cache_key, None)
-                        value = None
-                        outcome = "expired"
-                    else:
-                        outcome = "hit"
+            value, outcome = await self._get_value(owner, key)
         except Exception as exc:
-            await self._record_failed(
-                CACHE_READ, owner, key, started=started, error=exc
-            )
+            await self._record_failed("read", owner, key, started=started, error=exc)
             raise
         await self._record_completed(
-            CACHE_READ, owner, key, outcome=outcome, started=started
+            "read", owner, key, outcome=outcome, started=started
         )
         return value
 
     async def set(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
         started = time.perf_counter()
+        try:
+            await self._set_value(owner, key, value, ttl=ttl)
+        except Exception as exc:
+            await self._record_failed("set", owner, key, started=started, error=exc)
+            raise
+        await self._record_completed(
+            "set", owner, key, outcome="stored", started=started
+        )
+
+    async def _get_value(self, owner: str, key: str) -> tuple[bytes | None, str]:
+        cache_key = _cache_key(owner, key)
+        async with self._lock:
+            entry = self._entries.get(cache_key)
+            if entry is None:
+                return None, "miss"
+            expires_at, value = entry
+            if expires_at <= time.monotonic():
+                self._entries.pop(cache_key, None)
+                return None, "expired"
+            return value, "hit"
+
+    async def _set_value(
+        self, owner: str, key: str, value: bytes, *, ttl: float
+    ) -> None:
         if not isinstance(value, bytes):
             raise TypeError("Cache values must be bytes.")
         cache_key = _cache_key(owner, key)
         expires_at = time.monotonic() + _ttl(ttl)
-        try:
-            async with self._lock:
-                self._entries[cache_key] = (expires_at, value)
-        except Exception as exc:
-            await self._record_failed(CACHE_SET, owner, key, started=started, error=exc)
-            raise
-        await self._record_completed(
-            CACHE_SET, owner, key, outcome="stored", started=started
-        )
+        async with self._lock:
+            self._entries[cache_key] = (expires_at, value)
 
     async def delete(self, owner: str, key: str) -> None:
         started = time.perf_counter()
@@ -228,12 +217,10 @@ class InMemoryCache(_SingleFlightCache):
             async with self._lock:
                 self._entries.pop(_cache_key(owner, key), None)
         except Exception as exc:
-            await self._record_failed(
-                CACHE_DELETE, owner, key, started=started, error=exc
-            )
+            await self._record_failed("delete", owner, key, started=started, error=exc)
             raise
         await self._record_completed(
-            CACHE_DELETE, owner, key, outcome="deleted", started=started
+            "delete", owner, key, outcome="deleted", started=started
         )
 
     async def get_or_set(
@@ -265,37 +252,44 @@ class RedisCache(_SingleFlightCache):
     async def get(self, owner: str, key: str) -> bytes | None:
         started = time.perf_counter()
         try:
-            value = await self._redis_client().get(_cache_key(owner, key))
+            value, _outcome = await self._get_value(owner, key)
         except Exception as exc:
-            await self._record_failed(
-                CACHE_READ, owner, key, started=started, error=exc
-            )
+            await self._record_failed("read", owner, key, started=started, error=exc)
             raise
-        result = value if isinstance(value, bytes) else None
         await self._record_completed(
-            CACHE_READ,
+            "read",
             owner,
             key,
-            outcome="hit" if result is not None else "miss",
+            outcome="hit" if value is not None else "miss",
             started=started,
         )
-        return result
+        return value
 
     async def set(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
         started = time.perf_counter()
-        if not isinstance(value, bytes):
-            raise TypeError("Cache values must be bytes.")
         try:
-            await self._redis_client().set(
-                _cache_key(owner, key),
-                value,
-                px=max(1, round(_ttl(ttl) * 1000)),
-            )
+            await self._set_value(owner, key, value, ttl=ttl)
         except Exception as exc:
-            await self._record_failed(CACHE_SET, owner, key, started=started, error=exc)
+            await self._record_failed("set", owner, key, started=started, error=exc)
             raise
         await self._record_completed(
-            CACHE_SET, owner, key, outcome="stored", started=started
+            "set", owner, key, outcome="stored", started=started
+        )
+
+    async def _get_value(self, owner: str, key: str) -> tuple[bytes | None, str]:
+        value = await self._redis_client().get(_cache_key(owner, key))
+        result = value if isinstance(value, bytes) else None
+        return result, "hit" if result is not None else "miss"
+
+    async def _set_value(
+        self, owner: str, key: str, value: bytes, *, ttl: float
+    ) -> None:
+        if not isinstance(value, bytes):
+            raise TypeError("Cache values must be bytes.")
+        await self._redis_client().set(
+            _cache_key(owner, key),
+            value,
+            px=max(1, round(_ttl(ttl) * 1000)),
         )
 
     async def delete(self, owner: str, key: str) -> None:
@@ -303,12 +297,10 @@ class RedisCache(_SingleFlightCache):
         try:
             await self._redis_client().delete(_cache_key(owner, key))
         except Exception as exc:
-            await self._record_failed(
-                CACHE_DELETE, owner, key, started=started, error=exc
-            )
+            await self._record_failed("delete", owner, key, started=started, error=exc)
             raise
         await self._record_completed(
-            CACHE_DELETE, owner, key, outcome="deleted", started=started
+            "delete", owner, key, outcome="deleted", started=started
         )
 
     async def get_or_set(
@@ -356,12 +348,6 @@ def _cache_key(owner: str, key: str) -> str:
     if not isinstance(key, str) or not key.strip():
         raise ValueError("Cache key must be a non-blank string.")
     return f"{owner.strip()}:{key}"
-
-
-def _key_fingerprint(owner: str, key: str) -> str:
-    """Return a stable opaque cache-key identifier for observations."""
-
-    return hashlib.sha256(_cache_key(owner, key).encode()).hexdigest()[:16]
 
 
 def _ttl(value: float) -> float:

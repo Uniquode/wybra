@@ -22,7 +22,8 @@ from wybra.db.surfaces import (
     migration_version_locations_from_modules,
     model_packages_from_modules,
 )
-from wybra.events import EVT_SESSION, Event, EventDispatcher, SessionLifecycleEvent
+from wybra.events._core import EVT_SESSION, Event, EventsCapability
+from wybra.events.sessions import SessionLifecycleEvent
 from wybra.services.crypto import (
     ENV_WYBRA_SECRET_KEY,
     SecretEnvelopeService,
@@ -441,17 +442,24 @@ async def test_session_finalisation_skips_unchanged_sessions() -> None:
 
 @pytest.mark.anyio
 async def test_session_lifecycle_events_exclude_session_data_and_identifiers() -> None:
-    events = EventDispatcher()
     observed: list[Event] = []
 
     async def handler(event: Event) -> None:
         observed.append(event)
 
-    events.subscribe(EVT_SESSION, handler)
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {
+                "app": {"modules": (), "deployment_environment": "local"},
+                "wybra.events": {"enabled": True},
+            }
+        ),
+    )
+    site.require_capability(EventsCapability).subscribe(EVT_SESSION, handler)
     context = SessionMiddlewareContext(
         settings=_settings(),
         storage=MemorySessionStorage(payload_max_bytes=1024),
-        events=events,
     )
     request = Request(
         {
@@ -462,9 +470,12 @@ async def test_session_lifecycle_events_exclude_session_data_and_identifiers() -
         }
     )
 
-    session = await context.load_session(request, now=1.0)
-    session["private"] = "not-observable"
-    await context.finalise_response(Response(), session, now=2.0)
+    try:
+        session = await context.load_session(request, now=1.0)
+        session["private"] = "not-observable"
+        await context.finalise_response(Response(), session, now=2.0)
+    finally:
+        await site.close()
 
     session_events = [cast(SessionLifecycleEvent, event) for event in observed]
     assert [(event.operation, event.outcome) for event in session_events] == [

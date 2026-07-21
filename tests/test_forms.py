@@ -31,7 +31,8 @@ from wybra.db.versioning import (
     VersionFieldError,
     version_field_check_constraint,
 )
-from wybra.events import EVT_FORM, Event, EventDispatcher, FormPersistenceCompletedEvent
+from wybra.events._core import EVT_FORM, Event, EventsCapability
+from wybra.events.forms import FormPersistenceCompletedEvent
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,
@@ -590,64 +591,72 @@ class TestForms:
             InvalidVersionedForm()
 
     async def test_model_form_detects_stale_versioned_update(self) -> None:
-        events = EventDispatcher()
         observed: list[Event] = []
 
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        events.subscribe(EVT_FORM, handler)
-        async with migrated_test_database(
-            modules=("tests_support.form_binding",)
-        ) as database:
-            record = await FormVersionedRecord.create(id=1, data="before")
-            current = await FormVersionedRecord.get(id=record.id)
-            stale_delete = await FormVersionedRecord.get(id=record.id)
+        site = await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {"modules": (), "deployment_environment": "local"},
+                    "wybra.events": {"enabled": True},
+                }
+            ),
+        )
+        try:
+            site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
+            async with migrated_test_database(
+                modules=("tests_support.form_binding",)
+            ) as database:
+                record = await FormVersionedRecord.create(id=1, data="before")
+                current = await FormVersionedRecord.get(id=record.id)
+                stale_delete = await FormVersionedRecord.get(id=record.id)
 
-            class VersionedForm(ModelForm):
-                data = TextField()
-                version = NonNegativeIntegerField(widget="hidden")
+                class VersionedForm(ModelForm):
+                    data = TextField()
+                    version = NonNegativeIntegerField(widget="hidden")
 
-                class Meta:
-                    model = FormVersionedRecord
+                    class Meta:
+                        model = FormVersionedRecord
 
-            current_form = VersionedForm(
-                instance=current,
-                connection=database.capability().database(),
-                events=events,
-            )
-            await current_form.parse({"data": "current", "version": "0"})
-            current_result = await current_form.save()
+                current_form = VersionedForm(
+                    instance=current,
+                    connection=database.capability().database(),
+                )
+                await current_form.parse({"data": "current", "version": "0"})
+                current_result = await current_form.save()
 
-            fresh = await FormVersionedRecord.get(id=record.id)
-            stale_form = VersionedForm(
-                instance=fresh,
-                connection=database.capability().database(),
-                events=events,
-            )
-            await stale_form.parse({"data": "stale", "version": "0"})
-            stale_result = await stale_form.save()
-            stale_delete_form = VersionedForm(
-                instance=stale_delete,
-                connection=database.capability().database(),
-                events=events,
-            )
-            await stale_delete_form.parse({"data": "before", "version": "0"})
-            stale_delete_result = await stale_delete_form.delete()
-            persisted = await FormVersionedRecord.get(id=record.id)
+                fresh = await FormVersionedRecord.get(id=record.id)
+                stale_form = VersionedForm(
+                    instance=fresh,
+                    connection=database.capability().database(),
+                )
+                await stale_form.parse({"data": "stale", "version": "0"})
+                stale_result = await stale_form.save()
+                stale_delete_form = VersionedForm(
+                    instance=stale_delete,
+                    connection=database.capability().database(),
+                )
+                await stale_delete_form.parse({"data": "before", "version": "0"})
+                stale_delete_result = await stale_delete_form.delete()
+                persisted = await FormVersionedRecord.get(id=record.id)
 
-            assert current_result.updated
-            assert current.version == 1
-            assert stale_result.affected_count == 0
-            assert stale_form.result.errors[None] == (
-                "This record was changed by another user.",
-            )
-            assert stale_delete_result.affected_count == 0
-            assert stale_delete_form.result.errors[None] == (
-                "This record was changed by another user.",
-            )
-            assert persisted.data == "current"
-            assert persisted.version == 1
+                assert current_result.updated
+                assert current.version == 1
+                assert stale_result.affected_count == 0
+                assert stale_form.result.errors[None] == (
+                    "This record was changed by another user.",
+                )
+                assert stale_delete_result.affected_count == 0
+                assert stale_delete_form.result.errors[None] == (
+                    "This record was changed by another user.",
+                )
+                assert persisted.data == "current"
+                assert persisted.version == 1
+        finally:
+            await site.close()
 
         persistence_events = [
             event
@@ -732,52 +741,61 @@ class TestForms:
             assert (await FormAddress.get(id=address.id)).street == "After"
 
     async def test_composite_form_reports_stale_version_conflicts(self) -> None:
-        events = EventDispatcher()
         observed: list[Event] = []
 
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        events.subscribe(EVT_FORM, handler)
-        async with migrated_test_database(
-            modules=("tests_support.form_binding",)
-        ) as database:
-            VersionedCompositeForm = type(
-                "VersionedCompositeForm",
-                (CompositeForm,),
+        site = await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
                 {
-                    "Meta": type(
-                        "Meta",
-                        (),
-                        {"models": (FormVersionedRecord,)},
-                    )
-                },
-            )
-            record = await FormVersionedRecord.create(id=1, data="before")
-            current = await FormVersionedRecord.get(id=record.id)
-            current_form = VersionedCompositeForm(
-                connection=database.capability().database(),
-                instances={None: current},
-                events=events,
-            )
-            await current_form.parse({"data": "current", "version": "0"})
-            await current_form.save()
+                    "app": {"modules": (), "deployment_environment": "local"},
+                    "wybra.events": {"enabled": True},
+                }
+            ),
+        )
+        try:
+            site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
+            async with migrated_test_database(
+                modules=("tests_support.form_binding",)
+            ) as database:
+                VersionedCompositeForm = type(
+                    "VersionedCompositeForm",
+                    (CompositeForm,),
+                    {
+                        "Meta": type(
+                            "Meta",
+                            (),
+                            {"models": (FormVersionedRecord,)},
+                        )
+                    },
+                )
+                record = await FormVersionedRecord.create(id=1, data="before")
+                current = await FormVersionedRecord.get(id=record.id)
+                current_form = VersionedCompositeForm(
+                    connection=database.capability().database(),
+                    instances={None: current},
+                )
+                await current_form.parse({"data": "current", "version": "0"})
+                await current_form.save()
 
-            fresh = await FormVersionedRecord.get(id=record.id)
-            stale_form = VersionedCompositeForm(
-                connection=database.capability().database(),
-                instances={None: fresh},
-                events=events,
-            )
-            await stale_form.parse({"data": "stale", "version": "0"})
+                fresh = await FormVersionedRecord.get(id=record.id)
+                stale_form = VersionedCompositeForm(
+                    connection=database.capability().database(),
+                    instances={None: fresh},
+                )
+                await stale_form.parse({"data": "stale", "version": "0"})
 
-            saved = await stale_form.save()
+                saved = await stale_form.save()
 
-            assert saved.affected_count == 0
-            assert stale_form.result.errors[None] == (
-                "This record was changed by another user.",
-            )
-            assert (await FormVersionedRecord.get(id=record.id)).data == "current"
+                assert saved.affected_count == 0
+                assert stale_form.result.errors[None] == (
+                    "This record was changed by another user.",
+                )
+                assert (await FormVersionedRecord.get(id=record.id)).data == "current"
+        finally:
+            await site.close()
 
         persistence_events = [
             event
@@ -1480,6 +1498,7 @@ class TestForms:
         assert not record.rollback_called
         assert not record.add_called
 
+    @pytest.mark.anyio
     async def test_model_form_remains_plain_object_compatible(self) -> None:
         class PlainRecord:
             preferred_name = ""
@@ -1490,13 +1509,39 @@ class TestForms:
             class Meta:
                 model = PlainRecord
 
-        record = PlainRecord()
-        form = PlainModelForm()
-        await form.parse({"preferred_name": "Plain"})
+        observed: list[Event] = []
 
-        form.apply(record)
+        async def handler(event: Event) -> None:
+            observed.append(event)
 
-        assert record.preferred_name == "Plain"
+        site = await start(
+            FastAPI(),
+            config_source=MappingConfigSource(
+                {
+                    "app": {"modules": (), "deployment_environment": "local"},
+                    "wybra.events": {"enabled": True},
+                }
+            ),
+        )
+        site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
+        try:
+            form = PlainModelForm()
+            await form.parse({"preferred_name": "Plain"})
+            saved = await form.save()
+        finally:
+            await site.close()
+
+        assert saved.created
+        assert (
+            len(
+                [
+                    event
+                    for event in observed
+                    if isinstance(event, FormPersistenceCompletedEvent)
+                ]
+            )
+            == 1
+        )
 
     @pytest.mark.anyio
     async def test_form_post_handler_adds_success_message_after_valid_commit(
@@ -3088,8 +3133,11 @@ class TestForms:
             ),
         )
 
-        assert site.require_capability(FormsCapability)
-        assert isinstance(app.state.csrf, CsrfProtector)
+        try:
+            assert site.require_capability(FormsCapability)
+            assert isinstance(app.state.csrf, CsrfProtector)
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_setup_uses_keychain_csrf_secret_before_fallback(self) -> None:
@@ -3237,7 +3285,7 @@ class TestForms:
         async def partial_form() -> PlainTextResponse:
             return PlainTextResponse("ok")
 
-        await start(
+        site = await start(
             app,
             config_source=MappingConfigSource(
                 {
@@ -3250,14 +3298,17 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.get("/form")
-            partial_response = client.get("/partials/form")
+        try:
+            with WybraTestClient(app) as client:
+                response = client.get("/form")
+                partial_response = client.get("/partials/form")
 
-        assert response.status_code == 200
-        assert CSRF_COOKIE_NAME in response.cookies
-        assert partial_response.status_code == 200
-        assert CSRF_COOKIE_NAME not in partial_response.cookies
+            assert response.status_code == 200
+            assert CSRF_COOKIE_NAME in response.cookies
+            assert partial_response.status_code == 200
+            assert CSRF_COOKIE_NAME not in partial_response.cookies
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_routes_urlencoded_post_as_patch(
@@ -3269,7 +3320,7 @@ class TestForms:
         async def update(request: Request) -> PlainTextResponse:
             return PlainTextResponse(request.method)
 
-        await start(
+        site = await start(
             app,
             config_source=MappingConfigSource(
                 {
@@ -3282,11 +3333,14 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post("/record", data={"_method": "PATCH"})
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post("/record", data={"_method": "PATCH"})
 
-        assert response.status_code == 200
-        assert response.text == "PATCH"
+            assert response.status_code == 200
+            assert response.text == "PATCH"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_preserves_ordinary_urlencoded_body(
@@ -3298,7 +3352,7 @@ class TestForms:
         async def post(request: Request) -> PlainTextResponse:
             return PlainTextResponse(str((await request.form())["title"]))
 
-        await start(
+        site = await start(
             app,
             config_source=MappingConfigSource(
                 {
@@ -3311,11 +3365,14 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post("/record", data={"title": "Readable"})
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post("/record", data={"title": "Readable"})
 
-        assert response.status_code == 200
-        assert response.text == "Readable"
+            assert response.status_code == 200
+            assert response.text == "Readable"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_routes_json_post_as_delete(
@@ -3327,7 +3384,7 @@ class TestForms:
         async def delete(request: Request) -> PlainTextResponse:
             return PlainTextResponse(request.method)
 
-        await start(
+        site = await start(
             app,
             config_source=MappingConfigSource(
                 {
@@ -3340,11 +3397,14 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post("/record", json={"_method": "DELETE"})
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post("/record", json={"_method": "DELETE"})
 
-        assert response.status_code == 200
-        assert response.text == "DELETE"
+            assert response.status_code == 200
+            assert response.text == "DELETE"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_leaves_text_plain_post_untouched(
@@ -3356,7 +3416,7 @@ class TestForms:
         async def post(request: Request) -> PlainTextResponse:
             return PlainTextResponse((await request.body()).decode("utf-8"))
 
-        await start(
+        site = await start(
             app,
             config_source=MappingConfigSource(
                 {
@@ -3369,15 +3429,18 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post(
-                "/record",
-                content="_method=DELETE\nlarge content remains untouched",
-                headers={"content-type": "text/plain"},
-            )
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post(
+                    "/record",
+                    content="_method=DELETE\nlarge content remains untouched",
+                    headers={"content-type": "text/plain"},
+                )
 
-        assert response.status_code == 200
-        assert response.text.startswith("_method=DELETE")
+            assert response.status_code == 200
+            assert response.text.startswith("_method=DELETE")
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_preserves_multipart_form_data(
@@ -3390,7 +3453,7 @@ class TestForms:
             form_data = await request_form_data(request)
             return PlainTextResponse(str(form_data["title"]))
 
-        await start(
+        site = await start(
             app,
             config_source=MappingConfigSource(
                 {
@@ -3403,18 +3466,21 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post(
-                "/record",
-                files={
-                    "_method": (None, "PATCH"),
-                    "title": (None, "Updated"),
-                    "upload": ("example.txt", b"contents"),
-                },
-            )
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post(
+                    "/record",
+                    files={
+                        "_method": (None, "PATCH"),
+                        "title": (None, "Updated"),
+                        "upload": ("example.txt", b"contents"),
+                    },
+                )
 
-        assert response.status_code == 200
-        assert response.text == "Updated"
+            assert response.status_code == 200
+            assert response.text == "Updated"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_forms_method_override_preserves_ordinary_multipart_body(
@@ -3426,7 +3492,7 @@ class TestForms:
         async def post(request: Request) -> PlainTextResponse:
             return PlainTextResponse(str((await request.form())["title"]))
 
-        await start(
+        site = await start(
             app,
             config_source=MappingConfigSource(
                 {
@@ -3439,14 +3505,17 @@ class TestForms:
             ),
         )
 
-        with WybraTestClient(app) as client:
-            response = client.post(
-                "/record",
-                files={"title": (None, "Readable")},
-            )
+        try:
+            with WybraTestClient(app) as client:
+                response = client.post(
+                    "/record",
+                    files={"title": (None, "Readable")},
+                )
 
-        assert response.status_code == 200
-        assert response.text == "Readable"
+            assert response.status_code == 200
+            assert response.text == "Readable"
+        finally:
+            await site.close()
 
     async def test_validate_forms_target_is_available(
         self, monkeypatch, tmp_path

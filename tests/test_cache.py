@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,20 +14,36 @@ from jinja2.exceptions import TemplateRuntimeError
 from wybra.cache import CacheCapability, CacheSettings, InMemoryCache, RedisCache
 from wybra.config import MappingConfigSource
 from wybra.core.exceptions import ConfigurationError
-from wybra.events import (
+from wybra.events._core import (
     EVT_CACHE,
-    CacheOperationCompletedEvent,
-    CacheOperationFailedEvent,
     Event,
-    EventDispatcher,
+    EventsCapability,
 )
-from wybra.site import start
+from wybra.events.cache import CacheOperationCompletedEvent, CacheOperationFailedEvent
+from wybra.site import Site, start
 from wybra.template import DefaultTemplateCapability, TemplateCapability
 from wybra.template.cache import configure_cache_extension
 
 
 async def _cache_provider(cache: CacheCapability) -> CacheCapability:
     return cache
+
+
+@asynccontextmanager
+async def _started_events_site() -> AsyncIterator[Site]:
+    site = await start(
+        FastAPI(),
+        config_source=MappingConfigSource(
+            {
+                "app": {"modules": (), "deployment_environment": "local"},
+                "wybra.events": {"enabled": True},
+            }
+        ),
+    )
+    try:
+        yield site
+    finally:
+        await site.close()
 
 
 class TestCacheSettings:
@@ -44,32 +62,32 @@ class TestInMemoryCache:
     ) -> None:
         now = 100.0
         monkeypatch.setattr("wybra.cache.capabilities.time.monotonic", lambda: now)
-        events = EventDispatcher()
         observed: list[Event] = []
 
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        events.subscribe(EVT_CACHE, handler)
-        cache = InMemoryCache(events=events)
+        async with _started_events_site() as site:
+            site.require_capability(EventsCapability).subscribe(EVT_CACHE, handler)
+            cache = InMemoryCache()
 
-        assert await cache.get("template", "private-user-key") is None
-        await cache.set("template", "private-user-key", b"content", ttl=1)
-        assert await cache.get("template", "private-user-key") == b"content"
-        now = 102.0
-        assert await cache.get("template", "private-user-key") is None
-        await cache.delete("template", "private-user-key")
+            assert await cache.get("template", "private-user-key") is None
+            await cache.set("template", "private-user-key", b"content", ttl=1)
+            assert await cache.get("template", "private-user-key") == b"content"
+            now = 102.0
+            assert await cache.get("template", "private-user-key") is None
+            await cache.delete("template", "private-user-key")
 
-        async def failing_factory() -> bytes:
-            raise RuntimeError("source unavailable")
+            async def failing_factory() -> bytes:
+                raise RuntimeError("source unavailable")
 
-        with pytest.raises(RuntimeError, match="source unavailable"):
-            await cache.get_or_set(
-                "template",
-                "private-user-key",
-                ttl=60,
-                factory=failing_factory,
-            )
+            with pytest.raises(RuntimeError, match="source unavailable"):
+                await cache.get_or_set(
+                    "template",
+                    "private-user-key",
+                    ttl=60,
+                    factory=failing_factory,
+                )
 
         assert [str(event.scope) for event in observed] == [
             "cache.read.completed",
@@ -126,37 +144,18 @@ class TestInMemoryCache:
 
     @pytest.mark.anyio
     async def test_cancelling_event_handler_cannot_cancel_cache_operation(self) -> None:
-        events = EventDispatcher()
-
         async def cancelling_handler(event: Event) -> None:
             raise asyncio.CancelledError()
 
-        events.subscribe(EVT_CACHE, cancelling_handler)
-        cache = InMemoryCache(events=events)
+        async with _started_events_site() as site:
+            site.require_capability(EventsCapability).subscribe(
+                EVT_CACHE, cancelling_handler
+            )
+            cache = InMemoryCache()
 
-        await cache.set("template", "fragment", b"content", ttl=60)
+            await cache.set("template", "fragment", b"content", ttl=60)
 
-        assert await cache.get("template", "fragment") == b"content"
-
-    @pytest.mark.anyio
-    async def test_faulty_delivery_enabled_probe_cannot_break_cache_operation(
-        self,
-    ) -> None:
-        class FaultyEvents:
-            def subscribe(self, selector, handler) -> None:
-                del selector, handler
-
-            async def publish(self, event: Event) -> None:
-                del event
-
-            def enabled(self) -> bool:
-                raise RuntimeError("enabled probe failed")
-
-        cache = InMemoryCache(events=FaultyEvents())
-
-        await cache.set("template", "fragment", b"content", ttl=60)
-
-        assert await cache.get("template", "fragment") == b"content"
+            assert await cache.get("template", "fragment") == b"content"
 
     @pytest.mark.anyio
     async def test_rejects_colons_in_owner_names(self) -> None:
@@ -222,8 +221,43 @@ class TestInMemoryCache:
         assert calls == 1
 
     @pytest.mark.anyio
+    async def test_get_or_set_records_a_miss_before_waiting_for_the_factory(
+        self,
+    ) -> None:
+        factory_started = asyncio.Event()
+        release_factory = asyncio.Event()
+        read_recorded = asyncio.Event()
+
+        async def handler(event: Event) -> None:
+            if (
+                isinstance(event, CacheOperationCompletedEvent)
+                and str(event.scope) == "cache.read.completed"
+                and event.outcome == "miss"
+            ):
+                read_recorded.set()
+
+        async def factory() -> bytes:
+            factory_started.set()
+            await release_factory.wait()
+            return b"value"
+
+        async with _started_events_site() as site:
+            site.require_capability(EventsCapability).subscribe(EVT_CACHE, handler)
+            cache = InMemoryCache()
+            fill = asyncio.create_task(
+                cache.get_or_set("template", "fragment", ttl=60, factory=factory)
+            )
+            await factory_started.wait()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            assert read_recorded.is_set()
+
+            release_factory.set()
+            assert await fill == b"value"
+
+    @pytest.mark.anyio
     async def test_get_or_set_releases_waiters_before_slow_event_delivery(self) -> None:
-        events = EventDispatcher()
         event_started = asyncio.Event()
         release_event = asyncio.Event()
 
@@ -235,34 +269,77 @@ class TestInMemoryCache:
                 event_started.set()
                 await release_event.wait()
 
-        events.subscribe(EVT_CACHE, slow_handler)
-        cache = InMemoryCache(events=events)
-        factory_started = asyncio.Event()
-        release_factory = asyncio.Event()
+        async with _started_events_site() as site:
+            site.require_capability(EventsCapability).subscribe(EVT_CACHE, slow_handler)
+            cache = InMemoryCache()
+            factory_started = asyncio.Event()
+            release_factory = asyncio.Event()
 
-        async def factory() -> bytes:
-            factory_started.set()
-            await release_factory.wait()
-            return b"value"
+            async def factory() -> bytes:
+                factory_started.set()
+                await release_factory.wait()
+                return b"value"
 
-        first = asyncio.create_task(
-            cache.get_or_set("template", "fragment", ttl=60, factory=factory)
-        )
-        await factory_started.wait()
-        second = asyncio.create_task(
-            cache.get_or_set(
-                "template",
-                "fragment",
-                ttl=60,
-                factory=lambda: pytest.fail("A waiting cache caller must not fill."),
+            first = asyncio.create_task(
+                cache.get_or_set("template", "fragment", ttl=60, factory=factory)
             )
-        )
-        release_factory.set()
-        await event_started.wait()
+            await factory_started.wait()
+            second = asyncio.create_task(
+                cache.get_or_set(
+                    "template",
+                    "fragment",
+                    ttl=60,
+                    factory=lambda: pytest.fail(
+                        "A waiting cache caller must not fill."
+                    ),
+                )
+            )
+            release_factory.set()
+            await event_started.wait()
 
-        assert await second == b"value"
-        release_event.set()
-        assert await first == b"value"
+            assert await second == b"value"
+            release_event.set()
+            assert await first == b"value"
+
+    @pytest.mark.anyio
+    async def test_get_or_set_waiters_are_not_delayed_by_slow_cache_subscribers(
+        self,
+    ) -> None:
+        """The single-flight timeout covers only cache filling, never observers."""
+
+        async def slow_handler(_event: Event) -> None:
+            await asyncio.sleep(1)
+
+        async with _started_events_site() as site:
+            site.require_capability(EventsCapability).subscribe(EVT_CACHE, slow_handler)
+            cache = InMemoryCache()
+            factory_started = asyncio.Event()
+
+            async def factory() -> bytes:
+                factory_started.set()
+                await asyncio.sleep(0.35)
+                return b"value"
+
+            first = asyncio.create_task(
+                cache.get_or_set(
+                    "template", "fragment", ttl=60, factory=factory, timeout=0.8
+                )
+            )
+            await factory_started.wait()
+            second = asyncio.create_task(
+                cache.get_or_set(
+                    "template",
+                    "fragment",
+                    ttl=60,
+                    factory=lambda: pytest.fail(
+                        "A waiting cache caller must not fill."
+                    ),
+                    timeout=0.8,
+                )
+            )
+
+            assert await asyncio.wait_for(second, timeout=0.8) == b"value"
+            assert await asyncio.wait_for(first, timeout=0.8) == b"value"
 
     @pytest.mark.anyio
     async def test_get_or_set_releases_waiters_after_a_failed_factory(self) -> None:

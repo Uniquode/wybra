@@ -11,13 +11,23 @@ from __future__ import annotations
 
 import logging
 import time
-from asyncio import current_task, ensure_future, shield
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
-from contextlib import asynccontextmanager, contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass, field
+from asyncio import (
+    CancelledError,
+    Task,
+    create_task,
+    current_task,
+    ensure_future,
+)
+from asyncio import (
+    Event as AsyncEvent,
+)
+from collections import deque
+from collections.abc import Awaitable, Callable, Iterable
+from contextvars import Context, ContextVar, Token, copy_context
+from dataclasses import InitVar, dataclass, field
 from functools import wraps
-from inspect import iscoroutinefunction
+from gc import collect
+from inspect import BoundArguments, iscoroutinefunction, signature
 from threading import Lock
 from typing import (
     TYPE_CHECKING,
@@ -28,6 +38,8 @@ from typing import (
     TypeVar,
     runtime_checkable,
 )
+from uuid import UUID
+from weakref import ReferenceType, ref
 
 from wybra.config import BaseSettings, ConfigDef, to_bool
 from wybra.events_config import EVENTS_CONFIG_DEF, EVENTS_CONFIG_SECTION
@@ -39,10 +51,16 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
+EVENT_HISTORY_LIMIT: Final = 32
+EVENT_DELIVERY_PENDING_LIMIT: Final = 1024
 
 
 class EventScopeError(ValueError):
     """Raised when an event scope or topic is invalid."""
+
+
+class EventRuntimeError(RuntimeError):
+    """Raised when event runtime lifecycle rules are violated."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,28 +111,49 @@ class EventScope:
         return ".".join(self.segments)
 
 
+@dataclass(frozen=True, slots=True)
+class EventContext:
+    """Immutable inherited correlation context for event observations."""
+
+    request_id: UUID | None = None
+    segments: tuple[str, ...] = ()
+
+    def extend(self, *segments: str) -> EventContext:
+        """Derive a context with additional declared levels."""
+
+        return EventContext(
+            request_id=self.request_id,
+            segments=(
+                self.segments
+                + tuple(_normalise_segment(segment) for segment in segments)
+            ),
+        )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Event:
     """An immutable observation classified by its current event scope."""
 
-    kind: ClassVar[EventSegment]
+    event_scope: ClassVar[EventScope]
+    topic: InitVar[EventScope | None] = None
     scope: EventScope = field(init=False)
+    context: EventContext | None = field(init=False)
     occurred_at: float = field(default_factory=time.time)
 
-    def __post_init__(self) -> None:
-        parent = current_scope()
-        if parent is None:
-            raise EventScopeError("Published events require an active scope.")
-        kind = getattr(type(self), "kind", None)
-        if not isinstance(kind, EventSegment):
+    def __post_init__(self, topic: EventScope | None) -> None:
+        fixed_scope = topic or getattr(type(self), "event_scope", None)
+        if isinstance(fixed_scope, EventScope):
+            object.__setattr__(self, "scope", fixed_scope)
+        else:
             raise EventScopeError(
-                f"Event type {type(self).__name__} must declare an EventSegment kind."
+                "Event type "
+                f"{type(self).__name__} must declare an explicit event topic."
             )
-        object.__setattr__(self, "scope", parent(kind))
+        object.__setattr__(self, "context", current_context())
 
 
 type EventHandler = Callable[[Event], Awaitable[None]]
-type OutcomeEventFactory = Callable[[EventOutcome], Event]
+type _QueuedEvent = tuple[Event, tuple[EventHandler, ...], Context]
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +174,9 @@ class EventOutcome:
     """Secret-safe completion state supplied to a post-operation event factory."""
 
     succeeded: bool
+    duration_seconds: float = 0.0
     error_type: str | None = None
+    result: object | None = None
 
 
 @runtime_checkable
@@ -145,6 +186,17 @@ class EventsCapability(Protocol):
     def subscribe(self, selector: EventScope, handler: EventHandler) -> None: ...
 
     async def publish(self, event: Event) -> None: ...
+
+
+@runtime_checkable
+class _EventHistoryCapability(Protocol):
+    """Internal capability extension for bounded event-history replay."""
+
+    async def replay(self, selector: EventScope, handler: EventHandler) -> None: ...
+
+    async def subscribe_and_replay(
+        self, selector: EventScope, handler: EventHandler
+    ) -> None: ...
 
 
 class _DisabledEventsCapability:
@@ -158,6 +210,20 @@ class _DisabledEventsCapability:
         del event
         return None
 
+    async def replay(self, selector: EventScope, handler: EventHandler) -> None:
+        del selector, handler
+        return None
+
+    async def subscribe_and_replay(
+        self, selector: EventScope, handler: EventHandler
+    ) -> None:
+        del selector, handler
+        return None
+
+    async def close(self) -> None:
+        """Release the disabled no-op runtime."""
+        return None
+
     def enabled(self) -> bool:
         """Return whether delivery can accept observations."""
 
@@ -166,9 +232,9 @@ class _DisabledEventsCapability:
 
 @dataclass(slots=True)
 class _LazyEventsCapability:
-    """Resolve the configured site-local event sink on first use."""
+    """Resolve the configured process event sink on first use."""
 
-    site: Site
+    site: ReferenceType[Site]
     _capability: EventsCapability | None = field(default=None, init=False)
     _resolve_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
@@ -178,10 +244,36 @@ class _LazyEventsCapability:
     async def publish(self, event: Event) -> None:
         await self._resolve().publish(event)
 
+    async def replay(self, selector: EventScope, handler: EventHandler) -> None:
+        await replay_event_history(self._resolve(), selector, handler)
+
+    async def subscribe_and_replay(
+        self, selector: EventScope, handler: EventHandler
+    ) -> None:
+        await subscribe_and_replay_event_history(self._resolve(), selector, handler)
+
     def enabled(self) -> bool:
         """Return whether the resolved sink is accepting observations."""
 
         return event_delivery_enabled(self._resolve())
+
+    async def close(self) -> None:
+        """Release this runtime when its owning site shuts down."""
+        capability = self._capability
+        if capability is not None:
+            close = getattr(capability, "close", None)
+            if callable(close) and iscoroutinefunction(close):
+                await close()
+        _release_events_runtime(self)
+
+    async def _drain(self) -> None:
+        """Wait for queued delivery; used only by deterministic test support."""
+        capability = self._capability
+        if capability is None:
+            return
+        drain = getattr(capability, "_drain", None)
+        if callable(drain) and iscoroutinefunction(drain):
+            await drain()
 
     def _resolve(self) -> EventsCapability:
         capability = self._capability
@@ -192,7 +284,10 @@ class _LazyEventsCapability:
             with self._resolve_lock:
                 capability = self._capability
                 if capability is None:
-                    settings = EventsSettings.load_settings(self.site.config)
+                    site = self.site()
+                    if site is None:
+                        return _DisabledEventsCapability()
+                    settings = EventsSettings.load_settings(site.config)
                     capability = (
                         EventDispatcher()
                         if settings.enabled
@@ -204,9 +299,35 @@ class _LazyEventsCapability:
 
 @dataclass(slots=True)
 class EventDispatcher:
-    """Dispatch events sequentially to handlers selected by scope prefix."""
+    """Deliver events sequentially without controlling their producers."""
 
     _handlers: list[tuple[EventScope, EventHandler]] = field(default_factory=list)
+    _history: deque[Event] = field(
+        default_factory=lambda: deque(maxlen=EVENT_HISTORY_LIMIT),
+        init=False,
+        repr=False,
+    )
+    _pending: deque[_QueuedEvent] = field(
+        default_factory=deque,
+        init=False,
+        repr=False,
+    )
+    _pending_available: AsyncEvent = field(
+        default_factory=AsyncEvent,
+        init=False,
+        repr=False,
+    )
+    _pending_drained: AsyncEvent = field(
+        default_factory=AsyncEvent,
+        init=False,
+        repr=False,
+    )
+    _worker: Task[None] | None = field(default=None, init=False, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
+    _dropped_pending_events: int = field(default=0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._pending_drained.set()
 
     def enabled(self) -> bool:
         """Return whether this concrete dispatcher accepts observations."""
@@ -221,24 +342,114 @@ class EventDispatcher:
         self._handlers.append((selector, handler))
 
     async def publish(self, event: Event) -> None:
+        """Queue an event without waiting for its handlers to finish."""
+        if self._closed:
+            return
+        self._history.append(event)
+        handlers = tuple(
+            handler
+            for selector, handler in self._handlers
+            if event.scope.matches(selector)
+        )
+        if len(self._pending) >= EVENT_DELIVERY_PENDING_LIMIT:
+            self._pending.popleft()
+            self._dropped_pending_events += 1
+            if self._should_log_pending_eviction():
+                logger.warning(
+                    "Event delivery backlog is full; dropping oldest observation",
+                    extra={
+                        "pending_limit": EVENT_DELIVERY_PENDING_LIMIT,
+                        "dropped_pending_events": self._dropped_pending_events,
+                    },
+                )
+        self._pending.append((event, handlers, copy_context()))
+        self._pending_drained.clear()
+        self._pending_available.set()
+        if self._worker is None or self._worker.done():
+            self._worker = create_task(self._dispatch_queued_events())
+
+    async def close(self) -> None:
+        """Finish accepted delivery before releasing the dispatcher worker."""
+        self._closed = True
+        worker = self._worker
+        if worker is None or worker.done():
+            return
+        await self._pending_drained.wait()
+        worker.cancel()
+        try:
+            await worker
+        except CancelledError:
+            if _external_cancellation_requested():
+                raise
+
+    async def _drain(self) -> None:
+        """Wait until all currently queued events have been delivered."""
+        await self._pending_drained.wait()
+
+    async def _dispatch_queued_events(self) -> None:
+        while True:
+            await self._pending_available.wait()
+            while self._pending:
+                event, handlers, producer_context = self._pending.popleft()
+                if not self._pending:
+                    self._pending_available.clear()
+                await self._dispatch_event(event, handlers, producer_context)
+            self._pending_drained.set()
+
+    def _should_log_pending_eviction(self) -> bool:
+        """Rate-limit backlog warnings while retaining useful load visibility."""
+
+        return self._dropped_pending_events == 1 or (
+            self._dropped_pending_events & (self._dropped_pending_events - 1) == 0
+        )
+
+    async def _dispatch_event(
+        self,
+        event: Event,
+        handlers: tuple[EventHandler, ...],
+        producer_context: Context,
+    ) -> None:
         dispatch_started = time.perf_counter()
         handler_failed = False
-        for selector, handler in self._handlers:
-            if event.scope.matches(selector):
-                handler_failed = (
-                    await self._dispatch_handler(event, handler) or handler_failed
-                )
+        for handler in handlers:
+            handler_failed = (
+                await self._dispatch_handler(event, handler, producer_context)
+                or handler_failed
+            )
         _record_dispatch_diagnostic(
             event,
             duration_seconds=time.perf_counter() - dispatch_started,
             handler_failed=handler_failed,
         )
 
-    async def _dispatch_handler(self, event: Event, handler: EventHandler) -> bool:
+    async def replay(self, selector: EventScope, handler: EventHandler) -> None:
+        """Deliver retained matching events to an explicit internal consumer."""
+
+        for event in tuple(self._history):
+            if event.scope.matches(selector):
+                await self._dispatch_handler(event, handler, copy_context())
+
+    async def subscribe_and_replay(
+        self, selector: EventScope, handler: EventHandler
+    ) -> None:
+        """Atomically capture history, subscribe, then deliver that snapshot."""
+        history = tuple(
+            event for event in self._history if event.scope.matches(selector)
+        )
+        self.subscribe(selector, handler)
+        for event in history:
+            await self._dispatch_handler(event, handler, copy_context())
+
+    async def _dispatch_handler(
+        self,
+        event: Event,
+        handler: EventHandler,
+        producer_context: Context,
+    ) -> bool:
         started = time.perf_counter()
-        handler_task = ensure_future(handler(event))
+        handler_task = producer_context.run(ensure_future, handler(event))
         try:
-            await shield(handler_task)
+            await handler_task
         except BaseException as exc:
             if _external_cancellation_requested():
                 handler_task.cancel()
@@ -268,41 +479,168 @@ class EventDispatcher:
             return False
 
 
+_EVENTS_RUNTIME: _LazyEventsCapability | None = None
+_EVENTS_RUNTIME_LOCK = Lock()
+
+
 def setup_core_events(site: Site) -> None:
-    """Register lazy core event delivery before configured module setup."""
+    """Register the one lazy process event runtime before module setup."""
 
-    site.provide_capability(EventsCapability, _LazyEventsCapability(site))
+    global _EVENTS_RUNTIME
+    runtime = _LazyEventsCapability(ref(site))
+    with _EVENTS_RUNTIME_LOCK:
+        if _EVENTS_RUNTIME is not None and _EVENTS_RUNTIME.site() is not None:
+            # A caller that has discarded its app/site can leave the app-state
+            # reference cycle awaiting ordinary garbage collection. It is no
+            # longer a live Site, so collect once before rejecting a genuine
+            # concurrently active Site.
+            collect()
+        if _EVENTS_RUNTIME is not None and _EVENTS_RUNTIME.site() is not None:
+            raise EventRuntimeError("Only one Wybra Site may run in a process.")
+        _EVENTS_RUNTIME = runtime
+    try:
+        site.provide_capability(EventsCapability, runtime)
+    except BaseException:
+        _release_events_runtime(runtime)
+        raise
 
 
-@asynccontextmanager
-async def observe_operation(
-    dispatcher: EventsCapability,
-    before: Event,
-    outcome_event: OutcomeEventFactory,
-) -> AsyncIterator[None]:
-    """Publish non-controlling observations around one operation.
+def events_enabled() -> bool:
+    """Resolve and return whether central event delivery is enabled."""
 
-    The operation's own result or exception always wins.  Post-operation
-    observation construction and dispatch are independently isolated so that
-    observation code cannot alter the business operation it describes.
+    runtime = _EVENTS_RUNTIME
+    return runtime is not None and runtime.enabled()
+
+
+async def replay_event_history(
+    capability: EventsCapability,
+    selector: EventScope,
+    handler: EventHandler,
+) -> None:
+    """Replay retained history to an internal consumer when supported.
+
+    This is intentionally not part of the public ``EventsCapability``
+    contract. Ordinary subscriptions remain live-only.
     """
 
-    await publish_observation(dispatcher, before, message="pre-operation event")
+    if isinstance(capability, _EventHistoryCapability):
+        await capability.replay(selector, handler)
+
+
+async def subscribe_and_replay_event_history(
+    capability: EventsCapability,
+    selector: EventScope,
+    handler: EventHandler,
+) -> None:
+    """Install a live subscriber without duplicating retained observations."""
+    if isinstance(capability, _EventHistoryCapability):
+        await capability.subscribe_and_replay(selector, handler)
+        return
+    capability.subscribe(selector, handler)
+
+
+type EventDescriptor = Callable[..., Event | None]
+
+
+def observe(
+    descriptor: EventDescriptor,
+    *options: object,
+    context: str | Iterable[str] | None = None,
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
+    """Observe an async boundary without exposing publication mechanics."""
+
+    segments = _normalise_context_segments(context)
+
+    def decorate(function: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
+        if not iscoroutinefunction(function):
+            raise TypeError("Observed functions must be async callables.")
+        function_signature = signature(function)
+
+        @wraps(function)
+        async def observed(*args: P.args, **kwargs: P.kwargs) -> T:
+            if not events_enabled():
+                return await function(*args, **kwargs)
+            call = function_signature.bind(*args, **kwargs)
+            call.apply_defaults()
+            token = _set_observation_context(segments)
+            started = time.perf_counter()
+            try:
+                await _publish_descriptor_safely(descriptor, call, None, options)
+                result = await function(*args, **kwargs)
+            except BaseException as exc:
+                await _publish_descriptor_safely(
+                    descriptor,
+                    call,
+                    EventOutcome(
+                        succeeded=False,
+                        duration_seconds=time.perf_counter() - started,
+                        error_type=type(exc).__name__,
+                    ),
+                    options,
+                )
+                raise
+            else:
+                await _publish_descriptor_safely(
+                    descriptor,
+                    call,
+                    EventOutcome(
+                        succeeded=True,
+                        duration_seconds=time.perf_counter() - started,
+                        result=result,
+                    ),
+                    options,
+                )
+                return result
+            finally:
+                if token is not None:
+                    _CURRENT_CONTEXT.reset(token)
+
+        return observed
+
+    return decorate
+
+
+def _normalise_context_segments(value: str | Iterable[str] | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    values = (value,) if isinstance(value, str) else tuple(value)
+    return tuple(_normalise_segment(segment) for segment in values)
+
+
+def _set_observation_context(
+    segments: tuple[str, ...],
+) -> Token[EventContext | None] | None:
+    if not segments:
+        return None
+    parent = current_context() or EventContext()
+    return _CURRENT_CONTEXT.set(parent.extend(*segments))
+
+
+async def _publish_descriptor_safely(
+    descriptor: EventDescriptor,
+    call: BoundArguments,
+    outcome: EventOutcome | None,
+    options: tuple[object, ...],
+) -> None:
     try:
-        yield
-    except Exception as exc:
-        await _publish_outcome_safely(
-            dispatcher,
-            outcome_event,
-            EventOutcome(succeeded=False, error_type=type(exc).__name__),
-        )
-        raise
-    else:
-        await _publish_outcome_safely(
-            dispatcher,
-            outcome_event,
-            EventOutcome(succeeded=True),
-        )
+        event = descriptor(call, outcome, *options)
+    except BaseException:
+        logger.exception("Unable to create observed event")
+        return
+    if event is None:
+        return
+    runtime = _EVENTS_RUNTIME
+    if runtime is not None:
+        await _publish_observation(runtime, event, message="observed event")
+
+
+def _release_events_runtime(runtime: _LazyEventsCapability) -> None:
+    """Release the process runtime after its owning site has closed."""
+
+    global _EVENTS_RUNTIME
+    with _EVENTS_RUNTIME_LOCK:
+        if _EVENTS_RUNTIME is runtime:
+            _EVENTS_RUNTIME = None
 
 
 async def _publish_safely(
@@ -319,20 +657,7 @@ async def _publish_safely(
         logger.exception("Unable to publish %s", message)
 
 
-async def _publish_outcome_safely(
-    dispatcher: EventsCapability,
-    outcome_event: OutcomeEventFactory,
-    outcome: EventOutcome,
-) -> None:
-    try:
-        event = outcome_event(outcome)
-    except BaseException:
-        logger.exception("Unable to create post-operation event")
-        return
-    await publish_observation(dispatcher, event, message="post-operation event")
-
-
-async def publish_observation(
+async def _publish_observation(
     dispatcher: EventsCapability,
     event: Event,
     *,
@@ -343,69 +668,39 @@ async def publish_observation(
     await _publish_safely(dispatcher, event, message=message)
 
 
-_CURRENT_SCOPE: ContextVar[EventScope | None] = ContextVar(
-    "wybra_current_event_scope",
+_CURRENT_CONTEXT: ContextVar[EventContext | None] = ContextVar(
+    "wybra_current_event_context",
     default=None,
 )
 
 
-def current_scope() -> EventScope | None:
-    """Return the current async event scope, if one has been established."""
+def current_context() -> EventContext | None:
+    """Return the inherited event context for the current async execution."""
 
-    return _CURRENT_SCOPE.get()
+    return _CURRENT_CONTEXT.get()
 
 
-def scope(
-    value: EventScope,
+def context(
+    values: str | Iterable[str],
 ) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
-    """Decorate an async callable with an overriding event scope."""
+    """Decorate an async callable with additional immutable context levels."""
 
-    def decorate(function: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
-        @wraps(function)
-        async def scoped(*args: P.args, **kwargs: P.kwargs) -> T:
-            token = _CURRENT_SCOPE.set(value)
-            try:
-                return await function(*args, **kwargs)
-            finally:
-                _CURRENT_SCOPE.reset(token)
-
-        return scoped
-
-    return decorate
-
-
-@contextmanager
-def scoped(value: EventScope) -> Iterator[None]:
-    """Temporarily establish an event scope for the current async context."""
-
-    token = _CURRENT_SCOPE.set(value)
-    try:
-        yield
-    finally:
-        _CURRENT_SCOPE.reset(token)
-
-
-def extend(
-    *segments: EventSegment | str,
-) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
-    """Decorate an async callable with a scope extending its caller's scope."""
-
+    segments = (values,) if isinstance(values, str) else tuple(values)
     if not segments:
-        raise EventScopeError("Event scope extensions require at least one segment.")
+        raise EventScopeError("Event context extensions require at least one segment.")
+    normalised = tuple(_normalise_segment(segment) for segment in segments)
 
     def decorate(function: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @wraps(function)
-        async def extended(*args: P.args, **kwargs: P.kwargs) -> T:
-            parent = current_scope()
-            if parent is None:
-                raise EventScopeError("Event scope extensions require an active scope.")
-            token = _CURRENT_SCOPE.set(parent(*segments))
+        async def contextual(*args: P.args, **kwargs: P.kwargs) -> T:
+            parent = current_context() or EventContext()
+            token = _CURRENT_CONTEXT.set(parent.extend(*normalised))
             try:
                 return await function(*args, **kwargs)
             finally:
-                _CURRENT_SCOPE.reset(token)
+                _CURRENT_CONTEXT.reset(token)
 
-        return extended
+        return contextual
 
     return decorate
 
@@ -628,246 +923,6 @@ _SCOPE_DESCRIPTIONS: Final = {
 }
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ModuleSetupEvent(Event):
-    """An observation of a configured module's ``setup_site`` hook."""
-
-    kind: ClassVar[EventSegment] = SETUP
-    module: str
-    outcome: str
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ModulePostSetupEvent(Event):
-    """An observation of a configured module's ``post_setup_site`` hook."""
-
-    kind: ClassVar[EventSegment] = POST_SETUP
-    module: str
-    outcome: str
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RequestStartedEvent(Event):
-    """An observation at the outer Wybra HTTP middleware entry."""
-
-    kind: ClassVar[EventSegment] = STARTED
-    method: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RequestCompletedEvent(Event):
-    """An observation after an HTTP request returns or raises."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    method: str
-    duration_seconds: float
-    status_code: int | None
-    route_name: str | None
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RouteDispatchedEvent(Event):
-    """An observation of a resolved route entering a class-based view."""
-
-    kind: ClassVar[EventSegment] = DISPATCH
-    method: str
-    route_name: str | None
-    view_type: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ViewCompletedEvent(Event):
-    """An observation of a class-based view dispatch outcome."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    method: str
-    route_name: str | None
-    view_type: str
-    duration_seconds: float
-    status_code: int | None
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class GenericViewCompletedEvent(Event):
-    """An observation of a model-driven collection, item, or bulk operation."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    operation: str
-    model_type: str | None
-    content_type: str | None
-    duration_seconds: float
-    status_code: int | None
-    affected_count: int | None = None
-    skipped_count: int | None = None
-    failed_count: int | None = None
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class TemplateRenderCompletedEvent(Event):
-    """An observation of one asynchronous template-rendering outcome."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    template_name: str
-    duration_seconds: float
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class CacheOperationCompletedEvent(Event):
-    """An observation of a completed cache operation without its raw key."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    owner: str
-    key_fingerprint: str
-    outcome: str
-    duration_seconds: float
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class CacheOperationFailedEvent(Event):
-    """An observation of a failed cache operation without its raw key."""
-
-    kind: ClassVar[EventSegment] = FAILED
-    owner: str
-    key_fingerprint: str
-    operation: str
-    duration_seconds: float
-    error_type: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class FormValidationCompletedEvent(Event):
-    """An observation of a form validation attempt without submitted values."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    form_type: str
-    field_count: int
-    invalid_field_count: int
-    valid: bool
-    duration_seconds: float
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class FormPersistenceCompletedEvent(Event):
-    """An observation of a form persistence outcome without model values."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    form_type: str
-    model_types: tuple[str, ...]
-    operation: str
-    changed_fields: tuple[str, ...]
-    affected_count: int
-    created: bool
-    updated: bool
-    deleted: bool
-    stale_conflict: bool
-    duration_seconds: float
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class FormPersistenceFailedEvent(Event):
-    """An observation of a failed form persistence operation."""
-
-    kind: ClassVar[EventSegment] = FAILED
-    form_type: str
-    model_types: tuple[str, ...]
-    operation: str
-    duration_seconds: float
-    error_type: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class AccountLifecycleEvent(Event):
-    """An account lifecycle outcome with opaque identity metadata only."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    operation: str
-    outcome: str
-    user_id: str | None = None
-    masked_email: str | None = None
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class CredentialAccessEvent(Event):
-    """A credential/access-control outcome without credential material."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    operation: str
-    provider: str
-    outcome: str
-    user_id: str | None = None
-    masked_email: str | None = None
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SessionLifecycleEvent(Event):
-    """A session lifecycle outcome without session identifiers or payloads."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    operation: str
-    backend: str
-    outcome: str
-    error_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SecurityPolicyEvent(Event):
-    """A safe outcome for one configured security policy."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    policy: str
-    outcome: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SecurityDenialEvent(Event):
-    """A secret-free observation of a security rejection."""
-
-    kind: ClassVar[EventSegment] = DENIED
-    mechanism: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class CapabilityResolvedEvent(Event):
-    """An observation of a proxy resolving a site capability."""
-
-    kind: ClassVar[EventSegment] = RESOLVED
-    capability_type: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class CapabilityUnavailableEvent(Event):
-    """An observation of a proxy not finding a site capability."""
-
-    kind: ClassVar[EventSegment] = UNAVAILABLE
-    capability_type: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class CapabilityProvidedEvent(Event):
-    """An observation that a capability was registered with a site."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    capability_type: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SiteLifecycleEvent(Event):
-    """A site startup or shutdown outcome."""
-
-    kind: ClassVar[EventSegment] = COMPLETED
-    phase: str
-    error_count: int = 0
-
-
 def available_event_scopes() -> tuple[tuple[EventScope, str], ...]:
     """Return public event selectors and their developer-facing descriptions."""
 
@@ -915,6 +970,7 @@ __all__ = (
     "EVT_SITE",
     "DEFAULT_EVENT_SCOPES",
     "event_delivery_enabled",
+    "events_enabled",
     "EVT_SQL",
     "EVT_TEMPLATE",
     "EVT_VIEW",
@@ -934,7 +990,7 @@ __all__ = (
     "COLLECTION",
     "COMMIT",
     "CONNECTION",
-    "current_scope",
+    "current_context",
     "MODEL",
     "MODULE",
     "CAPABILITY",
@@ -960,51 +1016,28 @@ __all__ = (
     "SAVEPOINT",
     "SQL_STATEMENT",
     "TEMPLATE_RENDER",
-    "TemplateRenderCompletedEvent",
     "TRANSACTION",
     "VALIDATION",
     "SUCCEEDED",
     "VIEW",
     "EventScope",
     "EventScopeError",
+    "EventRuntimeError",
     "EventSegment",
+    "EventContext",
     "EventsSettings",
     "Event",
     "GENERIC",
-    "GenericViewCompletedEvent",
-    "FormPersistenceCompletedEvent",
-    "FormPersistenceFailedEvent",
-    "FormValidationCompletedEvent",
-    "ModuleSetupEvent",
-    "ModulePostSetupEvent",
-    "RequestStartedEvent",
-    "RequestCompletedEvent",
-    "RouteDispatchedEvent",
-    "ViewCompletedEvent",
-    "CapabilityResolvedEvent",
-    "CapabilityUnavailableEvent",
-    "CapabilityProvidedEvent",
-    "SiteLifecycleEvent",
-    "CacheOperationCompletedEvent",
-    "CacheOperationFailedEvent",
-    "AccountLifecycleEvent",
-    "CredentialAccessEvent",
-    "SessionLifecycleEvent",
-    "SecurityPolicyEvent",
-    "SecurityDenialEvent",
     "EventDispatcher",
     "EventHandler",
+    "EventDescriptor",
     "EventOutcome",
     "EventsCapability",
-    "OutcomeEventFactory",
     "available_event_scopes",
     "event_scope",
     "event_segment",
-    "extend",
     "parse_event_scopes",
-    "observe_operation",
-    "publish_observation",
-    "scope",
-    "scoped",
+    "observe",
+    "context",
     "setup_core_events",
 )

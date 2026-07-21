@@ -22,7 +22,7 @@ from wybra.diagnostics.context import (
     template_render_diagnostics,
     trace,
 )
-from wybra.diagnostics.events import (
+from wybra.diagnostics.records import (
     DiagnosticContext,
     DiagnosticEvent,
     DiagnosticLevel,
