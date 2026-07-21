@@ -103,10 +103,13 @@ class JsonRpcConnection:
 
     async def _receive_message(self) -> tuple[str, dict[str, object]]:
         raw = await self._websocket.recv()
-        if not isinstance(raw, str):
-            raise DebugProtocolError(
-                "Received a binary WebSocket message instead of JSON-RPC text."
-            )
+        if isinstance(raw, bytes):
+            try:
+                raw = raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise DebugProtocolError(
+                    "Received a non-UTF-8 binary WebSocket message."
+                ) from exc
         try:
             message = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -216,3 +219,7 @@ main = debug_command
 
 
 __all__ = ("debug_command", "main")
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by subprocess test.
+    debug_command()

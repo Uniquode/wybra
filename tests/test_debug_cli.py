@@ -1,10 +1,10 @@
 import asyncio
 import json
 import signal
+import sys
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -112,11 +112,19 @@ async def test_jsonrpc_connection_yields_only_diagnostics_notification_frames() 
 
 
 @pytest.mark.anyio
+async def test_jsonrpc_connection_decodes_utf8_binary_notification_frames() -> None:
+    frame = b'{"jsonrpc":"2.0","method":"diagnostics.notification","params":{}}'
+    connection = JsonRpcConnection(FakeWebSocket([frame]))
+
+    assert await anext(connection.notifications()) == frame.decode()
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "frame",
     [
         "not json",
-        b'{"jsonrpc":"2.0","method":"diagnostics.notification","params":{}}',
+        b"\xff",
         '{"jsonrpc":"1.0","method":"diagnostics.notification","params":{}}',
         '{"jsonrpc":"2.0","method":"unexpected","params":{}}',
         '{"jsonrpc":"2.0","method":"diagnostics.notification","params":null}',
@@ -368,9 +376,10 @@ async def test_debug_command_closes_the_stream_on_sigint() -> None:
     async with serve(diagnostics_server, "127.0.0.1", 0) as server:
         socket = server.sockets[0]
         host, port = socket.getsockname()[:2]
-        command = Path.cwd() / ".venv" / "bin" / "wybra-debug"
         process = await asyncio.create_subprocess_exec(
-            command,
+            sys.executable,
+            "-m",
+            "wybra.tools.debug",
             f"ws://{host}:{port}/__debug/ws",
             "--scope",
             "sql",
