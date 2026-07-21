@@ -154,14 +154,14 @@ they cannot be subscribed to. Bounded live subscription queues report a
 
 `wybra-debug` is a small client for this already-enabled endpoint. It neither
 enables diagnostics nor changes the server's collection filters or any other
-client's subscription. Its required positional argument is the complete
-WebSocket URL, including the exposed path. Unencrypted `ws://` URLs are
-accepted only for loopback development endpoints; remote diagnostics require
-TLS through `wss://`:
+client's subscription. Its required positional argument is the complete secure
+WebSocket URL, including the exposed path. Use `wss://` for every remote,
+container, or proxy-facing endpoint. A local loopback development listener may
+use the corresponding non-TLS WebSocket scheme.
 
 ```sh
-wybra-debug ws://127.0.0.1:8000/__debug/ws --list-scopes
-wybra-debug ws://127.0.0.1:8000/__debug/ws --scope sql --scope request
+wybra-debug wss://debug.example.test/__debug/ws --list-scopes
+wybra-debug wss://debug.example.test/__debug/ws --scope sql --scope request
 wybra-debug wss://debug.example.test/__debug/ws --scope events.errors
 ```
 
