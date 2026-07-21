@@ -8,14 +8,8 @@ from fastapi.responses import Response
 
 from wybra.auth.timestamps import current_timestamp
 from wybra.diagnostics import backend_operation_diagnostics
-from wybra.events import (
-    EVT_SESSION,
-    SESSION,
-    EventsCapability,
-    SessionLifecycleEvent,
-    publish_observation,
-    scoped,
-)
+from wybra.events import observe
+from wybra.events.sessions import session_event
 from wybra.sessions.cleanup import SessionCleanupRegistry
 from wybra.sessions.ids import create_session_id, validate_session_id
 from wybra.sessions.settings import SessionsSettings
@@ -30,7 +24,6 @@ SESSION_CLEANUP_INTERVAL_SECONDS = 60 * 60
 class SessionMiddlewareContext:
     settings: SessionsSettings
     storage: SessionStorage
-    events: EventsCapability | None = None
     cleanup_registry: SessionCleanupRegistry | None = None
     _last_cleanup_at: float | None = field(default=None, init=False, repr=False)
 
@@ -128,6 +121,7 @@ class SessionMiddlewareContext:
             if succeeded and operation != "unchanged":
                 await self._publish(operation, "succeeded")
 
+    @observe(session_event)
     async def _publish(
         self,
         operation: str,
@@ -135,19 +129,7 @@ class SessionMiddlewareContext:
         *,
         error: Exception | None = None,
     ) -> None:
-        if self.events is None:
-            return
-        with scoped(EVT_SESSION(SESSION)):
-            await publish_observation(
-                self.events,
-                SessionLifecycleEvent(
-                    operation=operation,
-                    backend=type(self.storage).__name__,
-                    outcome=outcome,
-                    error_type=type(error).__name__ if error is not None else None,
-                ),
-                message="session lifecycle event",
-            )
+        del operation, outcome, error
 
     async def _load_cookie_session(
         self,

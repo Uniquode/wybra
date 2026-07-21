@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from types import FunctionType
+from typing import cast
+from uuid import uuid7
 
 import pytest
 from fastapi import FastAPI, Request
@@ -16,7 +19,6 @@ from wybra.db._tortoise import (
     instrument_tortoise_context,
 )
 from wybra.db._tortoise.compatibility import _parse_version
-from wybra.db._tortoise.instrumentation import _result_count
 from wybra.db.persistence import close_database, create_database
 from wybra.diagnostics import (
     backend_operation_diagnostics,
@@ -30,10 +32,10 @@ from wybra.diagnostics.context import (
     reset_current_diagnostics,
     set_current_diagnostics,
 )
-from wybra.diagnostics.event_projection import register_event_projection
-from wybra.diagnostics.events import RequestDiagnostics
 from wybra.diagnostics.logging import emit_request_diagnostics
-from wybra.events import EVT_SQL, EventDispatcher
+from wybra.diagnostics.records import RequestDiagnostics
+from wybra.events._core import _CURRENT_CONTEXT, EventContext
+from wybra.events.db import _result_count
 from wybra.site import start
 from wybra.template.capabilities import DefaultTemplateCapability
 from wybra.testing import WybraTestClient
@@ -64,6 +66,7 @@ def _diagnostic_app_config(
                 "modules": (),
                 "deployment_environment": "local",
             },
+            "wybra.events": {"enabled": True},
             "wybra.diagnostics": {
                 "events_enabled": True,
                 "level": diagnostics_level,
@@ -259,28 +262,31 @@ async def test_sql_template_and_backend_diagnostics_are_collected(
 
 @pytest.mark.anyio
 async def test_tortoise_instrumentation_is_idempotent() -> None:
-    dispatcher = EventDispatcher()
-    register_event_projection(dispatcher, (EVT_SQL,))
+    site = await start(FastAPI(), config_source=_diagnostic_app_config())
     database = await create_database(
         "sqlite://:memory:",
         modules=("wybra.sessions",),
-        events=dispatcher,
     )
-    instrument_tortoise_context(database.context, dispatcher)
+    instrument_tortoise_context(database.context)
     diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
     token = set_current_diagnostics(diagnostics)
+    request_id = uuid7()
+    event_token = _CURRENT_CONTEXT.set(EventContext(request_id=request_id))
 
     try:
         with database.context:
             await database.connection().execute_query("select 1")
     finally:
+        _CURRENT_CONTEXT.reset(event_token)
         reset_current_diagnostics(token)
         await close_database(database)
+        await site.close()
 
     assert diagnostics.sql_query_count == 1
     sql_event = next(event for event in diagnostics.events if event.category == "sql")
     assert sql_event.attributes["operation"] == "query"
     assert sql_event.attributes["result_count"] == 1
+    assert sql_event.attributes["event_context_request_id"] == str(request_id)
 
 
 @pytest.mark.parametrize(
@@ -315,12 +321,10 @@ def test_insert_identifier_is_not_reported_as_an_affected_row_count() -> None:
 
 @pytest.mark.anyio
 async def test_tortoise_instrumentation_records_transaction_queries() -> None:
-    dispatcher = EventDispatcher()
-    register_event_projection(dispatcher, (EVT_SQL,))
+    site = await start(FastAPI(), config_source=_diagnostic_app_config())
     database = await create_database(
         "sqlite://:memory:",
         modules=("wybra.sessions",),
-        events=dispatcher,
     )
     diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
     token = set_current_diagnostics(diagnostics)
@@ -334,6 +338,7 @@ async def test_tortoise_instrumentation_records_transaction_queries() -> None:
     finally:
         reset_current_diagnostics(token)
         await close_database(database)
+        await site.close()
 
     assert diagnostics.sql_query_count == 2
     assert [
@@ -350,12 +355,10 @@ async def test_tortoise_instrumentation_records_transaction_queries() -> None:
 
 @pytest.mark.anyio
 async def test_tortoise_instrumentation_records_transaction_rollback() -> None:
-    dispatcher = EventDispatcher()
-    register_event_projection(dispatcher, (EVT_SQL,))
+    site = await start(FastAPI(), config_source=_diagnostic_app_config())
     database = await create_database(
         "sqlite://:memory:",
         modules=("wybra.sessions",),
-        events=dispatcher,
     )
     diagnostics = RequestDiagnostics(method="GET", path="/", level="trace")
     token = set_current_diagnostics(diagnostics)
@@ -368,6 +371,7 @@ async def test_tortoise_instrumentation_records_transaction_rollback() -> None:
     finally:
         reset_current_diagnostics(token)
         await close_database(database)
+        await site.close()
 
     assert [
         event.name
@@ -424,12 +428,10 @@ async def test_diagnostics_middleware_wraps_module_middleware(
     try:
         # The core event lifecycle boundary is intentionally outermost; it wraps
         # diagnostics, which in turn wraps configured module middleware.
-        assert app.user_middleware[0].kwargs["dispatch"].__name__ == (
-            "event_lifecycle_middleware"
-        )
-        assert app.user_middleware[1].kwargs["dispatch"].__name__ == (
-            "diagnostics_middleware"
-        )
+        first_dispatch = cast(FunctionType, app.user_middleware[0].kwargs["dispatch"])
+        second_dispatch = cast(FunctionType, app.user_middleware[1].kwargs["dispatch"])
+        assert first_dispatch.__name__ == ("event_lifecycle_middleware")
+        assert second_dispatch.__name__ == "diagnostics_middleware"
 
         with WybraTestClient(app) as client:
             response = client.get("/status")

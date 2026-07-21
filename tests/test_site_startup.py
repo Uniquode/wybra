@@ -1298,9 +1298,12 @@ class TestModuleLifecycle:
             ),
         )
 
-        capability_type = __import__("late_dependency_types").LateCapability
+        try:
+            capability_type = __import__("late_dependency_types").LateCapability
 
-        assert site.require_capability(capability_type).label() == "late"
+            assert site.require_capability(capability_type).label() == "late"
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_start_ignores_modules_without_setup_site(
@@ -1316,7 +1319,10 @@ class TestModuleLifecycle:
             config_source=MappingConfigSource({"app": {"modules": ("plain_module",)}}),
         )
 
-        assert site.modules == ("plain_module",)
+        try:
+            assert site.modules == ("plain_module",)
+        finally:
+            await site.close()
 
     @pytest.mark.anyio
     async def test_start_rejects_non_callable_setup_site(

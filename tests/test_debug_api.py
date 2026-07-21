@@ -12,7 +12,7 @@ from wybra import start_site
 from wybra.config import MappingConfigSource
 from wybra.diagnostics import record_sql_query
 from wybra.diagnostics.capabilities import DiagnosticsCapability
-from wybra.diagnostics.events import RequestDiagnostics
+from wybra.diagnostics.records import RequestDiagnostics
 from wybra.testing import WybraTestClient
 
 debug_module = importlib.import_module("wybra.diagnostics.debug")

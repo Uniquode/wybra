@@ -9,15 +9,8 @@ from typing import Literal, cast, get_args
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 
-from wybra.events import (
-    EVT_SECURITY,
-    POLICY,
-    EventsCapability,
-    SecurityPolicyEvent,
-    publish_observation,
-    scoped,
-)
-from wybra.site import SiteCapabilityError, get_site
+from wybra.events import observe
+from wybra.events.security import security_policy_event
 
 CrossOriginOpenerPolicy = Literal[
     "same-origin",
@@ -85,24 +78,10 @@ async def _security_header_middleware(
     return response
 
 
+@observe(security_policy_event)
 async def _publish_policy(request: Request, *, outcome: str) -> None:
     """Publish a safe security-policy observation without header values."""
-
-    try:
-        events = get_site(request.app).optional_capability(EventsCapability)
-    except SiteCapabilityError:
-        return
-    if events is None:
-        return
-    with scoped(EVT_SECURITY(POLICY)):
-        await publish_observation(
-            events,
-            SecurityPolicyEvent(
-                policy="cross_origin_opener",
-                outcome=outcome,
-            ),
-            message="security policy event",
-        )
+    del request, outcome
 
 
 def _effective_cross_origin_opener_policy(

@@ -10,7 +10,6 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from wybra.auth.capabilities import login_required
-from wybra.auth.events import publish_credential_access
 from wybra.auth.forms import PasskeyRevokeCommandForm, command_text
 from wybra.auth.mfa.storage import (
     WEBAUTHN_ACTIVE_STATUS,
@@ -45,6 +44,7 @@ from wybra.auth.routes.totp import (
 )
 from wybra.auth.sessions import complete_authentication_ceremony, set_session_cookie
 from wybra.auth.timestamps import current_timestamp
+from wybra.events.auth import publish_credential_access
 from wybra.forms import request_form_data
 
 from .account import _security_page_response

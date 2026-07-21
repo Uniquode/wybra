@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,14 +12,8 @@ from jinja2 import Environment, select_autoescape
 from wybra.assets import StaticAssetCapability, require_static_asset_capability
 from wybra.core.resources import PackageResourceSource
 from wybra.diagnostics import template_render_diagnostics
-from wybra.events import (
-    EVT_TEMPLATE,
-    TEMPLATE_RENDER,
-    EventsCapability,
-    TemplateRenderCompletedEvent,
-    publish_observation,
-    scoped,
-)
+from wybra.events import observe
+from wybra.events.template import template_event
 from wybra.site import SiteCapabilityProxy
 from wybra.template.cache import (
     CacheExtension,
@@ -65,7 +58,6 @@ class DefaultTemplateCapability:
     assets: SiteCapabilityProxy[StaticAssetCapability] | None = None
     cache_provider: CacheProvider | None = None
     cache_key_normalisers: CacheKeyNormalisers | None = None
-    events: EventsCapability | None = None
     include_request_context: bool = True
     auto_reload: bool | None = None
     cache_size: int = 400
@@ -110,29 +102,12 @@ class DefaultTemplateCapability:
         )
         self.cache_key_normalisers = normalisers
 
+    @observe(template_event)
     async def render_template(self, template_name: str, context: dict[str, Any]) -> str:
-        started = time.perf_counter()
-        error_type: str | None = None
-        try:
-            with template_render_diagnostics(template_name):
-                return await self.environment.get_template(template_name).render_async(
-                    context
-                )
-        except Exception as exc:
-            error_type = type(exc).__name__
-            raise
-        finally:
-            if self.events is not None:
-                with scoped(EVT_TEMPLATE(TEMPLATE_RENDER)):
-                    await publish_observation(
-                        self.events,
-                        TemplateRenderCompletedEvent(
-                            template_name=template_name,
-                            duration_seconds=time.perf_counter() - started,
-                            error_type=error_type,
-                        ),
-                        message="template render event",
-                    )
+        with template_render_diagnostics(template_name):
+            return await self.environment.get_template(template_name).render_async(
+                context
+            )
 
     async def render_page(
         self,

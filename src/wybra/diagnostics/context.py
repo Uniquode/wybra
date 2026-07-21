@@ -13,12 +13,12 @@ from wybra.diagnostics.capabilities import (
     DiagnosticsCapability,
     process_diagnostics_capability,
 )
-from wybra.diagnostics.events import (
+from wybra.diagnostics.records import (
     DiagnosticContext,
     DiagnosticLevel,
     RequestDiagnostics,
 )
-from wybra.events import EventScope
+from wybra.events._core import EventScope
 
 REQUEST_DIAGNOSTICS_SCOPE_KEY = "wybra.diagnostics"
 type DiagnosticAttributes = Mapping[str, object] | Callable[[], Mapping[str, object]]
@@ -302,6 +302,7 @@ def record_sql_operation(
     operation: str | None = None,
     result_count: int | None = None,
     inserted_id: int | None = None,
+    attributes: DiagnosticAttributes | None = None,
 ) -> None:
     """Record SQL metadata where statement text is intentionally unavailable."""
 
@@ -312,6 +313,7 @@ def record_sql_operation(
             operation=operation,
             result_count=result_count,
             inserted_id=inserted_id,
+            attributes=dict(_attributes(attributes)),
         )
     )
 

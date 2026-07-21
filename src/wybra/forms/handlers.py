@@ -53,12 +53,6 @@ class FormPostHandler[FormT: Form]:
         data: Mapping[str, object] | None = None,
     ) -> FormPostResult[FormT]:
         form_data = data if data is not None else await request_form_data(request)
-        if self.form.events is None:
-            from wybra.events import EventsCapability
-
-            self.form.events = get_site(request.app).optional_capability(
-                EventsCapability
-            )
         result = await self.form.parse(form_data)
         if not result.is_valid:
             await self.add_failure_message(request)

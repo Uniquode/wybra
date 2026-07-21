@@ -6,7 +6,8 @@ import pytest
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 
 from wybra.config import ConfigService, ConfigSourceError, MappingConfigSource
-from wybra.events import EVT_SECURITY, Event, EventsCapability, SecurityDenialEvent
+from wybra.events._core import EVT_SECURITY, Event, EventsCapability
+from wybra.events.security import SecurityDenialEvent
 from wybra.forms import (
     CSRF_COOKIE_NAME,
     CSRF_FIELD_NAME,

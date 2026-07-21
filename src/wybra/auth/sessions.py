@@ -28,7 +28,6 @@ from wybra.auth.accounts.manager import (
 from wybra.auth.accounts.schemas import UserCreate
 from wybra.auth.authorisation import is_user_effectively_active
 from wybra.auth.delivery import IdentityDelivery, NullIdentityDelivery
-from wybra.auth.events import publish_account_lifecycle, publish_credential_access
 from wybra.auth.mfa.challenges import (
     AuthenticationAssertion,
     AuthenticationMethod,
@@ -59,6 +58,7 @@ from wybra.auth.result import (
 )
 from wybra.auth.settings import identity_options_from_state
 from wybra.auth.timestamps import current_timestamp
+from wybra.events.auth import publish_account_lifecycle, publish_credential_access
 from wybra.site import get_site
 
 _CURRENT_USER_CACHE_TOKEN_ATTR = "identity_current_user_token"

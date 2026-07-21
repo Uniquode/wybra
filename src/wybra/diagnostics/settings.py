@@ -11,9 +11,9 @@ from wybra.config import (
     to_positive_float,
     to_positive_int,
 )
-from wybra.diagnostics.events import DiagnosticLevel, normalise_diagnostics_level
+from wybra.diagnostics.records import DiagnosticLevel, normalise_diagnostics_level
 from wybra.diagnostics_config import DIAGNOSTICS_CONFIG_DEF
-from wybra.events import DEFAULT_EVENT_SCOPES, EventScope, parse_event_scopes
+from wybra.events._core import DEFAULT_EVENT_SCOPES, EventScope, parse_event_scopes
 
 DIAGNOSTICS_CONFIG_SECTION = "wybra.diagnostics"
 

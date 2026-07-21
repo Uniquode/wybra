@@ -6,12 +6,13 @@ from collections.abc import Iterable
 from typing import Final
 
 from wybra.diagnostics.context import record_sql_operation, record_topic
-from wybra.events import (
+from wybra.events._core import (
     Event,
     EventsCapability,
     EventScope,
     available_event_scopes,
     event_segment,
+    subscribe_and_replay_event_history,
 )
 
 _EVENT_ATTRIBUTE_NAMES: Final = {
@@ -105,7 +106,7 @@ _EVENT_ATTRIBUTE_NAMES: Final = {
     "CapabilityUnavailableEvent": ("capability_type",),
     "CapabilityProvidedEvent": ("capability_type",),
     "SiteLifecycleEvent": ("phase", "error_count"),
-    "DatabaseConnectionEvent": ("connection_name", "outcome"),
+    "DatabaseConnectionEvent": ("connection_name",),
     "DatabaseStatementEvent": (
         "connection_name",
         "operation",
@@ -139,22 +140,24 @@ class DiagnosticsEventProjection:
         )
 
 
-def register_event_projection(
+async def register_event_projection(
     capability: EventsCapability,
     selectors: Iterable[EventScope],
 ) -> None:
-    """Register one passive diagnostics projection for every public event root."""
+    """Register and replay one passive projection for public event roots."""
 
     projection = DiagnosticsEventProjection(selectors)
     for scope, _description in available_event_scopes():
         if len(scope.segments) == 1:
-            capability.subscribe(scope, projection)
+            await subscribe_and_replay_event_history(capability, scope, projection)
 
 
 def _event_attributes(event: Event) -> dict[str, str | int | float | bool | None]:
     attributes: dict[str, str | int | float | bool | None] = {
         "event_type": f"{type(event).__module__}.{type(event).__qualname__}",
     }
+    if event.context is not None and event.context.request_id is not None:
+        attributes["event_context_request_id"] = str(event.context.request_id)
     for attribute_name in _EVENT_ATTRIBUTE_NAMES.get(type(event).__name__, ()):
         value = getattr(event, attribute_name, None)
         if isinstance(value, str | int | float | bool) or value is None:
@@ -188,6 +191,7 @@ def _record_sql_statement(event: Event) -> None:
         operation=operation if isinstance(operation, str) else None,
         result_count=result_count if isinstance(result_count, int) else None,
         inserted_id=inserted_id if isinstance(inserted_id, int) else None,
+        attributes=_event_attributes(event),
     )
 
 

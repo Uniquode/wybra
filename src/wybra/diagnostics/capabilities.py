@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from typing import Final
 from uuid import uuid7
 
-from wybra.diagnostics.events import DiagnosticLevel, RequestDiagnostics
-from wybra.events import EventScope
+from wybra.diagnostics.records import DiagnosticLevel, RequestDiagnostics
+from wybra.events._core import EventScope
 
 _DEFAULT_SUBSCRIPTION_QUEUE_LIMIT: Final = 32
 _DEFAULT_SNAPSHOT_EVENT_LIMIT: Final = 1_000

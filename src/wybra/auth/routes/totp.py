@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from secrets import token_urlsafe
-from typing import Any, Final
+from typing import Any, Final, Protocol
 from urllib.parse import quote, urlencode, urlsplit
 
 import qrcode
@@ -43,6 +43,8 @@ from wybra.auth.result import (
 from wybra.auth.sessions import session_cookie_secure_for_request
 from wybra.auth.settings import auth_settings_from_state, identity_options_from_state
 from wybra.auth.timestamps import current_timestamp
+from wybra.events import observe
+from wybra.events.auth import totp_verification_event
 from wybra.template import render_page
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,24 @@ TOTP_LOGIN_FORM_ERROR_BY_MESSAGE: Final[dict[str, str]] = {
     ERROR_TOTP_SETUP_REQUIRED: "Complete authenticator setup to continue.",
     ERROR_VERIFICATION_CODE_INVALID: "Two-factor verification failed.",
 }
+
+
+class TOTPVerificationStore(Protocol):
+    """The minimal credential-store surface needed for code verification."""
+
+    async def verify_totp_credential(
+        self,
+        *,
+        credential_id: str,
+        user_id: str,
+        code: str,
+        period_seconds: int,
+        allowed_drift: int,
+        expected_status: str,
+        timestamp: float | None,
+    ) -> tuple[bool, int | None, str | None]: ...
+
+
 TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE: Final[dict[str, str]] = {
     ERROR_TOTP_CODE_REQUIRED: (
         "Enter the code from your authenticator app or a one-time use recovery code."
@@ -331,9 +351,10 @@ def totp_credential_problem(
     return None
 
 
+@observe(totp_verification_event)
 async def verify_totp_code_for_credential(
     *,
-    store: TOTPCredentialStore,
+    store: TOTPVerificationStore,
     credential_id: str,
     user_id: str,
     code: str,

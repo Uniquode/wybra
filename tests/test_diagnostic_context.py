@@ -9,7 +9,7 @@ from wybra.diagnostics import (
     diagnostic_context,
     record_sql_query,
 )
-from wybra.events import EVT_SQL
+from wybra.events._core import EVT_SQL
 
 
 @pytest.mark.anyio

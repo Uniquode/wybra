@@ -45,6 +45,13 @@ from wybra.core.runtime import (
 )
 from wybra.core.settings import load_composition_config_from_environment
 from wybra.errors.diagnostics import structured_error, type_name
+from wybra.events import observe
+from wybra.events.site import (
+    capability_provided_event,
+    capability_resolution_event,
+    module_hook_event,
+    site_lifecycle_event,
+)
 from wybra.tools.project import runtime_project_root
 
 logger = logging.getLogger(__name__)
@@ -71,7 +78,7 @@ class SiteCapabilityError(RuntimeError):
     """Raised when a site capability cannot be registered or resolved."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class Site:
     app: FastAPI
     config: ConfigService
@@ -125,29 +132,11 @@ class Site:
 
         if not self._pending_capability_events:
             return
-        from wybra.events import (
-            CAPABILITY,
-            EVT_SITE,
-            CapabilityProvidedEvent,
-            EventsCapability,
-            publish_observation,
-            scoped,
-        )
 
         pending = tuple(self._pending_capability_events)
         self._pending_capability_events.clear()
-        events = self.optional_capability(EventsCapability)
-        if events is None:
-            return
-        with scoped(EVT_SITE(CAPABILITY)):
-            for capability_type in pending:
-                await publish_observation(
-                    events,
-                    CapabilityProvidedEvent(
-                        capability_type=type_name(capability_type),
-                    ),
-                    message="capability registration event",
-                )
+        for capability_type in pending:
+            await _record_capability_provided(type_name(capability_type))
 
     def require_capability(self, capability_type: type[T]) -> T:
         try:
@@ -181,8 +170,13 @@ class Site:
         if not self._capabilities:
             return
 
+        from wybra.events import EventsCapability
+
         error_count = 0
+        events = self.optional_capability(EventsCapability)
         for capability in tuple(self._capabilities.values()):
+            if capability is events:
+                continue
             close = getattr(capability, "close", None)
             if close is None:
                 continue
@@ -212,7 +206,11 @@ class Site:
                 if not isinstance(exc, Exception):
                     raise
 
-        await _publish_site_lifecycle(self, phase="shutdown", error_count=error_count)
+        await _publish_site_lifecycle(phase="shutdown", error_count=error_count)
+        if events is not None:
+            close_events = getattr(events, "close", None)
+            if callable(close_events) and iscoroutinefunction(close_events):
+                await close_events()
         self._capabilities.clear()
         self._pending_capability_events.clear()
 
@@ -307,32 +305,9 @@ class SiteCapabilityProxy[T]:
         self._state = _CapabilityProxyState.UNAVAILABLE
 
     async def _record_resolution(self, *, available: bool) -> None:
-        from wybra.events import (
-            CAPABILITY,
-            EVT_SITE,
-            CapabilityResolvedEvent,
-            CapabilityUnavailableEvent,
-            EventsCapability,
-            publish_observation,
-            scoped,
+        await _record_capability_resolution(
+            type_name(self.capability_type), available=available
         )
-
-        events = self.site.optional_capability(EventsCapability)
-        if events is None:
-            return
-        with scoped(EVT_SITE(CAPABILITY)):
-            event = (
-                CapabilityResolvedEvent(capability_type=type_name(self.capability_type))
-                if available
-                else CapabilityUnavailableEvent(
-                    capability_type=type_name(self.capability_type)
-                )
-            )
-            await publish_observation(
-                events,
-                event,
-                message="capability proxy resolution event",
-            )
 
     def _require_cached_capability(self) -> T:
         if self._capability is None:
@@ -399,34 +374,47 @@ def get_site(app: FastAPI) -> Site:
     return site
 
 
+@observe(site_lifecycle_event, context="lifecycle")
 async def _publish_site_lifecycle(
-    site: Site,
     *,
     phase: str,
     error_count: int = 0,
 ) -> None:
     """Publish a non-controlling site lifecycle observation."""
 
-    from wybra.events import (
-        EVT_SITE,
-        SHUTDOWN,
-        STARTUP,
-        EventsCapability,
-        SiteLifecycleEvent,
-        publish_observation,
-        scoped,
-    )
+    del phase, error_count
 
-    events = site.optional_capability(EventsCapability)
-    if events is None:
-        return
-    event_scope = STARTUP if phase == "startup" else SHUTDOWN
-    with scoped(EVT_SITE(event_scope)):
-        await publish_observation(
-            events,
-            SiteLifecycleEvent(phase=phase, error_count=error_count),
-            message="site lifecycle event",
-        )
+
+@observe(capability_provided_event, context="capability")
+async def _record_capability_provided(capability_type: str) -> None:
+    """Record a provided site capability without exposing dispatch mechanics."""
+
+    del capability_type
+
+
+@observe(capability_resolution_event, context="capability")
+async def _record_capability_resolution(
+    capability_type: str,
+    *,
+    available: bool,
+) -> None:
+    """Record a lazy capability resolution without exposing dispatch mechanics."""
+
+    del capability_type, available
+
+
+@observe(module_hook_event, context="module")
+async def _invoke_module_hook(
+    site: Site,
+    *,
+    module_name: str,
+    attribute: str,
+    hook: Callable[[Site], Awaitable[None]],
+) -> None:
+    """Run one configured hook while observing its lifecycle."""
+
+    del module_name, attribute
+    await hook(site)
 
 
 async def start(
@@ -460,10 +448,10 @@ async def start(
         _setup_core_events(site)
         await site._publish_pending_capability_events()
         await _compose_site(site, module_loader or import_module)
-        _setup_core_diagnostics(site)
+        await _setup_core_diagnostics(site)
         await site._publish_pending_capability_events()
         _register_event_lifecycle_middleware(site)
-        await _publish_site_lifecycle(site, phase="startup")
+        await _publish_site_lifecycle(phase="startup")
     except Exception:
         await site.close()
         raise
@@ -711,14 +699,14 @@ async def _compose_site(site: Site, module_loader: ModuleLoader) -> None:
     await _post_setup_module_hooks(site, loaded_modules)
 
 
-def _setup_core_diagnostics(site: Site) -> None:
+async def _setup_core_diagnostics(site: Site) -> None:
     from wybra.diagnostics.setup import setup_core_diagnostics
 
-    setup_core_diagnostics(site)
+    await setup_core_diagnostics(site)
 
 
 def _setup_core_events(site: Site) -> None:
-    from wybra.events import setup_core_events
+    from wybra.events._core import setup_core_events
 
     setup_core_events(site)
 
@@ -799,56 +787,27 @@ async def _run_module_hook(
     attribute: str,
     hook: object,
 ) -> None:
-    from wybra.events import (
-        EVT_SITE,
-        MODULE,
-        EventsCapability,
-        ModulePostSetupEvent,
-        ModuleSetupEvent,
-        publish_observation,
-        scoped,
-    )
-
     _require_async_hook(module_name=module_name, attribute=attribute, hook=hook)
     async_hook = cast(Callable[[Site], Awaitable[None]], hook)
-    event_type = (
-        ModuleSetupEvent if attribute == SETUP_SITE_ATTRIBUTE else ModulePostSetupEvent
-    )
-    dispatcher = site.require_capability(EventsCapability)
-    with scoped(EVT_SITE(MODULE)):
-        await publish_observation(
-            dispatcher,
-            event_type(module=module_name, outcome="started"),
-            message="module hook start event",
+    try:
+        await _invoke_module_hook(
+            site,
+            module_name=module_name,
+            attribute=attribute,
+            hook=async_hook,
         )
-        try:
-            await async_hook(site)
-        except BaseException as exc:
-            await publish_observation(
-                dispatcher,
-                event_type(
-                    module=module_name,
-                    outcome="failed",
-                    error_type=type(exc).__name__,
-                ),
-                message="module hook failure event",
+    except BaseException as exc:
+        if not isinstance(exc, Exception):
+            raise
+        if isinstance(exc, SiteCapabilityError):
+            raise
+        raise SiteCapabilityError(
+            structured_error(
+                "Configured module hook failed",
+                module=module_name,
+                attribute=attribute,
+                error_type=type(exc).__name__,
             )
-            if not isinstance(exc, Exception):
-                raise
-            if isinstance(exc, SiteCapabilityError):
-                raise
-            raise SiteCapabilityError(
-                structured_error(
-                    "Configured module hook failed",
-                    module=module_name,
-                    attribute=attribute,
-                    error_type=type(exc).__name__,
-                )
-            ) from exc
-        else:
-            await publish_observation(
-                dispatcher,
-                event_type(module=module_name, outcome="succeeded"),
-                message="module hook completion event",
-            )
-            await site._publish_pending_capability_events()
+        ) from exc
+    else:
+        await site._publish_pending_capability_events()

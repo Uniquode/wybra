@@ -15,8 +15,8 @@ from wybra.diagnostics.context import (
     set_current_diagnostic_context,
     set_current_diagnostics,
 )
-from wybra.diagnostics.events import DiagnosticContext, RequestDiagnostics
 from wybra.diagnostics.logging import emit_request_diagnostics
+from wybra.diagnostics.records import DiagnosticContext, RequestDiagnostics
 from wybra.diagnostics.settings import DiagnosticsSettings
 from wybra.site import Site
 

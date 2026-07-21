@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from wybra.diagnostics.capabilities import DiagnosticsCapability
-from wybra.diagnostics.events import RequestDiagnostics
-from wybra.events import EVT_SQL, EVT_TEMPLATE, SQL_STATEMENT
+from wybra.diagnostics.records import RequestDiagnostics
+from wybra.events._core import EVT_SQL, EVT_TEMPLATE, SQL_STATEMENT
 
 
 def _completed_diagnostics(*, statement: str) -> RequestDiagnostics:

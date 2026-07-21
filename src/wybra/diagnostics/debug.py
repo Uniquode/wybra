@@ -17,7 +17,7 @@ from wybra.diagnostics.capabilities import (
     DiagnosticsSubscription,
 )
 from wybra.diagnostics.settings import DiagnosticsSettings
-from wybra.events import (
+from wybra.events._core import (
     EVT_CONTENT_TYPES,
     EventScope,
     EventScopeError,
