@@ -12,7 +12,6 @@ from wybra.events._core import (
     EventScope,
     available_event_scopes,
     event_segment,
-    subscribe_and_replay_event_history,
 )
 
 _EVENT_ATTRIBUTE_NAMES: Final = {
@@ -149,7 +148,7 @@ async def register_event_projection(
     projection = DiagnosticsEventProjection(selectors)
     for scope, _description in available_event_scopes():
         if len(scope.segments) == 1:
-            await subscribe_and_replay_event_history(capability, scope, projection)
+            await capability.subscribe(scope, projection, history=True)
 
 
 def _event_attributes(event: Event) -> dict[str, str | int | float | bool | None]:

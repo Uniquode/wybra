@@ -68,7 +68,9 @@ class TestInMemoryCache:
             observed.append(event)
 
         async with _started_events_site() as site:
-            site.require_capability(EventsCapability).subscribe(EVT_CACHE, handler)
+            await site.require_capability(EventsCapability).subscribe(
+                EVT_CACHE, handler
+            )
             cache = InMemoryCache()
 
             assert await cache.get("template", "private-user-key") is None
@@ -148,7 +150,7 @@ class TestInMemoryCache:
             raise asyncio.CancelledError()
 
         async with _started_events_site() as site:
-            site.require_capability(EventsCapability).subscribe(
+            await site.require_capability(EventsCapability).subscribe(
                 EVT_CACHE, cancelling_handler
             )
             cache = InMemoryCache()
@@ -242,7 +244,9 @@ class TestInMemoryCache:
             return b"value"
 
         async with _started_events_site() as site:
-            site.require_capability(EventsCapability).subscribe(EVT_CACHE, handler)
+            await site.require_capability(EventsCapability).subscribe(
+                EVT_CACHE, handler
+            )
             cache = InMemoryCache()
             fill = asyncio.create_task(
                 cache.get_or_set("template", "fragment", ttl=60, factory=factory)
@@ -270,7 +274,9 @@ class TestInMemoryCache:
                 await release_event.wait()
 
         async with _started_events_site() as site:
-            site.require_capability(EventsCapability).subscribe(EVT_CACHE, slow_handler)
+            await site.require_capability(EventsCapability).subscribe(
+                EVT_CACHE, slow_handler
+            )
             cache = InMemoryCache()
             factory_started = asyncio.Event()
             release_factory = asyncio.Event()
@@ -311,7 +317,9 @@ class TestInMemoryCache:
             await asyncio.sleep(1)
 
         async with _started_events_site() as site:
-            site.require_capability(EventsCapability).subscribe(EVT_CACHE, slow_handler)
+            await site.require_capability(EventsCapability).subscribe(
+                EVT_CACHE, slow_handler
+            )
             cache = InMemoryCache()
             factory_started = asyncio.Event()
 

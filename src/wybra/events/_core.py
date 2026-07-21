@@ -183,41 +183,32 @@ class EventOutcome:
 class EventsCapability(Protocol):
     """Process-local delivery of typed observational events."""
 
-    def subscribe(self, selector: EventScope, handler: EventHandler) -> None: ...
+    async def subscribe(
+        self,
+        selector: EventScope,
+        handler: EventHandler,
+        *,
+        history: bool = False,
+    ) -> None: ...
 
     async def publish(self, event: Event) -> None: ...
-
-
-@runtime_checkable
-class _EventHistoryCapability(Protocol):
-    """Internal capability extension for bounded event-history replay."""
-
-    async def replay(self, selector: EventScope, handler: EventHandler) -> None: ...
-
-    async def subscribe_and_replay(
-        self, selector: EventScope, handler: EventHandler
-    ) -> None: ...
 
 
 class _DisabledEventsCapability:
     """No-op core sink used when optional event delivery is disabled."""
 
-    def subscribe(self, selector: EventScope, handler: EventHandler) -> None:
-        del selector, handler
+    async def subscribe(
+        self,
+        selector: EventScope,
+        handler: EventHandler,
+        *,
+        history: bool = False,
+    ) -> None:
+        del selector, handler, history
         return None
 
     async def publish(self, event: Event) -> None:
         del event
-        return None
-
-    async def replay(self, selector: EventScope, handler: EventHandler) -> None:
-        del selector, handler
-        return None
-
-    async def subscribe_and_replay(
-        self, selector: EventScope, handler: EventHandler
-    ) -> None:
-        del selector, handler
         return None
 
     async def close(self) -> None:
@@ -238,19 +229,17 @@ class _LazyEventsCapability:
     _capability: EventsCapability | None = field(default=None, init=False)
     _resolve_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
-    def subscribe(self, selector: EventScope, handler: EventHandler) -> None:
-        self._resolve().subscribe(selector, handler)
+    async def subscribe(
+        self,
+        selector: EventScope,
+        handler: EventHandler,
+        *,
+        history: bool = False,
+    ) -> None:
+        await self._resolve().subscribe(selector, handler, history=history)
 
     async def publish(self, event: Event) -> None:
         await self._resolve().publish(event)
-
-    async def replay(self, selector: EventScope, handler: EventHandler) -> None:
-        await replay_event_history(self._resolve(), selector, handler)
-
-    async def subscribe_and_replay(
-        self, selector: EventScope, handler: EventHandler
-    ) -> None:
-        await subscribe_and_replay_event_history(self._resolve(), selector, handler)
 
     def enabled(self) -> bool:
         """Return whether the resolved sink is accepting observations."""
@@ -278,9 +267,8 @@ class _LazyEventsCapability:
     def _resolve(self) -> EventsCapability:
         capability = self._capability
         if capability is None:
-            # ``subscribe()`` remains synchronous, so use a thread lock rather
-            # than an asyncio primitive to make first resolution safe for both
-            # event-loop tasks and synchronous callers on other threads.
+            # A thread lock makes first resolution safe for event-loop tasks
+            # that reach this lazy process runtime concurrently.
             with self._resolve_lock:
                 capability = self._capability
                 if capability is None:
@@ -334,12 +322,25 @@ class EventDispatcher:
 
         return True
 
-    def subscribe(self, selector: EventScope, handler: EventHandler) -> None:
+    async def subscribe(
+        self,
+        selector: EventScope,
+        handler: EventHandler,
+        *,
+        history: bool = False,
+    ) -> None:
         if not iscoroutinefunction(handler) and not iscoroutinefunction(
             handler.__call__
         ):
             raise TypeError("Event handlers must be async callables.")
+        retained: tuple[Event, ...] = ()
+        if history:
+            retained = tuple(
+                event for event in self._history if event.scope.matches(selector)
+            )
         self._handlers.append((selector, handler))
+        for event in retained:
+            await self._dispatch_handler(event, handler, copy_context())
 
     async def publish(self, event: Event) -> None:
         """Queue an event without waiting for its handlers to finish."""
@@ -422,24 +423,6 @@ class EventDispatcher:
             handler_failed=handler_failed,
         )
 
-    async def replay(self, selector: EventScope, handler: EventHandler) -> None:
-        """Deliver retained matching events to an explicit internal consumer."""
-
-        for event in tuple(self._history):
-            if event.scope.matches(selector):
-                await self._dispatch_handler(event, handler, copy_context())
-
-    async def subscribe_and_replay(
-        self, selector: EventScope, handler: EventHandler
-    ) -> None:
-        """Atomically capture history, subscribe, then deliver that snapshot."""
-        history = tuple(
-            event for event in self._history if event.scope.matches(selector)
-        )
-        self.subscribe(selector, handler)
-        for event in history:
-            await self._dispatch_handler(event, handler, copy_context())
-
     async def _dispatch_handler(
         self,
         event: Event,
@@ -510,33 +493,6 @@ def events_enabled() -> bool:
 
     runtime = _EVENTS_RUNTIME
     return runtime is not None and runtime.enabled()
-
-
-async def replay_event_history(
-    capability: EventsCapability,
-    selector: EventScope,
-    handler: EventHandler,
-) -> None:
-    """Replay retained history to an internal consumer when supported.
-
-    This is intentionally not part of the public ``EventsCapability``
-    contract. Ordinary subscriptions remain live-only.
-    """
-
-    if isinstance(capability, _EventHistoryCapability):
-        await capability.replay(selector, handler)
-
-
-async def subscribe_and_replay_event_history(
-    capability: EventsCapability,
-    selector: EventScope,
-    handler: EventHandler,
-) -> None:
-    """Install a live subscriber without duplicating retained observations."""
-    if isinstance(capability, _EventHistoryCapability):
-        await capability.subscribe_and_replay(selector, handler)
-        return
-    capability.subscribe(selector, handler)
 
 
 type EventDescriptor = Callable[..., Event | None]

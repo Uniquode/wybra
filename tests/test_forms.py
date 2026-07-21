@@ -606,7 +606,7 @@ class TestForms:
             ),
         )
         try:
-            site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
+            await site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
             async with migrated_test_database(
                 modules=("tests_support.form_binding",)
             ) as database:
@@ -756,7 +756,7 @@ class TestForms:
             ),
         )
         try:
-            site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
+            await site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
             async with migrated_test_database(
                 modules=("tests_support.form_binding",)
             ) as database:
@@ -1523,7 +1523,7 @@ class TestForms:
                 }
             ),
         )
-        site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
+        await site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
         try:
             form = PlainModelForm()
             await form.parse({"preferred_name": "Plain"})

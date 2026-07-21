@@ -456,7 +456,7 @@ async def test_session_lifecycle_events_exclude_session_data_and_identifiers() -
             }
         ),
     )
-    site.require_capability(EventsCapability).subscribe(EVT_SESSION, handler)
+    await site.require_capability(EventsCapability).subscribe(EVT_SESSION, handler)
     context = SessionMiddlewareContext(
         settings=_settings(),
         storage=MemorySessionStorage(payload_max_bytes=1024),
