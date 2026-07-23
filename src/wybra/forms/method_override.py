@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from starlette.datastructures import Headers
+from starlette.datastructures import FormData, Headers
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from wybra.forms.csrf import CSRF_FORM_DATA_STATE_ATTR
 from wybra.forms.security import FORM_BODY_MAX_BYTES, normalise_content_type
 
 _ALLOWED_METHODS = frozenset({"PATCH", "PUT", "DELETE"})
@@ -27,10 +28,10 @@ class MethodOverrideMiddleware:
         headers = Headers(scope=scope)
         content_type = normalise_content_type(headers.get("content-type", ""))
         if scope["method"] != "POST" or content_type not in _SUPPORTED_CONTENT_TYPES:
-            await self.app(scope, receive, send)
+            await self._call_app(scope, receive, send)
             return
         if not _has_small_content_length(headers):
-            await self.app(scope, receive, send)
+            await self._call_app(scope, receive, send)
             return
         body = await Request(scope, receive).body()
         request = Request(scope, _replay_receive(body))
@@ -42,13 +43,20 @@ class MethodOverrideMiddleware:
                 return
         else:
             try:
-                override = _form_method_override_from_form(await request.form())
+                async with request.form() as form_data:
+                    override = _form_method_override_from_form(form_data)
             except Exception:
-                await self.app(scope, _replay_receive(body), send)
+                await self._call_app(scope, _replay_receive(body), send)
                 return
         if override is not None:
             scope = {**scope, "method": override}
-        await self.app(scope, _replay_receive(body), send)
+        await self._call_app(scope, _replay_receive(body), send)
+
+    async def _call_app(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            await _close_cached_form_data(scope)
 
 
 def _has_small_content_length(headers: Headers) -> bool:
@@ -96,6 +104,15 @@ def _replay_receive(body: bytes) -> Receive:
         return {"type": "http.request", "body": body, "more_body": False}
 
     return receive
+
+
+async def _close_cached_form_data(scope: Scope) -> None:
+    state = scope.get("state")
+    if not isinstance(state, dict):
+        return
+    form_data = state.pop(CSRF_FORM_DATA_STATE_ATTR, None)
+    if isinstance(form_data, FormData):
+        await form_data.close()
 
 
 __all__ = [

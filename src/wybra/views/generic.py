@@ -24,6 +24,7 @@ from wybra.events import observe
 from wybra.events.views import generic_view_event
 from wybra.forms import ModelForm
 from wybra.forms.csrf import request_form_data
+from wybra.scopes import ScopeAction, ScopeDeclarationError, scope_visibility
 from wybra.site import get_site
 from wybra.views.base import HandlerResult, View
 from wybra.views.bulk import BulkAction, BulkActionResult, BulkDeleteAction
@@ -64,20 +65,77 @@ class GenericView(View):
         route_type = kwargs.pop("_route_type", RouteType.PAGE)
         self._route_type = RouteType(route_type)
         self._collection_path = kwargs.pop("_collection_path", request.url.path)
+        action = self.scope_action(request, **kwargs)
+        if action is not None and not self._scope_action_available(request, action):
+            return self.method_not_allowed(request, **kwargs)
         return await super().dispatch(request, **kwargs)
+
+    def scope_action(
+        self,
+        request: Request,
+        **kwargs: Any,
+    ) -> ScopeAction | None:
+        """Map collection, item, and bulk dispatch to canonical actions."""
+
+        match request.method.upper():
+            case "GET" | "HEAD":
+                return (
+                    ScopeAction.VIEW
+                    if kwargs.get("id") is not None
+                    else ScopeAction.LIST
+                )
+            case "POST" if action_name := kwargs.get("action"):
+                return self._bulk_scope_action(str(action_name))
+            case "POST":
+                return ScopeAction.CREATE
+            case "PUT" | "PATCH":
+                return ScopeAction.UPDATE
+            case "DELETE":
+                return ScopeAction.DELETE
+            case _:
+                return None
+
+    def _bulk_scope_action(self, action_name: str) -> ScopeAction:
+        bulk_action = getattr(self, "bulk_actions", {}).get(action_name)
+        if bulk_action is None:
+            return ScopeAction.MANAGE
+        return self._normalise_bulk_scope_action(action_name, bulk_action)
+
+    @staticmethod
+    def _normalise_bulk_scope_action(
+        action_name: str,
+        bulk_action: object,
+    ) -> ScopeAction:
+        action = getattr(bulk_action, "scope_action", ScopeAction.MANAGE)
+        try:
+            return ScopeAction(action)
+        except (TypeError, ValueError) as exc:
+            raise ScopeDeclarationError(
+                f"Bulk action {action_name!r} declares unknown scope action: "
+                f"{action!r}."
+            ) from exc
+
+    def _scope_action_available(
+        self,
+        request: Request,
+        action: ScopeAction,
+    ) -> bool:
+        return True
 
     @classmethod
     def route_definitions(cls, base_path: str):
         """Return the collection, bulk, and item routes for this resource."""
         from wybra.views.routing import ViewRoute
 
+        for action_name, bulk_action in getattr(cls, "bulk_actions", {}).items():
+            cls._normalise_bulk_scope_action(action_name, bulk_action)
         return (
             ViewRoute(base_path, ("GET", "POST"), name_suffix="collection"),
             ViewRoute(
-                f"{base_path.rstrip('/')}/bulk",
+                f"{base_path.rstrip('/')}/bulk/{{action}}",
                 ("POST",),
                 name_suffix="bulk",
-                dispatch_kwargs={"bulk": True},
+                path_parameter="action",
             ),
             ViewRoute(
                 f"{base_path.rstrip('/')}/{{id}}",
@@ -94,8 +152,8 @@ class GenericView(View):
         return await self.retrieve_object(request, str(object_id))
 
     async def post(self, request: Request, **kwargs: Any) -> HandlerResult:
-        if kwargs.get("bulk"):
-            return await self.bulk_action(request)
+        if action_name := kwargs.get("action"):
+            return await self.bulk_action(request, str(action_name))
         return await self.create_object(request)
 
     async def patch(self, request: Request, **kwargs: Any) -> HandlerResult:
@@ -124,7 +182,11 @@ class GenericView(View):
         """Delete and return one object representation for this request."""
         raise NotImplementedError
 
-    async def bulk_action(self, request: Request) -> HandlerResult:
+    async def bulk_action(
+        self,
+        request: Request,
+        action_name: str,
+    ) -> HandlerResult:
         """Perform a collection action for this request."""
         raise NotImplementedError
 
@@ -158,6 +220,14 @@ class ModelGenericView(GenericView):
             response = await self._request_validation_response(request, exc)
         return response
 
+    def _bulk_scope_action(self, action_name: str) -> ScopeAction:
+        action = self.bulk_actions.get(action_name)
+        if action is None:
+            raise _RequestValidationError(
+                "action", f"Bulk action is not registered: {action_name}."
+            )
+        return self._normalise_bulk_scope_action(action_name, action)
+
     async def list_objects(self, request: Request) -> HandlerResult:
         """Render or represent the configured model collection."""
         records = await self.get_collection(request)
@@ -174,7 +244,6 @@ class ModelGenericView(GenericView):
             "bulk_actions": self.bulk_actions,
             "collection_path": self._collection_path,
             "collection_url": self._collection_url(request),
-            "bulk_action_url": self._bulk_action_url(request),
             "page_title": content_type.verbose_name_plural,
         }
         edit_id = request.query_params.get("edit")
@@ -281,20 +350,19 @@ class ModelGenericView(GenericView):
             )
         return self._mutation_redirect(request, record)
 
-    async def bulk_action(self, request: Request) -> HandlerResult:
+    async def bulk_action(
+        self,
+        request: Request,
+        action_name: str,
+    ) -> HandlerResult:
         """Run an explicitly registered action over visible selected records."""
-        values = await self.request_values(request)
-        action_name = values.get("action")
-        selected = _selected_values(values)
-        if not isinstance(action_name, str):
-            raise _RequestValidationError(
-                "action", "Bulk actions require an action name."
-            )
         action = self.bulk_actions.get(action_name)
         if action is None:
             raise _RequestValidationError(
                 "action", f"Bulk action is not registered: {action_name}."
             )
+        values = await self.request_values(request)
+        selected = _selected_values(values)
         if isinstance(action, BulkDeleteAction) and not _is_confirmed(values):
             return await self._bulk_confirmation_error(request)
         selected_ids = tuple(dict.fromkeys(str(value) for value in selected))
@@ -384,6 +452,16 @@ class ModelGenericView(GenericView):
         """Return content metadata for the configured model."""
         content_types = get_site(request.app).require_capability(ContentTypesCapability)
         return content_types.for_model(self.get_model())
+
+    def _scope_action_available(
+        self,
+        request: Request,
+        action: ScopeAction,
+    ) -> bool:
+        return (
+            action is ScopeAction.MANAGE
+            or action.value in self.get_content_type(request).actions
+        )
 
     def get_list_ordering(self) -> tuple[str, ...]:
         """Return model-specific ordering, falling back to its primary key."""
@@ -519,7 +597,6 @@ class ModelGenericView(GenericView):
             "bulk_actions": self.bulk_actions,
             "collection_path": self._collection_path,
             "collection_url": self._collection_url(request),
-            "bulk_action_url": self._bulk_action_url(request),
             "page_title": content_type.verbose_name_plural,
         }
         if isinstance(form.instance, Model):
@@ -585,6 +662,34 @@ class ModelGenericView(GenericView):
         request: Request,
     ) -> dict[str, object]:
         """Extend the model-driven template context for an HTML representation."""
+        visibility = await scope_visibility(
+            request,
+            target=type(self),
+            model=self._scope_model(),
+        )
+        visibility = {
+            action: allowed and self._scope_action_available(request, action)
+            for action, allowed in visibility.items()
+        }
+        context["scope_visibility"] = {
+            action.value: allowed for action, allowed in visibility.items()
+        }
+        if not visibility[ScopeAction.CREATE]:
+            context.pop("create_form", None)
+        bulk_actions = {
+            name: bulk_action
+            for name, bulk_action in self.bulk_actions.items()
+            if visibility[self._bulk_scope_action(name)]
+        }
+        context["bulk_actions"] = bulk_actions
+        bulk_action_urls = {
+            name: self._bulk_action_url(request, name) for name in bulk_actions
+        }
+        context["bulk_action_urls"] = bulk_action_urls
+        if bulk_action_urls:
+            context["bulk_action_url"] = next(iter(bulk_action_urls.values()))
+        else:
+            context.pop("bulk_action_url", None)
         return context
 
     def serialise_object(self, record: Model) -> dict[str, object]:
@@ -634,10 +739,10 @@ class ModelGenericView(GenericView):
             return path
         return f"{path}?{collection_url.split('?', maxsplit=1)[1]}"
 
-    def _bulk_action_url(self, request: Request) -> str:
+    def _bulk_action_url(self, request: Request, action_name: str) -> str:
         return self._with_collection_state(
             request,
-            f"{self._collection_path.rstrip('/')}/bulk",
+            f"{self._collection_path.rstrip('/')}/bulk/{action_name}",
         )
 
     def _edit_url(self, request: Request, record: Model) -> str:
@@ -691,7 +796,6 @@ class ModelGenericView(GenericView):
             "bulk_actions": self.bulk_actions,
             "collection_path": self._collection_path,
             "collection_url": self._collection_url(request),
-            "bulk_action_url": self._bulk_action_url(request),
             "page_title": content_type.verbose_name_plural,
         }
 

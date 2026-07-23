@@ -11,6 +11,7 @@ from tortoise.exceptions import IntegrityError
 
 from wybra.auth.accounts.manager import InvalidID, UserManager, UserNotExists
 from wybra.auth.admin.management import TortoiseAuthManagementStore
+from wybra.auth.authorisation.effective import effective_scope_sets_for_user
 from wybra.auth.email_normalisation import normalise_email_target
 from wybra.auth.ids import parse_uuid
 from wybra.auth.mfa.storage import (
@@ -19,15 +20,19 @@ from wybra.auth.mfa.storage import (
     TortoiseTOTPCredentialStore,
     TortoiseWebAuthnCredentialStore,
 )
-from wybra.auth.models import AccessToken, IdentityUserEmail, User
+from wybra.auth.models import AccessToken, Group, IdentityUserEmail, Scope, User
 from wybra.auth.options import IdentityOptions
 from wybra.auth.persistence.contracts import (
     AuthManagementStore,
+    AuthorisationStore,
     AuthPersistenceScope,
     ChallengeStore,
     DuplicateIdentityError,
+    EffectiveScopeSet,
+    GroupRecord,
     LocalUserRecord,
     RecoveryCodeStore,
+    ScopeRecord,
     SessionTokenStore,
     TOTPCredentialStore,
     UserStore,
@@ -244,6 +249,36 @@ class PersistentSessionTokenStrategy:
 
 
 @dataclass(frozen=True, slots=True)
+class TortoiseAuthorisationStore:
+    """Tortoise-backed authorisation catalogue and effective scopes."""
+
+    connection: BaseDBAsyncClient
+
+    async def list_groups(self) -> tuple[GroupRecord, ...]:
+        groups = await Group.all().using_db(self.connection).order_by("abbrev")
+        return tuple(
+            GroupRecord(id=str(group.id), abbrev=group.abbrev, title=group.description)
+            for group in groups
+        )
+
+    async def list_scopes(self) -> tuple[ScopeRecord, ...]:
+        scopes = await Scope.all().using_db(self.connection).order_by("scope")
+        return tuple(
+            ScopeRecord(scope=scope.scope, title=scope.description) for scope in scopes
+        )
+
+    async def effective_scope_sets_for_user(
+        self,
+        user_id: uuid.UUID,
+    ) -> EffectiveScopeSet:
+        scopes, groups = await effective_scope_sets_for_user(
+            self.connection,
+            user_id,
+        )
+        return EffectiveScopeSet(scopes=scopes, groups=groups)
+
+
+@dataclass(frozen=True, slots=True)
 class TortoiseAuthPersistenceScope:
     """Tortoise-backed auth repository scope."""
 
@@ -281,6 +316,10 @@ class TortoiseAuthPersistenceScope:
     @property
     def management(self) -> AuthManagementStore:
         return TortoiseAuthManagementStore(self.connection, self.secret_service)
+
+    @property
+    def authorisation(self) -> AuthorisationStore:
+        return TortoiseAuthorisationStore(self.connection)
 
     async def get_user(self, user_id: str | uuid.UUID) -> User | None:
         parsed_user_id = parse_uuid(user_id)

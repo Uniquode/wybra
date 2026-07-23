@@ -9,11 +9,13 @@ from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
 from fastapi import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
+from tortoise.models import Model
 
 from wybra.api import ApiCapability, ApiPaging
 from wybra.errors.diagnostics import structured_error, type_name
 from wybra.events import observe
 from wybra.events.views import view_event
+from wybra.scopes import ScopeAction, enforce_scope_access, get_scope_declaration
 from wybra.site import SiteCapabilityError
 
 type JsonValue = Mapping[str, Any] | Sequence[Any] | str | int | float | bool | None
@@ -46,12 +48,64 @@ class View:
     @observe(view_event)
     async def dispatch(self, request: Request, **kwargs: Any) -> Response:
         handler = self._handler_for(request.method)
+        await self._enforce_scope_access(request, **kwargs)
         result = handler(request, **kwargs)
         if isawaitable(result):
             result = await result
         if isinstance(result, _DeferredViewResponse):
             return await result.render_response()
         return self.response_from_result(cast(HandlerResult, result))
+
+    def scope_action(
+        self,
+        request: Request,
+        **_kwargs: Any,
+    ) -> ScopeAction | None:
+        """Return the canonical action represented by this dispatch."""
+
+        match request.method.upper():
+            case "GET" | "HEAD":
+                return ScopeAction.VIEW
+            case "POST":
+                return ScopeAction.CREATE
+            case "PUT" | "PATCH":
+                return ScopeAction.UPDATE
+            case "DELETE":
+                return ScopeAction.DELETE
+            case _:
+                return None
+
+    async def _enforce_scope_access(self, request: Request, **kwargs: Any) -> None:
+        if not callable(getattr(self, request.method.lower(), None)):
+            return
+        action = self.scope_action(request, **kwargs)
+        if action is None:
+            return
+        view_type = type(self)
+        model = self._scope_model()
+        view_declaration = get_scope_declaration(view_type)
+        model_declaration = get_scope_declaration(model) if model is not None else None
+        if (
+            not view_declaration.requires
+            and not view_declaration.actions
+            and (
+                model_declaration is None
+                or (not model_declaration.requires and not model_declaration.actions)
+            )
+        ):
+            return
+        await enforce_scope_access(
+            request,
+            target=view_type,
+            action=action,
+            model=model,
+        )
+
+    def _scope_model(self) -> type[Model] | None:
+        model = type(self).model
+        if isinstance(model, type) and issubclass(model, Model):
+            return model
+        return None
 
     def _handler_for(self, method: str) -> ViewHandler:
         handler = getattr(self, method.lower(), None)

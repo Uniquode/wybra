@@ -56,8 +56,10 @@ display; it does not infer translated words from model class names.
 
 Content types supply model metadata to generic views but never create or choose
 routes. A generic view remains an ordinary explicitly decorated route, owned by
-the application. Content types also do not carry scopes or policy rules; the
-upcoming scope-decorators change will own that behaviour.
+the application. Content types also do not carry scopes or policy rules.
+`wybra.scopes` derives canonical model-action requirements from content-type
+identifiers while keeping policy metadata separate. See
+[`SCOPES.md`](SCOPES.md).
 
 There is deliberately no generic foreign-key support, multi-tenant registry,
 or persisted `content_type` table in this first implementation.

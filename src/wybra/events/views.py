@@ -138,7 +138,7 @@ def _route_name(request: Request) -> str | None:
 
 
 def _generic_operation(kwargs: Mapping[str, Any]) -> str:
-    if kwargs.get("bulk"):
+    if kwargs.get("action") is not None:
         return "bulk"
     if kwargs.get("id") is not None:
         return "item"

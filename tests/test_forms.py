@@ -3444,8 +3444,25 @@ class TestForms:
 
     @pytest.mark.anyio
     async def test_forms_method_override_preserves_multipart_form_data(
-        self, tmp_path
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from starlette import formparsers
+
+        temporary_files: list[Any] = []
+        spooled_temporary_file = formparsers.SpooledTemporaryFile
+
+        def record_temporary_file(*args: Any, **kwargs: Any) -> Any:
+            temporary_file = spooled_temporary_file(*args, **kwargs)
+            temporary_files.append(temporary_file)
+            return temporary_file
+
+        monkeypatch.setattr(
+            formparsers,
+            "SpooledTemporaryFile",
+            record_temporary_file,
+        )
         app = FastAPI()
 
         @app.patch("/record")
@@ -3481,6 +3498,9 @@ class TestForms:
             assert response.text == "Updated"
         finally:
             await site.close()
+
+        assert len(temporary_files) == 2
+        assert all(temporary_file.closed for temporary_file in temporary_files)
 
     @pytest.mark.anyio
     async def test_forms_method_override_preserves_ordinary_multipart_body(

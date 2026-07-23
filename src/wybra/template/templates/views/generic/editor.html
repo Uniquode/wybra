@@ -1,11 +1,15 @@
 <section aria-labelledby="wybra-generic-dialog-title" data-wybra-generic-editor>
   <h2 id="wybra-generic-dialog-title">Edit {{ content_type.verbose_name }}</h2>
+  {% if scope_visibility.update %}
   {{ render_form(form, action=form_action, method=form_method, attr=form_attr) }}
+  {% endif %}
+  {% if scope_visibility.delete %}
   <button
     type="button"
     hx-get="{{ delete_fragment_url }}"
     hx-target="#wybra-generic-dialog"
     hx-swap="innerHTML"
   >Delete {{ content_type.verbose_name }}</button>
+  {% endif %}
   <a href="{{ collection_url }}" data-wybra-generic-cancel>Cancel</a>
 </section>

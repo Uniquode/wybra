@@ -56,6 +56,7 @@ from wybra.views import (
     ViewRouter,
     register_view,
 )
+from wybra.views.routing import _collection_path
 
 
 def _request(method: str = "GET", *, app: FastAPI | None = None) -> Request:
@@ -215,8 +216,12 @@ def test_view_router_expands_a_generic_view_to_resource_routes() -> None:
         ) -> dict[str, str]:
             return {"action": "delete", "id": object_id}
 
-        async def bulk_action(self, request: Request) -> dict[str, str]:
-            return {"action": "bulk"}
+        async def bulk_action(
+            self,
+            request: Request,
+            action_name: str,
+        ) -> dict[str, str]:
+            return {"action": "bulk", "name": action_name}
 
     app = FastAPI()
     app.include_router(router, prefix="/admin")
@@ -236,7 +241,45 @@ def test_view_router_expands_a_generic_view_to_resource_routes() -> None:
         "action": "delete",
         "id": "42",
     }
-    assert client.post("/admin/articles/bulk").json() == {"action": "bulk"}
+    assert client.post("/admin/articles/bulk/delete").json() == {
+        "action": "bulk",
+        "name": "delete",
+    }
+
+
+@pytest.mark.parametrize(
+    ("route_path", "expected"),
+    [
+        ("/articles", "/articles"),
+        ("/articles/{id}", "/articles"),
+        ("/articles/bulk/{action}", "/articles"),
+    ],
+)
+def test_generic_route_derives_owning_collection_path(
+    route_path: str,
+    expected: str,
+) -> None:
+    assert _collection_path(route_path) == expected
+
+
+def test_bulk_action_url_places_action_before_collection_state() -> None:
+    view = ModelGenericView()
+    view._collection_path = "/articles"
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/articles",
+            "query_string": b"search=open&page=2",
+            "headers": [],
+            "app": FastAPI(),
+        }
+    )
+
+    assert (
+        view._bulk_action_url(request, "delete")
+        == "/articles/bulk/delete?search=open&page=2"
+    )
 
 
 def test_generic_view_respects_owning_router_dependencies() -> None:
@@ -332,7 +375,8 @@ async def test_shipped_generic_templates_render_through_jinja() -> None:
     page_context = {
         **form_context,
         "asset_url": lambda path: f"/assets/{path}",
-        "bulk_action_url": "/articles/bulk",
+        "bulk_action_url": "/articles/bulk/delete",
+        "bulk_action_urls": {"delete": "/articles/bulk/delete"},
         "bulk_actions": {"delete": object()},
         "collection_url": "/articles",
         "content_type": content_type,
@@ -341,6 +385,14 @@ async def test_shipped_generic_templates_render_through_jinja() -> None:
         "page_title": "Articles",
         "request": request,
         "route_name": "articles-collection",
+        "scope_visibility": {
+            "create": True,
+            "delete": True,
+            "list": True,
+            "manage": True,
+            "update": True,
+            "view": True,
+        },
     }
 
     workspace = await templates.render_template("views/generic/view.html", page_context)
@@ -367,6 +419,8 @@ async def test_shipped_generic_templates_render_through_jinja() -> None:
     assert '<h1 id="generic-view-title">Articles</h1>' in workspace
     assert 'value="article-1"' in workspace
     assert 'name="csrf_token"' in workspace
+    assert 'action="/articles/bulk/delete"' in workspace
+    assert 'formaction="/articles/bulk/delete"' in workspace
     assert "data-highlighted" in workspace
     assert "data-wybra-generic-editor" in editor
     assert 'name="_method" type="hidden" value="PATCH"' in editor
@@ -618,13 +672,11 @@ async def test_model_generic_view_validates_malformed_api_and_bulk_input() -> No
         bulk_actions = {"delete": BulkDeleteAction()}
 
     app = FastAPI()
-    invalid_requests: tuple[tuple[object, bool, str], ...] = (
-        ([], False, "body"),
-        ({}, True, "action"),
-        ({"action": 1}, True, "action"),
-        ({"action": "archive"}, True, "action"),
-        ({"action": "delete", "selected": "article-1"}, True, "selected"),
-        ({"action": "delete", "selected": [{}]}, True, "selected"),
+    invalid_requests: tuple[tuple[object, str | None, str], ...] = (
+        ([], None, "body"),
+        ({}, "archive", "action"),
+        ({"selected": "article-1"}, "delete", "selected"),
+        ({"selected": [{}]}, "delete", "selected"),
     )
     async with migrated_test_database(
         modules=("tests_support.content_types",)
@@ -640,11 +692,12 @@ async def test_model_generic_view_validates_malformed_api_and_bulk_input() -> No
         )
         site.provide_capability(ApiCapability, DefaultApiCapability(ApiSettings()))
 
-        for values, bulk, field in invalid_requests:
+        for values, action, field in invalid_requests:
+            dispatch_kwargs = {"action": action} if action is not None else {}
             response = await ArticleView().dispatch(
                 _json_request(values, method="POST", app=app),
                 _route_type=RouteType.API,
-                bulk=bulk,
+                **dispatch_kwargs,
             )
             payload = json.loads(response.body)
 
@@ -726,12 +779,12 @@ async def test_model_generic_view_bulk_delete_uses_visible_selected_records() ->
 
         response = await ArticleView().dispatch(
             _json_request(
-                {"action": "delete", "selected": [selected.id, 999], "confirm": True},
+                {"selected": [selected.id, 999], "confirm": True},
                 method="POST",
                 app=app,
             ),
             _route_type=RouteType.API,
-            bulk=True,
+            action="delete",
         )
 
         assert await Article.filter(id=selected.id).exists() is False
@@ -797,7 +850,6 @@ async def test_model_generic_view_publishes_collection_item_and_bulk_outcomes() 
             await ArticleView().dispatch(
                 _json_request(
                     {
-                        "action": "delete",
                         "selected": [selected.id, 999],
                         "confirm": True,
                     },
@@ -805,7 +857,7 @@ async def test_model_generic_view_publishes_collection_item_and_bulk_outcomes() 
                     app=app,
                 ),
                 _route_type=RouteType.API,
-                bulk=True,
+                action="delete",
             )
             invalid = await ArticleView().dispatch(
                 _json_request({}, method="POST", app=app),
