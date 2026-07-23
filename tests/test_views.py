@@ -50,6 +50,7 @@ from wybra.views import (
     GenericView,
     HTMLView,
     ModelGenericView,
+    ScopeVisibility,
     TemplateResponse,
     TemplateView,
     View,
@@ -385,14 +386,14 @@ async def test_shipped_generic_templates_render_through_jinja() -> None:
         "page_title": "Articles",
         "request": request,
         "route_name": "articles-collection",
-        "scope_visibility": {
-            "create": True,
-            "delete": True,
-            "list": True,
-            "manage": True,
-            "update": True,
-            "view": True,
-        },
+        "scope_visibility": ScopeVisibility(
+            create=True,
+            delete=True,
+            list=True,
+            manage=True,
+            update=True,
+            view=True,
+        ),
     }
 
     workspace = await templates.render_template("views/generic/view.html", page_context)
@@ -415,6 +416,49 @@ async def test_shipped_generic_templates_render_through_jinja() -> None:
             "object": article,
         },
     )
+    denied_scope_visibility = ScopeVisibility(
+        create=False,
+        delete=False,
+        list=False,
+        manage=False,
+        update=False,
+        view=False,
+    )
+    denied_workspace = await templates.render_template(
+        "views/generic/view.html",
+        {
+            **page_context,
+            "delete_action": "/articles/article-1",
+            "delete_fragment_url": "/articles/article-1?delete=article-1",
+            "form": ArticleForm(),
+            "form_action": "/articles/article-1",
+            "form_attr": {},
+            "form_method": "patch",
+            "object": article,
+            "scope_visibility": denied_scope_visibility,
+        },
+    )
+    denied_editor = await templates.render_template(
+        "views/generic/editor.html",
+        {
+            **page_context,
+            "delete_fragment_url": "/articles/article-1?delete=article-1",
+            "form": ArticleForm(),
+            "form_action": "/articles/article-1",
+            "form_attr": {},
+            "form_method": "patch",
+            "scope_visibility": denied_scope_visibility,
+        },
+    )
+    denied_delete = await templates.render_template(
+        "views/generic/delete.html",
+        {
+            **page_context,
+            "delete_action": "/articles/article-1",
+            "object": article,
+            "scope_visibility": denied_scope_visibility,
+        },
+    )
 
     assert '<h1 id="generic-view-title">Articles</h1>' in workspace
     assert 'value="article-1"' in workspace
@@ -426,6 +470,12 @@ async def test_shipped_generic_templates_render_through_jinja() -> None:
     assert 'name="_method" type="hidden" value="PATCH"' in editor
     assert "data-wybra-generic-delete" in delete
     assert 'hx-delete="/articles/article-1"' in delete
+    assert 'aria-label="Edit Article"' not in denied_workspace
+    assert '<section aria-label="Edit Article"' not in denied_workspace
+    assert '<section aria-label="Delete Article"' not in denied_workspace
+    assert 'name="_method" type="hidden" value="PATCH"' not in denied_editor
+    assert 'hx-get="/articles/article-1?delete=article-1"' not in denied_editor
+    assert 'hx-delete="/articles/article-1"' not in denied_delete
 
 
 def test_model_generic_view_uses_explicit_form_and_stable_generated_form() -> None:

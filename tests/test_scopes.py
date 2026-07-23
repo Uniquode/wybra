@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI, Request
+from jinja2 import Environment
 
 from wybra.content_types import ContentType, ContentTypesCapability
 from wybra.core.exceptions import Http403
@@ -34,7 +35,13 @@ from wybra.scopes import (
     scopes,
     validate_site_scope_catalogue,
 )
-from wybra.views import BulkDeleteAction, ModelGenericView, View, ViewRouter
+from wybra.views import (
+    BulkDeleteAction,
+    ModelGenericView,
+    ScopeVisibility,
+    View,
+    ViewRouter,
+)
 
 
 class _ContentTypes:
@@ -938,6 +945,16 @@ async def test_generic_context_intersects_scope_visibility_with_content_actions(
         "delete": False,
         "manage": True,
     }
+    visibility = cast(ScopeVisibility, context["scope_visibility"])
+    assert isinstance(visibility, ScopeVisibility)
+    for action in ScopeAction:
+        template = Environment(enable_async=True).from_string(
+            "{% if scope_visibility."
+            f"{action.value}"
+            " %}visible{% else %}hidden{% endif %}"
+        )
+        rendered = await template.render_async(scope_visibility=visibility)
+        assert rendered == ("visible" if visibility[action.value] else "hidden")
 
 
 @pytest.mark.anyio

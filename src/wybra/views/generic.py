@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -37,6 +37,41 @@ class _RequestValidationError(ValueError):
     def __init__(self, field: str, message: str) -> None:
         super().__init__(message)
         self.field = field
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class ScopeVisibility(Mapping[str, bool]):
+    """Immutable standard-action visibility for generic template contexts."""
+
+    list: bool
+    view: bool
+    create: bool
+    update: bool
+    delete: bool
+    manage: bool
+
+    def __getitem__(self, key: str) -> bool:
+        try:
+            action = ScopeAction(key)
+        except ValueError:
+            raise KeyError(key) from None
+        if action is ScopeAction.LIST:
+            return self.list
+        if action is ScopeAction.VIEW:
+            return self.view
+        if action is ScopeAction.CREATE:
+            return self.create
+        if action is ScopeAction.UPDATE:
+            return self.update
+        if action is ScopeAction.DELETE:
+            return self.delete
+        return self.manage
+
+    def __iter__(self) -> Iterator[str]:
+        return (action.value for action in ScopeAction)
+
+    def __len__(self) -> int:
+        return len(ScopeAction)
 
 
 @dataclass(frozen=True, slots=True)
@@ -671,9 +706,14 @@ class ModelGenericView(GenericView):
             action: allowed and self._scope_action_available(request, action)
             for action, allowed in visibility.items()
         }
-        context["scope_visibility"] = {
-            action.value: allowed for action, allowed in visibility.items()
-        }
+        context["scope_visibility"] = ScopeVisibility(
+            list=visibility[ScopeAction.LIST],
+            view=visibility[ScopeAction.VIEW],
+            create=visibility[ScopeAction.CREATE],
+            update=visibility[ScopeAction.UPDATE],
+            delete=visibility[ScopeAction.DELETE],
+            manage=visibility[ScopeAction.MANAGE],
+        )
         if not visibility[ScopeAction.CREATE]:
             context.pop("create_form", None)
         bulk_actions = {
@@ -804,7 +844,11 @@ class ModelGenericView(GenericView):
         return request.headers.get("HX-Request", "").lower() == "true"
 
 
-__all__ = ["GenericView", "ModelGenericView"]
+__all__ = [
+    "GenericView",
+    "ModelGenericView",
+    "ScopeVisibility",
+]
 
 
 def _selected_values(values: Mapping[str, object]) -> tuple[object, ...]:

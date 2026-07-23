@@ -136,6 +136,14 @@ dispatch applies the same availability check before invoking mutation handlers.
 Forms and templates inherit the enclosing view decision rather than declaring
 scopes independently.
 
+Generic HTML contexts expose visibility as an immutable
+`wybra.views.ScopeVisibility` object with boolean `list`, `view`, `create`,
+`update`, `delete`, and `manage` attributes. Templates use natural dot notation
+such as `scope_visibility.update`; unlike a mutable dictionary, the typed object
+cannot resolve `update` to a mapping method. String-key lookup such as
+`scope_visibility["update"]` returns the same value when bracket syntax is
+useful. Runtime dispatch enforcement remains the authorisation boundary.
+
 An optional synchronous or asynchronous object callback may be supplied after
 declarative requirements pass. This is an extension point, not a persisted
 object-permission engine.
