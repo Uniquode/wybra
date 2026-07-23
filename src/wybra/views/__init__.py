@@ -8,7 +8,11 @@ from wybra.views.base import (
 )
 from wybra.views.bulk import BulkAction, BulkActionResult, BulkDeleteAction
 from wybra.views.config import module_config
-from wybra.views.generic import GenericView, ModelGenericView
+from wybra.views.generic import (
+    GenericView,
+    ModelGenericView,
+    ScopeVisibility,
+)
 from wybra.views.routing import (
     ViewRegistrationError,
     ViewRoute,
@@ -26,6 +30,7 @@ __all__ = [
     "HTMLView",
     "GenericView",
     "ModelGenericView",
+    "ScopeVisibility",
     "TemplateResponse",
     "TemplateView",
     "View",

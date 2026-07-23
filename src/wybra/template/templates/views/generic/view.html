@@ -33,7 +33,7 @@
   <form id="wybra-generic-bulk" method="post" action="{{ bulk_action_url }}" data-wybra-generic-bulk>
     {{ render_csrf_field() }}
     {% for action_name, action in bulk_actions.items() %}
-    <button name="action" type="submit" value="{{ action_name }}">{{ action_name|replace("_", " ")|title }}</button>
+    <button formaction="{{ bulk_action_urls[action_name] }}" type="submit">{{ action_name|replace("_", " ")|title }}</button>
     {% endfor %}
     <label><input name="confirm" type="checkbox" value="true"> Confirm destructive actions</label>
   </form>
@@ -48,6 +48,7 @@
       {% if bulk_actions is defined and bulk_actions %}
       <input aria-label="Select {{ content_type.verbose_name }}" form="wybra-generic-bulk" name="selected" type="checkbox" value="{{ object.pk }}">
       {% endif %}
+      {% if scope_visibility.update %}
       <a
         href="{{ collection_url }}{% if '?' in collection_url %}&amp;{% else %}?{% endif %}edit={{ object.pk }}"
         hx-get="{{ collection_url }}{% if '?' in collection_url %}&amp;{% else %}?{% endif %}edit={{ object.pk }}"
@@ -56,16 +57,19 @@
         aria-label="Edit {{ content_type.verbose_name }}"
         data-wybra-generic-edit-link
       >{{ object }}</a>
+      {% else %}
+      {{ object }}
+      {% endif %}
     </li>
     {% endfor %}
   </ul>
   {% endif %}
-  {% if form is defined and object is defined %}
+  {% if form is defined and object is defined and scope_visibility.update %}
   <section aria-label="Edit {{ content_type.verbose_name }}" data-wybra-generic-edit>
     <h2>Edit {{ content_type.verbose_name }}</h2>
     {% include "views/generic/editor.html" %}
   </section>
-  {% elif object is defined and delete_action is defined %}
+  {% elif object is defined and delete_action is defined and scope_visibility.delete %}
   <section aria-label="Delete {{ content_type.verbose_name }}" data-wybra-generic-delete>
     {% include "views/generic/delete.html" %}
   </section>

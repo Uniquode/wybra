@@ -82,6 +82,7 @@ from wybra.providers.google import (
     decode_google_oauth_state_cookie,
     encode_google_oauth_state_cookie,
 )
+from wybra.scopes import ScopeCatalogueCapability, ScopeGrantsCapability
 from wybra.services.crypto import SecretEnvelopeService
 from wybra.services.secrets import MissingSecretError, SecretsCapability, SecretValue
 from wybra.site import Site, SiteCapabilityError, start
@@ -1130,11 +1131,17 @@ class TestAuthenticationPages:
 
         auth = site.require_capability(AuthCapability)
         auth_persistence = site.require_capability(AuthPersistenceCapability)
+        scope_catalogue = site.require_capability(ScopeCatalogueCapability)
+        scope_grants = site.require_capability(ScopeGrantsCapability)
 
         assert site.has_capability(AuthCapability) is True
         assert site.has_capability(AuthPersistenceCapability) is True
+        assert site.has_capability(ScopeCatalogueCapability) is True
+        assert site.has_capability(ScopeGrantsCapability) is True
         assert isinstance(auth, AuthCapability)
         assert isinstance(auth_persistence, AuthPersistenceCapability)
+        assert isinstance(scope_catalogue, ScopeCatalogueCapability)
+        assert isinstance(scope_grants, ScopeGrantsCapability)
         assert auth.settings is app.state.auth_settings
         assert not hasattr(auth, "fastapi_users")
         assert not hasattr(app.state, "fastapi_users")

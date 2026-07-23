@@ -10,6 +10,10 @@ from fastapi import Request
 from fastapi.responses import Response
 from tortoise.exceptions import BaseORMException
 
+from wybra.auth.authorisation.grants import (
+    AuthScopeCatalogueProvider,
+    AuthScopeGrantsProvider,
+)
 from wybra.auth.delivery import NullIdentityDelivery
 from wybra.auth.models import User
 from wybra.auth.persistence.contracts import AuthPersistenceCapability
@@ -31,6 +35,7 @@ from wybra.auth.settings import AuthSettings, load_auth_settings
 from wybra.core.exceptions import ConfigurationError
 from wybra.db.capabilities import DatabaseCapability
 from wybra.forms import FormsCapability
+from wybra.scopes import ScopeCatalogueCapability, ScopeGrantsCapability
 from wybra.secrets import SecretsSettings
 from wybra.services.crypto import SecretEnvelopeService
 from wybra.services.secrets import SecretsCapability
@@ -109,12 +114,15 @@ async def setup_site(site: Site) -> None:
     site.app.state.identity_delivery = NullIdentityDelivery()
     site.app.state.secret_envelope_service = secret_envelope_service
     site.provide_capability(AuthCapability, capability)
+    persistence = TortoiseAuthPersistenceCapability(
+        site.capability_proxy(DatabaseCapability),
+        secret_service_resolver=lambda: _current_secret_envelope_service(site),
+    )
+    site.provide_capability(AuthPersistenceCapability, persistence)
+    site.provide_capability(ScopeGrantsCapability, AuthScopeGrantsProvider())
     site.provide_capability(
-        AuthPersistenceCapability,
-        TortoiseAuthPersistenceCapability(
-            site.capability_proxy(DatabaseCapability),
-            secret_service_resolver=lambda: _current_secret_envelope_service(site),
-        ),
+        ScopeCatalogueCapability,
+        AuthScopeCatalogueProvider(persistence),
     )
     _register_session_cookie_cleanup_middleware(site, settings)
 

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from fastapi import Request
 from tortoise.models import Model
+
+from wybra.scopes import ScopeAction
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +42,8 @@ class BulkActionView(Protocol):
 @dataclass(frozen=True, slots=True)
 class BulkDeleteAction:
     """Built-in destructive action; views must explicitly register it."""
+
+    scope_action: ClassVar[ScopeAction] = ScopeAction.DELETE
 
     async def execute(
         self,

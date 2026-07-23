@@ -23,6 +23,7 @@ from wybra.tools.project import (
     ProjectToolConfigurationError,
     runtime_project_root,
 )
+from wybra.tools.scope_validation import validate_scope_catalogue
 from wybra.tools.settings import load_project_settings
 from wybra.tools.validation.core import ValidationResult
 from wybra.tools.validation.registry import (
@@ -52,6 +53,7 @@ BUILTIN_VALIDATION_TARGETS: Mapping[str, ValidationTarget] = {
     "forms": validate_forms,
     "routes": validate_routes,
     "security": validate_security,
+    "scopes": validate_scope_catalogue,
     "sessions": validate_sessions,
     "template": validate_template,
 }

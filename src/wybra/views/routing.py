@@ -16,6 +16,7 @@ from wybra.core.routes import (
     RouteType,
     route,
 )
+from wybra.scopes import bind_scope_target
 from wybra.views.base import View
 
 
@@ -139,7 +140,15 @@ def _endpoint_for(
         async def endpoint(request: Request) -> Response:
             return await view_class().dispatch(request, **dispatch_kwargs)
 
-        return endpoint
+        return bind_scope_target(endpoint, view_class)
+
+    if view_route.path_parameter == "action":
+
+        async def endpoint(request: Request, action: str) -> Response:
+            kwargs = {"action": action, **dispatch_kwargs}
+            return await view_class().dispatch(request, **kwargs)
+
+        return bind_scope_target(endpoint, view_class)
 
     if view_route.path_parameter != "id":
         raise ViewRegistrationError(
@@ -150,7 +159,7 @@ def _endpoint_for(
         kwargs = {"id": id, **dispatch_kwargs}
         return await view_class().dispatch(request, **kwargs)
 
-    return endpoint
+    return bind_scope_target(endpoint, view_class)
 
 
 def _dispatch_kwargs(
@@ -170,7 +179,7 @@ def _dispatch_kwargs(
 
 def _collection_path(path: str) -> str:
     """Return the collection component of a generic resource route path."""
-    return path.removesuffix("/bulk").split("/{", maxsplit=1)[0] or "/"
+    return path.split("/{", maxsplit=1)[0].removesuffix("/bulk") or "/"
 
 
 def _route_name(base_name: str, view_route: ViewRoute) -> str:

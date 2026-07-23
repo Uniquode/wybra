@@ -1,5 +1,6 @@
 import ast
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from textwrap import dedent
@@ -10,6 +11,7 @@ import pytest
 
 import wybra.assets.validation as asset_validation
 import wybra.template.validation as template_validation
+import wybra.tools.scope_validation as scope_validation
 import wybra.tools.validate as validate_module
 from wybra.api.validation import validate_api
 from wybra.assets.validation import validate_assets
@@ -18,6 +20,7 @@ from wybra.core.composition import (
     AppConfig,
     AssetOptions,
     RouteOptions,
+    RunserverOptions,
     TemplateOptions,
 )
 from wybra.core.config import ENV_APP_DEBUG, ENV_APP_ENV, RUNTIME_CONFIG_DEF
@@ -27,6 +30,7 @@ from wybra.errors.validation import validate_errors
 from wybra.security.validation import validate_security
 from wybra.template.validation import _contains_post_form, validate_template
 from wybra.tools.project import ProjectToolConfigurationError, runtime_project_root
+from wybra.tools.scope_validation import validate_scope_catalogue
 from wybra.tools.settings import ProjectSettings
 from wybra.tools.validate import main as validate_main
 from wybra.tools.validation.core import ValidationResult
@@ -424,15 +428,136 @@ class TestValidation:
             lambda _overrides: settings,
         )
 
+        async def no_missing_scopes(_settings: object) -> tuple[str, ...]:
+            return ()
+
+        monkeypatch.setattr(
+            scope_validation,
+            "_validate_configured_scope_catalogue",
+            no_missing_scopes,
+        )
+
         exit_code = validate_main([])
 
         captured = capsys.readouterr()
         assert exit_code == 0
         assert captured.out == (
             "api: ok\nassets: ok\nerrors: ok\nforms: ok\nroutes: ok\nsecurity: ok\n"
-            "sessions: ok\ntemplate: ok\ncommand-target: ok\n"
+            "scopes: ok\nsessions: ok\ntemplate: ok\ncommand-target: ok\n"
         )
         assert captured.err == ""
+
+    def test_scope_catalogue_validation_reports_each_missing_identifier(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def missing_scopes(_settings: object) -> tuple[str, ...]:
+            return ("articles.article.update", "reports.export")
+
+        monkeypatch.setattr(
+            scope_validation,
+            "_validate_configured_scope_catalogue",
+            missing_scopes,
+        )
+
+        result = validate_scope_catalogue(_web_settings(tmp_path))
+
+        assert result.name == "scopes"
+        assert result.errors == (
+            "Declared scope is missing from the persisted catalogue: "
+            "articles.article.update.",
+            "Declared scope is missing from the persisted catalogue: reports.export.",
+        )
+        assert result.checks[-1].description == (
+            "declared scopes exist in the persisted catalogue"
+        )
+        assert result.checks[-1].passed is False
+
+    @pytest.mark.anyio
+    async def test_scope_catalogue_validation_finalises_the_configured_site(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app = SimpleNamespace()
+        site = object()
+        lifespan_active = False
+
+        @asynccontextmanager
+        async def lifespan(current_app: object):
+            nonlocal lifespan_active
+            assert current_app is app
+            lifespan_active = True
+            try:
+                yield
+            finally:
+                lifespan_active = False
+
+        async def validate_configured_site(current_site: object) -> tuple[str, ...]:
+            assert lifespan_active is True
+            assert current_site is site
+            return ("reports.export",)
+
+        app.router = SimpleNamespace(lifespan_context=lifespan)
+        monkeypatch.setattr(
+            scope_validation,
+            "import_from_string",
+            lambda target: app if target == "host_app:app" else None,
+        )
+        monkeypatch.setattr(scope_validation, "get_site", lambda current_app: site)
+        monkeypatch.setattr(
+            scope_validation,
+            "validate_site_scope_catalogue",
+            validate_configured_site,
+        )
+        settings = _web_settings(tmp_path)
+        settings = replace(
+            settings,
+            app_config=replace(
+                settings.app_config,
+                runserver=RunserverOptions(asgi_app="host_app:app"),
+            ),
+        )
+
+        missing = await scope_validation._validate_configured_scope_catalogue(settings)
+
+        assert missing == ("reports.export",)
+        assert lifespan_active is False
+
+    def test_validate_command_exposes_builtin_scope_target(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        async def missing_scopes(_settings: object) -> tuple[str, ...]:
+            return ("reports.export",)
+
+        monkeypatch.setattr(
+            scope_validation,
+            "_validate_configured_scope_catalogue",
+            missing_scopes,
+        )
+        monkeypatch.setattr(
+            validate_module,
+            "_build_settings",
+            lambda _overrides: _web_settings(tmp_path),
+        )
+
+        exit_code = validate_main(["scopes"])
+
+        captured = capsys.readouterr()
+        assert validate_module.BUILTIN_VALIDATION_TARGETS["scopes"] is (
+            validate_scope_catalogue
+        )
+        assert exit_code == 1
+        assert captured.out == ""
+        assert captured.err == (
+            "scopes: failed\n"
+            "- Declared scope is missing from the persisted catalogue: "
+            "reports.export.\n"
+        )
 
     def test_validate_security_accepts_omitted_security_module(
         self, tmp_path: Path

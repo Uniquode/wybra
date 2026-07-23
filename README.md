@@ -43,6 +43,8 @@ Repository: <https://github.com/Uniquode/wybra>
   HATEOAS-style paging metadata, streaming responses, and API validation.
 - `wybra.db`: Tortoise ORM configuration, async database helpers, database URL
   handling, and native migration command support.
+- `wybra.scopes`: provider-neutral declarative scope metadata, access decisions,
+  protected-view enforcement, visibility, discovery, and catalogue validation.
 - `wybra.secrets`: runtime secret lookup from consumer-selected sources,
   including environment variables, AWS Secrets Manager, OS keychains, and Vault.
 - `wybra.tools`: generic project command adapters and validation target
@@ -71,6 +73,9 @@ check commands, SQLite URL guidance, and optional OS-service boundaries.
 
 See [`docs/CACHE.md`](docs/CACHE.md) for cache configuration and safe Jinja
 fragment-caching guidance.
+
+See [`docs/SCOPES.md`](docs/SCOPES.md) for declarative model, view, and endpoint
+scope policy, optional auth integration, discovery, and catalogue validation.
 
 The framework project does not contain host application settings, `app.toml`,
 or change-management artifacts. Host-facing commands resolve the configured

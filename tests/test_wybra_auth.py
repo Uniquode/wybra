@@ -101,6 +101,7 @@ from wybra.auth.models import (
 )
 from wybra.auth.options import VALID_IDENTITY_INTEGRATIONS
 from wybra.auth.persistence import auth_persistence_scope
+from wybra.auth.persistence.contracts import EffectiveScopeSet, ScopeRecord
 from wybra.auth.provider_credentials import (
     ProviderCredentialStorageError,
     TortoiseProviderCredentialStore,
@@ -1103,6 +1104,60 @@ class TestAuthentication:
                 await close_database(database)
 
         await assert_effective_scopes()
+
+    @pytest.mark.anyio
+    async def test_auth_persistence_exposes_authorisation_store(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        database = await initialise_auth_database(
+            sqlite_file_url(tmp_path / "authorisation-store.sqlite3")
+        )
+        try:
+            async with auth_persistence_scope(database) as persistence:
+                await persistence.management.create_local_user(
+                    IdentityOptions(),
+                    email="policy-user@example.com",
+                    password="Correct horse 42!",
+                )
+                await persistence.management.create_scope(
+                    scope="articles.article.update",
+                    description="Update articles.",
+                )
+                await persistence.management.create_group(
+                    abbrev="editors",
+                    description="Article editors.",
+                )
+                await persistence.management.add_scope_to_group(
+                    group_target="editors",
+                    scope="articles.article.update",
+                )
+                await persistence.management.add_user_to_group(
+                    group_target="editors",
+                    user_target="policy-user@example.com",
+                )
+                user = await persistence.get_user_by_email("policy-user@example.com")
+                assert user is not None
+
+                scopes = await persistence.authorisation.list_scopes()
+                effective = (
+                    await persistence.authorisation.effective_scope_sets_for_user(
+                        user.id
+                    )
+                )
+
+            assert scopes == (
+                ScopeRecord(
+                    scope="articles.article.update",
+                    title="Update articles.",
+                ),
+            )
+            assert effective == EffectiveScopeSet(
+                scopes=("articles.article.update",),
+                groups=("editors",),
+            )
+        finally:
+            await close_database(database)
 
     @pytest.mark.anyio
     async def test_effective_scope_resolution_is_cycle_safe_and_reads_current_data(
