@@ -948,7 +948,7 @@ async def test_generic_context_intersects_scope_visibility_with_content_actions(
     visibility = cast(ScopeVisibility, context["scope_visibility"])
     assert isinstance(visibility, ScopeVisibility)
     for action in ScopeAction:
-        template = Environment(enable_async=True).from_string(
+        template = Environment(enable_async=True, autoescape=True).from_string(
             "{% if scope_visibility."
             f"{action.value}"
             " %}visible{% else %}hidden{% endif %}"
