@@ -23,7 +23,7 @@ dependencies = [
     "inflect>=7.5.0",
     "jinja2>=3.1.6",
     "phonenumbers>=9.0.35",
-    "pwdlib[argon2,bcrypt]==0.3.0",
+    "pwdlib[argon2,bcrypt]==0.3.1",
     "pycountry>=26.2.16",
     "pydantic>=2.13.4",
     "pyjwt>=2.13.0",
@@ -83,7 +83,7 @@ databases = [
 tasks = [
     "croniter>=6.2.4,<7.0.0",
     "pytz>=2025.2,<2027.0",
-    "taskiq>=0.12.4,<0.13.0",
+    "taskiq>=0.12.4,<0.14.0",
 ]
 
 [project.scripts]
@@ -119,7 +119,7 @@ dev = [
     "pytz>=2025.2,<2027.0",
     "redis>=8.0.1",
     "ruff>=0.16.0",
-    "taskiq>=0.12.4,<0.13.0",
+    "taskiq>=0.12.4,<0.14.0",
     "testcontainers[mssql,mysql]>=4.15.0",
     "ty>=0.0.64",
 ]
