@@ -194,7 +194,7 @@ class RedisPubSubCache:
             if caller_cancelled:
                 activation.cancel()
                 result = await asyncio.gather(activation, return_exceptions=True)
-                if result and isinstance(result[0], RedisPubSubSubscription):
+                if isinstance(result[0], RedisPubSubSubscription):
                     try:
                         await result[0].close()
                     except BaseException as cleanup_error:

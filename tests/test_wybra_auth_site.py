@@ -4,6 +4,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from time import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -30,7 +31,12 @@ from wybra.auth.mfa.storage import (
 )
 from wybra.auth.mfa.totp import generate_totp, generate_totp_secret
 from wybra.auth.mfa.webauthn import credential_id_to_text
-from wybra.auth.models import ExternalIdentityLink, IdentityProvider, User
+from wybra.auth.models import (
+    ExternalIdentityLink,
+    IdentityAuthenticationChallenge,
+    IdentityProvider,
+    User,
+)
 from wybra.auth.provider_credentials import TortoiseProviderCredentialStore
 from wybra.auth.routes.pages import passkeys as passkey_pages
 from wybra.auth.routes.pages import totp_management as totp_management_pages
@@ -1121,6 +1127,30 @@ class FakeAppleIDTokenValidator:
 
 
 class TestAuthenticationPages:
+    @pytest.mark.anyio
+    async def test_challenge_store_rejects_unknown_persisted_kind(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        site = await start(FastAPI(), config_source=_site_config_source(tmp_path))
+        await _create_auth_schema(site)
+        user_id = uuid.uuid4()
+        await _ensure_identity_user(site, user_id)
+
+        async with database_write_transaction(
+            site.require_capability(DatabaseCapability)
+        ) as session:
+            challenge = await IdentityAuthenticationChallenge.create(
+                id=uuid.uuid4().hex,
+                user_id=user_id,
+                kind="unknown",
+                expires_at=time() + 60,
+                using_db=session,
+            )
+            store = TortoiseChallengeStore(session)
+
+            assert await store.get_challenge(challenge.id) is None
+
     @pytest.mark.anyio
     async def test_wybra_auth_setup_site_registers_auth_capability(
         self,
