@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 ConfigSourceInput = str | AppConfig | ConfigSource | None
 ModuleLoader = Callable[[str], ModuleType]
-AppT = TypeVar("AppT", bound=FastAPI)
+AppT = TypeVar("AppT", bound=FastAPI, contravariant=True)
 SETUP_SITE_ATTRIBUTE = "setup_site"
 POST_SETUP_SITE_ATTRIBUTE = "post_setup_site"
 SETUP_FINALISATION_ATTRIBUTE = "setup_finalisation"

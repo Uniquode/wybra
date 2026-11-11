@@ -95,13 +95,17 @@ class TortoiseChallengeStore:
             await self.consume_challenge(challenge_id)
             return None
 
-        return ChallengeRecord(
-            id=challenge.id,
-            user_id=str(challenge.user_id),
-            kind=challenge.kind,  # type: ignore[arg-type]
-            expires_at=challenge.expires_at,
-            metadata=challenge.metadata_payload or {},
-        )
+        match challenge.kind:
+            case "totp" | "webauthn" | "recovery-code" as kind:
+                return ChallengeRecord(
+                    id=challenge.id,
+                    user_id=str(challenge.user_id),
+                    kind=kind,
+                    expires_at=challenge.expires_at,
+                    metadata=challenge.metadata_payload or {},
+                )
+            case _:
+                return None
 
     async def consume_challenge(self, challenge_id: str) -> None:
         await (
