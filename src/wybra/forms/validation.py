@@ -68,10 +68,7 @@ def validate_forms(settings: FormsValidationSettings) -> ValidationResult:
             checks,
             errors,
             passed=True,
-            description=(
-                "forms settings load: "
-                f"csrf_cookie_secure={forms_settings.cookie_secure}"
-            ),
+            description=(f"forms settings load: csrf_cookie_secure={forms_settings.cookie_secure}"),
         )
 
     return ValidationResult(name="forms", errors=tuple(errors), checks=tuple(checks))

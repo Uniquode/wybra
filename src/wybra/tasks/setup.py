@@ -53,9 +53,7 @@ async def _finalise_taskiq_setup(site: Site, settings: TasksSettings) -> None:
         pass
     if cache is None:
         cache_name = truncate_safe_string(settings.cache_name)
-        raise SiteCapabilityError(
-            f"Taskiq tasks configured cache {cache_name!r} was not found."
-        )
+        raise SiteCapabilityError(f"Taskiq tasks configured cache {cache_name!r} was not found.")
     try:
         load_taskiq()
     except ConfigurationError as exc:

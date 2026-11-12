@@ -63,9 +63,7 @@ def tortoise_connection_for_route(
     """Resolve a route through the capability bound to a database connection."""
     capability = connection._capability
     if not isinstance(capability, DatabaseCapability):
-        raise DatabaseCapabilityError(
-            "Database connection has no resolvable database capability."
-        )
+        raise DatabaseCapabilityError("Database connection has no resolvable database capability.")
     return tortoise_connection(capability, route)
 
 
@@ -76,9 +74,7 @@ def tortoise_transaction_for_route(
     """Open a route-pinned transaction through a bound database capability."""
     capability = connection._capability
     if not isinstance(capability, DatabaseCapability):
-        raise DatabaseCapabilityError(
-            "Database connection has no resolvable database capability."
-        )
+        raise DatabaseCapabilityError("Database connection has no resolvable database capability.")
     return tortoise_transaction(capability, route)
 
 
@@ -163,9 +159,7 @@ class WybraDatabaseCapability:
                     "error_type": type(exc).__name__,
                 },
             )
-            raise DatabaseCapabilityError(
-                "Database close failed: error_count=1."
-            ) from exc
+            raise DatabaseCapabilityError("Database close failed: error_count=1.") from exc
 
         object.__setattr__(self, "_closed", True)
 
@@ -182,6 +176,4 @@ class WybraDatabaseCapability:
 def _tortoise_adapter(capability: DatabaseCapability) -> TortoiseRouteAdapter:
     if isinstance(capability, TortoiseRouteAdapter):
         return capability
-    raise DatabaseCapabilityError(
-        "Database capability does not provide the internal Tortoise route adapter."
-    )
+    raise DatabaseCapabilityError("Database capability does not provide the internal Tortoise route adapter.")

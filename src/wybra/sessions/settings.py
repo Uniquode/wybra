@@ -88,10 +88,7 @@ class SessionsSettings(BaseSettings):
         )
         if storage_backend is None:
             if deployment_environment != LOCAL_ENVIRONMENT:
-                raise ConfigurationError(
-                    "wybra.sessions.storage_backend must be configured outside "
-                    "local deployments."
-                )
+                raise ConfigurationError("wybra.sessions.storage_backend must be configured outside local deployments.")
             storage_backend = SessionStorageBackend.COOKIE
 
         lifetime_seconds = _configuration_value(
@@ -127,10 +124,7 @@ class SessionsSettings(BaseSettings):
             "cookie_same_site",
         )
         if cookie_same_site == "none" and cookie_secure is not True:
-            raise ConfigurationError(
-                "wybra.sessions.cookie_secure must be true when "
-                "cookie_same_site is 'none'."
-            )
+            raise ConfigurationError("wybra.sessions.cookie_secure must be true when cookie_same_site is 'none'.")
         project_root = _project_root(self.project_root)
         file_directory = _configuration_value(
             to_optional_path,

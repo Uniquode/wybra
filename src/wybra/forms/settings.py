@@ -49,9 +49,7 @@ class FormsSettings(BaseSettings):
         return cls(**values)
 
     def __post_init__(self) -> None:
-        deployment_environment = normalise_deployment_environment(
-            self.deployment_environment
-        )
+        deployment_environment = normalise_deployment_environment(self.deployment_environment)
         cookie_secure = _normalise_optional_bool(
             self.csrf_cookie_secure,
             "csrf_cookie_secure",
@@ -60,11 +58,7 @@ class FormsSettings(BaseSettings):
             self.csrf_token_max_age_seconds,
             "csrf_token_max_age_seconds",
         )
-        cookie_secure = (
-            deployment_environment != "local"
-            if cookie_secure is None
-            else cookie_secure
-        )
+        cookie_secure = deployment_environment != "local" if cookie_secure is None else cookie_secure
         secret_reference = _normalise_csrf_token_secret_reference(
             self.csrf_token_secret_source,
             self.csrf_token_secret_key,
@@ -74,18 +68,10 @@ class FormsSettings(BaseSettings):
             self.csrf_token_secret_previous_key,
         )
         token_secret = _normalise_token_secret(self.csrf_token_secret)
-        if (
-            deployment_environment != "local"
-            and token_secret is None
-            and secret_reference is None
-        ):
-            raise ConfigurationError(
-                "Non-local deployments must configure a stable CSRF token secret."
-            )
+        if deployment_environment != "local" and token_secret is None and secret_reference is None:
+            raise ConfigurationError("Non-local deployments must configure a stable CSRF token secret.")
         if deployment_environment != "local" and not cookie_secure:
-            raise ConfigurationError(
-                "Non-local deployments must use secure CSRF cookies."
-            )
+            raise ConfigurationError("Non-local deployments must use secure CSRF cookies.")
         if token_secret is None and secret_reference is None:
             logger.info(
                 "Generated startup-local CSRF token secret. Configure "
@@ -156,10 +142,7 @@ class FormsSettings(BaseSettings):
 
     @property
     def csrf_token_secret_previous_reference(self) -> tuple[SecretSource, str] | None:
-        if (
-            self.csrf_token_secret_source is None
-            or self.csrf_token_secret_previous_key is None
-        ):
+        if self.csrf_token_secret_source is None or self.csrf_token_secret_previous_key is None:
             return None
         return (
             cast(SecretSource, self.csrf_token_secret_source),
@@ -247,9 +230,7 @@ def _normalise_csrf_token_secret_reference(
     if source is None and key is None:
         return None
     if source is None:
-        raise ConfigurationError(
-            "csrf_token_secret_source is required when csrf_token_secret_key is set."
-        )
+        raise ConfigurationError("csrf_token_secret_source is required when csrf_token_secret_key is set.")
     if source != KEYCHAIN_SOURCE:
         raise ConfigurationError("csrf_token_secret_source must be keychain.")
     if key is None:
@@ -266,18 +247,13 @@ def _normalise_csrf_token_secret_previous_reference(
     if source is None and key is None:
         return None
     if source is None:
-        raise ConfigurationError(
-            "csrf_token_secret_source is required when "
-            "csrf_token_secret_previous_key is set."
-        )
+        raise ConfigurationError("csrf_token_secret_source is required when csrf_token_secret_previous_key is set.")
     if source != KEYCHAIN_SOURCE:
         raise ConfigurationError("csrf_token_secret_source must be keychain.")
     if key is None:
         return KEYCHAIN_SOURCE, CSRF_TOKEN_SECRET_KEY_PREVIOUS
     if not isinstance(key, str) or not key.strip():
-        raise ConfigurationError(
-            "csrf_token_secret_previous_key must be a non-blank string."
-        )
+        raise ConfigurationError("csrf_token_secret_previous_key must be a non-blank string.")
     return KEYCHAIN_SOURCE, key.strip()
 
 

@@ -84,17 +84,12 @@ def validate_assets(settings: AssetValidationSettings) -> ValidationResult:
             error=f"Static asset source validation failed: {exc}",
         )
     else:
-        source_names = ", ".join(
-            f"{source.package}:{source.directory}" for source in static_sources
-        )
+        source_names = ", ".join(f"{source.package}:{source.directory}" for source in static_sources)
         record_check(
             checks,
             errors,
             passed=True,
-            description=(
-                "static asset sources load"
-                + (f": {source_names}" if source_names else ": none configured")
-            ),
+            description=("static asset sources load" + (f": {source_names}" if source_names else ": none configured")),
         )
 
     return ValidationResult(name="assets", errors=tuple(errors), checks=tuple(checks))
@@ -188,10 +183,7 @@ def _collection_root_problem(root: Path) -> str | None:
     if not parent.is_dir():
         return f"Static asset collection root parent is not a directory: {parent}"
     if not os.access(parent, os.W_OK | os.X_OK):
-        return (
-            "Static asset collection root cannot be created because parent is not "
-            f"writable: {parent}"
-        )
+        return f"Static asset collection root cannot be created because parent is not writable: {parent}"
     return None
 
 

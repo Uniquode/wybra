@@ -109,8 +109,7 @@ def _render_interpolation(
     if isinstance(value, TrustedSql):
         return value.value
     raise TypeError(
-        "SQL template interpolation must use ident(), param(), or trusted_sql(): "
-        f"{interpolation.expression}."
+        f"SQL template interpolation must use ident(), param(), or trusted_sql(): {interpolation.expression}."
     )
 
 

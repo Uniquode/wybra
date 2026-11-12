@@ -23,9 +23,7 @@ def load_environment(
     else:
         configured_environment = dict(environ)
 
-    base_environment = (
-        dict(configured_environment) if read_dotenv else configured_environment
-    )
+    base_environment = dict(configured_environment) if read_dotenv else configured_environment
     try:
         return Env(
             environ=base_environment,
@@ -34,10 +32,7 @@ def load_environment(
             update=False,
         )
     except Exception as exc:
-        raise ConfigurationError(
-            "Environment loader failed while initialising envex "
-            f"({type(exc).__name__})."
-        ) from exc
+        raise ConfigurationError(f"Environment loader failed while initialising envex ({type(exc).__name__}).") from exc
 
 
 def runtime_environment() -> Env:

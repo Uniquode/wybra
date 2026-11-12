@@ -192,16 +192,13 @@ class SiteProfileCapability:
         if profile is not None and profile.profile_picture_media_id is not None:
             try:
                 return ProfileImage(
-                    src=await (await self.media.require()).url_for(
-                        profile.profile_picture_media_id
-                    ),
+                    src=await (await self.media.require()).url_for(profile.profile_picture_media_id),
                     alt="Profile picture",
                     fallback_text=None,
                 )
             except MediaError, SiteCapabilityError:
                 logger.warning(
-                    "Profile image resolution via media capability failed; "
-                    "using fallback profile initial.",
+                    "Profile image resolution via media capability failed; using fallback profile initial.",
                     extra={"user_id": str(user.id)},
                 )
         return ProfileImage(
@@ -231,14 +228,10 @@ def profile_picture_storage_key(user_id: uuid.UUID, extension: str) -> str:
     if raw_suffix.startswith("."):
         raise ProfileInputError("Profile picture extension must not start with a dot.")
     if "." in raw_suffix:
-        raise ProfileInputError(
-            "Profile picture extension must not contain additional dots."
-        )
+        raise ProfileInputError("Profile picture extension must not contain additional dots.")
     suffix = raw_suffix.lower()
     if "/" in suffix or "\\" in suffix:
-        raise ProfileInputError(
-            "Profile picture extension must not contain path separators."
-        )
+        raise ProfileInputError("Profile picture extension must not contain path separators.")
     user_key = user_id.hex
     return f"profile/{user_key[:2]}/{user_key[2:4]}/{user_key}.{suffix}"
 

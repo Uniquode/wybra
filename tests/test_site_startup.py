@@ -122,13 +122,9 @@ def _write_app_config(
 ) -> Path:
     asset_root_config = f'        root = "{asset_root}"\n' if asset_root else ""
     deployment_config = (
-        f'        deployment_environment = "{deployment_environment}"\n'
-        if deployment_environment is not None
-        else ""
+        f'        deployment_environment = "{deployment_environment}"\n' if deployment_environment is not None else ""
     )
-    debug_config = (
-        f"        debug = {str(debug).lower()}\n" if debug is not None else ""
-    )
+    debug_config = f"        debug = {str(debug).lower()}\n" if debug is not None else ""
     log_config = (
         f"""
         [log]
@@ -348,9 +344,7 @@ class TestSiteComposition:
                             "project_root": tmp_path,
                             "modules": ("api_route_app",),
                         },
-                        "app.routes": {
-                            "prefixes": {"api_route_app": {"default": "/api"}}
-                        },
+                        "app.routes": {"prefixes": {"api_route_app": {"default": "/api"}}},
                     }
                 ),
             )
@@ -387,9 +381,7 @@ class TestSiteComposition:
                         "project_root": tmp_path,
                         "modules": ("wybra.api", "configured_api_route_app"),
                     },
-                    "app.routes": {
-                        "prefixes": {"configured_api_route_app": {"default": "/api"}}
-                    },
+                    "app.routes": {"prefixes": {"configured_api_route_app": {"default": "/api"}}},
                 }
             ),
         )
@@ -706,9 +698,7 @@ class TestSiteComposition:
             await site.close()
 
     @pytest.mark.anyio
-    async def test_start_app_debug_environment_overrides_config(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_start_app_debug_environment_overrides_config(self, tmp_path: Path) -> None:
         app = FastAPI()
         site = await start(
             app,
@@ -735,9 +725,7 @@ class TestSiteComposition:
         with pytest.raises(ConfigSourceError, match="app.debug"):
             await start(
                 FastAPI(),
-                config_source=MappingConfigSource(
-                    {"app": {"modules": ("wybra.assets",)}}
-                ),
+                config_source=MappingConfigSource({"app": {"modules": ("wybra.assets",)}}),
                 environ={ENV_APP_DEBUG: "maybe"},
             )
 
@@ -792,10 +780,7 @@ class TestSiteComposition:
         assert site.modules == ("wybra.assets",)
 
     def test_local_file_uri_path_normalises_windows_drive_paths(self) -> None:
-        assert (
-            _local_file_uri_path("/C:/Users/David%20N/app.toml", windows=True)
-            == "C:/Users/David N/app.toml"
-        )
+        assert _local_file_uri_path("/C:/Users/David%20N/app.toml", windows=True) == "C:/Users/David N/app.toml"
 
     @pytest.mark.anyio
     async def test_start_rejects_blank_config_source_string(self) -> None:
@@ -804,9 +789,7 @@ class TestSiteComposition:
 
     @pytest.mark.anyio
     async def test_start_rejects_unsupported_config_source_uri_scheme(self) -> None:
-        with pytest.raises(
-            ConfigSourceError, match="Unsupported config source URI scheme"
-        ):
+        with pytest.raises(ConfigSourceError, match="Unsupported config source URI scheme"):
             await start(FastAPI(), config_source="https://example.test/app.toml")
 
     @pytest.mark.anyio
@@ -818,9 +801,7 @@ class TestSiteComposition:
 
     @pytest.mark.anyio
     async def test_start_rejects_invalid_config_source_object(self) -> None:
-        with pytest.raises(
-            ConfigSourceError, match="string, AppConfig, or ConfigSource"
-        ):
+        with pytest.raises(ConfigSourceError, match="string, AppConfig, or ConfigSource"):
             await start(FastAPI(), config_source=object())  # type: ignore[arg-type]
 
     @pytest.mark.anyio
@@ -833,9 +814,7 @@ class TestSiteComposition:
             def load(self) -> ConfigSourceResult:
                 return ConfigSourceResult()
 
-        with pytest.raises(
-            ConfigSourceError, match="string, AppConfig, or ConfigSource"
-        ):
+        with pytest.raises(ConfigSourceError, match="string, AppConfig, or ConfigSource"):
             await start(
                 FastAPI(),
                 config_source=InvalidConfigSource(),  # type: ignore[arg-type]
@@ -1168,9 +1147,7 @@ class TestSiteComposition:
         assert site.modules == ("wybra.assets",)
 
     @pytest.mark.anyio
-    async def test_start_reports_missing_required_config_file(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_start_reports_missing_required_config_file(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigSourceError, match="file: App config file"):
             await start(FastAPI(), config_source=str(tmp_path / "missing.toml"))
 
@@ -1192,21 +1169,17 @@ class TestModuleLifecycle:
         _write_module(
             tmp_path,
             "first_module",
-            "from site_setup_recorder import calls\n"
-            'async def setup_site(site):\n    calls.append("first")\n',
+            'from site_setup_recorder import calls\nasync def setup_site(site):\n    calls.append("first")\n',
         )
         _write_module(
             tmp_path,
             "second_module",
-            "from site_setup_recorder import calls\n"
-            'async def setup_site(site):\n    calls.append("second")\n',
+            'from site_setup_recorder import calls\nasync def setup_site(site):\n    calls.append("second")\n',
         )
 
         site = await start(
             FastAPI(),
-            config_source=MappingConfigSource(
-                {"app": {"modules": ("first_module", "second_module")}}
-            ),
+            config_source=MappingConfigSource({"app": {"modules": ("first_module", "second_module")}}),
         )
 
         from site_setup_recorder import calls
@@ -1239,9 +1212,7 @@ class TestModuleLifecycle:
 
         await start(
             FastAPI(),
-            config_source=MappingConfigSource(
-                {"app": {"modules": ("first_post_module", "second_post_module")}}
-            ),
+            config_source=MappingConfigSource({"app": {"modules": ("first_post_module", "second_post_module")}}),
         )
 
         from post_setup_recorder import calls
@@ -1329,9 +1300,7 @@ class TestModuleLifecycle:
 
         await start(
             FastAPI(),
-            config_source=MappingConfigSource(
-                {"app": {"modules": ("async_callable_finaliser_module",)}}
-            ),
+            config_source=MappingConfigSource({"app": {"modules": ("async_callable_finaliser_module",)}}),
         )
 
         from async_callable_finaliser_recorder import calls
@@ -1356,16 +1325,11 @@ class TestModuleLifecycle:
 
         with pytest.raises(
             SiteCapabilityError,
-            match=(
-                "module=failing_deferred_module.*attribute=setup_finalisation.*"
-                "error_type=RuntimeError"
-            ),
+            match=("module=failing_deferred_module.*attribute=setup_finalisation.*error_type=RuntimeError"),
         ):
             await start(
                 FastAPI(),
-                config_source=MappingConfigSource(
-                    {"app": {"modules": ("failing_deferred_module",)}}
-                ),
+                config_source=MappingConfigSource({"app": {"modules": ("failing_deferred_module",)}}),
             )
 
     @pytest.mark.anyio
@@ -1402,9 +1366,7 @@ class TestModuleLifecycle:
 
         await start(
             app,
-            config_source=MappingConfigSource(
-                {"app": {"modules": ("mapped_error_app", "wybra.errors")}}
-            ),
+            config_source=MappingConfigSource({"app": {"modules": ("mapped_error_app", "wybra.errors")}}),
         )
 
         from jinja2.exceptions import TemplateNotFound
@@ -1429,8 +1391,7 @@ class TestModuleLifecycle:
         _write_module(
             tmp_path,
             "plain_module",
-            "from post_setup_missing_recorder import calls\n"
-            'async def setup_site(site):\n    calls.append("setup")\n',
+            'from post_setup_missing_recorder import calls\nasync def setup_site(site):\n    calls.append("setup")\n',
         )
 
         await start(
@@ -1475,9 +1436,7 @@ class TestModuleLifecycle:
 
         site = await start(
             FastAPI(),
-            config_source=MappingConfigSource(
-                {"app": {"modules": ("dependent_module", "provider_module")}}
-            ),
+            config_source=MappingConfigSource({"app": {"modules": ("dependent_module", "provider_module")}}),
         )
 
         try:
@@ -1521,9 +1480,7 @@ class TestModuleLifecycle:
         ):
             await start(
                 FastAPI(),
-                config_source=MappingConfigSource(
-                    {"app": {"modules": ("invalid_module",)}}
-                ),
+                config_source=MappingConfigSource({"app": {"modules": ("invalid_module",)}}),
             )
 
     @pytest.mark.anyio
@@ -1545,9 +1502,7 @@ class TestModuleLifecycle:
         ):
             await start(
                 FastAPI(),
-                config_source=MappingConfigSource(
-                    {"app": {"modules": ("sync_module",)}}
-                ),
+                config_source=MappingConfigSource({"app": {"modules": ("sync_module",)}}),
             )
 
     @pytest.mark.anyio
@@ -1569,9 +1524,7 @@ class TestModuleLifecycle:
         ):
             await start(
                 FastAPI(),
-                config_source=MappingConfigSource(
-                    {"app": {"modules": ("failing_module",)}}
-                ),
+                config_source=MappingConfigSource({"app": {"modules": ("failing_module",)}}),
             )
 
     @pytest.mark.anyio
@@ -1589,9 +1542,7 @@ class TestModuleLifecycle:
         ):
             await start(
                 FastAPI(),
-                config_source=MappingConfigSource(
-                    {"app": {"modules": ("invalid_post_module",)}}
-                ),
+                config_source=MappingConfigSource({"app": {"modules": ("invalid_post_module",)}}),
             )
 
     @pytest.mark.anyio
@@ -1604,10 +1555,7 @@ class TestModuleLifecycle:
         _write_module(
             tmp_path,
             "sync_post_module",
-            (
-                "def post_setup_site(site):\n"
-                '    raise RuntimeError("should not be called")\n'
-            ),
+            ('def post_setup_site(site):\n    raise RuntimeError("should not be called")\n'),
         )
 
         with pytest.raises(
@@ -1616,9 +1564,7 @@ class TestModuleLifecycle:
         ):
             await start(
                 FastAPI(),
-                config_source=MappingConfigSource(
-                    {"app": {"modules": ("sync_post_module",)}}
-                ),
+                config_source=MappingConfigSource({"app": {"modules": ("sync_post_module",)}}),
             )
 
     @pytest.mark.anyio
@@ -1640,7 +1586,5 @@ class TestModuleLifecycle:
         ):
             await start(
                 FastAPI(),
-                config_source=MappingConfigSource(
-                    {"app": {"modules": ("failing_post_module",)}}
-                ),
+                config_source=MappingConfigSource({"app": {"modules": ("failing_post_module",)}}),
             )

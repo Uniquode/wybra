@@ -43,9 +43,7 @@ def _json(response: Response) -> object:
 def test_api_settings_load_from_module_config() -> None:
     from wybra.api import ApiLinkMode, ApiSettings
 
-    settings = ApiSettings.load_settings(
-        _config({"path_prefix": "service", "paging_link_mode": "request_path"})
-    )
+    settings = ApiSettings.load_settings(_config({"path_prefix": "service", "paging_link_mode": "request_path"}))
 
     assert settings.path_prefix == "/service"
     assert settings.paging_link_mode == ApiLinkMode.REQUEST_PATH
@@ -143,9 +141,7 @@ def test_paged_response_uses_pathless_hateoas_links_by_default() -> None:
 def test_page_link_can_include_request_path() -> None:
     from wybra.api import ApiLinkMode, ApiPageLink, ApiSettings, DefaultApiCapability
 
-    capability = DefaultApiCapability(
-        ApiSettings.load_settings(_config({"paging_link_mode": "request_path"}))
-    )
+    capability = DefaultApiCapability(ApiSettings.load_settings(_config({"paging_link_mode": "request_path"})))
     link = capability.page_link(
         _request("/api/items", query_string=b"cursor=abc&limit=25"),
         rel="self",
@@ -167,9 +163,7 @@ async def test_streaming_response_delegates_through_api_capability() -> None:
         yield b"two\n"
 
     capability = DefaultApiCapability(ApiSettings.load_settings(_config()))
-    response = capability.streaming_response(
-        stream(), media_type="application/x-ndjson"
-    )
+    response = capability.streaming_response(stream(), media_type="application/x-ndjson")
 
     assert isinstance(response, StreamingResponse)
     assert response.media_type == "application/x-ndjson"

@@ -49,11 +49,9 @@ async def run_maintenance_task(config_path: Path, task: str) -> int:
     return await tools_migrate.run_migration(
         None,
         config_source=config_path.as_posix(),
-        operation=lambda _backend, context: (
-            data_migrate.run_database_maintenance_lifecycle(
-                context,
-                data_migrate.DatabaseMaintenanceRequest(task=task, confirm=None),
-            )
+        operation=lambda _backend, context: data_migrate.run_database_maintenance_lifecycle(
+            context,
+            data_migrate.DatabaseMaintenanceRequest(task=task, confirm=None),
         ),
         include_provisioning_connection=True,
     )

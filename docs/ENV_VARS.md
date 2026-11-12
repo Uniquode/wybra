@@ -73,6 +73,25 @@ Configured secret-source keys may also point at environment variables:
 | `WYBRA_CACHE__<NAME>__URL` | Overrides the Redis URL for the existing `[cache.<name>]` instance only. The cache name is upper-cased. |
 | `WYBRA_CACHE__<NAME>__SERVERS` | Overrides the comma-separated NATS server URLs for the existing `[cache.<name>]` instance only. The cache name is upper-cased. |
 
+## Streams
+
+| Name | Description |
+| --- | --- |
+| `WYBRA_STREAMS_BACKEND` | Overrides the provider selected by `[streams]`. |
+| `WYBRA_STREAMS_URL` | Overrides the Redis URL selected by `[streams]`. |
+| `WYBRA_STREAMS_URL_SOURCE` | Selects the Redis URL secret source; `environment` requires `WYBRA_STREAMS_URL_KEY` to name a distinct variable. |
+| `WYBRA_STREAMS_URL_KEY` | Names the Redis URL key in the selected secret source. |
+| `WYBRA_STREAMS_CREDENTIALS_SOURCE` | Selects the separately supplied Redis credentials source. |
+| `WYBRA_STREAMS_CREDENTIALS_KEY` | Names the Redis credentials key in the selected secret source. |
+| `WYBRA_STREAMS_REDIS_CREDENTIALS` | Supplies Redis credentials when the selected credentials source is `environment` and no key override is set. |
+| `WYBRA_STREAMS_SERVERS` | Overrides the comma-separated core-NATS server URLs selected by `[streams]`. |
+| `WYBRA_STREAMS_AUTHENTICATION` | Selects NATS `token` or `user-password` authentication. |
+| `WYBRA_STREAMS_AUTHENTICATION_SOURCE` | Selects the NATS authentication secret source. |
+| `WYBRA_STREAMS_AUTHENTICATION_KEY` | Names the NATS authentication key in the selected secret source. |
+| `WYBRA_STREAMS_NATS_TOKEN` | Supplies a NATS token when the selected authentication source is `environment` and no key override is set. |
+| `WYBRA_STREAMS_NATS_CREDENTIALS` | Supplies `username:password` when NATS `user-password` authentication uses the environment source and no key override is set. |
+| `WYBRA_STREAMS_NAMESPACE` | Overrides the namespace selected by `[streams]`. |
+
 ## Authentication
 
 | Name | Description |

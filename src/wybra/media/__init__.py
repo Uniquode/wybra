@@ -27,9 +27,7 @@ async def setup_site(site: Site) -> None:
     settings = MediaSettings.load_settings(site.config)
     capability = FilesystemMediaCapability(
         settings=settings,
-        catalogue=TortoiseMediaCatalogueRepository(
-            site.capability_proxy(DatabaseCapability)
-        ),
+        catalogue=TortoiseMediaCatalogueRepository(site.capability_proxy(DatabaseCapability)),
     )
     site.provide_capability(MediaCapability, capability)
     if capability.serve and capability.url_mode == "storage-key":

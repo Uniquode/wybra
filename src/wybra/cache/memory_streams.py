@@ -67,14 +67,8 @@ class InMemoryStreamCache:
         stream_key = _stream_key(owner, stream)
         payload = validate_payload(payload)
         async with self._fence(lease):
-            if (
-                stream_key not in self._records
-                and len(self._records) >= self.max_streams
-            ):
-                raise CacheFeatureError(
-                    "The in-memory stream cache has reached its configured "
-                    "stream capacity."
-                )
+            if stream_key not in self._records and len(self._records) >= self.max_streams:
+                raise CacheFeatureError("The in-memory stream cache has reached its configured stream capacity.")
             position = StreamPosition(self._next_positions.get(stream_key, 0) + 1)
             self._next_positions[stream_key] = position.value
             records = self._records.setdefault(stream_key, deque())
@@ -123,23 +117,13 @@ class InMemoryStreamCache:
         async with self._lock:
             latest = self._next_positions.get(stream_key, 0)
             if position.value > latest:
-                raise CacheConflictError(
-                    f"Stream position {position.value} does not exist in {stream!r}."
-                )
+                raise CacheConflictError(f"Stream position {position.value} does not exist in {stream!r}.")
             consumer_key = (stream_key, consumer)
             current = self._consumer_positions.get(consumer_key)
             if current is not None and position < current:
-                raise CacheConflictError(
-                    f"Stream consumer {consumer!r} cannot move backwards."
-                )
-            if (
-                current is None
-                and self._consumer_count(stream_key) >= self.max_consumers
-            ):
-                raise CacheFeatureError(
-                    "The in-memory stream cache has reached its configured "
-                    "consumer capacity."
-                )
+                raise CacheConflictError(f"Stream consumer {consumer!r} cannot move backwards.")
+            if current is None and self._consumer_count(stream_key) >= self.max_consumers:
+                raise CacheFeatureError("The in-memory stream cache has reached its configured consumer capacity.")
             self._consumer_positions[consumer_key] = position
 
     async def forget_consumer(
@@ -151,22 +135,16 @@ class InMemoryStreamCache:
         stream_key = _stream_key(owner, stream)
         consumer = validate_resource(consumer, label="stream consumer")
         async with self._lock:
-            return (
-                self._consumer_positions.pop((stream_key, consumer), None) is not None
-            )
+            return self._consumer_positions.pop((stream_key, consumer), None) is not None
 
     def _consumer_count(self, stream_key: StreamKey) -> int:
         return sum(
-            1
-            for consumer_stream_key, _consumer in self._consumer_positions
-            if consumer_stream_key == stream_key
+            1 for consumer_stream_key, _consumer in self._consumer_positions if consumer_stream_key == stream_key
         )
 
     def bind_lease_fence(self, leases: InMemoryLeaseCache) -> None:
         if self.leases is not None and self.leases is not leases:
-            raise CacheFeatureError(
-                "Stream cache lease fencing is already bound to another lease cache."
-            )
+            raise CacheFeatureError("Stream cache lease fencing is already bound to another lease cache.")
         self.leases = leases
 
     def _read(
@@ -181,13 +159,9 @@ class InMemoryStreamCache:
             return ()
         earliest = records[0].position.value
         if after is not None and after.value < earliest - 1:
-            raise CachePositionExpiredError(
-                f"Stream position {after.value} is no longer retained."
-            )
+            raise CachePositionExpiredError(f"Stream position {after.value} is no longer retained.")
         after_value = 0 if after is None else after.value
-        return tuple(
-            record for record in records if record.position.value > after_value
-        )[:limit]
+        return tuple(record for record in records if record.position.value > after_value)[:limit]
 
     @asynccontextmanager
     async def _fence(self, lease: LeaseToken | None):
@@ -196,9 +170,7 @@ class InMemoryStreamCache:
                 yield
             return
         if self.leases is None:
-            raise CacheFeatureError(
-                "Stream cache does not support lease-fenced appends."
-            )
+            raise CacheFeatureError("Stream cache does not support lease-fenced appends.")
         async with self.leases.hold_fence(lease) as validate:
             async with self._lock:
                 validate(lease)
@@ -295,19 +267,10 @@ class InMemoryPubSubCache:
         topic_key = _stream_key(owner, topic)
         async with self._lock:
             self._require_open()
-            if (
-                topic_key not in self._subscriptions
-                and len(self._subscriptions) >= self.max_topics
-            ):
-                raise CacheFeatureError(
-                    "The in-memory pub/sub cache has reached its configured "
-                    "topic capacity."
-                )
+            if topic_key not in self._subscriptions and len(self._subscriptions) >= self.max_topics:
+                raise CacheFeatureError("The in-memory pub/sub cache has reached its configured topic capacity.")
             if self._subscription_count() >= self.max_subscriptions:
-                raise CacheFeatureError(
-                    "The in-memory pub/sub cache has reached its configured "
-                    "subscription capacity."
-                )
+                raise CacheFeatureError("The in-memory pub/sub cache has reached its configured subscription capacity.")
             subscription: InMemoryPubSubSubscription
 
             async def remove() -> None:

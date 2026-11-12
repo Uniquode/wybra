@@ -72,11 +72,7 @@ def render_json(inspection: RouteInspection) -> str:
 def _succinct_line(record: RouteRecord) -> str:
     methods = ",".join(record.methods) if record.methods else record.kind.value
     name = f" name={record.name}" if record.name else ""
-    origin = (
-        f" origin={record.origin.module_name}:{record.origin.router_label}"
-        if record.origin
-        else ""
-    )
+    origin = f" origin={record.origin.module_name}:{record.origin.router_label}" if record.origin else ""
     shape = f" shape={record.shape.route_type.value}"
     return f"{methods:<12} {record.path}{name}{origin}{shape}"
 
@@ -260,11 +256,7 @@ def _graph_origin_label(origin: RouteOriginLabel) -> str:
 
 
 def _graph_route_methods(record: RouteRecord) -> str:
-    methods = (
-        ",".join(method.lower() for method in record.methods)
-        if record.methods
-        else record.kind.value
-    )
+    methods = ",".join(method.lower() for method in record.methods) if record.methods else record.kind.value
     return f"[{methods}]"
 
 
@@ -290,20 +282,14 @@ def _mermaid_label(
     if node.kind:
         details.append(node.kind.value)
     if node.route_ids:
-        details.extend(
-            _route_detail(route_map[route_id]) for route_id in node.route_ids
-        )
+        details.extend(_route_detail(route_map[route_id]) for route_id in node.route_ids)
     return json.dumps("<br/>".join(html.escape(part) for part in details))
 
 
 def _route_detail(record: RouteRecord) -> str:
     methods = ",".join(record.methods) if record.methods else record.kind.value
     name = f" {record.name}" if record.name else ""
-    origin = (
-        f" {record.origin.module_name}:{record.origin.router_label}"
-        if record.origin
-        else ""
-    )
+    origin = f" {record.origin.module_name}:{record.origin.router_label}" if record.origin else ""
     return f"{methods}{name}{origin} {record.shape.route_type.value}"
 
 

@@ -107,9 +107,7 @@ class InMemoryWorkQueue:
             self._promote_delayed()
             self._ensure_queue_capacity(queue_key)
             if self._active_count(queue_key) >= self.max_items_per_queue:
-                raise CacheWorkQueueRejectedError(
-                    f"Queue {queue!r} has reached its configured item capacity."
-                )
+                raise CacheWorkQueueRejectedError(f"Queue {queue!r} has reached its configured item capacity.")
             self._enqueue(queue_key, item, delay=delay)
             self._condition.notify_all()
         return identity
@@ -269,11 +267,7 @@ class InMemoryWorkQueue:
 
     def _recover_expired(self) -> None:
         now = self.clock()
-        expired = [
-            receipt
-            for receipt, reservation in self._inflight.items()
-            if reservation.visible_until <= now
-        ]
+        expired = [receipt for receipt, reservation in self._inflight.items() if reservation.visible_until <= now]
         for receipt in expired:
             reservation = self._inflight.pop(receipt)
             self._retry_or_dead_letter(
@@ -309,43 +303,29 @@ class InMemoryWorkQueue:
             or reservation.queue_key[1] != delivery.queue
             or reservation.item.attempt != delivery.attempt
         ):
-            raise CacheConflictError(
-                f"Delivery {delivery.identity.value!r} is stale or no longer reserved."
-            )
+            raise CacheConflictError(f"Delivery {delivery.identity.value!r} is stale or no longer reserved.")
         return reservation
 
     def _next_wakeup(self, queue_key: QueueKey) -> float | None:
         wakeups = [
-            available_at
-            for available_at, _sequence, delayed_key, _item in self._delayed
-            if delayed_key == queue_key
+            available_at for available_at, _sequence, delayed_key, _item in self._delayed if delayed_key == queue_key
         ]
         wakeups.extend(
-            reservation.visible_until
-            for reservation in self._inflight.values()
-            if reservation.queue_key == queue_key
+            reservation.visible_until for reservation in self._inflight.values() if reservation.queue_key == queue_key
         )
         return min(wakeups, default=None)
 
     def _active_count(self, queue_key: QueueKey) -> int:
         return (
             len(self._ready.get(queue_key, ()))
-            + sum(
-                delayed_key == queue_key
-                for _available_at, _sequence, delayed_key, _item in self._delayed
-            )
-            + sum(
-                reservation.queue_key == queue_key
-                for reservation in self._inflight.values()
-            )
+            + sum(delayed_key == queue_key for _available_at, _sequence, delayed_key, _item in self._delayed)
+            + sum(reservation.queue_key == queue_key for reservation in self._inflight.values())
         )
 
     def _ensure_queue_capacity(self, queue_key: QueueKey) -> None:
         known_queues = self._known_queues()
         if queue_key not in known_queues and len(known_queues) >= self.max_queues:
-            raise CacheWorkQueueRejectedError(
-                "The in-memory work queue has reached its configured queue capacity."
-            )
+            raise CacheWorkQueueRejectedError("The in-memory work queue has reached its configured queue capacity.")
 
     def _known_queues(self) -> set[QueueKey]:
         return (

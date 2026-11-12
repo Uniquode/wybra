@@ -10,9 +10,7 @@ from wybra.forms.csrf import CSRF_FORM_DATA_STATE_ATTR
 from wybra.forms.security import FORM_BODY_MAX_BYTES, normalise_content_type
 
 _ALLOWED_METHODS = frozenset({"PATCH", "PUT", "DELETE"})
-_SUPPORTED_CONTENT_TYPES = frozenset(
-    {"application/json", "application/x-www-form-urlencoded", "multipart/form-data"}
-)
+_SUPPORTED_CONTENT_TYPES = frozenset({"application/json", "application/x-www-form-urlencoded", "multipart/form-data"})
 
 
 class MethodOverrideMiddleware:

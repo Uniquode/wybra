@@ -46,8 +46,7 @@ def validate_scope_catalogue(
     return ValidationResult(
         name="scopes",
         errors=tuple(
-            f"Declared scope is missing from the persisted catalogue: {identifier}."
-            for identifier in missing
+            f"Declared scope is missing from the persisted catalogue: {identifier}." for identifier in missing
         ),
         checks=(
             ValidationCheck(
@@ -67,9 +66,7 @@ async def _validate_configured_scope_catalogue(
 ) -> tuple[str, ...]:
     app_target = settings.app_config.runserver.asgi_app
     if app_target is None or not app_target.strip():
-        raise ProjectToolConfigurationError(
-            "[app.runserver].asgi_app must be configured for scope validation."
-        )
+        raise ProjectToolConfigurationError("[app.runserver].asgi_app must be configured for scope validation.")
 
     app = import_from_string(app_target.strip())
     lifespan_context = configured_asgi_lifespan(app)

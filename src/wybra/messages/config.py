@@ -44,9 +44,7 @@ def to_storage_backend(value: object) -> MessageStorageBackend:
     try:
         return MessageStorageBackend(value.strip().lower())
     except ValueError as exc:
-        raise ValueError(
-            f"messages storage backend must be one of: {storage_backend_choices()}."
-        ) from exc
+        raise ValueError(f"messages storage backend must be one of: {storage_backend_choices()}.") from exc
 
 
 def to_optional_cache_name(value: object) -> str | None:

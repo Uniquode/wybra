@@ -70,15 +70,9 @@ class FormFieldOptions:
     """Form-specific policy for one model field."""
 
     editable: bool = True
-    relation_query: Callable[[RelationQueryContext], Awaitable[RelationPage]] | None = (
-        None
-    )
-    relation_value: (
-        Callable[[object, RelationQueryContext], Awaitable[object | None]] | None
-    ) = None
-    option_format: Callable[[object, RelationQueryContext], Awaitable[str]] | None = (
-        None
-    )
+    relation_query: Callable[[RelationQueryContext], Awaitable[RelationPage]] | None = None
+    relation_value: Callable[[object, RelationQueryContext], Awaitable[object | None]] | None = None
+    option_format: Callable[[object, RelationQueryContext], Awaitable[str]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,18 +145,12 @@ class _TortoiseRelationQueryService(RelationQueryService):
             return RelationPage(records=records, next_cursor=next_cursor)
 
         selected = tuple(
-            await model.filter(**{f"{primary_key}__in": selected_values})
-            .using_db(client)
-            .order_by(primary_key)
+            await model.filter(**{f"{primary_key}__in": selected_values}).using_db(client).order_by(primary_key)
         )
         selected_keys = {str(getattr(record, primary_key)) for record in selected}
         return RelationPage(
             records=selected
-            + tuple(
-                record
-                for record in records
-                if str(getattr(record, primary_key)) not in selected_keys
-            ),
+            + tuple(record for record in records if str(getattr(record, primary_key)) not in selected_keys),
             next_cursor=next_cursor,
         )
 
@@ -175,22 +163,12 @@ class ModelForm(Form):
         if allowed is None:
             return fields
         model = cls._declared_model()
-        model_fields = (
-            model._meta.fields_map
-            if isinstance(model, type) and issubclass(model, Model)
-            else {}
-        )
+        model_fields = model._meta.fields_map if isinstance(model, type) and issubclass(model, Model) else {}
         unknown = set(allowed) - (set(fields) | set(model_fields))
         if unknown:
-            raise ModelFormDeclarationError(
-                "Unknown model form field(s): " + ", ".join(sorted(unknown))
-            )
+            raise ModelFormDeclarationError("Unknown model form field(s): " + ", ".join(sorted(unknown)))
         return {
-            name: (
-                fields[name]
-                if name in fields
-                else cls.form_field_from_model(model_fields[name])
-            )
+            name: (fields[name] if name in fields else cls.form_field_from_model(model_fields[name]))
             for name in allowed
         }
 
@@ -308,9 +286,7 @@ class ModelForm(Form):
             policy = self._declared_form_options(self.fields)[name]
             page = await self._relation_page(policy, context)
             choices = {
-                str(self._primary_key(record)): await self._format_relation_option(
-                    policy, record, context
-                )
+                str(self._primary_key(record)): await self._format_relation_option(policy, record, context)
                 for record in page.records
             }
             field = self.fields[name]
@@ -330,9 +306,7 @@ class ModelForm(Form):
         if not self.is_valid():
             return target
 
-        version_name = (
-            version_field_name(type(target)) if isinstance(target, Model) else None
-        )
+        version_name = version_field_name(type(target)) if isinstance(target, Model) else None
 
         for name, result in self.result.fields.items():
             form_field = self.fields[name]
@@ -376,29 +350,19 @@ class ModelForm(Form):
         changed_fields = self._changed_model_fields(original, target, created)
         try:
             many_to_many_changes = (
-                tuple(
-                    name
-                    for name in self._many_to_many_fields()
-                    if self.result.fields[name].value is not None
-                )
+                tuple(name for name in self._many_to_many_fields() if self.result.fields[name].value is not None)
                 if created
                 else await self._changed_many_to_many_fields(target, client)
             )
             changed_fields += many_to_many_changes
             if not created and not changed_fields:
-                await ensure_model_version(
-                    target, client=client, expected_version=self._submitted_version()
-                )
+                await ensure_model_version(target, client=client, expected_version=self._submitted_version())
                 return SaveResult(primary=target, original=original)
             if created:
                 await target.save(using_db=client)
             else:
-                await save_model_update(
-                    target, client=client, expected_version=self._submitted_version()
-                )
-            await self._save_many_to_many_relations(
-                target, client, many_to_many_changes
-            )
+                await save_model_update(target, client=client, expected_version=self._submitted_version())
+            await self._save_many_to_many_relations(target, client, many_to_many_changes)
         except OptimisticLockConflict:
             self._stale_conflict = True
             self.add_error(None, "This record was changed by another user.")
@@ -436,9 +400,7 @@ class ModelForm(Form):
         original = copy(target)
         action = await self.deletion_action(target)
         try:
-            async with tortoise_transaction_for_route(
-                self.connection, self._writer_route
-            ) as client:
+            async with tortoise_transaction_for_route(self.connection, self._writer_route) as client:
                 if action == "physical":
                     await delete_model_instance(
                         target,
@@ -494,11 +456,7 @@ class ModelForm(Form):
                 continue
             if name in self._many_to_many_fields():
                 continue
-            if (
-                created
-                or original is None
-                or getattr(original, name) != getattr(target, name)
-            ):
+            if created or original is None or getattr(original, name) != getattr(target, name):
                 changed.append(name)
         return tuple(changed)
 
@@ -511,9 +469,7 @@ class ModelForm(Form):
             return None
         result = self.result.fields.get(name)
         if result is None or not result.is_valid or not isinstance(result.value, int):
-            raise ModelBindingError(
-                "Versioned ModelForm updates require a valid submitted version field."
-            )
+            raise ModelBindingError("Versioned ModelForm updates require a valid submitted version field.")
         return result.value
 
     async def _resolve_relation_values(self) -> None:
@@ -539,9 +495,7 @@ class ModelForm(Form):
                 limit=None,
                 query=query,
             )
-            resolved = await self._resolve_relation_value(
-                name, policies[name], result.value, context
-            )
+            resolved = await self._resolve_relation_value(name, policies[name], result.value, context)
             if resolved is None:
                 self.add_error(name, "Select a valid option.")
                 continue
@@ -630,9 +584,7 @@ class ModelForm(Form):
             if value is None:
                 continue
             if not isinstance(value, tuple):
-                raise ModelBindingError(
-                    f"Multi-select relation field must resolve to records: {name}."
-                )
+                raise ModelBindingError(f"Multi-select relation field must resolve to records: {name}.")
             relation = getattr(target, name)
             await relation.clear(using_db=client)
             await relation.add(*value, using_db=client)
@@ -648,13 +600,9 @@ class ModelForm(Form):
             if value is None:
                 continue
             if not isinstance(value, tuple):
-                raise ModelBindingError(
-                    f"Multi-select relation field must resolve to records: {name}."
-                )
+                raise ModelBindingError(f"Multi-select relation field must resolve to records: {name}.")
             current = await getattr(target, name).all().using_db(client)
-            if {self._primary_key(record) for record in current} != {
-                self._primary_key(record) for record in value
-            }:
+            if {self._primary_key(record) for record in current} != {self._primary_key(record) for record in value}:
                 changed.append(name)
         return tuple(changed)
 
@@ -687,9 +635,7 @@ class ModelForm(Form):
                 try:
                     value = getattr(instance, name)
                 except AttributeError as exc:
-                    raise ModelBindingError(
-                        f"Model instance has no attribute for field: {name}."
-                    ) from exc
+                    raise ModelBindingError(f"Model instance has no attribute for field: {name}.") from exc
                 bound_defaults[name] = field.from_model_value(value)
         return bound_defaults
 
@@ -697,18 +643,14 @@ class ModelForm(Form):
     def _declared_model(cls) -> object:
         model = getattr(getattr(cls, "Meta", None), "model", None)
         if model is None:
-            raise ModelFormDeclarationError(
-                "ModelForm declarations require Meta.model."
-            )
+            raise ModelFormDeclarationError("ModelForm declarations require Meta.model.")
         return model
 
     @classmethod
     def _validate_declared_model_fields(cls) -> None:
         model = cls._declared_model()
         if hasattr(getattr(cls, "Meta", None), "bindings"):
-            raise ModelFormDeclarationError(
-                "Meta.bindings is no longer supported; use field value adapters."
-            )
+            raise ModelFormDeclarationError("Meta.bindings is no longer supported; use field value adapters.")
         if not isinstance(model, type) or not issubclass(model, Model):
             return
         try:
@@ -718,9 +660,7 @@ class ModelForm(Form):
         fields = cls.declared_fields()
         unknown = set(fields) - set(model._meta.fields_map)
         if unknown:
-            raise ModelFormDeclarationError(
-                "Unknown Tortoise model field(s): " + ", ".join(sorted(unknown))
-            )
+            raise ModelFormDeclarationError("Unknown Tortoise model field(s): " + ", ".join(sorted(unknown)))
 
         relation_fields = cls._relation_model_field_names(model)
         for name, options in cls._declared_form_options(fields).items():
@@ -732,9 +672,7 @@ class ModelForm(Form):
                 )
             )
             if has_relation_policy and name not in relation_fields:
-                raise ModelFormDeclarationError(
-                    f"Relation form options require a relation field: {name}."
-                )
+                raise ModelFormDeclarationError(f"Relation form options require a relation field: {name}.")
 
     @staticmethod
     def _relation_model_field_names(model: type[Model]) -> set[str]:
@@ -746,23 +684,15 @@ class ModelForm(Form):
         return relation_fields
 
     @classmethod
-    def _declared_form_options(
-        cls, fields: Mapping[str, object]
-    ) -> dict[str, FormFieldOptions]:
+    def _declared_form_options(cls, fields: Mapping[str, object]) -> dict[str, FormFieldOptions]:
         raw_options = getattr(getattr(cls, "Meta", None), "form_options", {}) or {}
         if not isinstance(raw_options, Mapping):
             raise ModelFormDeclarationError("Meta.form_options must be a mapping.")
         unknown = set(raw_options) - set(fields)
         if unknown:
-            raise ModelFormDeclarationError(
-                "Unknown form option field(s): " + ", ".join(sorted(unknown))
-            )
-        if not all(
-            isinstance(option, FormFieldOptions) for option in raw_options.values()
-        ):
-            raise ModelFormDeclarationError(
-                "Meta.form_options values must be FormFieldOptions."
-            )
+            raise ModelFormDeclarationError("Unknown form option field(s): " + ", ".join(sorted(unknown)))
+        if not all(isinstance(option, FormFieldOptions) for option in raw_options.values()):
+            raise ModelFormDeclarationError("Meta.form_options values must be FormFieldOptions.")
         return {name: raw_options.get(name, FormFieldOptions()) for name in fields}
 
     def _apply_form_options(self) -> None:

@@ -8,10 +8,7 @@ def cache_provider_configured(modules: Iterable[str]) -> bool:
     configured_modules = tuple(modules)
     if "wybra.cache" in configured_modules:
         return True
-    return any(
-        _module_provides_cache_capability(module_name)
-        for module_name in configured_modules
-    )
+    return any(_module_provides_cache_capability(module_name) for module_name in configured_modules)
 
 
 def _module_provides_cache_capability(module_name: str) -> bool:

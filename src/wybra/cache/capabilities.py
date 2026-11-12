@@ -74,9 +74,7 @@ class _SingleFlightCache:
         """Read a value and outcome without recording an observation."""
         raise NotImplementedError
 
-    async def _set_value(
-        self, owner: str, key: str, value: bytes, *, ttl: float
-    ) -> None:
+    async def _set_value(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
         """Store a value without recording an observation."""
         raise NotImplementedError
 
@@ -97,18 +95,12 @@ class _SingleFlightCache:
             try:
                 value, read_outcome = await self._get_value(owner, key)
             except Exception as exc:
-                await self._record_failed(
-                    "read", owner, key, started=read_started, error=exc
-                )
+                await self._record_failed("read", owner, key, started=read_started, error=exc)
                 raise
             if value is not None:
-                await self._record_completed(
-                    "read", owner, key, outcome=read_outcome, started=read_started
-                )
+                await self._record_completed("read", owner, key, outcome=read_outcome, started=read_started)
                 return value
-            await self._record_completed(
-                "read", owner, key, outcome=read_outcome, started=read_started
-            )
+            await self._record_completed("read", owner, key, outcome=read_outcome, started=read_started)
 
             async with self._fills_lock:
                 fill = self._fills.get(cache_key)
@@ -150,9 +142,7 @@ class _SingleFlightCache:
                 raise
             else:
                 if not uncached:
-                    await self._record_completed(
-                        "set", owner, key, outcome="stored", started=fill_started
-                    )
+                    await self._record_completed("set", owner, key, outcome="stored", started=fill_started)
                 await self._record_completed(
                     "fill",
                     owner,
@@ -210,9 +200,7 @@ class InMemoryCache(_SingleFlightCache):
         except Exception as exc:
             await self._record_failed("read", owner, key, started=started, error=exc)
             raise
-        await self._record_completed(
-            "read", owner, key, outcome=outcome, started=started
-        )
+        await self._record_completed("read", owner, key, outcome=outcome, started=started)
         return value
 
     async def set(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
@@ -222,9 +210,7 @@ class InMemoryCache(_SingleFlightCache):
         except Exception as exc:
             await self._record_failed("set", owner, key, started=started, error=exc)
             raise
-        await self._record_completed(
-            "set", owner, key, outcome="stored", started=started
-        )
+        await self._record_completed("set", owner, key, outcome="stored", started=started)
 
     async def _get_value(self, owner: str, key: str) -> tuple[bytes | None, str]:
         cache_key = _cache_key(owner, key)
@@ -238,9 +224,7 @@ class InMemoryCache(_SingleFlightCache):
                 return None, "expired"
             return value, "hit"
 
-    async def _set_value(
-        self, owner: str, key: str, value: bytes, *, ttl: float
-    ) -> None:
+    async def _set_value(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
         value = validate_cache_value(value)
         cache_key = _cache_key(owner, key)
         expires_at = time.monotonic() + _ttl(ttl)
@@ -255,9 +239,7 @@ class InMemoryCache(_SingleFlightCache):
         except Exception as exc:
             await self._record_failed("delete", owner, key, started=started, error=exc)
             raise
-        await self._record_completed(
-            "delete", owner, key, outcome="deleted", started=started
-        )
+        await self._record_completed("delete", owner, key, outcome="deleted", started=started)
 
     async def get_or_set(
         self,
@@ -317,9 +299,7 @@ class RedisCache(_SingleFlightCache):
         except Exception as exc:
             await self._record_failed("set", owner, key, started=started, error=exc)
             raise
-        await self._record_completed(
-            "set", owner, key, outcome="stored", started=started
-        )
+        await self._record_completed("set", owner, key, outcome="stored", started=started)
 
     async def _get_value(self, owner: str, key: str) -> tuple[bytes | None, str]:
         runtime = self._runtime()
@@ -332,9 +312,7 @@ class RedisCache(_SingleFlightCache):
         result = value if isinstance(value, bytes) else None
         return result, "hit" if result is not None else "miss"
 
-    async def _set_value(
-        self, owner: str, key: str, value: bytes, *, ttl: float
-    ) -> None:
+    async def _set_value(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
         value = validate_cache_value(value)
         ttl = validate_cache_ttl(ttl)
         runtime = self._runtime()
@@ -359,9 +337,7 @@ class RedisCache(_SingleFlightCache):
         except Exception as exc:
             await self._record_failed("delete", owner, key, started=started, error=exc)
             raise
-        await self._record_completed(
-            "delete", owner, key, outcome="deleted", started=started
-        )
+        await self._record_completed("delete", owner, key, outcome="deleted", started=started)
 
     async def get_or_set(
         self,
@@ -418,9 +394,7 @@ class NatsJetStreamCache(_SingleFlightCache):
         except Exception as exc:
             await self._record_failed("read", owner, key, started=started, error=exc)
             raise
-        await self._record_completed(
-            "read", owner, key, outcome=outcome, started=started
-        )
+        await self._record_completed("read", owner, key, outcome=outcome, started=started)
         return value
 
     async def set(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
@@ -430,17 +404,13 @@ class NatsJetStreamCache(_SingleFlightCache):
         except Exception as exc:
             await self._record_failed("set", owner, key, started=started, error=exc)
             raise
-        await self._record_completed(
-            "set", owner, key, outcome="stored", started=started
-        )
+        await self._record_completed("set", owner, key, outcome="stored", started=started)
 
     async def _get_value(self, owner: str, key: str) -> tuple[bytes | None, str]:
         value = await self._runtime().get(owner, key)
         return value, "hit" if value is not None else "miss"
 
-    async def _set_value(
-        self, owner: str, key: str, value: bytes, *, ttl: float
-    ) -> None:
+    async def _set_value(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
         value = validate_cache_value(value)
         ttl = validate_cache_ttl(ttl)
         await self._runtime().set(owner, key, value, ttl=ttl)
@@ -452,9 +422,7 @@ class NatsJetStreamCache(_SingleFlightCache):
         except Exception as exc:
             await self._record_failed("delete", owner, key, started=started, error=exc)
             raise
-        await self._record_completed(
-            "delete", owner, key, outcome="deleted", started=started
-        )
+        await self._record_completed("delete", owner, key, outcome="deleted", started=started)
 
     async def get_or_set(
         self,

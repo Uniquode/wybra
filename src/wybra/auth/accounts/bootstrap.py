@@ -46,10 +46,7 @@ async def bootstrap_initial_admin(
     if not await _claim_initial_admin_bootstrap(connection):
         existing_admin = await _wait_for_claimed_administrative_user(connection)
         if existing_admin is None:
-            raise RuntimeError(
-                "Initial admin bootstrap was already claimed, but no "
-                "administrative user exists."
-            )
+            raise RuntimeError("Initial admin bootstrap was already claimed, but no administrative user exists.")
 
         return InitialAdminBootstrapResult(created=False, user=existing_admin)
 

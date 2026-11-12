@@ -142,19 +142,14 @@ def get_scope_declaration(target: object) -> ScopeDeclaration:
 
     target = scope_target(target)
     attached = getattr(target, _SCOPE_DECLARATION_ATTRIBUTE, None)
-    declaration = (
-        attached if isinstance(attached, ScopeDeclaration) else ScopeDeclaration()
-    )
+    declaration = attached if isinstance(attached, ScopeDeclaration) else ScopeDeclaration()
     if not _is_model(target):
         return declaration
 
     metadata_declaration = _model_metadata_declaration(target)
-    if (
-        declaration.requires or declaration.actions
-    ) and _model_declares_metadata_scopes(target):
+    if (declaration.requires or declaration.actions) and _model_declares_metadata_scopes(target):
         raise ScopeDeclarationError(
-            f"Model {target.__name__} declares scopes through both the decorator "
-            "and Meta.scopes."
+            f"Model {target.__name__} declares scopes through both the decorator and Meta.scopes."
         )
     if declaration.requires or declaration.actions:
         return declaration
@@ -231,11 +226,7 @@ def missing_scope_catalogue_entries(
     """Return declared identifiers absent from a persisted scope catalogue."""
 
     persisted = frozenset(persisted_identifiers)
-    return tuple(
-        identifier
-        for identifier in declared_scope_identifiers(discovered)
-        if identifier not in persisted
-    )
+    return tuple(identifier for identifier in declared_scope_identifiers(discovered) if identifier not in persisted)
 
 
 async def validate_site_scope_catalogue(site: Site) -> tuple[str, ...]:
@@ -261,9 +252,7 @@ def resolve_scope_requirements(
         return declaration.requires
 
     if content_types is None:
-        raise ScopeDeclarationError(
-            "ContentTypesCapability is required to resolve model scope actions."
-        )
+        raise ScopeDeclarationError("ContentTypesCapability is required to resolve model scope actions.")
     model = target if _is_model(target) else _require_model_backed_view(target)
     content_type = content_types.for_model(model)
     return (*declaration.requires, f"{content_type.identifier}.{resolved_action}")
@@ -303,9 +292,7 @@ def missing_scope_requirements(
         requirement
         for requirement in requirements
         if requirement not in grants
-        and not any(
-            requirement.startswith(f"{aggregate}.") for aggregate in aggregate_grants
-        )
+        and not any(requirement.startswith(f"{aggregate}.") for aggregate in aggregate_grants)
     )
 
 
@@ -322,11 +309,7 @@ async def access_decision(
 
     site = get_site(request.app)
     content_types = site.optional_capability(ContentTypesCapability)
-    model_requirements = (
-        resolve_scope_requirements(model, action, content_types)
-        if model is not None
-        else ()
-    )
+    model_requirements = resolve_scope_requirements(model, action, content_types) if model is not None else ()
     view_requirements = resolve_scope_requirements(target, action, content_types)
     required_scopes = tuple(dict.fromkeys((*model_requirements, *view_requirements)))
     resolved_action = _normalise_operation_action(action)
@@ -450,11 +433,7 @@ async def _scope_subject(request: Request) -> ScopeSubject:
         return cached
 
     capability = get_site(request.app).optional_capability(ScopeGrantsCapability)
-    subject = (
-        await capability.resolve_scope_subject(request)
-        if capability is not None
-        else ScopeSubject()
-    )
+    subject = await capability.resolve_scope_subject(request) if capability is not None else ScopeSubject()
     setattr(request.state, _SCOPE_SUBJECT_STATE_ATTRIBUTE, subject)
     return subject
 
@@ -468,19 +447,14 @@ def _normalise_declaration(
 ) -> ScopeDeclaration:
     if _is_model(target):
         if values and actions is not None:
-            raise ScopeDeclarationError(
-                "Model positional scope actions cannot be combined with actions=."
-            )
+            raise ScopeDeclarationError("Model positional scope actions cannot be combined with actions=.")
         return ScopeDeclaration(
             requires=_normalise_requirements(requires),
             actions=_normalise_actions(values if values else actions),
         )
 
     if values and requires is not None:
-        raise ScopeDeclarationError(
-            "View or endpoint positional requirements cannot be combined with "
-            "requires=."
-        )
+        raise ScopeDeclarationError("View or endpoint positional requirements cannot be combined with requires=.")
     if actions is not None:
         _require_model_backed_view(target)
     return ScopeDeclaration(
@@ -508,13 +482,8 @@ def _normalise_requirements(values: Iterable[str] | None) -> tuple[str, ...]:
     try:
         requirements = tuple(values)
     except TypeError as exc:
-        raise ScopeDeclarationError(
-            "requires= must be an iterable of scope names."
-        ) from exc
-    if not all(
-        isinstance(requirement, str) and requirement.strip()
-        for requirement in requirements
-    ):
+        raise ScopeDeclarationError("requires= must be an iterable of scope names.") from exc
+    if not all(isinstance(requirement, str) and requirement.strip() for requirement in requirements):
         raise ScopeDeclarationError("Scope requirements must be non-blank strings.")
     if len(set(requirements)) != len(requirements):
         raise ScopeDeclarationError("Scope requirements must not contain duplicates.")
@@ -529,9 +498,7 @@ def _normalise_actions(values: Iterable[str] | None) -> tuple[ScopeAction, ...]:
     try:
         names = tuple(values)
     except TypeError as exc:
-        raise ScopeDeclarationError(
-            "actions= must be an iterable of action names."
-        ) from exc
+        raise ScopeDeclarationError("actions= must be an iterable of action names.") from exc
     if not all(isinstance(name, str) and name for name in names):
         raise ScopeDeclarationError("Scope actions must be non-blank strings.")
     if len(set(names)) != len(names):
@@ -539,25 +506,15 @@ def _normalise_actions(values: Iterable[str] | None) -> tuple[ScopeAction, ...]:
     excluded = tuple(name.removeprefix("-") for name in names if name.startswith("-"))
     included = tuple(name for name in names if not name.startswith("-"))
     if excluded and included:
-        raise ScopeDeclarationError(
-            "Inclusive and exclusion-prefixed scope actions cannot be combined."
-        )
+        raise ScopeDeclarationError("Inclusive and exclusion-prefixed scope actions cannot be combined.")
     invalid = next(
-        (
-            name
-            for name in (*included, *excluded)
-            if name not in _STANDARD_SCOPE_ACTION_NAMES
-        ),
+        (name for name in (*included, *excluded) if name not in _STANDARD_SCOPE_ACTION_NAMES),
         None,
     )
     if invalid is not None:
         raise ScopeDeclarationError(f"Unknown scope action: {invalid}.")
     selected_names = (
-        tuple(
-            action.value
-            for action in STANDARD_SCOPE_ACTIONS
-            if action.value not in excluded
-        )
+        tuple(action.value for action in STANDARD_SCOPE_ACTIONS if action.value not in excluded)
         if excluded
         else included
     )
@@ -572,15 +529,13 @@ def _model_metadata_declaration(model: type[Model]) -> ScopeDeclaration:
         return ScopeDeclaration(actions=STANDARD_SCOPE_ACTIONS)
     if value is False:
         raise ScopeDeclarationError(
-            f"Model Meta.scopes must be None, True, or an iterable of action "
-            f"names: {model.__name__}."
+            f"Model Meta.scopes must be None, True, or an iterable of action names: {model.__name__}."
         )
     try:
         actions = _normalise_actions(cast(Iterable[str], value))
     except TypeError as exc:
         raise ScopeDeclarationError(
-            f"Model Meta.scopes must be None, True, or an iterable of action "
-            f"names: {model.__name__}."
+            f"Model Meta.scopes must be None, True, or an iterable of action names: {model.__name__}."
         ) from exc
     return ScopeDeclaration(actions=actions)
 
@@ -597,14 +552,10 @@ def _require_model_backed_view(target: object) -> type[Model]:
     from wybra.views.generic import ModelGenericView
 
     if not isinstance(target, type) or not issubclass(target, ModelGenericView):
-        raise ScopeDeclarationError(
-            "actions= requires a model or model-backed ModelGenericView."
-        )
+        raise ScopeDeclarationError("actions= requires a model or model-backed ModelGenericView.")
     model = target.model
     if model is None or not _is_model(model):
-        raise ScopeDeclarationError(
-            "actions= requires ModelGenericView.model to be a Tortoise model."
-        )
+        raise ScopeDeclarationError("actions= requires ModelGenericView.model to be a Tortoise model.")
     return model
 
 
@@ -633,9 +584,7 @@ def _discover_target_scopes(
             identifier=identifier,
             origin=ScopeDeclarationOrigin.LITERAL,
             target=target_name,
-            content_type=(
-                content_type.identifier if content_type is not None else None
-            ),
+            content_type=(content_type.identifier if content_type is not None else None),
         )
         for identifier in declaration.requires
     ]

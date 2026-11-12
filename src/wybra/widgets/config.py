@@ -16,9 +16,7 @@ def to_widget_features(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, str):
-        features = tuple(
-            feature.strip() for feature in value.split(",") if feature.strip()
-        )
+        features = tuple(feature.strip() for feature in value.split(",") if feature.strip())
         return _validate_widget_features(features)
     if isinstance(value, list | tuple):
         return _validate_widget_features(tuple(value))
@@ -26,9 +24,7 @@ def to_widget_features(value: object) -> tuple[str, ...]:
 
 
 def _validate_widget_features(features: tuple[object, ...]) -> tuple[str, ...]:
-    invalid_types = tuple(
-        feature for feature in features if not isinstance(feature, str)
-    )
+    invalid_types = tuple(feature for feature in features if not isinstance(feature, str))
     if invalid_types:
         raise ValueError("feature names must be strings.")
     feature_names = tuple(feature for feature in features if isinstance(feature, str))

@@ -81,14 +81,10 @@ class TOTPVerificationStore(Protocol):
 
 
 TOTP_LOGIN_CHALLENGE_ERROR_BY_MESSAGE: Final[dict[str, str]] = {
-    ERROR_TOTP_CODE_REQUIRED: (
-        "Enter the code from your authenticator app or a one-time use recovery code."
-    ),
+    ERROR_TOTP_CODE_REQUIRED: ("Enter the code from your authenticator app or a one-time use recovery code."),
     ERROR_TOTP_INVALID: "Verification code is invalid.",
     ERROR_TOTP_RECOVERY_INVALID: "Verification code is invalid.",
-    ERROR_TOTP_SETUP_REQUIRED: (
-        "Set up an authenticator before continuing, or choose to bypass this step."
-    ),
+    ERROR_TOTP_SETUP_REQUIRED: ("Set up an authenticator before continuing, or choose to bypass this step."),
     ERROR_VERIFICATION_CODE_INVALID: "Verification code is invalid.",
 }
 RECOVERY_CODES_DOWNLOAD_FILENAME: Final[str] = "recovery-codes.txt"
@@ -98,9 +94,7 @@ TOTP_SETUP_PAGE_MESSAGES: Final[dict[str, str]] = {
     "return_to_account": "Return to account",
     "return_to_security": "Return to Login & Security",
     "download_recovery_codes": f"Download {RECOVERY_CODES_DOWNLOAD_FILENAME}",
-    "instructions": (
-        "Use your authenticator app to add this account, then enter the first code."
-    ),
+    "instructions": ("Use your authenticator app to add this account, then enter the first code."),
     "show_setup_qr_code": "Show setup QRCode",
     "show_setup_uri": "Show setup URI",
     "setup_uri": "Setup URI:",
@@ -464,9 +458,7 @@ async def render_totp_setup_page(
             setup_error=setup_error,
             setup_complete=setup_complete,
             setup_recovery_codes=recovery_codes,
-            setup_recovery_codes_download_href=recovery_codes_download_href(
-                recovery_codes
-            ),
+            setup_recovery_codes_download_href=recovery_codes_download_href(recovery_codes),
             recovery_codes_download_filename=RECOVERY_CODES_DOWNLOAD_FILENAME,
             setup_return_label=setup_return_label,
             totp_code_length=DEFAULT_TOTP_DIGITS,

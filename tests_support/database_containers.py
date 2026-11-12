@@ -120,10 +120,7 @@ class ContainerDatabaseConfig:
             lines.append(f"sa_database = {_toml_string(self.service_database)}")
         if self.options:
             lines.extend(("", "[app.database.options]"))
-            lines.extend(
-                f"{key} = {_toml_string(value)}"
-                for key, value in sorted(self.options.items())
-            )
+            lines.extend(f"{key} = {_toml_string(value)}" for key, value in sorted(self.options.items()))
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
@@ -303,8 +300,7 @@ def start_mssql_container(
                 [
                     "bash",
                     "-c",
-                    "/opt/mssql-tools*/bin/sqlcmd "
-                    "-U SA -P \"$SA_PASSWORD\" -Q 'SELECT 1' -C",
+                    "/opt/mssql-tools*/bin/sqlcmd -U SA -P \"$SA_PASSWORD\" -Q 'SELECT 1' -C",
                 ]
             ).with_startup_timeout(120)
         )
@@ -398,8 +394,7 @@ async def _cleanup_mysql_target(config: ContainerDatabaseConfig) -> None:
     try:
         async with connection.cursor() as cursor:
             await cursor.execute(
-                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA "
-                "WHERE SCHEMA_NAME = %s",
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = %s",
                 (config.database,),
             )
             database_row = await cursor.fetchone()

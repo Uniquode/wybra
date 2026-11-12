@@ -48,10 +48,7 @@ from wybra.services.crypto import ENVELOPE_PREFIX, SecretEnvelopeService
 from wybra.site import Site, start
 
 _KEYRING_PLATFORM_SKIP_REASONS = {
-    "macos": (
-        "macOS Keychain integration requires Darwin, keyring, and an "
-        "accessible Keychain."
-    ),
+    "macos": ("macOS Keychain integration requires Darwin, keyring, and an accessible Keychain."),
     "linux": "Linux Secret Service integration requires D-Bus and a provider.",
     "windows": (
         "Windows Credential Manager integration requires Windows, keyring, and "
@@ -158,9 +155,7 @@ class TestSecretsSettingsCredentialReferences:
 
 class TestDefaultSecretsCapability:
     def test_resolves_and_checks_registered_source(self) -> None:
-        capability = DefaultSecretsCapability.from_drivers(
-            (EnvironmentSecretSourceDriver({"API_TOKEN": "resolved"}),)
-        )
+        capability = DefaultSecretsCapability.from_drivers((EnvironmentSecretSourceDriver({"API_TOKEN": "resolved"}),))
 
         assert capability.exists("environment", "API_TOKEN") is True
         assert capability.resolve("environment", "API_TOKEN").reveal() == "resolved"
@@ -259,9 +254,7 @@ class TestAwsSecretsManagerSource:
         def missing_import(name: str) -> Any:
             raise ModuleNotFoundError(name=name)
 
-        monkeypatch.setattr(
-            "wybra.secrets.sources.importlib.import_module", missing_import
-        )
+        monkeypatch.setattr("wybra.secrets.sources.importlib.import_module", missing_import)
         driver = AwsSecretsManagerSourceDriver(KmsSecretSourceSettings())
 
         with pytest.raises(MissingSecretSourceDependencyError, match="`kms`"):
@@ -337,9 +330,7 @@ class TestVaultSource:
         def missing_import(name: str) -> Any:
             raise ModuleNotFoundError(name=name)
 
-        monkeypatch.setattr(
-            "wybra.secrets.sources.importlib.import_module", missing_import
-        )
+        monkeypatch.setattr("wybra.secrets.sources.importlib.import_module", missing_import)
         driver = VaultSecretSourceDriver(VaultSecretSourceSettings())
 
         with pytest.raises(MissingSecretSourceDependencyError, match="`vault`"):
@@ -361,16 +352,12 @@ class FakeMacosMissingKeyring:
         pass
 
     def get_password(self, service: str, username: str) -> str | None:
-        raise self.KeyringError(
-            "Can't get password from keychain: (-50, 'Unknown Error')"
-        )
+        raise self.KeyringError("Can't get password from keychain: (-50, 'Unknown Error')")
 
 
 class TestKeychainSource:
     def test_error_helper_classifies_macos_missing_item(self) -> None:
-        exc = FakeMacosMissingKeyring.KeyringError(
-            "Can't get password from keychain: (-50, 'Unknown Error')"
-        )
+        exc = FakeMacosMissingKeyring.KeyringError("Can't get password from keychain: (-50, 'Unknown Error')")
 
         assert keyring_reports_missing_secret(exc) is True
 
@@ -428,9 +415,7 @@ class TestKeychainSource:
         def missing_import(name: str) -> Any:
             raise ModuleNotFoundError(name=name)
 
-        monkeypatch.setattr(
-            "wybra.secrets.sources.importlib.import_module", missing_import
-        )
+        monkeypatch.setattr("wybra.secrets.sources.importlib.import_module", missing_import)
         driver = KeychainSecretSourceDriver(KeychainSecretSourceSettings())
 
         with pytest.raises(MissingSecretSourceDependencyError, match="`keychain`"):
@@ -451,9 +436,7 @@ class TestKeychainSource:
         if not _keyring_backend_available(_probe_platform):
             pytest.skip(_KEYRING_PLATFORM_SKIP_REASONS[_probe_platform])
 
-        driver = KeychainSecretSourceDriver(
-            KeychainSecretSourceSettings(appname=_keyring_probe_service())
-        )
+        driver = KeychainSecretSourceDriver(KeychainSecretSourceSettings(appname=_keyring_probe_service()))
 
         assert driver.exists(_keyring_probe_username()) is False
 
@@ -513,9 +496,7 @@ async def test_secrets_setup_site_registers_environment_capability() -> None:
 
     capability = site.require_capability(SecretsCapability)
 
-    assert capability.resolve("environment", "SERVICE_TOKEN").reveal() == (
-        "from-environment"
-    )
+    assert capability.resolve("environment", "SERVICE_TOKEN").reveal() == ("from-environment")
 
 
 @pytest.mark.anyio

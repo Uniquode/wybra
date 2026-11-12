@@ -39,9 +39,7 @@ class SessionMiddlewareContext:
                 if isinstance(self.storage, CookieSessionStorage):
                     session = await self._load_cookie_session(cookie_value, now=now)
                 else:
-                    session = await self._load_server_side_session(
-                        cookie_value, now=now
-                    )
+                    session = await self._load_server_side_session(cookie_value, now=now)
         except Exception as exc:
             await self._publish("load", "failed", error=exc)
             raise
@@ -50,19 +48,14 @@ class SessionMiddlewareContext:
             "invalid" if session.invalid_cookie else "succeeded",
         )
         if not session.invalid_cookie:
-            session.prospective_expires_at = (
-                now + self.settings.resolved_lifetime_seconds
-            )
+            session.prospective_expires_at = now + self.settings.resolved_lifetime_seconds
             if session.session_id is None:
                 session.expires_at = session.prospective_expires_at
         return session
 
     async def cleanup_expired(self, *, now: float) -> None:
         last_cleanup_at = self._last_cleanup_at
-        if (
-            last_cleanup_at is not None
-            and now - last_cleanup_at < SESSION_CLEANUP_INTERVAL_SECONDS
-        ):
+        if last_cleanup_at is not None and now - last_cleanup_at < SESSION_CLEANUP_INTERVAL_SECONDS:
             return
         object.__setattr__(self, "_last_cleanup_at", now)
         await self.storage.cleanup(now=now)
@@ -101,9 +94,7 @@ class SessionMiddlewareContext:
                     return
                 operation = "created" if session.session_id is None else "saved"
                 session_id = session.session_id or create_session_id(now=now)
-                created_at = (
-                    session.created_at if session.created_at is not None else now
-                )
+                created_at = session.created_at if session.created_at is not None else now
                 record = SessionRecord(
                     data=dict(session.data),
                     created_at=created_at,

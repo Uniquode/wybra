@@ -46,18 +46,13 @@ def test_development_error_context_includes_chained_causes() -> None:
         except RuntimeError as exc:
             context = development_error_context(request, exc)
         return {
-            "causes": [
-                {"type": cause.exception_type, "message": cause.exception_message}
-                for cause in context.causes
-            ]
+            "causes": [{"type": cause.exception_type, "message": cause.exception_message} for cause in context.causes]
         }
 
     with WybraTestClient(app) as client:
         response = client.get("/debug")
 
-    assert response.json() == {
-        "causes": [{"type": "LookupError", "message": "original"}]
-    }
+    assert response.json() == {"causes": [{"type": "LookupError", "message": "original"}]}
 
 
 def test_chained_error_collection_stops_at_cycles() -> None:
@@ -68,6 +63,4 @@ def test_chained_error_collection_stops_at_cycles() -> None:
 
     causes = _chained_errors(first)
 
-    assert [(cause.exception_type, cause.exception_message) for cause in causes] == [
-        ("ValueError", "second")
-    ]
+    assert [(cause.exception_type, cause.exception_message) for cause in causes] == [("ValueError", "second")]

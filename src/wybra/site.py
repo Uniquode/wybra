@@ -126,9 +126,7 @@ class Site:
     def modules(self) -> tuple[str, ...]:
         app_config = self.config.get_config("app") or {}
         modules = app_config.get("modules", ())
-        if isinstance(modules, list | tuple) and all(
-            isinstance(module, str) for module in modules
-        ):
+        if isinstance(modules, list | tuple) and all(isinstance(module, str) for module in modules):
             return tuple(modules)
         return ()
 
@@ -158,8 +156,7 @@ class Site:
     def defer_setup_finalisation(self, finaliser: SiteSetupFinaliser) -> None:
         """Run an asynchronous finaliser after all module setup hooks."""
         if not callable(finaliser) or not (
-            iscoroutinefunction(finaliser)
-            or iscoroutinefunction(type(finaliser).__call__)
+            iscoroutinefunction(finaliser) or iscoroutinefunction(type(finaliser).__call__)
         ):
             raise SiteCapabilityError(
                 structured_error(
@@ -170,9 +167,7 @@ class Site:
             )
         module_name = self._setup_finaliser_module
         if module_name is None:
-            raise SiteCapabilityError(
-                "Deferred setup finalisers may only be registered from setup_site."
-            )
+            raise SiteCapabilityError("Deferred setup finalisers may only be registered from setup_site.")
         self._setup_finalisers.append(_DeferredSetupFinaliser(module_name, finaliser))
 
     async def _finalise_deferred_setup(self) -> None:
@@ -196,8 +191,7 @@ class Site:
     def defer_post_setup_finalisation(self, finaliser: SiteSetupFinaliser) -> None:
         """Run an asynchronous finaliser after every module post-setup hook."""
         if not callable(finaliser) or not (
-            iscoroutinefunction(finaliser)
-            or iscoroutinefunction(type(finaliser).__call__)
+            iscoroutinefunction(finaliser) or iscoroutinefunction(type(finaliser).__call__)
         ):
             raise SiteCapabilityError(
                 structured_error(
@@ -208,13 +202,8 @@ class Site:
             )
         module_name = self._post_setup_finaliser_module
         if module_name is None:
-            raise SiteCapabilityError(
-                "Deferred post-setup finalisers may only be registered from "
-                "post_setup_site."
-            )
-        self._post_setup_finalisers.append(
-            _DeferredSetupFinaliser(module_name, finaliser)
-        )
+            raise SiteCapabilityError("Deferred post-setup finalisers may only be registered from post_setup_site.")
+        self._post_setup_finalisers.append(_DeferredSetupFinaliser(module_name, finaliser))
 
     async def _finalise_deferred_post_setup(self) -> None:
         while self._post_setup_finalisers:
@@ -443,9 +432,7 @@ class SiteCapabilityProxy[T]:
         self._state = _CapabilityProxyState.UNAVAILABLE
 
     async def _record_resolution(self, *, available: bool) -> None:
-        await _record_capability_resolution(
-            type_name(self.capability_type), available=available
-        )
+        await _record_capability_resolution(type_name(self.capability_type), available=available)
 
     def _require_cached_capability(self) -> T:
         if self._capability is None:
@@ -639,8 +626,7 @@ def _normalise_config_source(
         )
         if app_config is None:  # pragma: no cover - require_app_config prevents this
             raise ConfigSourceError(
-                "Application config file could not be resolved; pass --config or set "
-                f"{APP_CONFIG_ENV}."
+                f"Application config file could not be resolved; pass --config or set {APP_CONFIG_ENV}."
             )
         return AppConfigSource(app_config), app_config
     if isinstance(config_source, AppConfig):
@@ -653,9 +639,7 @@ def _normalise_config_source(
         return AppConfigSource(app_config, source="file"), app_config
     if _is_config_source(config_source):
         return config_source, None
-    raise ConfigSourceError(
-        "Config source must be a string, AppConfig, or ConfigSource."
-    )
+    raise ConfigSourceError("Config source must be a string, AppConfig, or ConfigSource.")
 
 
 def _load_file_config_source(config_path: Path, *, project_root: Path) -> AppConfig:
@@ -693,9 +677,7 @@ def _apply_runtime_debug(
 ) -> None:
     debug = _runtime_debug(config)
     if debug and deployment_environment != "local":
-        raise ConfigurationError(
-            "app.debug is only allowed when deployment_environment is local."
-        )
+        raise ConfigurationError("app.debug is only allowed when deployment_environment is local.")
     app.debug = debug
 
 
@@ -756,14 +738,10 @@ def _file_config_path(config_source: str) -> Path:
 
     parsed = urlparse(value)
     if parsed.scheme and parsed.scheme != "file":
-        raise ConfigSourceError(
-            f"Unsupported config source URI scheme: {parsed.scheme}."
-        )
+        raise ConfigSourceError(f"Unsupported config source URI scheme: {parsed.scheme}.")
     if parsed.scheme == "file":
         if parsed.netloc not in {"", "localhost"}:
-            raise ConfigSourceError(
-                "file:// config source URI must refer to a local file."
-            )
+            raise ConfigSourceError("file:// config source URI must refer to a local file.")
         if not parsed.path:
             raise ConfigSourceError("file:// config source URI must include a path.")
         return Path(_local_file_uri_path(parsed.path))
@@ -913,10 +891,7 @@ def _validate_registered_route_dependencies(site: Site) -> None:
     route_inspection = inspect_route_tree(site.app)
     if any(route.shape.template is not None for route in route_inspection.routes):
         site.require_capability(TemplateCapability)
-    if any(
-        route.shape.declared_route_type is RouteType.API
-        for route in route_inspection.routes
-    ):
+    if any(route.shape.declared_route_type is RouteType.API for route in route_inspection.routes):
         site.require_capability(ApiCapability)
 
 

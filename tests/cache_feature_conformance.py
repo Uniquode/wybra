@@ -13,7 +13,6 @@ from wybra.cache import (
     CacheConflictError,
     CachePositionExpiredError,
     LeaseCacheCapability,
-    PubSubCacheCapability,
     ScheduleCacheCapability,
     ScheduleCursor,
     StreamCacheCapability,
@@ -64,9 +63,7 @@ async def assert_baseline_cache_conformance(
         await release_fill.wait()
         return b"filled"
 
-    first_fill = asyncio.create_task(
-        cache.get_or_set(owner, "fill", ttl=60, factory=factory)
-    )
+    first_fill = asyncio.create_task(cache.get_or_set(owner, "fill", ttl=60, factory=factory))
     second_fill: asyncio.Task[bytes] | None = None
     second_started = asyncio.Event()
 
@@ -108,12 +105,7 @@ async def assert_atomic_conformance(
     *,
     owner: str = "conformance-atomic",
 ) -> None:
-    creates = await asyncio.gather(
-        *(
-            feature.create(owner, "value", str(index).encode(), ttl=30)
-            for index in range(8)
-        )
-    )
+    creates = await asyncio.gather(*(feature.create(owner, "value", str(index).encode(), ttl=30) for index in range(8)))
     winners = [created for created in creates if created is not None]
     assert len(winners) == 1
     created = winners[0]
@@ -148,9 +140,7 @@ async def assert_atomic_conformance(
     )
     assert await feature.get(owner, "value") is None
 
-    counters = await asyncio.gather(
-        *(feature.increment(owner, "counter", ttl=30) for _ in range(8))
-    )
+    counters = await asyncio.gather(*(feature.increment(owner, "counter", ttl=30) for _ in range(8)))
     assert sorted(counter.value for counter in counters) == list(range(1, 9))
     assert len({counter.revision for counter in counters}) == 8
 
@@ -268,9 +258,7 @@ async def assert_lease_fenced_mutation_conformance(
     assert current is not None
     assert current.value == b"live"
     assert await atomic.get(owner, "stale-create") is None
-    assert [record.payload for record in await streams.read(owner, "events")] == [
-        b"live"
-    ]
+    assert [record.payload for record in await streams.read(owner, "events")] == [b"live"]
 
 
 async def assert_work_queue_conformance(
@@ -548,26 +536,10 @@ async def assert_stream_conformance(
     assert [record.position for record in replayed] == [first, second]
 
     retained_positions = [
-        await feature.append(owner, "retained", str(index).encode())
-        for index in range(retention_count + 2)
+        await feature.append(owner, "retained", str(index).encode()) for index in range(retention_count + 2)
     ]
     with pytest.raises(CachePositionExpiredError):
         await feature.read(owner, "retained", after=retained_positions[0])
-
-
-async def assert_pubsub_conformance(
-    feature: PubSubCacheCapability,
-    *,
-    owner: str = "conformance-pubsub",
-) -> None:
-    await feature.publish(owner, "live", b"offline")
-    subscription = await feature.subscribe(owner, "live")
-    try:
-        await feature.publish(owner, "live", b"online")
-        assert await subscription.receive(timeout=1) == b"online"
-    finally:
-        await subscription.close()
-    await feature.publish(owner, "live", b"after")
 
 
 async def assert_schedule_conformance(
@@ -735,7 +707,6 @@ __all__ = (
     "assert_atomic_conformance",
     "assert_lease_conformance",
     "assert_lease_fenced_mutation_conformance",
-    "assert_pubsub_conformance",
     "assert_schedule_conformance",
     "assert_stream_conformance",
     "assert_work_queue_conformance",

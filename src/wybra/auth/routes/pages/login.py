@@ -188,9 +188,7 @@ async def _handle_totp_post_authentication_decision(
                 email=email,
                 setup_challenge_id=setup_challenge_id,
                 setup_bypass_error=(
-                    "Verify your email before authenticator setup can proceed."
-                    if not user.is_verified
-                    else None
+                    "Verify your email before authenticator setup can proceed." if not user.is_verified else None
                 ),
             )
             set_totp_setup_nonce_cookie(response, request, setup_nonce)
@@ -258,10 +256,7 @@ async def _handle_login_totp_challenge(
                     request,
                     challenge_user,
                 )
-                if (
-                    ceremony_result.is_failure()
-                    and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
-                ):
+                if ceremony_result.is_failure() and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
                     response = await _verification_required_response(
                         request,
                         email=challenge_user.email,
@@ -337,9 +332,7 @@ async def _handle_login_totp_challenge(
             )
 
         challenge_return_to = (
-            challenge.metadata_payload.get("return_to")
-            if isinstance(challenge.metadata_payload, dict)
-            else None
+            challenge.metadata_payload.get("return_to") if isinstance(challenge.metadata_payload, dict) else None
         )
         if isinstance(challenge_return_to, str) and challenge_return_to.strip():
             return_to = normalise_return_to(challenge_return_to, default=return_to)
@@ -370,8 +363,7 @@ async def _handle_login_totp_challenge(
         )
         if credential_problem is not None:
             logger.warning(
-                "TOTP challenge credential rejected: challenge_id=%s "
-                "credential_id=%s user_id=%s reason=%s",
+                "TOTP challenge credential rejected: challenge_id=%s credential_id=%s user_id=%s reason=%s",
                 log_safe_uuid(challenge_id),
                 log_safe_uuid(credential_id),
                 log_safe_uuid(user.id),
@@ -472,10 +464,7 @@ async def _handle_login_totp_challenge(
         else (),
     )
     if ceremony_result.is_failure() or ceremony_result.value is None:
-        if (
-            ceremony_result.is_failure()
-            and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
-        ):
+        if ceremony_result.is_failure() and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
             response = await _verification_required_response(request, email=user.email)
             clear_totp_login_nonce_cookie(response, request)
             return response
@@ -490,8 +479,6 @@ async def _handle_login_totp_challenge(
         )
 
     response = RedirectResponse(url=return_to, status_code=303)
-    set_session_cookie(
-        response, request, ceremony_result.value, _identity_options(request)
-    )
+    set_session_cookie(response, request, ceremony_result.value, _identity_options(request))
     clear_totp_login_nonce_cookie(response, request)
     return response

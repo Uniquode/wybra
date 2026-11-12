@@ -214,9 +214,7 @@ def _diagnostic_topic(event: Event) -> EventScope:
     if str(event.scope) not in {"sql.transaction", "sql.savepoint"}:
         return event.scope
     outcome = getattr(event, "outcome", None)
-    return (
-        event.scope(event_segment(outcome)) if isinstance(outcome, str) else event.scope
-    )
+    return event.scope(event_segment(outcome)) if isinstance(outcome, str) else event.scope
 
 
 __all__ = (

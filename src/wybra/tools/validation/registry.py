@@ -85,10 +85,7 @@ def _targets_from_surface(
             surface_message(
                 "Validation surface",
                 surface_name,
-                (
-                    f"must expose `{VALIDATION_TARGETS_ATTRIBUTE}` as a "
-                    "mapping of target names to callables."
-                ),
+                (f"must expose `{VALIDATION_TARGETS_ATTRIBUTE}` as a mapping of target names to callables."),
             )
         )
 
@@ -99,10 +96,7 @@ def _targets_from_surface(
                 surface_message(
                     "Validation surface",
                     surface_name,
-                    (
-                        "contains an invalid target name; target names must be "
-                        "non-empty strings."
-                    ),
+                    ("contains an invalid target name; target names must be non-empty strings."),
                 )
             )
         if not callable(target):
@@ -120,9 +114,7 @@ def _targets_from_surface(
 
 def _require_configured_module(module_name: str) -> None:
     if _find_module_spec(module_name) is None:
-        raise ValidationDiscoveryError(
-            configured_module_message(module_name, "could not be imported.")
-        )
+        raise ValidationDiscoveryError(configured_module_message(module_name, "could not be imported."))
 
 
 def _find_module_spec(module_name: str) -> object | None:
@@ -153,6 +145,4 @@ def _import_validation_surface(surface_name: str) -> ModuleType:
 
 def _missing_configured_package(exc: ModuleNotFoundError, package_name: str) -> bool:
     missing_name = exc.name
-    return missing_name is not None and (
-        missing_name == package_name or package_name.startswith(f"{missing_name}.")
-    )
+    return missing_name is not None and (missing_name == package_name or package_name.startswith(f"{missing_name}."))

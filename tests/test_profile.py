@@ -109,9 +109,7 @@ class ProfileUser:
 
 
 class ProfileTemplateStub:
-    async def render_template(
-        self, template_name: str, context: dict[str, object]
-    ) -> str:
+    async def render_template(self, template_name: str, context: dict[str, object]) -> str:
         return self._render(template_name, context)
 
     async def render_page(
@@ -135,9 +133,7 @@ class ProfileTemplateStub:
         field_errors = ""
         phone_states = ""
         if isinstance(profile_details_form, ProfileDetailsForm):
-            preferred_name = str(
-                profile_details_form.fields["preferred_name"].value or ""
-            )
+            preferred_name = str(profile_details_form.fields["preferred_name"].value or "")
             field_errors = ",".join(
                 f"{field}:{'|'.join(errors)}"
                 for field, errors in profile_details_form.errors.items()
@@ -146,9 +142,7 @@ class ProfileTemplateStub:
         phone_subdivision = profile_form.fields.get("phone_subdivision_code")
         phone_number = profile_form.fields.get("phone_number")
         if phone_subdivision is not None:
-            phone_states += "|subdivisions=" + ",".join(
-                option.label for option in phone_subdivision.options()
-            )
+            phone_states += "|subdivisions=" + ",".join(option.label for option in phone_subdivision.options())
         if phone_number is not None and phone_number.disabled:
             phone_states += "|phone_disabled"
         if phone_number is not None:
@@ -248,9 +242,7 @@ async def _profile_route_site(
 
     app.dependency_overrides[login_required] = current_user
     app.state.csrf = CsrfProtector("test-secret")
-    config_data: dict[str, object] = {
-        "app": {"modules": ("wybra.profile", "wybra.forms")}
-    }
+    config_data: dict[str, object] = {"app": {"modules": ("wybra.profile", "wybra.forms")}}
     if profile_config is not None:
         config_data["wybra.profile"] = profile_config
     site = Site(
@@ -298,9 +290,7 @@ def _widget_site(
         app.add_api_route("/profile", endpoint, name="profile:edit")
     site = Site(
         app=app,
-        config=ConfigService(
-            [MappingConfigSource({"app": {"modules": ("wybra.widgets",)}})]
-        ),
+        config=ConfigService([MappingConfigSource({"app": {"modules": ("wybra.widgets",)}})]),
     )
     site.provide_capability(AuthCapability, AuthCapabilityStub(user))
     site.provide_capability(
@@ -328,9 +318,7 @@ async def _ensure_auth_user(
     *,
     email: str | None = None,
 ) -> None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as connection:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
         await User.get_or_create(
             id=user_id,
             defaults={
@@ -400,9 +388,7 @@ class TestProfile:
         site = await _site_with_database(tmp_path)
         await _create_site_schema(site)
 
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             await User.create(
                 id=user_id,
                 email="deleted-profile@example.test",
@@ -428,16 +414,8 @@ class TestProfile:
             )
 
             assert result.is_ok() is True
-            assert (
-                await UserProfile.filter(user_id=user_id).using_db(connection).count()
-                == 0
-            )
-            assert (
-                await UserPhoneContact.filter(user_id=user_id)
-                .using_db(connection)
-                .count()
-                == 0
-            )
+            assert await UserProfile.filter(user_id=user_id).using_db(connection).count() == 0
+            assert await UserPhoneContact.filter(user_id=user_id).using_db(connection).count() == 0
 
         await site.close()
 
@@ -456,9 +434,7 @@ class TestProfile:
         result = validate_profile(Settings())
 
         assert result.is_ok is False
-        assert result.errors == (
-            "wybra.profile must be configured to validate profile resources.",
-        )
+        assert result.errors == ("wybra.profile must be configured to validate profile resources.",)
 
     async def test_profile_settings_enable_editing_with_default_editable_fields(
         self,
@@ -470,9 +446,7 @@ class TestProfile:
         assert "profile_picture" not in settings.editable_fields
 
     async def test_profile_settings_reads_configured_editable_fields(self) -> None:
-        settings = ProfileSettings.load_settings(
-            {"editable_fields": "preferred_name,display_name,bio"}
-        )
+        settings = ProfileSettings.load_settings({"editable_fields": "preferred_name,display_name,bio"})
 
         assert settings.editable_fields == ("preferred_name", "display_name", "bio")
 
@@ -483,9 +457,7 @@ class TestProfile:
                     MappingConfigSource(
                         {
                             "app": {"modules": ("wybra.profile",)},
-                            "wybra.profile": {
-                                "editable_fields": ("preferred_name", "email")
-                            },
+                            "wybra.profile": {"editable_fields": ("preferred_name", "email")},
                         }
                     )
                 ]
@@ -500,9 +472,7 @@ class TestProfile:
         assert PROFILE_FIELD_METADATA["bio"].max_length == 1024
 
     async def test_profile_settings_reads_configured_pronoun_options(self) -> None:
-        settings = ProfileSettings.load_settings(
-            {"pronoun_options": ("ze|zir", ("fae", "faer"))}
-        )
+        settings = ProfileSettings.load_settings({"pronoun_options": ("ze|zir", ("fae", "faer"))})
 
         assert tuple(option.value for option in settings.pronoun_options) == (
             "ze|zir",
@@ -544,9 +514,7 @@ class TestProfile:
             country_code="AU",
         )
 
-        assert (
-            with_subdivision.normalised_number == without_subdivision.normalised_number
-        )
+        assert with_subdivision.normalised_number == without_subdivision.normalised_number
         assert with_subdivision.subdivision_code == "AU-VIC"
 
     async def test_country_choices_are_iso_backed_with_dial_prefixes_and_flags(
@@ -608,10 +576,7 @@ class TestProfile:
         assert response.status_code == 200
         assert "profile/pages/edit.html" in response.text
         assert "preferred_name=" in response.text
-        assert (
-            await site.require_capability(ProfileCapability).get_profile(user.id)
-            is None
-        )
+        assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
         await site.close()
 
     @pytest.mark.anyio
@@ -622,9 +587,7 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             await UserProfile.create(
                 user_id=user.id,
                 preferred_name="David",
@@ -646,9 +609,7 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             await UserPhoneContact.create(
                 user_id=user.id,
                 country_code="AU",
@@ -734,10 +695,7 @@ class TestProfile:
 
         assert response.status_code == 303
         assert response.headers["location"] == "/account"
-        assert (
-            await site.require_capability(ProfileCapability).get_profile(user.id)
-            is None
-        )
+        assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
         await site.close()
 
     @pytest.mark.anyio
@@ -764,13 +722,8 @@ class TestProfile:
             )
 
         assert response.status_code == 303
-        assert (
-            await site.require_capability(ProfileCapability).get_profile(user.id)
-            is None
-        )
-        contacts = await site.require_capability(ProfileCapability).list_phone_contacts(
-            user.id
-        )
+        assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
+        contacts = await site.require_capability(ProfileCapability).list_phone_contacts(user.id)
         assert len(contacts) == 1
         await site.close()
 
@@ -784,9 +737,7 @@ class TestProfile:
             del args, kwargs
             raise ProfileInputError("Phone persistence failed.")
 
-        monkeypatch.setattr(
-            "wybra.profile.forms.save_phone_contact_in_transaction", fail_phone_save
-        )
+        monkeypatch.setattr("wybra.profile.forms.save_phone_contact_in_transaction", fail_phone_save)
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
@@ -806,10 +757,7 @@ class TestProfile:
             )
 
         assert response.status_code == 400
-        assert (
-            await site.require_capability(ProfileCapability).get_profile(user.id)
-            is None
-        )
+        assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
         await site.close()
 
     @pytest.mark.anyio
@@ -820,9 +768,7 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             await UserProfile.create(
                 user_id=user.id,
                 preferred_name="David",
@@ -868,9 +814,7 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             await UserProfile.create(
                 user_id=user.id,
                 preferred_name="Before",
@@ -925,9 +869,7 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = await _profile_route_site(tmp_path, user)
         await _create_site_schema(site)
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             profile = await UserProfile.create(user_id=user.id, using_db=connection)
             with pytest.raises(IntegrityError):
                 await connection.execute_query(
@@ -968,10 +910,7 @@ class TestProfile:
         assert response.status_code == 400
         assert "preferred_name=David" in response.text
         assert "website_links:Profile link URL scheme" in response.text
-        assert (
-            await site.require_capability(ProfileCapability).get_profile(user.id)
-            is None
-        )
+        assert await site.require_capability(ProfileCapability).get_profile(user.id) is None
         await site.close()
 
     @pytest.mark.anyio
@@ -986,9 +925,7 @@ class TestProfile:
             profile_config={"editable_fields": ("preferred_name",)},
         )
         await _create_site_schema(site)
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             await UserProfile.create(
                 user_id=user.id,
                 preferred_name="Previous",
@@ -1046,9 +983,7 @@ class TestProfile:
             "profile/pages/edit.html",
             {
                 **csrf,
-                **forms_rendering_context(
-                    templates, csrf, url_context=ProfileUrlContext()
-                ),
+                **forms_rendering_context(templates, csrf, url_context=ProfileUrlContext()),
                 "asset_url": lambda path: f"/static/{path}",
                 "editable_fields": DEFAULT_EDITABLE_PROFILE_FIELDS,
                 "form_error": None,
@@ -1121,9 +1056,7 @@ class TestProfile:
             settings=ProfileSettings(),
             values={"phone_country_code": "AU", "phone_number": "not-a-number"},
         )
-        await profile_form.parse(
-            {"phone_country_code": "AU", "phone_number": "not-a-number"}
-        )
+        await profile_form.parse({"phone_country_code": "AU", "phone_number": "not-a-number"})
         profile_details_form = ProfileDetailsForm(
             settings=ProfileSettings(),
             user_id=uuid.uuid4(),
@@ -1204,11 +1137,7 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = _widget_site(user)
 
-        state = await login_widget_state(
-            SimpleNamespace(
-                app=site.app, url=SimpleNamespace(path="/account", query="")
-            )
-        )
+        state = await login_widget_state(SimpleNamespace(app=site.app, url=SimpleNamespace(path="/account", query="")))
 
         assert state is not None
         assert state.profile_path == "/profile?return_to=%2Faccount"
@@ -1233,11 +1162,7 @@ class TestProfile:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = _widget_site(user, security_route=True)
 
-        state = await login_widget_state(
-            SimpleNamespace(
-                app=site.app, url=SimpleNamespace(path="/account", query="")
-            )
-        )
+        state = await login_widget_state(SimpleNamespace(app=site.app, url=SimpleNamespace(path="/account", query="")))
 
         assert state is not None
         assert state.settings_menu is not None
@@ -1265,9 +1190,7 @@ class TestProfile:
         assert state is not None
         assert state.profile_path == "/profile?return_to=%2Faccount"
         assert state.settings_menu is not None
-        assert (
-            state.settings_menu.menu.items[-1].path == "/profile?return_to=%2Faccount"
-        )
+        assert state.settings_menu.menu.items[-1].path == "/profile?return_to=%2Faccount"
 
     @pytest.mark.anyio
     async def test_login_widget_state_omits_profile_link_when_route_missing(
@@ -1296,9 +1219,7 @@ class TestProfile:
     ) -> None:
         user = ProfileUser(id=uuid.uuid4(), email="david@example.test")
         site = _widget_site(user)
-        site.app.state.widgets_settings = WidgetsSettings(
-            default_profile_avatar_navigation=False
-        )
+        site.app.state.widgets_settings = WidgetsSettings(default_profile_avatar_navigation=False)
 
         state = await login_widget_state(SimpleNamespace(app=site.app))
 
@@ -1330,9 +1251,7 @@ class TestProfile:
 
     async def test_login_widget_template_renders_avatar_after_logout(self) -> None:
         templates = DefaultTemplateCapability(
-            template_sources=(
-                PackageResourceSource(package="wybra.widgets", directory="templates"),
-            )
+            template_sources=(PackageResourceSource(package="wybra.widgets", directory="templates"),)
         )
 
         html = await templates.render_template(
@@ -1457,24 +1376,16 @@ class TestProfile:
             return
 
         if expects_post_form:
-            assert (
-                '<form class="login-widget__logout-form" '
-                'method="post" action="/logout">'
-            ) in html
+            assert ('<form class="login-widget__logout-form" method="post" action="/logout">') in html
             assert 'name="csrf_token" type="hidden" value="secure-token"' in html
             assert 'href="/logout"' not in html
         else:
-            assert (
-                '<a class="login-widget__action web-responsive-compact-centre" '
-                'href="/logout">'
-            ) in html
+            assert ('<a class="login-widget__action web-responsive-compact-centre" href="/logout">') in html
             assert 'action="/logout"' not in html
 
     async def test_dropdown_menu_template_renders_shortcut_metadata(self) -> None:
         templates = DefaultTemplateCapability(
-            template_sources=(
-                PackageResourceSource(package="wybra.widgets", directory="templates"),
-            )
+            template_sources=(PackageResourceSource(package="wybra.widgets", directory="templates"),)
         )
         menu = DropdownPanel(
             label="Settings",
@@ -1485,9 +1396,7 @@ class TestProfile:
                     NavigationItem(
                         label="Profile",
                         path="/profile",
-                        shortcut=KeyboardShortcut(
-                            key="p", label="P", modifiers=("Ctrl",)
-                        ),
+                        shortcut=KeyboardShortcut(key="p", label="P", modifiers=("Ctrl",)),
                     ),
                 ),
                 shortcut_scope="settings-menu",
@@ -1524,9 +1433,7 @@ class TestProfile:
 
     async def test_widget_layout_renders_continuous_header_row(self) -> None:
         templates = DefaultTemplateCapability(
-            template_sources=(
-                PackageResourceSource(package="wybra.widgets", directory="templates"),
-            )
+            template_sources=(PackageResourceSource(package="wybra.widgets", directory="templates"),)
         )
 
         html = await templates.render_template(
@@ -1552,9 +1459,7 @@ class TestProfile:
 
     async def test_widget_layout_omits_header_row_without_controls(self) -> None:
         templates = DefaultTemplateCapability(
-            template_sources=(
-                PackageResourceSource(package="wybra.widgets", directory="templates"),
-            )
+            template_sources=(PackageResourceSource(package="wybra.widgets", directory="templates"),)
         )
 
         html = await templates.render_template(
@@ -1717,9 +1622,7 @@ class TestProfile:
         capability = _profile_capability(site)
         await capability.media.finalise_optional()
 
-        image = await capability.profile_image_for_user(
-            ProfileUser(id=uuid.uuid4(), email="_david@example.test")
-        )
+        image = await capability.profile_image_for_user(ProfileUser(id=uuid.uuid4(), email="_david@example.test"))
 
         assert image.src is None
         assert image.alt == "Profile picture"
@@ -1784,10 +1687,7 @@ class TestProfile:
         assert profile.pronouns == {"direct": "he", "possessive": "his"}
         assert profile.website_links == {"website": "https://example.test/profile"}
         assert profile.bio == "Hello <script>alert(1)</script>"
-        assert (
-            render_profile_bio(profile.bio)
-            == "Hello &lt;script&gt;alert(1)&lt;/script&gt;"
-        )
+        assert render_profile_bio(profile.bio) == "Hello &lt;script&gt;alert(1)&lt;/script&gt;"
         await site.close()
 
     @pytest.mark.anyio
@@ -1844,9 +1744,7 @@ class TestProfile:
         user_id = uuid.uuid4()
         await _ensure_auth_user(site, user_id)
 
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             contact = await UserPhoneContact.create(
                 user_id=user_id,
                 country_code="AU",
@@ -1882,9 +1780,7 @@ class TestProfile:
         await _ensure_auth_user(site, user_id)
         await _ensure_auth_user(site, other_user_id)
 
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as connection:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as connection:
             eligible = await UserPhoneContact.create(
                 user_id=user_id,
                 country_code="AU",
@@ -1944,9 +1840,7 @@ class TestProfile:
         capability = _profile_capability(site)
         media_capability = FilesystemMediaCapability(
             MediaSettings(root=tmp_path),
-            catalogue=TortoiseMediaCatalogueRepository(
-                site.capability_proxy(DatabaseCapability)
-            ),
+            catalogue=TortoiseMediaCatalogueRepository(site.capability_proxy(DatabaseCapability)),
         )
         site.provide_capability(
             MediaCapability,
@@ -2017,9 +1911,7 @@ class TestProfile:
                 media_id: uuid.UUID,
                 resource_key: str,
             ) -> None:
-                raise MediaCapabilityError(
-                    f"assign_resource_key not supported: {media_id=}, {resource_key=}."
-                )
+                raise MediaCapabilityError(f"assign_resource_key not supported: {media_id=}, {resource_key=}.")
 
             def path_for_key(self, storage_key: str | Path) -> Path:
                 return Path(storage_key)
@@ -2050,14 +1942,9 @@ class TestProfile:
     ) -> None:
         user_id = uuid.UUID("8ef0c57e-0000-4000-8000-000000000001")
 
-        assert (
-            profile_picture_storage_key(user_id, "png")
-            == "profile/8e/f0/8ef0c57e000040008000000000000001.png"
-        )
+        assert profile_picture_storage_key(user_id, "png") == "profile/8e/f0/8ef0c57e000040008000000000000001.png"
 
-    @pytest.mark.parametrize(
-        "extension", (" ", ".png", "avatar.png", "profile/png", None)
-    )
+    @pytest.mark.parametrize("extension", (" ", ".png", "avatar.png", "profile/png", None))
     async def test_profile_picture_storage_key_rejects_invalid_extensions(
         self,
         extension: object,

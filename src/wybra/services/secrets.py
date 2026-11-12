@@ -80,10 +80,7 @@ class MissingSecretSourceDependencyError(SecretsConfigurationError):
         dependency: str,
         hint: str,
     ) -> None:
-        super().__init__(
-            "Secret source dependency is missing: "
-            f"source={source}, dependency={dependency}. {hint}"
-        )
+        super().__init__(f"Secret source dependency is missing: source={source}, dependency={dependency}. {hint}")
         self.source = source
         self.dependency = dependency
         self.hint = hint
@@ -100,9 +97,7 @@ class SecretSourceUnavailableError(SecretsError):
         reason: str,
     ) -> None:
         key_text = f", key={_safe_reference(key)}" if key is not None else ""
-        super().__init__(
-            f"Secret source is unavailable: source={source}{key_text}, reason={reason}."
-        )
+        super().__init__(f"Secret source is unavailable: source={source}{key_text}, reason={reason}.")
         self.source = source
         self.key = key
         self.reason = reason
@@ -121,8 +116,7 @@ class SecretSourceOperationError(SecretsError):
     ) -> None:
         key_text = f", key={_safe_reference(key)}" if key is not None else ""
         super().__init__(
-            "Secret source operation failed: "
-            f"source={source}, operation={operation}{key_text}, reason={reason}."
+            f"Secret source operation failed: source={source}, operation={operation}{key_text}, reason={reason}."
         )
         self.source = source
         self.key = key
@@ -186,9 +180,7 @@ def _is_secret_source(value: str) -> TypeGuard[SecretSource]:
 def secret_key_value(value: object, *, name: str = "secret key") -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise InvalidSecretKeyError(
-        key=value, message=f"{name} must be a non-blank string."
-    )
+    raise InvalidSecretKeyError(key=value, message=f"{name} must be a non-blank string.")
 
 
 def _safe_reference(value: Any) -> str:

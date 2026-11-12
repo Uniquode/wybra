@@ -31,9 +31,7 @@ def _read_password(value: PasswordSource) -> str:
 
             password = line.rstrip("\r\n")
             if sys.stdin.read(1):
-                raise PasswordSourceError(
-                    "Password stdin input must contain exactly one line."
-                )
+                raise PasswordSourceError("Password stdin input must contain exactly one line.")
             return password
         case "prompt":
             return click.prompt(

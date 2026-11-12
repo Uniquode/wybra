@@ -25,9 +25,7 @@ async def test_postgresql_init_provisions_database_and_role(
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config_path = postgresql_database_config.write_app_config(
-        tmp_path / "wybra-it.toml"
-    )
+    config_path = postgresql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
     caplog.set_level(logging.INFO, logger="wybra.db.migrate")
     exit_code = await initialise_migrations(config_path)
@@ -58,9 +56,7 @@ async def test_postgresql_migrate_applies_tortoise_migrations(
     postgresql_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
 ) -> None:
-    config_path = postgresql_database_config.write_app_config(
-        tmp_path / "wybra-it.toml"
-    )
+    config_path = postgresql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
     assert await initialise_migrations(config_path) == 0
     assert await apply_migrations(config_path) == 0
@@ -112,9 +108,7 @@ async def test_postgresql_tasks_list_safe_maintenance_metadata(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config_path = postgresql_database_config.write_app_config(
-        tmp_path / "wybra-it.toml"
-    )
+    config_path = postgresql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
     exit_code = await list_maintenance_tasks(config_path)
 
@@ -122,9 +116,7 @@ async def test_postgresql_tasks_list_safe_maintenance_metadata(
     assert exit_code == 0
     assert "repair-privs: Reapply runtime role grants" in captured.out
     assert "migrations: Report Tortoise migration recorder state" in captured.out
-    assert_database_secrets_absent(
-        captured.out + captured.err, postgresql_database_config
-    )
+    assert_database_secrets_absent(captured.out + captured.err, postgresql_database_config)
 
 
 @pytest.mark.anyio
@@ -132,9 +124,7 @@ async def test_postgresql_run_migrations_maintenance_task(
     postgresql_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
 ) -> None:
-    config_path = postgresql_database_config.write_app_config(
-        tmp_path / "wybra-it.toml"
-    )
+    config_path = postgresql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
     assert await initialise_migrations(config_path) == 0
     assert await apply_migrations(config_path) == 0
@@ -146,9 +136,7 @@ async def test_postgresql_destroy_removes_disposable_database(
     postgresql_database_config: ContainerDatabaseConfig,
     tmp_path: Path,
 ) -> None:
-    config_path = postgresql_database_config.write_app_config(
-        tmp_path / "wybra-it.toml"
-    )
+    config_path = postgresql_database_config.write_app_config(tmp_path / "wybra-it.toml")
 
     assert await initialise_migrations(config_path) == 0
     assert await destroy_database(config_path, postgresql_database_config.database) == 0

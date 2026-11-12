@@ -75,10 +75,7 @@ def validation_event(
     errors = getattr(form, "errors", {})
     if not isinstance(fields, dict) or not isinstance(field_results, dict):
         raise TypeError("Form validation events require a bound form.")
-    invalid_fields = sum(
-        not bool(getattr(result, "is_valid", False))
-        for result in field_results.values()
-    )
+    invalid_fields = sum(not bool(getattr(result, "is_valid", False)) for result in field_results.values())
     is_valid = getattr(form, "is_valid", None)
     return FormValidationCompletedEvent(
         topic=EVT_FORM(VALIDATION, COMPLETED),
@@ -136,9 +133,7 @@ def _model_types(form: object) -> tuple[str, ...]:
     members = getattr(form, "members", None)
     if isinstance(members, tuple):
         models = tuple(getattr(member, "model", None) for member in members)
-        return _model_type_identifiers(
-            model for model in models if isinstance(model, type)
-        )
+        return _model_type_identifiers(model for model in models if isinstance(model, type))
     declared_model = getattr(form, "_declared_model", None)
     if callable(declared_model):
         model = declared_model()
@@ -153,9 +148,7 @@ def _model_type_identifiers(models: Iterable[type[object]]) -> tuple[str, ...]:
 
 def _tuple_attribute(value: object | None, name: str) -> tuple[str, ...]:
     attribute = getattr(value, name, ())
-    if not isinstance(attribute, tuple) or not all(
-        isinstance(item, str) for item in attribute
-    ):
+    if not isinstance(attribute, tuple) or not all(isinstance(item, str) for item in attribute):
         return ()
     return attribute
 

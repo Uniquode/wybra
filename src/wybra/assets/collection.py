@@ -140,9 +140,7 @@ def collect_normal_static_assets(
     try:
         resolved_root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise StaticCollectionError(
-            f"create failed for static collection root {resolved_root}: {exc}"
-        ) from exc
+        raise StaticCollectionError(f"create failed for static collection root {resolved_root}: {exc}") from exc
     previous_manifest_paths = _read_collection_manifest(resolved_root)
     winners: dict[str, PackageResourceFile] = {}
     collected_assets: list[StaticCollectedAsset] = []
@@ -234,8 +232,7 @@ def _write_nginx_cors_config(
 ) -> None:
     if not security_provider_configured(config.modules):
         raise StaticCollectionError(
-            "nginx CORS config export requires wybra.security or another security "
-            "policy provider in [app].modules"
+            "nginx CORS config export requires wybra.security or another security policy provider in [app].modules"
         )
     settings = SecuritySettings.load_settings(config_service)
     resolved_destination = _resolve_output_file(config, destination)
@@ -246,9 +243,7 @@ def _write_nginx_cors_config(
             encoding="utf-8",
         )
     except OSError as exc:
-        raise StaticCollectionError(
-            f"write failed for nginx CORS config {resolved_destination}: {exc}"
-        ) from exc
+        raise StaticCollectionError(f"write failed for nginx CORS config {resolved_destination}: {exc}") from exc
 
 
 def _resolve_output_file(config: AppConfig, path: Path) -> Path:
@@ -273,9 +268,7 @@ def _copy_asset(
                 shutil.copy2(source_path, destination)
             return status
     except OSError as exc:
-        raise StaticCollectionError(
-            f"copy failed for static asset {asset.logical_path!r}: {exc}"
-        ) from exc
+        raise StaticCollectionError(f"copy failed for static asset {asset.logical_path!r}: {exc}") from exc
 
 
 def _same_file(source: Path, destination: Path) -> bool:
@@ -294,10 +287,7 @@ def _same_file(source: Path, destination: Path) -> bool:
     ):
         return True
 
-    if (
-        source_stat.st_size == destination_stat.st_size
-        and source_stat.st_mtime_ns == destination_stat.st_mtime_ns
-    ):
+    if source_stat.st_size == destination_stat.st_size and source_stat.st_mtime_ns == destination_stat.st_mtime_ns:
         return _same_file_content(source, destination)
 
     return False
@@ -316,11 +306,7 @@ def _same_file_content(source: Path, destination: Path) -> bool:
 
 
 def _changed_status(destination: Path) -> StaticCollectionStatus:
-    return (
-        StaticCollectionStatus.UPDATED
-        if destination.exists()
-        else StaticCollectionStatus.COPIED
-    )
+    return StaticCollectionStatus.UPDATED if destination.exists() else StaticCollectionStatus.COPIED
 
 
 def _delete_stale_assets(
@@ -338,9 +324,7 @@ def _delete_stale_assets(
         try:
             path.unlink()
         except OSError as exc:
-            raise StaticCollectionError(
-                f"delete failed for static asset {logical_path!r}: {exc}"
-            ) from exc
+            raise StaticCollectionError(f"delete failed for static asset {logical_path!r}: {exc}") from exc
         deleted_assets.append(
             StaticDeletedAsset(
                 logical_path=logical_path,
@@ -358,43 +342,28 @@ def _read_collection_manifest(root: Path) -> frozenset[str]:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise StaticCollectionError(
-            f"static collect manifest {manifest_path} could not be read: {exc}"
-        ) from exc
+        raise StaticCollectionError(f"static collect manifest {manifest_path} could not be read: {exc}") from exc
 
     if not isinstance(manifest, Mapping):
-        raise StaticCollectionError(
-            f"static collect manifest {manifest_path} must be a JSON object."
-        )
-    if (
-        manifest.get(STATIC_COLLECT_MANIFEST_VERSION_KEY)
-        != STATIC_COLLECT_MANIFEST_VERSION
-    ):
-        raise StaticCollectionError(
-            f"static collect manifest {manifest_path} has unsupported version."
-        )
+        raise StaticCollectionError(f"static collect manifest {manifest_path} must be a JSON object.")
+    if manifest.get(STATIC_COLLECT_MANIFEST_VERSION_KEY) != STATIC_COLLECT_MANIFEST_VERSION:
+        raise StaticCollectionError(f"static collect manifest {manifest_path} has unsupported version.")
 
     assets = manifest.get(STATIC_COLLECT_MANIFEST_ASSETS_KEY)
     if not isinstance(assets, list):
-        raise StaticCollectionError(
-            f"static collect manifest {manifest_path} must contain an assets list."
-        )
+        raise StaticCollectionError(f"static collect manifest {manifest_path} must contain an assets list.")
 
     logical_paths: set[str] = set()
     for index, asset in enumerate(assets):
         if not isinstance(asset, str):
             raise StaticCollectionError(
-                "static collect manifest "
-                f"{manifest_path} contains a non-text path at index {index}: "
-                f"{asset!r}"
+                f"static collect manifest {manifest_path} contains a non-text path at index {index}: {asset!r}"
             )
         try:
             logical_paths.add(normalise_logical_asset_path(asset))
         except InputValidationError as exc:
             raise StaticCollectionError(
-                "static collect manifest "
-                f"{manifest_path} contains an invalid path at index {index}: "
-                f"{asset!r}"
+                f"static collect manifest {manifest_path} contains an invalid path at index {index}: {asset!r}"
             ) from exc
 
     return frozenset(logical_paths)
@@ -414,9 +383,7 @@ def _write_collection_manifest(
         STATIC_COLLECT_MANIFEST_VERSION_KEY: STATIC_COLLECT_MANIFEST_VERSION,
         STATIC_COLLECT_MANIFEST_ASSETS_KEY: sorted(logical_paths),
     }
-    temp_manifest_path = manifest_path.with_name(
-        f"{manifest_path.name}.{uuid4().hex}.tmp"
-    )
+    temp_manifest_path = manifest_path.with_name(f"{manifest_path.name}.{uuid4().hex}.tmp")
     try:
         temp_manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -426,9 +393,7 @@ def _write_collection_manifest(
     except OSError as exc:
         with suppress(OSError):
             temp_manifest_path.unlink()
-        raise StaticCollectionError(
-            f"static collect manifest {manifest_path} could not be written: {exc}"
-        ) from exc
+        raise StaticCollectionError(f"static collect manifest {manifest_path} could not be written: {exc}") from exc
 
 
 __all__ = [

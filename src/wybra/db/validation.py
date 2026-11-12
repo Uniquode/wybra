@@ -47,8 +47,7 @@ def validate_persistence(settings: PersistenceValidationSettings) -> ValidationR
     has_database_connection = record_check(
         checks,
         errors,
-        passed=database_connection is not None
-        or bool(database_url is not None and database_url.strip()),
+        passed=database_connection is not None or bool(database_url is not None and database_url.strip()),
         description=_database_connection_description(database_connection, database_url),
         error=_database_connection_error(database_url),
     )
@@ -58,9 +57,7 @@ def validate_persistence(settings: PersistenceValidationSettings) -> ValidationR
             errors,
             passed=is_database_backend_available(database_connection.backend),
             description="database backend is available",
-            error=database_url_support_error(
-                f"{database_connection.backend.scheme}://"
-            ),
+            error=database_url_support_error(f"{database_connection.backend.scheme}://"),
         )
     elif has_database_connection and database_url is not None:
         record_check(
@@ -82,10 +79,7 @@ def validate_persistence(settings: PersistenceValidationSettings) -> ValidationR
         checks,
         errors,
         passed=has_migration_resources,
-        description=(
-            "development database initialisation command is available: "
-            "uv run wybra-migrate init"
-        ),
+        description=("development database initialisation command is available: uv run wybra-migrate init"),
         error="Development database initialisation requires migrations.",
     )
 
@@ -145,10 +139,7 @@ def _database_connection_description(
     database_url: str | None,
 ) -> str:
     if database_connection is not None:
-        return (
-            "database connection is configured: "
-            + database_connection.redacted_description
-        )
+        return "database connection is configured: " + database_connection.redacted_description
     if database_url is None:
         return "database connection is not configured"
     return f"database URL is configured: {redact_database_url(database_url)}"
@@ -182,12 +173,9 @@ def _record_migration_resource_checks(
         errors,
         passed=not model_packages or bool(version_locations),
         description=(
-            "module Tortoise migration version locations exist: "
-            + ", ".join(str(path) for path in version_locations)
+            "module Tortoise migration version locations exist: " + ", ".join(str(path) for path in version_locations)
         ),
-        error=(
-            "At least one configured module migration version location is required."
-        ),
+        error=("At least one configured module migration version location is required."),
     )
 
     if model_packages:
@@ -215,10 +203,7 @@ def _record_migration_resource_checks(
             errors,
             passed=True,
             description="migration revisions optional without model modules",
-            error=(
-                "Migration revisions are only required when configured modules "
-                "expose Tortoise models."
-            ),
+            error=("Migration revisions are only required when configured modules expose Tortoise models."),
         )
 
     return migration_resources_valid

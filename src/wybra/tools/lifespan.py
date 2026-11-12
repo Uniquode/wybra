@@ -14,14 +14,10 @@ def configured_asgi_lifespan(app: Any) -> AbstractAsyncContextManager[Any]:
     router = getattr(app, "router", None)
     factory = getattr(router, "lifespan_context", None)
     if not callable(factory):
-        raise ProjectToolConfigurationError(
-            "Configured ASGI application does not expose a lifespan context."
-        )
+        raise ProjectToolConfigurationError("Configured ASGI application does not expose a lifespan context.")
     context = factory(app)
     if not isinstance(context, AbstractAsyncContextManager):
-        raise ProjectToolConfigurationError(
-            "Configured ASGI application lifespan is not an async context manager."
-        )
+        raise ProjectToolConfigurationError("Configured ASGI application lifespan is not an async context manager.")
     return context
 
 

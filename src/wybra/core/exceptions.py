@@ -41,9 +41,7 @@ class HttpException(HTTPException):
         status_code: int | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
-        resolved_status_code = (
-            self.default_status_code if status_code is None else status_code
-        )
+        resolved_status_code = self.default_status_code if status_code is None else status_code
         resolved_detail = self.default_detail if detail is None else detail
         super().__init__(
             status_code=resolved_status_code,

@@ -131,15 +131,9 @@ def validate_template(settings: TemplateValidationSettings) -> ValidationResult:
             record_check(
                 checks,
                 errors,
-                passed=(
-                    'name="{{ csrf_field_name }}"' in template_content
-                    or "render_csrf_field(" in template_content
-                ),
+                passed=('name="{{ csrf_field_name }}"' in template_content or "render_csrf_field(" in template_content),
                 description=f"POST form CSRF field exists: {template_name}",
-                error=(
-                    "POST form template must include CSRF field: "
-                    f"{_template_location(settings, template_name)}"
-                ),
+                error=(f"POST form template must include CSRF field: {_template_location(settings, template_name)}"),
             )
 
         try:
@@ -181,9 +175,7 @@ def _template_renderer(
     template_sources: tuple[PackageResourceSource, ...],
 ) -> DefaultTemplateCapability:
     return DefaultTemplateCapability(
-        template_root=(
-            settings.template_root if _uses_filesystem_template_root(settings) else None
-        ),
+        template_root=(settings.template_root if _uses_filesystem_template_root(settings) else None),
         template_sources=template_sources,
         auto_reload=settings.template_auto_reload,
         cache_size=settings.template_cache_size,
@@ -215,11 +207,7 @@ def _filesystem_template_names(settings: TemplateValidationSettings) -> tuple[st
         return ()
 
     root = settings.template_root
-    return tuple(
-        path.relative_to(root).as_posix()
-        for path in sorted(root.rglob("*.html"))
-        if path.is_file()
-    )
+    return tuple(path.relative_to(root).as_posix() for path in sorted(root.rglob("*.html")) if path.is_file())
 
 
 def _package_template_names(source: PackageResourceSource) -> tuple[str, ...]:

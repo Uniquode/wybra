@@ -88,20 +88,14 @@ class TaskiqBrokerPolicy:
             label="Visibility timeout",
         )
         if self.visibility_timeout_seconds < MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS:
-            raise ValueError(
-                "Visibility timeout must be at least "
-                f"{MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS} seconds."
-            )
+            raise ValueError(f"Visibility timeout must be at least {MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS} seconds.")
         _validate_positive_finite(self.wait_timeout_seconds, label="Wait timeout")
         if (
             isinstance(self.maximum_delivery_attempts, bool)
             or not isinstance(self.maximum_delivery_attempts, int)
             or not 1 <= self.maximum_delivery_attempts <= MAX_TASK_DELIVERY_ATTEMPTS
         ):
-            raise ValueError(
-                "Maximum delivery attempts must be between one and "
-                f"{MAX_TASK_DELIVERY_ATTEMPTS}."
-            )
+            raise ValueError(f"Maximum delivery attempts must be between one and {MAX_TASK_DELIVERY_ATTEMPTS}.")
 
 
 class CacheTaskiqBroker(AsyncBroker):
@@ -114,8 +108,7 @@ class CacheTaskiqBroker(AsyncBroker):
         queue: str,
         consumer: str,
         policy: TaskiqBrokerPolicy,
-        on_publication_rejected: Callable[[TaskiqMessage], Awaitable[None]]
-        | None = None,
+        on_publication_rejected: Callable[[TaskiqMessage], Awaitable[None]] | None = None,
         on_delivery_exhausted: Callable[[TaskiqMessage], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__()
@@ -168,9 +161,7 @@ class CacheTaskiqBroker(AsyncBroker):
     async def kick(self, message: BrokerMessage) -> None:
         try:
             if len(message.message) > MAX_CACHE_FEATURE_PAYLOAD_BYTES:
-                raise CacheWorkQueueRejectedError(
-                    "Task message exceeds the configured cache payload limit."
-                )
+                raise CacheWorkQueueRejectedError("Task message exceeds the configured cache payload limit.")
             publication = self._publication_attempt.get()
             if publication is not None and publication.task_id == message.task_id:
                 publication.reached_broker = True
@@ -189,8 +180,7 @@ class CacheTaskiqBroker(AsyncBroker):
                     await self._reconcile_rejected_publication(task_message)
                 except Exception as error:
                     _LOGGER.warning(
-                        "Task lifecycle could not immediately reconcile a rejected "
-                        "submission: %s.",
+                        "Task lifecycle could not immediately reconcile a rejected submission: %s.",
                         type(error).__name__,
                     )
             raise
@@ -200,9 +190,7 @@ class CacheTaskiqBroker(AsyncBroker):
         """Track whether one submission reached this broker's queue hand-off."""
 
         attempt = _PublicationAttempt(task_id=task_id)
-        token: Token[_PublicationAttempt | None] = self._publication_attempt.set(
-            attempt
-        )
+        token: Token[_PublicationAttempt | None] = self._publication_attempt.set(attempt)
         try:
             yield attempt
         finally:
@@ -230,17 +218,10 @@ class CacheTaskiqBroker(AsyncBroker):
     ) -> AsyncGenerator[AckableMessage]:
         shutdown = asyncio.create_task(lifecycle.shutdown_requested.wait())
         try:
-            while (
-                self._lifecycle is lifecycle
-                and not lifecycle.shutdown_requested.is_set()
-            ):
+            while self._lifecycle is lifecycle and not lifecycle.shutdown_requested.is_set():
                 await self._observe_delivery_exhaustion(force=False)
                 delivery = await self._reserve_or_stop(shutdown)
-                if (
-                    delivery is not None
-                    and self._lifecycle is lifecycle
-                    and not lifecycle.shutdown_requested.is_set()
-                ):
+                if delivery is not None and self._lifecycle is lifecycle and not lifecycle.shutdown_requested.is_set():
                     visibility_timeout = self._policy.visibility_timeout_seconds
                     receipt = uuid4().hex
                     self._outstanding_deliveries[receipt] = _OutstandingDelivery(
@@ -248,9 +229,7 @@ class CacheTaskiqBroker(AsyncBroker):
                     )
                     if self.is_worker_process:
                         self._prefetch_renewals[receipt] = asyncio.create_task(
-                            self._renew_prefetched_delivery(
-                                receipt, visibility_timeout
-                            ),
+                            self._renew_prefetched_delivery(receipt, visibility_timeout),
                             name="wybra-taskiq-prefetch-renewal",
                         )
                     yield AckableMessage(
@@ -268,9 +247,7 @@ class CacheTaskiqBroker(AsyncBroker):
         if not force and now < self._next_dead_letter_observation_at:
             return
         if not force:
-            self._next_dead_letter_observation_at = (
-                now + self._dead_letter_observation_interval_seconds
-            )
+            self._next_dead_letter_observation_at = now + self._dead_letter_observation_interval_seconds
         try:
             deliveries = await self._work_queue.dead_letters(
                 _TASKIQ_WORK_QUEUE_OWNER,
@@ -279,8 +256,7 @@ class CacheTaskiqBroker(AsyncBroker):
             )
         except (CacheConflictError, CacheFeatureError) as error:
             _LOGGER.warning(
-                "Cache work dead-letter observation could not read the queue; it "
-                "will be retried: %s.",
+                "Cache work dead-letter observation could not read the queue; it will be retried: %s.",
                 type(error).__name__,
             )
             return
@@ -292,9 +268,7 @@ class CacheTaskiqBroker(AsyncBroker):
                 message = self.formatter.loads(message=delivery.payload)
                 message.parse_labels()
             except Exception:
-                _LOGGER.warning(
-                    "Cache work dead-letter payload is not a valid Taskiq message."
-                )
+                _LOGGER.warning("Cache work dead-letter payload is not a valid Taskiq message.")
                 self._remember_dead_letter(identity)
                 continue
             message.labels[DELIVERY_ATTEMPT_LABEL] = delivery.attempt
@@ -302,23 +276,16 @@ class CacheTaskiqBroker(AsyncBroker):
             try:
                 await self._on_delivery_exhausted(message)
             except CacheConflictError:
-                _LOGGER.warning(
-                    "Cache work dead-letter lifecycle state is temporarily "
-                    "contended; it will be retried."
-                )
+                _LOGGER.warning("Cache work dead-letter lifecycle state is temporarily contended; it will be retried.")
                 continue
             except CacheFeatureError:
-                _LOGGER.warning(
-                    "Cache work dead-letter lifecycle observation failed; it will "
-                    "be retried."
-                )
+                _LOGGER.warning("Cache work dead-letter lifecycle observation failed; it will be retried.")
                 continue
             except TaskLifecycleError, ValueError:
                 _LOGGER.warning("Cache work dead-letter lifecycle metadata is invalid.")
             except Exception as error:
                 _LOGGER.warning(
-                    "Cache work dead-letter lifecycle observation failed "
-                    "unexpectedly: %s.",
+                    "Cache work dead-letter lifecycle observation failed unexpectedly: %s.",
                     type(error).__name__,
                 )
                 continue
@@ -394,10 +361,7 @@ class CacheTaskiqBroker(AsyncBroker):
         """Return the broker-issued receipt bound to one acknowledgement message."""
 
         acknowledgement = message.ack
-        if (
-            isinstance(acknowledgement, _DeliveryAcknowledgement)
-            and acknowledgement.broker is self
-        ):
+        if isinstance(acknowledgement, _DeliveryAcknowledgement) and acknowledgement.broker is self:
             return acknowledgement.receipt
         return None
 
@@ -417,9 +381,7 @@ class CacheTaskiqBroker(AsyncBroker):
         try:
             timeout = float(value)
         except (TypeError, ValueError, OverflowError) as error:
-            raise ValueError(
-                "Task visibility timeout must be a positive number."
-            ) from error
+            raise ValueError("Task visibility timeout must be a positive number.") from error
         _validate_visibility_timeout(timeout)
         return max(self._policy.visibility_timeout_seconds, timeout)
 
@@ -503,12 +465,7 @@ class _DeliveryAcknowledgement:
 
 
 def _validate_positive_finite(value: object, *, label: str) -> float:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not isfinite(value)
-        or value <= 0
-    ):
+    if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(value) or value <= 0:
         raise ValueError(f"{label} must be a positive finite number.")
     return float(value)
 
@@ -516,10 +473,7 @@ def _validate_positive_finite(value: object, *, label: str) -> float:
 def _validate_visibility_timeout(value: object) -> None:
     timeout = _validate_positive_finite(value, label="Task visibility timeout")
     if timeout < MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS:
-        raise ValueError(
-            "Task visibility timeout must be at least "
-            f"{MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS} seconds."
-        )
+        raise ValueError(f"Task visibility timeout must be at least {MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS} seconds.")
 
 
 def _require_non_blank(value: str, *, label: str) -> str:

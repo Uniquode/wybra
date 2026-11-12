@@ -118,8 +118,7 @@ def load_composition_config_from_environment(
 
     if require_app_config:
         raise SettingsLoadError(
-            "Application config file could not be resolved; pass --config or set "
-            f"{app_config_env}."
+            f"Application config file could not be resolved; pass --config or set {app_config_env}."
         )
     return None
 

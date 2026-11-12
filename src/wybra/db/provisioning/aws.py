@@ -74,12 +74,8 @@ class Boto3RdsMetadataClient:
                 )
                 instances = response.get("DBInstances") or ()
                 if not instances:
-                    raise DatabaseProvisioningConfigurationError(
-                        "AWS RDS target was not found."
-                    )
-                return _metadata_from_instance(
-                    instances[0], region=target.client.region
-                )
+                    raise DatabaseProvisioningConfigurationError("AWS RDS target was not found.")
+                return _metadata_from_instance(instances[0], region=target.client.region)
 
             identifier = _required_cluster_identifier(target)
             client = self._rds_client(target.client)
@@ -88,16 +84,12 @@ class Boto3RdsMetadataClient:
             )
             clusters = response.get("DBClusters") or ()
             if not clusters:
-                raise DatabaseProvisioningConfigurationError(
-                    "AWS Aurora target was not found."
-                )
+                raise DatabaseProvisioningConfigurationError("AWS Aurora target was not found.")
             return _metadata_from_cluster(clusters[0], region=target.client.region)
         except DatabaseProvisioningConfigurationError:
             raise
         except Exception as exc:
-            raise DatabaseProvisioningOperationError(
-                "Failed to describe AWS managed database target."
-            ) from exc
+            raise DatabaseProvisioningOperationError("Failed to describe AWS managed database target.") from exc
 
     def _rds_client(self, settings: AwsClientSettings) -> Any:
         session = self._session(settings)
@@ -116,9 +108,7 @@ class Boto3RdsMetadataClient:
         sts = session.client("sts", region_name=settings.region)
         assume_role_args = {
             "RoleArn": settings.role_arn,
-            "RoleSessionName": (
-                settings.role_session_name or _DEFAULT_ROLE_SESSION_NAME
-            ),
+            "RoleSessionName": (settings.role_session_name or _DEFAULT_ROLE_SESSION_NAME),
         }
         external_id = settings.external_id
         if external_id is not None:
@@ -143,9 +133,7 @@ def validate_aws_managed_database_context(
     metadata = (metadata_client or Boto3RdsMetadataClient()).describe(target)
     family = database_family_for_aws_engine(metadata.engine)
     if context.family != family:
-        raise DatabaseProvisioningConfigurationError(
-            "AWS managed database engine does not match configured backend."
-        )
+        raise DatabaseProvisioningConfigurationError("AWS managed database engine does not match configured backend.")
     _validate_metadata_matches_target(target, metadata, context)
     return context
 
@@ -155,9 +143,7 @@ def _normalise_managed_target(value: object) -> AwsManagedTarget:
         target = value.strip().lower()
         if target in {"rds", "aurora"}:
             return target
-    raise DatabaseProvisioningConfigurationError(
-        "AWS managed database metadata target must be rds or aurora."
-    )
+    raise DatabaseProvisioningConfigurationError("AWS managed database metadata target must be rds or aurora.")
 
 
 def _required_db_instance_identifier(
@@ -165,9 +151,7 @@ def _required_db_instance_identifier(
 ) -> str:
     if target.db_instance_identifier is not None:
         return target.db_instance_identifier
-    raise DatabaseProvisioningConfigurationError(
-        "AWS RDS target requires db_instance_identifier."
-    )
+    raise DatabaseProvisioningConfigurationError("AWS RDS target requires db_instance_identifier.")
 
 
 def _required_cluster_identifier(
@@ -175,9 +159,7 @@ def _required_cluster_identifier(
 ) -> str:
     if target.cluster_identifier is not None:
         return target.cluster_identifier
-    raise DatabaseProvisioningConfigurationError(
-        "AWS Aurora target requires cluster_identifier."
-    )
+    raise DatabaseProvisioningConfigurationError("AWS Aurora target requires cluster_identifier.")
 
 
 def database_family_for_aws_engine(engine: str) -> DatabaseFamily:
@@ -191,12 +173,8 @@ def database_family_for_aws_engine(engine: str) -> DatabaseFamily:
     if normalised.startswith("sqlserver-"):
         return "mssql"
     if normalised.startswith("oracle-"):
-        raise DatabaseProvisioningConfigurationError(
-            "AWS managed Oracle databases are not supported."
-        )
-    raise DatabaseProvisioningConfigurationError(
-        f"Unsupported AWS managed database engine: {engine}."
-    )
+        raise DatabaseProvisioningConfigurationError("AWS managed Oracle databases are not supported.")
+    raise DatabaseProvisioningConfigurationError(f"Unsupported AWS managed database engine: {engine}.")
 
 
 def _aws_target_for_context(
@@ -215,53 +193,35 @@ def _validate_metadata_matches_target(
     context: ProvisioningContext,
 ) -> None:
     if metadata.managed != target.managed:
-        raise DatabaseProvisioningConfigurationError(
-            "AWS managed database target type mismatch."
-        )
-    expected_identifier = (
-        target.db_instance_identifier
-        if target.managed == "rds"
-        else target.cluster_identifier
-    )
+        raise DatabaseProvisioningConfigurationError("AWS managed database target type mismatch.")
+    expected_identifier = target.db_instance_identifier if target.managed == "rds" else target.cluster_identifier
     if metadata.identifier != expected_identifier:
-        raise DatabaseProvisioningConfigurationError(
-            "AWS managed database target identifier mismatch."
-        )
+        raise DatabaseProvisioningConfigurationError("AWS managed database target identifier mismatch.")
     if target.engine is not None and metadata.engine.lower() != target.engine.lower():
-        raise DatabaseProvisioningConfigurationError(
-            "AWS managed database engine mismatch."
-        )
+        raise DatabaseProvisioningConfigurationError("AWS managed database engine mismatch.")
     if (
         target.client.account_id is not None
         and metadata.account_id is not None
         and target.client.account_id != metadata.account_id
     ):
-        raise DatabaseProvisioningConfigurationError(
-            "AWS managed database account mismatch."
-        )
+        raise DatabaseProvisioningConfigurationError("AWS managed database account mismatch.")
     if (
         target.client.partition is not None
         and metadata.partition is not None
         and target.client.partition != metadata.partition
     ):
-        raise DatabaseProvisioningConfigurationError(
-            "AWS managed database partition mismatch."
-        )
+        raise DatabaseProvisioningConfigurationError("AWS managed database partition mismatch.")
     expected_endpoint = _expected_endpoint(target, context)
     if (
         expected_endpoint is not None
         and metadata.endpoint is not None
         and expected_endpoint.lower() != metadata.endpoint.lower()
     ):
-        raise DatabaseProvisioningConfigurationError(
-            "AWS managed database endpoint mismatch."
-        )
+        raise DatabaseProvisioningConfigurationError("AWS managed database endpoint mismatch.")
     expected_port = _expected_port(target, context)
     if expected_port is not None and metadata.port is not None:
         if expected_port != metadata.port:
-            raise DatabaseProvisioningConfigurationError(
-                "AWS managed database port mismatch."
-            )
+            raise DatabaseProvisioningConfigurationError("AWS managed database port mismatch.")
 
 
 def _expected_endpoint(

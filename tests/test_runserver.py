@@ -95,12 +95,8 @@ def test_runserver_command_writes_cli_overrides_to_server_environment(
         "--log-level",
         "debug",
     ]
-    assert observed["logging_config"]["formatters"]["simple"]["format"] == (
-        DEFAULT_LOG_FORMAT
-    )
-    assert observed["logging_config"]["formatters"]["simple"]["datefmt"] == (
-        DEFAULT_LOG_DATE_FORMAT
-    )
+    assert observed["logging_config"]["formatters"]["simple"]["format"] == (DEFAULT_LOG_FORMAT)
+    assert observed["logging_config"]["formatters"]["simple"]["datefmt"] == (DEFAULT_LOG_DATE_FORMAT)
     assert observed["environment"] == {
         APP_ROOT_ENV: tmp_path.resolve().as_posix(),
         APP_CONFIG_ENV: "app/app.toml",
@@ -219,12 +215,8 @@ def test_runserver_command_uses_app_config_startup_defaults(
         "8000",
         "--reload",
     ]
-    assert observed["logging_config"]["formatters"]["simple"]["format"] == (
-        DEFAULT_LOG_FORMAT
-    )
-    assert observed["logging_config"]["formatters"]["simple"]["datefmt"] == (
-        DEFAULT_LOG_DATE_FORMAT
-    )
+    assert observed["logging_config"]["formatters"]["simple"]["format"] == (DEFAULT_LOG_FORMAT)
+    assert observed["logging_config"]["formatters"]["simple"]["datefmt"] == (DEFAULT_LOG_DATE_FORMAT)
 
 
 def test_runserver_rejects_missing_app_config_startup_target(
@@ -246,9 +238,7 @@ def test_runserver_rejects_missing_app_config_startup_target(
     assert "[app.runserver].asgi_app must be configured" in result.output
 
 
-def test_uvicorn_logging_config_adds_uvicorn_loggers_without_colour_formatters() -> (
-    None
-):
+def test_uvicorn_logging_config_adds_uvicorn_loggers_without_colour_formatters() -> None:
     config = runserver_uvicorn.uvicorn_logging_config(default_logging_config())
 
     for logger_name in runserver_uvicorn.UVICORN_LOGGER_NAMES:

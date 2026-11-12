@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from wybra.cache.feature_models import (
@@ -181,22 +180,6 @@ class StreamCacheCapability(Protocol):
 
 
 @runtime_checkable
-class PubSubSubscription(Protocol):
-    def __aiter__(self) -> AsyncIterator[bytes]: ...
-
-    async def receive(self, *, timeout: float | None = None) -> bytes: ...
-
-    async def close(self) -> None: ...
-
-
-@runtime_checkable
-class PubSubCacheCapability(Protocol):
-    async def publish(self, owner: str, topic: str, payload: bytes) -> None: ...
-
-    async def subscribe(self, owner: str, topic: str) -> PubSubSubscription: ...
-
-
-@runtime_checkable
 class ScheduleCacheCapability(Protocol):
     @property
     def maximum_records(self) -> int: ...
@@ -263,8 +246,6 @@ __all__ = (
     "AtomicCacheCapability",
     "CacheTimeCapability",
     "LeaseCacheCapability",
-    "PubSubCacheCapability",
-    "PubSubSubscription",
     "ScheduleCacheCapability",
     "StreamCacheCapability",
     "WorkQueueCacheCapability",

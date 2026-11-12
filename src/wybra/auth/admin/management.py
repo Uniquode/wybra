@@ -174,17 +174,10 @@ class TortoiseAuthManagementStore:
                 (replacement_group_result.value or {}).get("group_ids", []),
             )
 
-            await (
-                GroupUser.filter(user_id=user.id)
-                .using_db(self.connection)
-                .select_for_update()
-            )
+            await GroupUser.filter(user_id=user.id).using_db(self.connection).select_for_update()
             await GroupUser.filter(user_id=user.id).using_db(self.connection).delete()
             await GroupUser.bulk_create(
-                [
-                    GroupUser(group_id=group_id, user_id=user.id)
-                    for group_id in dict.fromkeys(replacement_group_ids)
-                ],
+                [GroupUser(group_id=group_id, user_id=user.id) for group_id in dict.fromkeys(replacement_group_ids)],
                 using_db=self.connection,
             )
 
@@ -567,9 +560,7 @@ def passkey_record(credential: IdentityWebAuthnCredential) -> dict[str, Any]:
         "attestation_format": credential.attestation_format,
     }
     return {
-        field_name: record[field_name]
-        for field_name in PASSKEY_RECORD_FIELDS
-        if record.get(field_name) is not None
+        field_name: record[field_name] for field_name in PASSKEY_RECORD_FIELDS if record.get(field_name) is not None
     }
 
 
@@ -790,9 +781,7 @@ async def disable_totp_for_management(
     secret_service: SecretEnvelopeService | None = None,
 ) -> Result[dict[str, Any]]:
     credential_store = TortoiseTOTPCredentialStore(connection, secret_service)
-    active_credential_id = await credential_store.get_active_totp_credential(
-        str(user.id)
-    )
+    active_credential_id = await credential_store.get_active_totp_credential(str(user.id))
     if active_credential_id is None:
         return Result.failure(ERROR_NO_ACTIVE_TOTP, "User does not have active TOTP.")
 
@@ -807,9 +796,7 @@ async def rotate_totp_recovery_codes_for_management(
     secret_service: SecretEnvelopeService | None = None,
 ) -> Result[dict[str, Any]]:
     credential_store = TortoiseTOTPCredentialStore(connection, secret_service)
-    active_credential_id = await credential_store.get_active_totp_credential(
-        str(user.id)
-    )
+    active_credential_id = await credential_store.get_active_totp_credential(str(user.id))
     if active_credential_id is None:
         return Result.failure(ERROR_NO_ACTIVE_TOTP, "User does not have active TOTP.")
 
@@ -901,9 +888,7 @@ async def create_group_for_management(
 ) -> Result[dict[str, Any]]:
     existing_group = await Group.get_or_none(abbrev=abbrev, using_db=connection)
     if existing_group is not None:
-        return Result.failure(
-            ERROR_ALREADY_EXISTS, "Group abbreviation already exists."
-        )
+        return Result.failure(ERROR_ALREADY_EXISTS, "Group abbreviation already exists.")
 
     try:
         async with auth_savepoint(connection) as savepoint:
@@ -913,9 +898,7 @@ async def create_group_for_management(
                 using_db=savepoint,
             )
     except IntegrityError:
-        return Result.failure(
-            ERROR_ALREADY_EXISTS, "Group abbreviation already exists."
-        )
+        return Result.failure(ERROR_ALREADY_EXISTS, "Group abbreviation already exists.")
     return Result.ok(await group_record(connection, group))
 
 
@@ -1204,9 +1187,7 @@ async def list_candidate_child_groups_for_management(
     candidate_groups = [
         group
         for group in groups
-        if group.id != parent.id
-        and group.id not in reachable_from_parent
-        and group.id not in reachable_to_parent
+        if group.id != parent.id and group.id not in reachable_from_parent and group.id not in reachable_to_parent
     ]
     candidates = await group_records(connection, candidate_groups)
     return Result.ok({"groups": candidates})
@@ -1405,8 +1386,7 @@ async def _resolve_group_targets_for_set(
 ) -> Result[dict[str, Any]]:
     unique_targets = tuple(dict.fromkeys(group_targets))
     groups_by_abbrev = {
-        group.abbrev: group
-        for group in await Group.filter(abbrev__in=unique_targets).using_db(connection)
+        group.abbrev: group for group in await Group.filter(abbrev__in=unique_targets).using_db(connection)
     }
     parsed_ids: dict[str, UUID] = {}
     invalid_targets: set[str] = set()
@@ -1422,10 +1402,7 @@ async def _resolve_group_targets_for_set(
     groups_by_id: dict[UUID, Group] = {}
     if parsed_ids:
         groups_by_id = {
-            group.id: group
-            for group in await Group.filter(id__in=tuple(parsed_ids.values())).using_db(
-                connection
-            )
+            group.id: group for group in await Group.filter(id__in=tuple(parsed_ids.values())).using_db(connection)
         }
 
     group_ids = []
@@ -1484,9 +1461,7 @@ async def update_local_user_for_management(
     if preferred_timezone is not None and not _valid_timezone(preferred_timezone):
         return Result.failure(ERROR_INVALID_TIMEZONE)
 
-    locked_user = (
-        await User.filter(id=user.id).using_db(connection).select_for_update().first()
-    )
+    locked_user = await User.filter(id=user.id).using_db(connection).select_for_update().first()
     if locked_user is None:
         return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
     user = locked_user
@@ -1509,11 +1484,7 @@ async def update_local_user_for_management(
         has_changes = True
 
     if is_superuser is not None:
-        if (
-            not is_superuser
-            and user.is_superuser
-            and await _sole_superuser(connection, user)
-        ):
+        if not is_superuser and user.is_superuser and await _sole_superuser(connection, user):
             return Result.failure(
                 ERROR_FINAL_SUPERUSER,
                 "Cannot remove the final superuser flag.",
@@ -1575,9 +1546,7 @@ async def delete_local_user_for_management(
             "superuser accounts cannot be deleted.",
         )
 
-    locked_user = (
-        await User.filter(id=user.id).using_db(connection).select_for_update().first()
-    )
+    locked_user = await User.filter(id=user.id).using_db(connection).select_for_update().first()
     if locked_user is None:
         return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
     if locked_user.is_superuser:
@@ -1609,9 +1578,7 @@ async def deactivate_local_user_for_management(
             "superuser accounts cannot be deactivated.",
         )
 
-    locked_user = (
-        await User.filter(id=user.id).using_db(connection).select_for_update().first()
-    )
+    locked_user = await User.filter(id=user.id).using_db(connection).select_for_update().first()
     if locked_user is None:
         return Result.failure(ERROR_NOT_FOUND, "No matching user was found.")
     if locked_user.is_superuser:
@@ -1628,12 +1595,7 @@ async def deactivate_local_user_for_management(
 
 
 async def _sole_superuser(connection: BaseDBAsyncClient, user: User) -> bool:
-    superusers = (
-        await User.filter(is_superuser=True)
-        .using_db(connection)
-        .select_for_update()
-        .only("id")
-    )
+    superusers = await User.filter(is_superuser=True).using_db(connection).select_for_update().only("id")
     return bool(user.is_superuser and len(superusers) == 1)
 
 
@@ -1664,9 +1626,7 @@ async def _delete_user_persistence(
     )
 
     totp_credential_ids = tuple(
-        await IdentityTotpCredential.filter(user_id=user.id)
-        .using_db(connection)
-        .values_list("id", flat=True)
+        await IdentityTotpCredential.filter(user_id=user.id).using_db(connection).values_list("id", flat=True)
     )
     if totp_credential_ids:
         await (
@@ -1679,9 +1639,7 @@ async def _delete_user_persistence(
     await IdentityTotpCredential.filter(user_id=user.id).using_db(connection).delete()
 
     provider_ids = tuple(
-        await ExternalIdentityLink.filter(user_id=user.id)
-        .using_db(connection)
-        .values_list("provider_id", flat=True)
+        await ExternalIdentityLink.filter(user_id=user.id).using_db(connection).values_list("provider_id", flat=True)
     )
     await ExternalIdentityLink.filter(user_id=user.id).using_db(connection).delete()
     if provider_ids:
@@ -1779,12 +1737,8 @@ async def _group_has_memberships(
 ) -> bool:
     return bool(
         await GroupUser.filter(group_id=group.id).using_db(connection).exists()
-        or await GroupGroup.filter(parent_group_id=group.id)
-        .using_db(connection)
-        .exists()
-        or await GroupGroup.filter(child_group_id=group.id)
-        .using_db(connection)
-        .exists()
+        or await GroupGroup.filter(parent_group_id=group.id).using_db(connection).exists()
+        or await GroupGroup.filter(child_group_id=group.id).using_db(connection).exists()
     )
 
 
@@ -1882,9 +1836,7 @@ def _matches_user_filters(
     if is_superuser is not None and user.is_superuser is not is_superuser:
         return False
 
-    if effective_active is not None and (
-        is_user_effectively_active(user, now=now) is not effective_active
-    ):
+    if effective_active is not None and (is_user_effectively_active(user, now=now) is not effective_active):
         return False
 
     if is_verified is not None and user.is_verified is not is_verified:

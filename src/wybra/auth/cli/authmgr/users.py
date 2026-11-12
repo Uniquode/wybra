@@ -42,8 +42,7 @@ def register_user_commands(root_command: click.Group) -> None:
         "--include-secrets",
         is_flag=True,
         help=(
-            "Include generated TOTP secrets and recovery codes in JSON output. "
-            "Sensitive; use only for secure handoff."
+            "Include generated TOTP secrets and recovery codes in JSON output. Sensitive; use only for secure handoff."
         ),
     )
     @click.pass_context
@@ -134,9 +133,7 @@ def register_user_commands(root_command: click.Group) -> None:
         is_flag=True,
         help="Clear the account expiry timestamp.",
     )
-    @click.option(
-        "--add-group", "add_groups", multiple=True, help="Add group membership."
-    )
+    @click.option("--add-group", "add_groups", multiple=True, help="Add group membership.")
     @click.option(
         "--rm-group",
         "remove_groups",
@@ -191,8 +188,7 @@ def register_user_commands(root_command: click.Group) -> None:
         "--include-secrets",
         is_flag=True,
         help=(
-            "Include generated TOTP secrets and recovery codes in JSON output. "
-            "Sensitive; use only for secure handoff."
+            "Include generated TOTP secrets and recovery codes in JSON output. Sensitive; use only for secure handoff."
         ),
     )
     @click.pass_context
@@ -228,16 +224,12 @@ def register_user_commands(root_command: click.Group) -> None:
                 "or --add-group/--rm-group for incremental changes."
             )
         if set_groups and (add_groups or remove_groups):
-            raise click.UsageError(
-                "--set-group cannot be used with --add-group or --rm-group."
-            )
+            raise click.UsageError("--set-group cannot be used with --add-group or --rm-group.")
         _ensure_mutually_exclusive(
             (preferred_timezone, "--timezone"),
             (clear_preferred_timezone, "--no-timezone"),
         )
-        _ensure_mutually_exclusive(
-            (expires_at, "--expires-at"), (no_expires_at, "--no-expires-at")
-        )
+        _ensure_mutually_exclusive((expires_at, "--expires-at"), (no_expires_at, "--no-expires-at"))
         _ensure_mutually_exclusive((totp, "--totp"), (no_totp, "--no-totp"))
         _ensure_mutually_exclusive((totp, "--totp"), (rcodes, "--rcodes"))
         _ensure_mutually_exclusive((no_totp, "--no-totp"), (rcodes, "--rcodes"))
@@ -351,23 +343,15 @@ def register_user_commands(root_command: click.Group) -> None:
     @click.option("--logged-in", is_flag=True)
     @click.option(
         "--order",
-        type=click.Choice(
-            ("email", "email-domain", "created-at", "modified-at", "last-login-at")
-        ),
+        type=click.Choice(("email", "email-domain", "created-at", "modified-at", "last-login-at")),
         default="email",
         show_default=True,
-        help=(
-            "Sort field. Timestamp fields default to most-recent-first unless "
-            "--direction is set."
-        ),
+        help=("Sort field. Timestamp fields default to most-recent-first unless --direction is set."),
     )
     @click.option(
         "--direction",
         type=click.Choice(("asc", "desc")),
-        help=(
-            "Sort direction. Defaults to asc for email fields and desc for "
-            "timestamp fields."
-        ),
+        help=("Sort direction. Defaults to asc for email fields and desc for timestamp fields."),
     )
     @click.pass_context
     def list_command(

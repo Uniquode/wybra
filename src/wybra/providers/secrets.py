@@ -100,8 +100,7 @@ def validate_provider_secret_settings(
             ) from exc
         if not secret_exists:
             raise ProviderSecretResolutionError(
-                f"Provider {provider.name!r} {secret_label} is missing: "
-                f"source={source}, key={key}."
+                f"Provider {provider.name!r} {secret_label} is missing: source={source}, key={key}."
             )
 
 
@@ -113,9 +112,7 @@ def resolve_provider_client_secret(
     provider = settings.provider(provider_name)
     reference = provider.required_client_secret_reference()
     if reference is None:
-        raise ConfigurationError(
-            f"Provider {provider.name!r} does not configure a client secret reference."
-        )
+        raise ConfigurationError(f"Provider {provider.name!r} does not configure a client secret reference.")
     source, key = reference
     try:
         return secrets.resolve(source, key)
@@ -133,16 +130,12 @@ def resolve_provider_private_key(
     provider = settings.provider(provider_name)
     reference = provider.required_private_key_reference()
     if reference is None:
-        raise ConfigurationError(
-            f"Provider {provider.name!r} does not configure a private key reference."
-        )
+        raise ConfigurationError(f"Provider {provider.name!r} does not configure a private key reference.")
     source, key = reference
     try:
         return secrets.resolve(source, key)
     except SecretsError as exc:
-        raise ProviderSecretResolutionError(
-            f"Provider {provider.name!r} private key resolution failed: {exc}"
-        ) from exc
+        raise ProviderSecretResolutionError(f"Provider {provider.name!r} private key resolution failed: {exc}") from exc
 
 
 def provider_keychain_secret_references(

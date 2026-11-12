@@ -148,8 +148,7 @@ class FilesystemMediaCapability:
             )
         except MediaResourceKeyConflictError as exc:
             raise MediaInputError(
-                f"Media resource key is already assigned: "
-                f"resource_key={media_resource_key}."
+                f"Media resource key is already assigned: resource_key={media_resource_key}."
             ) from exc
 
     async def store(
@@ -188,9 +187,7 @@ class FilesystemMediaCapability:
         except OSError as exc:
             with suppress(FileNotFoundError):
                 temp_destination.unlink()
-            raise MediaStorageOperationError(
-                f"Media storage operation failed: key={media_key}."
-            ) from exc
+            raise MediaStorageOperationError(f"Media storage operation failed: key={media_key}.") from exc
         except BaseException:
             with suppress(FileNotFoundError):
                 temp_destination.unlink()
@@ -232,9 +229,7 @@ class FilesystemMediaCapability:
             raise MediaInputError("Media resource key must not be blank.")
         media = await self.catalogue.get_item_by_resource_key(validated_resource_key)
         if media is None:
-            raise MediaNotFoundError(
-                f"Unknown media resource key: resource_key={resource_key}."
-            )
+            raise MediaNotFoundError(f"Unknown media resource key: resource_key={resource_key}.")
         return media
 
     async def assign_resource_key(
@@ -250,8 +245,7 @@ class FilesystemMediaCapability:
             await self.catalogue.assign_resource_key(media_id, validated_resource_key)
         except MediaResourceKeyConflictError as exc:
             raise MediaInputError(
-                f"Media resource key is already assigned: "
-                f"resource_key={validated_resource_key}."
+                f"Media resource key is already assigned: resource_key={validated_resource_key}."
             ) from exc
 
     def path_for_key(self, storage_key: str | Path) -> Path:
@@ -272,20 +266,14 @@ class FilesystemMediaCapability:
         if self._writable_root_validated:
             return
         if not root.exists():
-            raise MediaStorageReadinessError(
-                f"Media root does not exist: root={self.root}."
-            )
+            raise MediaStorageReadinessError(f"Media root does not exist: root={self.root}.")
         if not root.is_dir():
-            raise MediaStorageReadinessError(
-                f"Media root is not a directory: root={self.root}."
-            )
+            raise MediaStorageReadinessError(f"Media root is not a directory: root={self.root}.")
         probe = root / f".wybra-media-write-test-{uuid.uuid4().hex}"
         try:
             probe.touch(exist_ok=True)
         except OSError as exc:
-            raise MediaStorageOperationError(
-                f"Media root is not writable: root={self.root}."
-            ) from exc
+            raise MediaStorageOperationError(f"Media root is not writable: root={self.root}.") from exc
         finally:
             probe.unlink(missing_ok=True)
         object.__setattr__(self, "_writable_root_validated", True)

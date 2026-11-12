@@ -83,9 +83,7 @@ def version_column_check_constraint(
     column_name: str,
 ) -> CheckConstraint:
     if not column_name.isidentifier():
-        raise VersionFieldError(
-            "VersionField database columns must use a Python-style identifier."
-        )
+        raise VersionFieldError("VersionField database columns must use a Python-style identifier.")
     identifier = re.sub(
         r"[^a-zA-Z0-9_]",
         "_",
@@ -98,16 +96,9 @@ def version_column_check_constraint(
 
 def version_field_name(model: type[Model]) -> str | None:
     """Return the model's version field, rejecting invalid declarations."""
-    names = tuple(
-        name
-        for name, field in model._meta.fields_map.items()
-        if isinstance(field, VersionField)
-    )
+    names = tuple(name for name, field in model._meta.fields_map.items() if isinstance(field, VersionField))
     if len(names) > 1:
-        raise VersionFieldError(
-            f"Model {model.__name__} declares multiple VersionField values: "
-            + ", ".join(names)
-        )
+        raise VersionFieldError(f"Model {model.__name__} declares multiple VersionField values: " + ", ".join(names))
     return names[0] if names else None
 
 
@@ -136,15 +127,11 @@ async def save_model_update(
     values = {
         name: getattr(target, name)
         for name in target._meta.fields_db_projection
-        if name not in {target._meta.pk_attr, version_name}
-        and not target._meta.fields_map[name].generated
+        if name not in {target._meta.pk_attr, version_name} and not target._meta.fields_map[name].generated
     }
     values[version_name] = expected_version + 1
     updated = await (
-        type(target)
-        .filter(pk=target.pk, **{version_name: expected_version})
-        .using_db(client)
-        .update(**values)
+        type(target).filter(pk=target.pk, **{version_name: expected_version}).using_db(client).update(**values)
     )
     if updated == 0:
         raise OptimisticLockConflict()
@@ -163,12 +150,7 @@ async def ensure_model_version(
         return
     if expected_version is None:
         raise VersionFieldError("Versioned updates require a submitted version.")
-    if not await (
-        type(target)
-        .filter(pk=target.pk, **{version_name: expected_version})
-        .using_db(client)
-        .exists()
-    ):
+    if not await type(target).filter(pk=target.pk, **{version_name: expected_version}).using_db(client).exists():
         raise OptimisticLockConflict()
 
 
@@ -185,12 +167,7 @@ async def delete_model_instance(
         return
     if expected_version is None:
         raise VersionFieldError("Versioned deletions require a submitted version.")
-    deleted = await (
-        type(target)
-        .filter(pk=target.pk, **{version_name: expected_version})
-        .using_db(client)
-        .delete()
-    )
+    deleted = await type(target).filter(pk=target.pk, **{version_name: expected_version}).using_db(client).delete()
     if deleted == 0:
         raise OptimisticLockConflict()
 

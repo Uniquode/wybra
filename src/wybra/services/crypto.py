@@ -73,15 +73,10 @@ def _decode_base64_key(raw_key: str) -> bytes:
     try:
         key = base64.urlsafe_b64decode(raw_key)
     except (binascii.Error, ValueError) as exc:
-        raise SecretDataError(
-            "Secret key value must be valid URL-safe base64."
-        ) from exc
+        raise SecretDataError("Secret key value must be valid URL-safe base64.") from exc
 
     if len(key) != SECRET_KEY_LENGTH:
-        raise SecretDataError(
-            f"Secret key value must decode to {SECRET_KEY_LENGTH} bytes, "
-            f"not {len(key)}."
-        )
+        raise SecretDataError(f"Secret key value must decode to {SECRET_KEY_LENGTH} bytes, not {len(key)}.")
 
     return key
 
@@ -95,32 +90,23 @@ def parse_secret_key_entry(raw_entry: str) -> tuple[str, bytes]:
     entry = raw_entry.strip()
     parts = entry.split(":", 2)
     if len(parts) != 3:
-        raise SecretDataError(
-            "Secret key entries must use format <version>:<base64-key>:<crc32hex>."
-        )
+        raise SecretDataError("Secret key entries must use format <version>:<base64-key>:<crc32hex>.")
 
     version, encoded_key, encoded_checksum = parts
     if version == PLAIN_TEXT_VERSION:
-        raise SecretDataError(
-            "Secret key version must not use reserved plaintext marker."
-        )
+        raise SecretDataError("Secret key version must not use reserved plaintext marker.")
     if not version:
         raise SecretDataError("Secret key version must not be empty.")
 
     key = _decode_base64_key(encoded_key)
     actual_checksum = _checksum(key)
     if len(encoded_checksum) != 8:
-        raise SecretDataError(
-            f"Secret key checksum for version {version} must be 8 hexadecimal "
-            "characters."
-        )
+        raise SecretDataError(f"Secret key checksum for version {version} must be 8 hexadecimal characters.")
 
     try:
         int(encoded_checksum, 16)
     except ValueError as exc:
-        raise SecretDataError(
-            f"Secret key checksum for version {version} is not valid hex."
-        ) from exc
+        raise SecretDataError(f"Secret key checksum for version {version} is not valid hex.") from exc
 
     if encoded_checksum.lower() != actual_checksum:
         raise SecretDataError(
@@ -147,9 +133,7 @@ def parse_secret_key_bundle(
     if previous_value is not None:
         for raw_entry in previous_value.split(","):
             if not raw_entry.strip():
-                raise SecretDataError(
-                    "Previous secret key entries must be comma-separated and non-empty."
-                )
+                raise SecretDataError("Previous secret key entries must be comma-separated and non-empty.")
             ring_entries.append(parse_secret_key_entry(raw_entry))
 
     versions = [version for version, _ in ring_entries]
@@ -158,9 +142,7 @@ def parse_secret_key_bundle(
 
     return SecretKeyRing(
         current_version=ring_entries[0][0],
-        keys=tuple(
-            SecretKey(version=version, key=key) for version, key in ring_entries
-        ),
+        keys=tuple(SecretKey(version=version, key=key) for version, key in ring_entries),
     )
 
 
@@ -305,9 +287,7 @@ class SecretKeyRing:
             if key.version == self.current_version:
                 return key
 
-        raise SecretVersionError(
-            f"Current secret version is missing from key ring: {self.current_version}."
-        )
+        raise SecretVersionError(f"Current secret version is missing from key ring: {self.current_version}.")
 
     def fernet_for(self, version: str) -> Fernet:
         for key in self.keys:
@@ -333,9 +313,7 @@ class SecretEnvelope:
     ) -> SecretEnvelope:
         encrypted = service.encrypt(value, required=required)
         if _decode_envelope(encrypted) is None:
-            raise SecretDataError(
-                "SecretEnvelope requires an encrypted secret envelope value."
-            )
+            raise SecretDataError("SecretEnvelope requires an encrypted secret envelope value.")
 
         return cls(encrypted)
 
@@ -416,9 +394,7 @@ def _resolve_secret_key(
     except MissingSecretError as exc:
         if not required:
             return None
-        raise SecretMaterialMissingError(
-            f"{name} is not configured in the selected secrets source: {exc}"
-        ) from exc
+        raise SecretMaterialMissingError(f"{name} is not configured in the selected secrets source: {exc}") from exc
     except SecretsError as exc:
         raise SecretMaterialMissingError(
             f"{name} could not be resolved from the selected secrets source: {exc}"
@@ -536,17 +512,13 @@ class SecretEnvelopeService:
     def current_version_required(self) -> str:
         key_ring = self._get_key_ring(required=True)
         if key_ring is None:  # pragma: no cover - required branch raises first
-            raise SecretMaterialMissingError(
-                "Secret material is required but no keys are configured."
-            )
+            raise SecretMaterialMissingError("Secret material is required but no keys are configured.")
         return key_ring.current.version
 
     def create_verifier_required(self, value: str, *, context: str) -> str:
         key_ring = self._get_key_ring(required=True)
         if key_ring is None:  # pragma: no cover - required branch raises first
-            raise SecretMaterialMissingError(
-                "Secret material is required but no keys are configured."
-            )
+            raise SecretMaterialMissingError("Secret material is required but no keys are configured.")
 
         digest = _verifier_digest(
             key=key_ring.current.key,
@@ -568,17 +540,11 @@ class SecretEnvelopeService:
 
         key_ring = self._get_key_ring(required=True)
         if key_ring is None:  # pragma: no cover - required branch raises first
-            raise SecretMaterialMissingError(
-                "Secret material is required but no keys are configured."
-            )
+            raise SecretMaterialMissingError("Secret material is required but no keys are configured.")
 
         version, expected_digest = envelope
         key = next(
-            (
-                candidate.key
-                for candidate in key_ring.keys
-                if candidate.version == version
-            ),
+            (candidate.key for candidate in key_ring.keys if candidate.version == version),
             None,
         )
         if key is None:
@@ -593,9 +559,7 @@ class SecretEnvelopeService:
             self._key_ring_loaded = True
 
         if self._key_ring is None and required:
-            raise SecretMaterialMissingError(
-                "Secret material is required but no keys are configured."
-            )
+            raise SecretMaterialMissingError("Secret material is required but no keys are configured.")
 
         return self._key_ring
 
@@ -610,12 +574,8 @@ class SecretEnvelopeService:
     def decrypt(self, value: str, *, required: bool = False) -> tuple[str, str]:
         envelope = _decode_envelope(value)
         if envelope is None:
-            if value == ENVELOPE_PREFIX or value.startswith(
-                ENVELOPE_PREFIX + ENVELOPE_SEPARATOR
-            ):
-                raise SecretDataError(
-                    "Encrypted secret envelope is invalid or malformed."
-                )
+            if value == ENVELOPE_PREFIX or value.startswith(ENVELOPE_PREFIX + ENVELOPE_SEPARATOR):
+                raise SecretDataError("Encrypted secret envelope is invalid or malformed.")
             return value, PLAIN_TEXT_VERSION
 
         key_ring = self._get_key_ring(required=required)
@@ -628,9 +588,7 @@ class SecretEnvelopeService:
             encrypted = token.encode("ascii")
             return fernet.decrypt(encrypted).decode("utf-8"), version
         except (InvalidToken, UnicodeDecodeError, UnicodeEncodeError) as exc:
-            raise SecretDataError(
-                "Encrypted secret value is invalid or corrupt."
-            ) from exc
+            raise SecretDataError("Encrypted secret value is invalid or corrupt.") from exc
 
     def refresh_key_ring(self) -> None:
         """Drop cached key-ring state so key material reloads on the next operation."""

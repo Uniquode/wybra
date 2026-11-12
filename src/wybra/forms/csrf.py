@@ -122,14 +122,10 @@ class CsrfProtector:
         previous_secrets: list[str] = []
         for index, raw_secret in enumerate(self.previous_secrets):
             if not isinstance(raw_secret, str):
-                raise ValueError(
-                    f"Previous CSRF token secret at index {index} is not a string."
-                )
+                raise ValueError(f"Previous CSRF token secret at index {index} is not a string.")
             secret = raw_secret.strip()
             if not secret:
-                raise ValueError(
-                    f"Previous CSRF token secret at index {index} is blank."
-                )
+                raise ValueError(f"Previous CSRF token secret at index {index} is blank.")
             previous_secrets.append(secret)
         if self.token_max_age_seconds <= 0:
             raise ValueError("CSRF token max age must be positive.")
@@ -247,10 +243,7 @@ class CsrfProtector:
 
     @staticmethod
     def _is_valid_nonce(nonce: str) -> bool:
-        return (
-            CSRF_NONCE_MIN_LENGTH <= len(nonce) <= CSRF_NONCE_MAX_LENGTH
-            and CSRF_TOKEN_SEPARATOR not in nonce
-        )
+        return CSRF_NONCE_MIN_LENGTH <= len(nonce) <= CSRF_NONCE_MAX_LENGTH and CSRF_TOKEN_SEPARATOR not in nonce
 
     def _can_parse_form_body(self, request: Request) -> bool:
         if not is_form_content_type(request.headers.get("content-type", "")):

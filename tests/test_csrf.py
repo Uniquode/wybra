@@ -40,10 +40,7 @@ def csrf_request(
             "type": "http",
             "method": method,
             "path": "/",
-            "headers": [
-                (name.lower().encode("ascii"), value.encode("latin-1"))
-                for name, value in headers.items()
-            ],
+            "headers": [(name.lower().encode("ascii"), value.encode("latin-1")) for name, value in headers.items()],
         },
         receive,
     )
@@ -195,9 +192,7 @@ def test_plan_csrf_token_secret_rotation_prepends_retired_current_secret() -> No
     )
 
     assert plan.previous_secret_count == 3
-    assert plan.previous_value == (
-        "current-csrf-secret,previous-csrf-secret,older-csrf-secret"
-    )
+    assert plan.previous_value == ("current-csrf-secret,previous-csrf-secret,older-csrf-secret")
     assert plan.current_value not in {
         "current-csrf-secret",
         "previous-csrf-secret",
@@ -267,10 +262,7 @@ async def test_csrf_form_validation_logs_rejection_reason(caplog) -> None:
 
     assert await protector.validate_request(request) is False
     assert "CSRF request rejected." in caplog.text
-    assert any(
-        getattr(record, "csrf_reason", None) == "missing_content_length"
-        for record in caplog.records
-    )
+    assert any(getattr(record, "csrf_reason", None) == "missing_content_length" for record in caplog.records)
 
 
 @pytest.mark.anyio
@@ -367,9 +359,7 @@ def test_csrf_dependency_raises_when_csrf_protector_misconfigured() -> None:
 
     app.include_router(router)
 
-    with pytest.raises(
-        RuntimeError, match="CSRF protector is not configured correctly"
-    ):
+    with pytest.raises(RuntimeError, match="CSRF protector is not configured correctly"):
         WybraTestClient(app).post("/submit", data={"field": "value"})
 
 
@@ -701,9 +691,7 @@ def test_csrf_settings_rejects_secret_key_without_source() -> None:
     with pytest.raises(ConfigurationError, match="csrf_token_secret_source"):
         FormsSettings.load_settings(
             {
-                "wybra.forms": {
-                    "csrf_token_secret_previous_key": CSRF_TOKEN_SECRET_KEY_PREVIOUS
-                },
+                "wybra.forms": {"csrf_token_secret_previous_key": CSRF_TOKEN_SECRET_KEY_PREVIOUS},
             },
         )
 

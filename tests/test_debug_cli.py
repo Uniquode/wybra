@@ -67,19 +67,12 @@ async def test_jsonrpc_connection_matches_the_response_to_its_request() -> None:
     response = await connection.request("diagnostics.scopes")
 
     assert response == '{"jsonrpc":"2.0","id":1,"result":[]}'
-    assert websocket.sent == [
-        '{"jsonrpc":"2.0","id":1,"method":"diagnostics.scopes","params":{}}'
-    ]
+    assert websocket.sent == ['{"jsonrpc":"2.0","id":1,"method":"diagnostics.scopes","params":{}}']
 
 
 @pytest.mark.anyio
 async def test_jsonrpc_connection_rejects_an_error_response() -> None:
-    websocket = FakeWebSocket(
-        [
-            '{"jsonrpc":"2.0","id":1,"error":'
-            '{"code":-32601,"message":"Method not found."}}'
-        ]
-    )
+    websocket = FakeWebSocket(['{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found."}}'])
 
     with pytest.raises(DebugProtocolError, match="-32601: Method not found."):
         await JsonRpcConnection(websocket).request("diagnostics.scopes")
@@ -114,9 +107,7 @@ async def test_jsonrpc_connection_rejects_malformed_response(
 
 @pytest.mark.anyio
 async def test_jsonrpc_connection_yields_only_diagnostics_notification_frames() -> None:
-    frame = (
-        '{"jsonrpc":"2.0","method":"diagnostics.notification","params":{"scope":"sql"}}'
-    )
+    frame = '{"jsonrpc":"2.0","method":"diagnostics.notification","params":{"scope":"sql"}}'
     connection = JsonRpcConnection(FakeWebSocket([frame]))
 
     assert await anext(connection.notifications()) == frame
@@ -180,9 +171,7 @@ async def test_debug_command_lists_scopes_from_a_local_websocket() -> None:
 
 @pytest.mark.anyio
 async def test_debug_command_reports_jsonrpc_errors_from_a_local_websocket() -> None:
-    response = (
-        '{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found."}}'
-    )
+    response = '{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found."}}'
 
     async def diagnostics_server(connection: ServerConnection) -> None:
         await connection.recv()
@@ -245,14 +234,10 @@ def test_debug_command_rejects_scope_selection_when_listing_scopes() -> None:
 
 
 @pytest.mark.anyio
-async def test_debug_command_treats_a_graceful_stream_close_as_normal_completion() -> (
-    None
-):
+async def test_debug_command_treats_a_graceful_stream_close_as_normal_completion() -> None:
     async def diagnostics_server(connection: ServerConnection) -> None:
         await connection.recv()
-        await connection.send(
-            '{"jsonrpc":"2.0","id":1,"result":{"subscribed":["sql"]}}'
-        )
+        await connection.send('{"jsonrpc":"2.0","id":1,"result":{"subscribed":["sql"]}}')
 
     async with serve(diagnostics_server, "127.0.0.1", 0) as server:
         socket = server.sockets[0]
@@ -271,9 +256,7 @@ async def test_debug_command_treats_a_graceful_stream_close_as_normal_completion
 async def test_debug_command_reports_a_lost_stream_as_a_stream_error() -> None:
     async def diagnostics_server(connection: ServerConnection) -> None:
         await connection.recv()
-        await connection.send(
-            '{"jsonrpc":"2.0","id":1,"result":{"subscribed":["sql"]}}'
-        )
+        await connection.send('{"jsonrpc":"2.0","id":1,"result":{"subscribed":["sql"]}}')
         await connection.close(code=1011, reason="server stopped")
 
     async with serve(diagnostics_server, "127.0.0.1", 0) as server:
@@ -331,9 +314,7 @@ def _debug_config() -> MappingConfigSource:
 @asynccontextmanager
 async def _running_debug_application() -> AsyncIterator[str]:
     app = FastAPI(lifespan=start_site(config_source=_debug_config()))
-    server = Server(
-        Config(app, host="127.0.0.1", port=0, access_log=False, log_level="critical")
-    )
+    server = Server(Config(app, host="127.0.0.1", port=0, access_log=False, log_level="critical"))
     task = asyncio.create_task(server.serve())
     while not server.started:
         await asyncio.sleep(0)
@@ -376,9 +357,7 @@ async def test_debug_command_closes_the_stream_on_sigint() -> None:
                 "method": "diagnostics.subscribe",
                 "params": {"scopes": ["sql"]},
             }
-            await connection.send(
-                '{"jsonrpc":"2.0","id":1,"result":{"subscribed":["sql"]}}'
-            )
+            await connection.send('{"jsonrpc":"2.0","id":1,"result":{"subscribed":["sql"]}}')
             subscribed.set()
             await connection.wait_closed()
         finally:
@@ -387,12 +366,8 @@ async def test_debug_command_closes_the_stream_on_sigint() -> None:
     async with serve(diagnostics_server, "127.0.0.1", 0) as server:
         socket = server.sockets[0]
         host, port = socket.getsockname()[:2]
-        creationflags = (
-            subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-        )
-        interrupt_signal = (
-            signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGINT
-        )
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        interrupt_signal = signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGINT
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",

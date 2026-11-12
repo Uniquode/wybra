@@ -122,14 +122,10 @@ class TemplateFormRenderer:
             raise FormError("Form render attr must be a mapping.")
         resolved_enctype = enctype or _default_enctype(form)
         fields = [
-            await self.render_field(form, name)
-            for name, field in form.fields.items()
-            if field.widget_name != "hidden"
+            await self.render_field(form, name) for name, field in form.fields.items() if field.widget_name != "hidden"
         ]
         hidden_fields = [
-            await self.render_field(form, name)
-            for name, field in form.fields.items()
-            if field.widget_name == "hidden"
+            await self.render_field(form, name) for name, field in form.fields.items() if field.widget_name == "hidden"
         ]
         csrf_field = await self.render_csrf_field(csrf) if csrf else Markup("")
         form_errors = tuple(form.errors.get(None, ()))
@@ -155,9 +151,7 @@ class TemplateFormRenderer:
     async def render_csrf_field(self, csrf: CsrfRenderable) -> Markup:
         context = _csrf_rendering_context(csrf)
         validate_csrf_rendering_context(context)
-        return _trusted_template_markup(
-            await self.templates.render_template(self.csrf_template, dict(context))
-        )
+        return _trusted_template_markup(await self.templates.render_template(self.csrf_template, dict(context)))
 
     async def render_phone_contact(
         self,
@@ -190,9 +184,7 @@ class TemplateFormRenderer:
             url_context=self.url_context,
         )
         if not phone_prefix and control is not None:
-            phone_prefix = control.phone_prefix(
-                form_text_value(form, resolved.country_field)
-            )
+            phone_prefix = control.phone_prefix(form_text_value(form, resolved.country_field))
         validate_phone_contact_fields(
             form,
             country_field=resolved.country_field,
@@ -250,15 +242,12 @@ class TemplateFormRenderer:
 
     def _widget_template(self, widget_name: str, *, field_name: str) -> str:
         widgets = self.widgets or {}
-        template_name = widgets.get(widget_name) or DEFAULT_FIELD_WIDGETS.get(
-            widget_name
-        )
+        template_name = widgets.get(widget_name) or DEFAULT_FIELD_WIDGETS.get(widget_name)
         if template_name is not None:
             return template_name
         known_widgets = sorted(set(DEFAULT_FIELD_WIDGETS) | set(widgets))
         raise UnknownWidgetError(
-            f"Unknown form widget {widget_name!r} for field {field_name!r}. "
-            f"Known widgets: {', '.join(known_widgets)}."
+            f"Unknown form widget {widget_name!r} for field {field_name!r}. Known widgets: {', '.join(known_widgets)}."
         )
 
 
@@ -408,9 +397,7 @@ def forms_rendering_context(
             **kwargs,
         ),
         "render_field": renderer.render_field,
-        "render_csrf_field": lambda **kwargs: renderer.render_csrf_field(
-            kwargs or csrf or {}
-        ),
+        "render_csrf_field": lambda **kwargs: renderer.render_csrf_field(kwargs or csrf or {}),
         "render_phone_contact": renderer.render_phone_contact,
         "render_phone_contact_fields": renderer.render_phone_contact_fields,
     }

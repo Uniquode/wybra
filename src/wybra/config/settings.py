@@ -102,8 +102,7 @@ class BaseSettings:
             return {}
         if not isinstance(configured_section, Mapping):
             raise ConfigSourceError(
-                f"Config section {section_name!r} must be a mapping; got "
-                f"{type(configured_section).__name__}."
+                f"Config section {section_name!r} must be a mapping; got {type(configured_section).__name__}."
             )
         values = dict(configured_section)
         section = _settings_config_sections(cls).get(section_name)
@@ -153,8 +152,7 @@ def _settings_config_source(
         )
         if app_config is None:  # pragma: no cover - require_app_config prevents this
             raise SettingsLoadError(
-                "Application config file could not be resolved; run from the "
-                f"app project or set {APP_CONFIG_ENV}."
+                f"Application config file could not be resolved; run from the app project or set {APP_CONFIG_ENV}."
             )
         return AppConfigSource(app_config)
     if isinstance(config_source, AppConfig):
@@ -170,11 +168,7 @@ def _settings_kwargs[SettingsT: BaseSettings](
     declared_fields: frozenset[str],
 ) -> dict[str, Any]:
     allowed = _settings_field_names(settings_type)
-    return {
-        key: value
-        for key, value in values.items()
-        if key in declared_fields and key in allowed
-    }
+    return {key: value for key, value in values.items() if key in declared_fields and key in allowed}
 
 
 def _settings_config_section[SettingsT: BaseSettings](
@@ -185,8 +179,7 @@ def _settings_config_section[SettingsT: BaseSettings](
     if config_section is not None:
         if config_section not in sections:
             raise ConfigDefinitionError(
-                f"{settings_type.__name__}.config_section must name a section "
-                "declared by module_config."
+                f"{settings_type.__name__}.config_section must name a section declared by module_config."
             )
         return config_section
 
@@ -194,8 +187,7 @@ def _settings_config_section[SettingsT: BaseSettings](
         return next(iter(sections))
 
     raise ConfigDefinitionError(
-        f"{settings_type.__name__}.config_section must be set when module_config "
-        "declares multiple sections."
+        f"{settings_type.__name__}.config_section must be set when module_config declares multiple sections."
     )
 
 
@@ -209,16 +201,12 @@ def _settings_config_sections(
         module_config = getattr(settings_type, "module_config", None)
         if module_config is not None:
             raise ConfigDefinitionError(
-                f"{settings_type.__name__}.module_config must be a ConfigDef, "
-                f"not {type(module_config).__name__!r}."
+                f"{settings_type.__name__}.module_config must be a ConfigDef, not {type(module_config).__name__!r}."
             ) from exc
-        raise ConfigDefinitionError(
-            f"{settings_type.__name__}.module_config must be a ConfigDef."
-        ) from exc
+        raise ConfigDefinitionError(f"{settings_type.__name__}.module_config must be a ConfigDef.") from exc
     if not isinstance(module_config, ConfigDef):
         raise ConfigDefinitionError(
-            f"{settings_type.__name__}.module_config must be a ConfigDef, "
-            f"not {type(module_config).__name__!r}."
+            f"{settings_type.__name__}.module_config must be a ConfigDef, not {type(module_config).__name__!r}."
         )
     return sections
 
@@ -240,8 +228,7 @@ def _transform_settings_values(
             values[field_name] = field_def.transform(values[field_name])
         except (TypeError, ValueError) as exc:
             raise ConfigSourceError(
-                f"Config value {section_name}.{field_name} is invalid "
-                f"({exc.__class__.__name__})."
+                f"Config value {section_name}.{field_name} is invalid ({exc.__class__.__name__})."
             ) from exc
 
 

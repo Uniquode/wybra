@@ -89,9 +89,7 @@ async def test_redis_schedule_advance_and_deletion_fence_live_claims() -> None:
                 next_due_at=now - 1,
             )
             assert deleted is not None
-            deleted_claim = await schedules.claim(
-                "tasks", "deleted", "scheduler", ttl=30
-            )
+            deleted_claim = await schedules.claim("tasks", "deleted", "scheduler", ttl=30)
             assert deleted_claim is not None
             assert await schedules.held(deleted_claim)
             assert await schedules.delete("tasks", "deleted")
@@ -107,9 +105,7 @@ async def test_redis_schedule_advance_and_deletion_fence_live_claims() -> None:
                 interval_seconds=60,
             )
             assert discarded is not None
-            discarded_claim = await schedules.claim(
-                "tasks", "discarded", "scheduler", ttl=30
-            )
+            discarded_claim = await schedules.claim("tasks", "discarded", "scheduler", ttl=30)
             assert discarded_claim is not None
             await schedules.discard(discarded_claim)
             assert not await schedules.held(discarded_claim)
@@ -199,9 +195,7 @@ async def test_redis_schedule_cursor_pages_equal_times_and_recurring() -> None:
                 interval_seconds=60,
             )
             assert recurring is not None
-            claim = await schedules.claim(
-                "tasks", recurring.identity, "scheduler", ttl=30
-            )
+            claim = await schedules.claim("tasks", recurring.identity, "scheduler", ttl=30)
             assert claim is not None
             advanced = await schedules.complete(claim)
             assert advanced is not None

@@ -154,9 +154,7 @@ class CacheTaskiqScheduleSource(ScheduleSource):
         _validate_schedule_refresh_interval(schedule, self._policy)
         zone_name = self._policy.timezone if timezone is None else timezone
         _timezone(zone_name)
-        limit = (
-            self._policy.catch_up_limit if catch_up_limit is None else catch_up_limit
-        )
+        limit = self._policy.catch_up_limit if catch_up_limit is None else catch_up_limit
         _validate_limit(limit, label="Catch-up limit")
         envelope = _Envelope(schedule, zone_name, limit)
         now = await self._cache_time.refresh() if schedule.time is None else None
@@ -204,8 +202,7 @@ class CacheTaskiqScheduleSource(ScheduleSource):
             cleanup_failures.extend(await self._release_staged(staged))
             if cleanup_failures:
                 error.add_note(
-                    f"{len(cleanup_failures)} schedule claim release "
-                    "operation(s) failed during cancellation."
+                    f"{len(cleanup_failures)} schedule claim release operation(s) failed during cancellation."
                 )
             raise
         except Exception as error:
@@ -288,9 +285,7 @@ class CacheTaskiqScheduleSource(ScheduleSource):
                     self._deferred_revisions.pop(claim.record.identity, None)
                     if envelope.task.cron is not None:
                         try:
-                            prepared = await self._prepare_cron_claim(
-                                claim, envelope, now
-                            )
+                            prepared = await self._prepare_cron_claim(claim, envelope, now)
                         except CacheConflictError:
                             self._untrack_refreshing(claim, refreshing)
                             if not self._deferred_revisions:
@@ -348,8 +343,7 @@ class CacheTaskiqScheduleSource(ScheduleSource):
                         cleanup_failures.extend(await self._release_staged(staged))
                         if cleanup_failures:
                             raise ExceptionGroup(
-                                "Taskiq schedule processing and invalid-envelope "
-                                "cleanup failed.",
+                                "Taskiq schedule processing and invalid-envelope cleanup failed.",
                                 [discard_error, *cleanup_failures],
                             ) from discard_error
                         raise
@@ -372,20 +366,16 @@ class CacheTaskiqScheduleSource(ScheduleSource):
                             [error, *cleanup_failures],
                         ) from error
                     raise
-        self._scan_cursor = (
-            cursor if preserve_scan_cursor and not exhausted_continuation else None
-        )
+        self._scan_cursor = cursor if preserve_scan_cursor and not exhausted_continuation else None
         if incompatible_count:
             _logger.warning(
-                "Deferred %d Taskiq schedules incompatible with the source refresh "
-                "interval: %s.",
+                "Deferred %d Taskiq schedules incompatible with the source refresh interval: %s.",
                 incompatible_count,
                 _diagnostic_identities(incompatible_identities),
             )
         if unsupported_count:
             _logger.warning(
-                "Deferred %d Taskiq schedules with an unsupported envelope "
-                "version: %s.",
+                "Deferred %d Taskiq schedules with an unsupported envelope version: %s.",
                 unsupported_count,
                 _diagnostic_identities(unsupported_identities),
             )
@@ -482,8 +472,7 @@ class CacheTaskiqScheduleSource(ScheduleSource):
         if cancellation is not None:
             if failures:
                 cancellation.add_note(
-                    f"{len(failures)} schedule claim release operation(s) failed "
-                    "during cancellation."
+                    f"{len(failures)} schedule claim release operation(s) failed during cancellation."
                 )
             raise cancellation
         if failures:
@@ -516,20 +505,13 @@ class CacheTaskiqScheduleSource(ScheduleSource):
         for offset in range(limit):
             dispatch_id, pending_entry = pending[(start + offset) % len(pending)]
             claim = pending_entry.claim
-            if (
-                not await self._schedules.held(claim)
-                and self._pending.get(dispatch_id) is pending_entry
-            ):
+            if not await self._schedules.held(claim) and self._pending.get(dispatch_id) is pending_entry:
                 self._pending.pop(dispatch_id, None)
                 removed = True
-        self._pending_prune_cursor = (
-            (start + limit) % len(self._pending) if self._pending else 0
-        )
+        self._pending_prune_cursor = (start + limit) % len(self._pending) if self._pending else 0
         return removed
 
-    async def _release_claim(
-        self, claim: ScheduleClaim
-    ) -> tuple[bool, list[Exception]]:
+    async def _release_claim(self, claim: ScheduleClaim) -> tuple[bool, list[Exception]]:
         claim_released = False
         cleanup_failures: list[Exception] = []
         try:
@@ -655,13 +637,9 @@ def _decode(
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise ValueError
     except KeyError, TypeError, ValueError:
-        raise _InvalidScheduleEnvelopeError(
-            "Taskiq schedule envelope is invalid."
-        ) from None
+        raise _InvalidScheduleEnvelopeError("Taskiq schedule envelope is invalid.") from None
     if version != _ENVELOPE_VERSION:
-        raise _UnsupportedScheduleEnvelopeError(
-            "Taskiq schedule envelope version is unsupported."
-        )
+        raise _UnsupportedScheduleEnvelopeError("Taskiq schedule envelope version is unsupported.")
     try:
         task = ScheduledTask.model_validate(value["task"])
         _validate_schedule(task)
@@ -707,11 +685,7 @@ def _pending_due_times(
         raise ValueError
     pending_due_at: list[float] = []
     for due_at in value:
-        if (
-            isinstance(due_at, bool)
-            or not isinstance(due_at, int | float)
-            or not math.isfinite(due_at)
-        ):
+        if isinstance(due_at, bool) or not isinstance(due_at, int | float) or not math.isfinite(due_at):
             raise ValueError
         pending_due_at.append(float(due_at))
     if not pending_due_at:
@@ -759,69 +733,41 @@ def _timezone(name: object):
 
 def _matches_cron_due_at(expression: str, due_at: float, timezone: str) -> bool:
     current = datetime.fromtimestamp(due_at, UTC).astimezone(_timezone(timezone))
-    return (
-        current.second == 0
-        and current.microsecond == 0
-        and croniter.match(expression, current)
-    )
+    return current.second == 0 and current.microsecond == 0 and croniter.match(expression, current)
 
 
 def _validate_schedule(schedule: ScheduledTask) -> None:
-    schedule_kinds = sum(
-        value is not None for value in (schedule.time, schedule.interval, schedule.cron)
-    )
+    schedule_kinds = sum(value is not None for value in (schedule.time, schedule.interval, schedule.cron))
     if schedule_kinds != 1:
-        raise ValueError(
-            "Taskiq schedule must specify exactly one of time, interval, or cron."
-        )
+        raise ValueError("Taskiq schedule must specify exactly one of time, interval, or cron.")
     if schedule.cron_offset is not None:
-        raise ValueError(
-            "Taskiq cron_offset is not supported; configure an IANA timezone instead."
-        )
+        raise ValueError("Taskiq cron_offset is not supported; configure an IANA timezone instead.")
     if schedule.cron is not None:
         cron_fields = schedule.cron.split()
         if len(cron_fields) != 5 or not croniter.is_valid(schedule.cron):
-            raise ValueError(
-                "Taskiq cron schedule must be a valid five-field expression."
-            )
+            raise ValueError("Taskiq cron schedule must be a valid five-field expression.")
 
 
 def _validate_policy_resource(value: object, *, label: str) -> None:
     if not isinstance(value, str) or not value.strip() or value != value.strip():
-        raise ValueError(
-            f"{label} must be a non-blank string without surrounding whitespace."
-        )
+        raise ValueError(f"{label} must be a non-blank string without surrounding whitespace.")
 
 
 def _validate_limit(value: int, *, label: str) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or not 1 <= value <= MAX_CACHE_FEATURE_LIMIT
-    ):
-        raise ValueError(
-            f"{label} must be a positive integer no greater than "
-            f"{MAX_CACHE_FEATURE_LIMIT}."
-        )
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_CACHE_FEATURE_LIMIT:
+        raise ValueError(f"{label} must be a positive integer no greater than {MAX_CACHE_FEATURE_LIMIT}.")
 
 
 def _validate_schedule_capacity(value: int) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or not 1 <= value <= MAX_CACHE_FEATURE_LIMIT
-    ):
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_CACHE_FEATURE_LIMIT:
         raise ValueError(
-            "Schedule capability maximum_records must be a positive integer no "
-            f"greater than {MAX_CACHE_FEATURE_LIMIT}."
+            f"Schedule capability maximum_records must be a positive integer no greater than {MAX_CACHE_FEATURE_LIMIT}."
         )
 
 
 def _validate_source_refresh_interval(value: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError(
-            "Taskiq source refresh interval must be a positive whole number of seconds."
-        )
+        raise ValueError("Taskiq source refresh interval must be a positive whole number of seconds.")
 
 
 def _validate_schedule_refresh_interval(
@@ -831,13 +777,9 @@ def _validate_schedule_refresh_interval(
     if schedule.cron is not None:
         return
     interval_seconds = _interval_seconds(schedule)
-    if (
-        interval_seconds is not None
-        and interval_seconds < policy.source_refresh_interval_seconds
-    ):
+    if interval_seconds is not None and interval_seconds < policy.source_refresh_interval_seconds:
         raise _RefreshIntervalMismatchError(
-            "Taskiq schedule interval must not be shorter than the configured "
-            "source refresh interval."
+            "Taskiq schedule interval must not be shorter than the configured source refresh interval."
         )
 
 
@@ -883,8 +825,7 @@ def _initial_due_at(
                 pass
             if localised is None:
                 raise ValueError(
-                    "Naive schedule time is ambiguous or non-existent in its timezone; "
-                    "use an aware datetime."
+                    "Naive schedule time is ambiguous or non-existent in its timezone; use an aware datetime."
                 )
             value = localised
         return value.astimezone(UTC).timestamp()
@@ -902,11 +843,7 @@ def _interval_seconds(schedule: ScheduledTask) -> float | None:
         return _MINUTE_SECONDS
     if schedule.interval is None:
         return None
-    return (
-        schedule.interval.total_seconds()
-        if isinstance(schedule.interval, timedelta)
-        else float(schedule.interval)
-    )
+    return schedule.interval.total_seconds() if isinstance(schedule.interval, timedelta) else float(schedule.interval)
 
 
 def _next_tick(now: float) -> float:
@@ -918,9 +855,7 @@ def _next_cron_due_at(expression: str, after: float, timezone: str) -> float:
     return croniter(expression, current).get_next(datetime).astimezone(UTC).timestamp()
 
 
-def _matching_due_times(
-    expression: str, start: float, now: float, timezone: str, limit: int
-) -> tuple[float, ...]:
+def _matching_due_times(expression: str, start: float, now: float, timezone: str, limit: int) -> tuple[float, ...]:
     zone = _timezone(timezone)
     cursor = datetime.fromtimestamp(_next_tick(now), UTC).astimezone(zone)
     iterator = croniter(expression, cursor)

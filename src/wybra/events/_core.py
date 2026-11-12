@@ -96,10 +96,7 @@ class EventScope:
 
         return EventScope(
             self.segments
-            + tuple(
-                segment.value if isinstance(segment, EventSegment) else segment
-                for segment in segments
-            )
+            + tuple(segment.value if isinstance(segment, EventSegment) else segment for segment in segments)
         )
 
     def matches(self, selector: EventScope) -> bool:
@@ -123,10 +120,7 @@ class EventContext:
 
         return EventContext(
             request_id=self.request_id,
-            segments=(
-                self.segments
-                + tuple(_normalise_segment(segment) for segment in segments)
-            ),
+            segments=(self.segments + tuple(_normalise_segment(segment) for segment in segments)),
         )
 
 
@@ -145,10 +139,7 @@ class Event:
         if isinstance(fixed_scope, EventScope):
             object.__setattr__(self, "scope", fixed_scope)
         else:
-            raise EventScopeError(
-                "Event type "
-                f"{type(self).__name__} must declare an explicit event topic."
-            )
+            raise EventScopeError(f"Event type {type(self).__name__} must declare an explicit event topic.")
         object.__setattr__(self, "context", current_context())
 
 
@@ -276,11 +267,7 @@ class _LazyEventsCapability:
                     if site is None:
                         return _DisabledEventsCapability()
                     settings = EventsSettings.load_settings(site.config)
-                    capability = (
-                        EventDispatcher()
-                        if settings.enabled
-                        else _DisabledEventsCapability()
-                    )
+                    capability = EventDispatcher() if settings.enabled else _DisabledEventsCapability()
                     self._capability = capability
         return capability
 
@@ -329,15 +316,11 @@ class EventDispatcher:
         *,
         history: bool = False,
     ) -> None:
-        if not iscoroutinefunction(handler) and not iscoroutinefunction(
-            handler.__call__
-        ):
+        if not iscoroutinefunction(handler) and not iscoroutinefunction(handler.__call__):
             raise TypeError("Event handlers must be async callables.")
         retained: tuple[Event, ...] = ()
         if history:
-            retained = tuple(
-                event for event in self._history if event.scope.matches(selector)
-            )
+            retained = tuple(event for event in self._history if event.scope.matches(selector))
         self._handlers.append((selector, handler))
         for event in retained:
             await self._dispatch_handler(event, handler, copy_context())
@@ -347,11 +330,7 @@ class EventDispatcher:
         if self._closed:
             return
         self._history.append(event)
-        handlers = tuple(
-            handler
-            for selector, handler in self._handlers
-            if event.scope.matches(selector)
-        )
+        handlers = tuple(handler for selector, handler in self._handlers if event.scope.matches(selector))
         if len(self._pending) >= EVENT_DELIVERY_PENDING_LIMIT:
             self._pending.popleft()
             self._dropped_pending_events += 1
@@ -413,10 +392,7 @@ class EventDispatcher:
         dispatch_started = time.perf_counter()
         handler_failed = False
         for handler in handlers:
-            handler_failed = (
-                await self._dispatch_handler(event, handler, producer_context)
-                or handler_failed
-            )
+            handler_failed = await self._dispatch_handler(event, handler, producer_context) or handler_failed
         _record_dispatch_diagnostic(
             event,
             duration_seconds=time.perf_counter() - dispatch_started,
@@ -722,11 +698,7 @@ def _record_handler_diagnostic(
         failure = error is not None
         record_topic(
             "info" if failure else "debug",
-            (
-                EVT_EVENTS_ERRORS(HANDLER, FAILED)
-                if failure
-                else EVT_EVENTS(HANDLER, SUCCEEDED)
-            ),
+            (EVT_EVENTS_ERRORS(HANDLER, FAILED) if failure else EVT_EVENTS(HANDLER, SUCCEEDED)),
             attributes=attributes,
             duration_seconds=duration_seconds,
             result="error" if failure else "ok",
@@ -756,26 +728,16 @@ def parse_event_scopes(
         raise EventScopeError("At least one event scope must be configured.")
     unknown_roots = sorted({scope.segments[0] for scope in scopes} - _ROOT_SCOPE_NAMES)
     if unknown_roots:
-        raise EventScopeError(
-            "Unknown event scope root: " + ", ".join(unknown_roots) + "."
-        )
+        raise EventScopeError("Unknown event scope root: " + ", ".join(unknown_roots) + ".")
     return scopes
 
 
 def _normalise_segment(value: str) -> str:
     segment = value.strip().lower()
     if not segment or segment == "*" or "." in segment:
-        raise EventScopeError(
-            "Event scope segments must be non-blank dot-free names; wildcards are "
-            "not supported."
-        )
-    if not all(
-        character.isascii() and (character.isalnum() or character == "_")
-        for character in segment
-    ):
-        raise EventScopeError(
-            f"Event scope segment {value!r} must use ASCII letters, digits, or '_'."
-        )
+        raise EventScopeError("Event scope segments must be non-blank dot-free names; wildcards are not supported.")
+    if not all(character.isascii() and (character.isalnum() or character == "_") for character in segment):
+        raise EventScopeError(f"Event scope segment {value!r} must use ASCII letters, digits, or '_'.")
     return segment
 
 

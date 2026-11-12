@@ -72,14 +72,8 @@ def provider_link_path(
     route_path = optional_route_path(request, descriptor.link_route_name)
     if route_path is None or enabled_provider(request, descriptor) is None:
         return None
-    security_path = (
-        optional_route_path(request, "auth:security")
-        or optional_route_path(request, "auth:account")
-        or "/"
-    )
-    query = urlencode(
-        {"return_to": normalise_return_to(return_to, default=security_path)}
-    )
+    security_path = optional_route_path(request, "auth:security") or optional_route_path(request, "auth:account") or "/"
+    query = urlencode({"return_to": normalise_return_to(return_to, default=security_path)})
     return f"{route_path}?{query}"
 
 
@@ -185,10 +179,7 @@ async def user_has_usable_passkey(
 
 
 def local_password_login_usable(user: object) -> bool:
-    return bool(
-        getattr(user, "password_login_enabled", True)
-        and getattr(user, "hashed_password", None)
-    )
+    return bool(getattr(user, "password_login_enabled", True) and getattr(user, "hashed_password", None))
 
 
 def provider_credential_store_from_request(

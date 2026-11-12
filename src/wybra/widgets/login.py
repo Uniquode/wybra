@@ -143,10 +143,7 @@ def _profile_path(request: Any) -> str | None:
     profile_path = _route_path(request, PROFILE_EDIT_ROUTE_NAME)
     if profile_path is None:
         return None
-    return (
-        f"{profile_path}?"
-        f"{urlencode({'return_to': _profile_return_path(request, profile_path)})}"
-    )
+    return f"{profile_path}?{urlencode({'return_to': _profile_return_path(request, profile_path)})}"
 
 
 def _profile_return_path(request: Any, profile_path: str) -> str:

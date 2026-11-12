@@ -22,9 +22,7 @@ class MappingConfigSource:
         source: str = "mapping",
         required: bool = True,
     ) -> None:
-        self._values = {
-            section: dict(section_values) for section, section_values in values.items()
-        }
+        self._values = {section: dict(section_values) for section, section_values in values.items()}
         self._metadata = ConfigSourceMetadata(source=source, required=required)
 
     @property
@@ -81,9 +79,7 @@ class EnvironmentConfigSource:
                     setting,
                 )
             except ValueError as exc:
-                raise ValueError(
-                    f"{setting.name} for {setting.field_name}: {exc}"
-                ) from exc
+                raise ValueError(f"{setting.name} for {setting.field_name}: {exc}") from exc
         return values
 
 
@@ -174,8 +170,7 @@ def _parse_bool(value: str, name: str) -> bool:
 
 def _app_config_sections(app_config: AppConfig) -> Mapping[str, Mapping[str, Any]]:
     values: dict[str, dict[str, Any]] = {
-        section: dict(section_values)
-        for section, section_values in app_config.raw_config.items()
+        section: dict(section_values) for section, section_values in app_config.raw_config.items()
     }
     values.setdefault("app", {}).update(
         {

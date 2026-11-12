@@ -58,9 +58,7 @@ def normalise_csrf_token_previous_secrets(value: str | None) -> tuple[str, ...]:
         raise ValueError("Previous CSRF token secrets must be non-blank.")
     previous_values = tuple(entry.strip() for entry in value.split(","))
     if any(not entry for entry in previous_values):
-        raise ValueError(
-            "Previous CSRF token secrets must be comma-separated and non-blank."
-        )
+        raise ValueError("Previous CSRF token secrets must be comma-separated and non-blank.")
     if len(set(previous_values)) != len(previous_values):
         raise ValueError("Previous CSRF token secrets must be unique.")
     return previous_values

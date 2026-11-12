@@ -19,9 +19,7 @@ def validate_errors(settings: ErrorsValidationSettings) -> ValidationResult:
         errors,
         passed=True,
         description=(
-            "errors module is configured"
-            if "wybra.errors" in settings.modules
-            else "errors module is not configured"
+            "errors module is configured" if "wybra.errors" in settings.modules else "errors module is not configured"
         ),
     )
     return ValidationResult(name="errors", errors=tuple(errors), checks=tuple(checks))

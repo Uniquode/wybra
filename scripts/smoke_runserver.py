@@ -176,16 +176,11 @@ def _wait_for_response(port: int, process: subprocess.Popen[str]) -> None:
     last_error: BaseException | None = None
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise SmokeFailure(
-                f"wybra-runserver exited before responding: "
-                f"returncode={process.returncode}"
-            )
+            raise SmokeFailure(f"wybra-runserver exited before responding: returncode={process.returncode}")
         try:
             status, body = _http_get(port, SMOKE_PATH)
             if status != 200 or body != EXPECTED_BODY:
-                raise SmokeFailure(
-                    f"Unexpected smoke response: status={status} body={body!r}"
-                )
+                raise SmokeFailure(f"Unexpected smoke response: status={status} body={body!r}")
             return
         except (HTTPException, OSError) as exc:
             last_error = exc

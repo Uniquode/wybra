@@ -43,9 +43,7 @@ class MySQLConnection(Protocol):
 
     async def fetchval(self, query: str, *args: object) -> object: ...
 
-    async def fetchall(
-        self, query: str, *args: object
-    ) -> tuple[tuple[object, ...], ...]: ...
+    async def fetchall(self, query: str, *args: object) -> tuple[tuple[object, ...], ...]: ...
 
     async def close(self) -> object: ...
 
@@ -116,8 +114,7 @@ class MySQLProvisioner:
                     (
                         f"Created {self.label} application user: {app_user}"
                         if user_created
-                        else f"Refreshed {self.label} application user password: "
-                        f"{app_user}"
+                        else f"Refreshed {self.label} application user password: {app_user}"
                     ),
                 )
             )
@@ -290,12 +287,8 @@ class MySQLProvisioner:
     ) -> tuple[ProvisioningPhaseResult, ...]:
         _ensure_mysql_compatible_context(context, self.family)
         task = request.task.strip()
-        if task not in {
-            maintenance_task.name for maintenance_task in _MYSQL_MAINTENANCE_TASKS
-        }:
-            raise DatabaseProvisioningConfigurationError(
-                f"Unknown {self.family} maintenance task: {request.task}."
-            )
+        if task not in {maintenance_task.name for maintenance_task in _MYSQL_MAINTENANCE_TASKS}:
+            raise DatabaseProvisioningConfigurationError(f"Unknown {self.family} maintenance task: {request.task}.")
 
         runtime_connection = context.runtime_connection
         service_connection = _service_account_connection(
@@ -323,8 +316,7 @@ class MySQLProvisioner:
                         self.family,
                         "maintenance",
                         "skipped",
-                        f"Repaired {self.label} runtime privileges for user: "
-                        f"{app_user}",
+                        f"Repaired {self.label} runtime privileges for user: {app_user}",
                     ),
                 )
             if task == TORTOISE_MIGRATIONS_TASK.name:
@@ -337,9 +329,7 @@ class MySQLProvisioner:
                         label=self.label,
                     ),
                 )
-            raise DatabaseProvisioningConfigurationError(
-                f"Unknown {self.family} maintenance task: {request.task}."
-            )
+            raise DatabaseProvisioningConfigurationError(f"Unknown {self.family} maintenance task: {request.task}.")
         finally:
             await maintenance.close()
 
@@ -402,8 +392,7 @@ class MySQLProvisioner:
             await _execute(
                 connection,
                 render_sql(
-                    t"ALTER USER {trusted_sql(account)} "
-                    t"IDENTIFIED BY {param(app_password)}",
+                    t"ALTER USER {trusted_sql(account)} IDENTIFIED BY {param(app_password)}",
                     dialect="mysql",
                     quote_identifier=quote_mysql_identifier,
                 ),
@@ -414,8 +403,7 @@ class MySQLProvisioner:
         await _execute(
             connection,
             render_sql(
-                t"CREATE USER {trusted_sql(account)} IDENTIFIED BY "
-                t"{param(app_password)}",
+                t"CREATE USER {trusted_sql(account)} IDENTIFIED BY {param(app_password)}",
                 dialect="mysql",
                 quote_identifier=quote_mysql_identifier,
             ),
@@ -433,8 +421,7 @@ class MySQLProvisioner:
 
     def _user_exists_statement(self, app_user: str) -> RenderedSql:
         return render_sql(
-            t"SELECT COUNT(*) FROM mysql.user "
-            t"WHERE User = {param(app_user)} AND Host = {param(_MYSQL_ACCOUNT_HOST)}",
+            t"SELECT COUNT(*) FROM mysql.user WHERE User = {param(app_user)} AND Host = {param(_MYSQL_ACCOUNT_HOST)}",
             dialect="mysql",
             quote_identifier=quote_mysql_identifier,
         )
@@ -577,9 +564,7 @@ class _DriverMySQLConnection:
             return next(iter(row.values()), None)
         return row[0]
 
-    async def fetchall(
-        self, query: str, *args: object
-    ) -> tuple[tuple[object, ...], ...]:
+    async def fetchall(self, query: str, *args: object) -> tuple[tuple[object, ...], ...]:
         async with self._connection.cursor() as cursor:
             await cursor.execute(query, args or None)
             rows = await cursor.fetchall()
@@ -662,8 +647,7 @@ async def _database_exists(
     count = await _fetchval(
         connection,
         render_sql(
-            t"SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA "
-            t"WHERE SCHEMA_NAME = {param(database)}",
+            t"SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = {param(database)}",
             dialect="mysql",
             quote_identifier=quote_mysql_identifier,
         ),
@@ -682,8 +666,7 @@ async def _repair_privileges(
     await _execute(
         connection,
         render_sql(
-            t"GRANT SELECT, INSERT, UPDATE, DELETE ON {ident(database)}.* "
-            t"TO {trusted_sql(_account_name(app_user))}",
+            t"GRANT SELECT, INSERT, UPDATE, DELETE ON {ident(database)}.* TO {trusted_sql(_account_name(app_user))}",
             dialect="mysql",
             quote_identifier=quote_mysql_identifier,
         ),
@@ -722,8 +705,7 @@ async def _migration_state_result(
         await _fetchval(
             connection,
             render_sql(
-                t"SELECT COUNT(*) FROM "
-                t"{ident(database)}.{ident(_MIGRATION_RECORDER_TABLE)}",
+                t"SELECT COUNT(*) FROM {ident(database)}.{ident(_MIGRATION_RECORDER_TABLE)}",
                 dialect="mysql",
                 quote_identifier=quote_mysql_identifier,
             ),
@@ -758,9 +740,7 @@ def _grant_scope_from_show_grants(
 
     scope = scope_match.group(1).strip()
     if scope == "*.*":
-        return (
-            "target" if grant.upper().startswith("GRANT USAGE ON *.*") else "external"
-        )
+        return "target" if grant.upper().startswith("GRANT USAGE ON *.*") else "external"
 
     if scope.startswith(f"{quote_mysql_identifier(target_database)}."):
         return "target"
@@ -776,9 +756,7 @@ async def _execute(
     try:
         return await connection.execute(statement.statement, *statement.parameters)
     except Exception as exc:
-        raise DatabaseProvisioningOperationError(
-            f"{label} provisioning statement failed."
-        ) from exc
+        raise DatabaseProvisioningOperationError(f"{label} provisioning statement failed.") from exc
 
 
 async def _fetchval(
@@ -790,9 +768,7 @@ async def _fetchval(
     try:
         return await connection.fetchval(statement.statement, *statement.parameters)
     except Exception as exc:
-        raise DatabaseProvisioningOperationError(
-            f"{label} provisioning query failed."
-        ) from exc
+        raise DatabaseProvisioningOperationError(f"{label} provisioning query failed.") from exc
 
 
 async def _fetchall(
@@ -804,9 +780,7 @@ async def _fetchall(
     try:
         return await connection.fetchall(statement.statement, *statement.parameters)
     except Exception as exc:
-        raise DatabaseProvisioningOperationError(
-            f"{label} provisioning query failed."
-        ) from exc
+        raise DatabaseProvisioningOperationError(f"{label} provisioning query failed.") from exc
 
 
 def _ensure_mysql_compatible_context(
@@ -826,9 +800,7 @@ def _service_account_connection(
 ) -> ResolvedDatabaseConnection:
     connection = context.provisioning_connection
     if connection is None:
-        raise DatabaseProvisioningConfigurationError(
-            f"Database {phase} requires service-account credentials."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Database {phase} requires service-account credentials.")
     _required_credential(
         connection,
         "user",

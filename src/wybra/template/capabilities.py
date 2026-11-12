@@ -28,9 +28,7 @@ from wybra.template.templating import build_template_loader
 
 @runtime_checkable
 class TemplateCapability(Protocol):
-    async def render_template(
-        self, template_name: str, context: dict[str, Any]
-    ) -> str: ...
+    async def render_template(self, template_name: str, context: dict[str, Any]) -> str: ...
 
     async def render_page(
         self,
@@ -105,9 +103,7 @@ class DefaultTemplateCapability:
     @observe(template_event)
     async def render_template(self, template_name: str, context: dict[str, Any]) -> str:
         with template_render_diagnostics(template_name):
-            return await self.environment.get_template(template_name).render_async(
-                context
-            )
+            return await self.environment.get_template(template_name).render_async(context)
 
     async def render_page(
         self,
@@ -183,9 +179,7 @@ class DefaultTemplateCapability:
             nonlocal capability
             if capability is None:
                 if self.assets is None:
-                    raise RuntimeError(
-                        "Static asset capability proxy is not configured."
-                    )
+                    raise RuntimeError("Static asset capability proxy is not configured.")
                 capability = await require_static_asset_capability(self.assets)
             return capability.url(logical_path)
 

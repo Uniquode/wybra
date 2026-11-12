@@ -48,10 +48,7 @@ def register_messages_middleware(site: Site) -> None:
     ) -> Response:
         nonlocal last_cleanup_at
         now = time.time()
-        if (
-            last_cleanup_at is None
-            or now - last_cleanup_at >= MESSAGES_CLEANUP_INTERVAL_SECONDS
-        ):
+        if last_cleanup_at is None or now - last_cleanup_at >= MESSAGES_CLEANUP_INTERVAL_SECONDS:
             capability = site.optional_capability(MessagesCapability)
             if capability is not None:
                 last_cleanup_at = now

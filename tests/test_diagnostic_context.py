@@ -53,10 +53,7 @@ async def test_concurrent_diagnostic_contexts_do_not_mix_events() -> None:
         task_group.start_soon(collect, "select 1")
         task_group.start_soon(collect, "select 2")
 
-    statements = {
-        snapshot.events[0]["attributes"]["statement"]
-        for snapshot in capability.snapshots(EVT_SQL)
-    }
+    statements = {snapshot.events[0]["attributes"]["statement"] for snapshot in capability.snapshots(EVT_SQL)}
     assert statements == {"select 1", "select 2"}
 
 

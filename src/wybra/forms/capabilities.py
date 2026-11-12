@@ -58,9 +58,7 @@ class DefaultFormsCapability:
 def forms_provider_configured(modules: tuple[str, ...]) -> bool:
     if "wybra.forms" in modules:
         return True
-    return any(
-        _module_provides_forms_capability(module_name) for module_name in modules
-    )
+    return any(_module_provides_forms_capability(module_name) for module_name in modules)
 
 
 @cache

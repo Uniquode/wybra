@@ -124,11 +124,7 @@ class RedisStreamCache:
             return await client.hget(keys.consumers, consumer)
 
         position = await self.runtime.feature_call(consumer_position)
-        after = (
-            None
-            if position is None
-            else _provider_position(position, label="consumer position")
-        )
+        after = None if position is None else _provider_position(position, label="consumer position")
         return await self.read(owner, stream, after=after, limit=limit)
 
     async def acknowledge(
@@ -156,17 +152,11 @@ class RedisStreamCache:
 
         result = _integer(await self.runtime.feature_call(acknowledge_position))
         if result == 0:
-            raise CacheConflictError(
-                f"Stream position {position_value} does not exist in {stream!r}."
-            )
+            raise CacheConflictError(f"Stream position {position_value} does not exist in {stream!r}.")
         if result == -1:
-            raise CacheConflictError(
-                f"Stream consumer {consumer!r} cannot move backwards."
-            )
+            raise CacheConflictError(f"Stream consumer {consumer!r} cannot move backwards.")
         if result == -2:
-            raise CacheFeatureError(
-                "The Redis stream cache has reached its configured consumer capacity."
-            )
+            raise CacheFeatureError("The Redis stream cache has reached its configured consumer capacity.")
         if result != 1:
             raise CacheFeatureError("Redis stream returned an invalid acknowledgement.")
 
@@ -189,9 +179,7 @@ class RedisStreamCache:
 
         result = _integer(await self.runtime.feature_call(forget_position))
         if result not in {0, 1}:
-            raise CacheFeatureError(
-                "Redis stream returned an invalid consumer release."
-            )
+            raise CacheFeatureError("Redis stream returned an invalid consumer release.")
         return result == 1
 
     def _keys(self, owner: str, stream: str) -> _StreamKeys:
@@ -263,9 +251,7 @@ def _read_result(
         return ()
     if status == -1:
         assert after is not None
-        raise CachePositionExpiredError(
-            f"Stream position {after} is no longer retained."
-        )
+        raise CachePositionExpiredError(f"Stream position {after} is no longer retained.")
     if status != 1:
         raise CacheFeatureError("Redis stream returned an invalid replay result.")
     return _records(value[1:], stream_name=stream_name)
@@ -302,16 +288,12 @@ def _integer(value: object) -> int:
         try:
             value = value.decode("ascii")
         except UnicodeDecodeError as exc:
-            raise CacheFeatureError(
-                "Redis stream returned an invalid integer."
-            ) from exc
+            raise CacheFeatureError("Redis stream returned an invalid integer.") from exc
     if isinstance(value, str):
         try:
             value = int(value)
         except ValueError as exc:
-            raise CacheFeatureError(
-                "Redis stream returned an invalid integer."
-            ) from exc
+            raise CacheFeatureError("Redis stream returned an invalid integer.") from exc
     if not isinstance(value, int):
         raise CacheFeatureError("Redis stream returned an invalid integer.")
     return value

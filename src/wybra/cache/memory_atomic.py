@@ -145,9 +145,7 @@ class InMemoryAtomicCache:
             elif isinstance(entry.value, int):
                 value = entry.value + amount
             else:
-                raise CacheConflictError(
-                    "The requested counter key contains an atomic byte value."
-                )
+                raise CacheConflictError("The requested counter key contains an atomic byte value.")
             revision = self._revision()
             self._entries[storage_key] = _AtomicEntry(
                 value,
@@ -167,15 +165,11 @@ class InMemoryAtomicCache:
         if storage_key in self._entries:
             return
         now = self.clock()
-        expired = [
-            key for key, entry in self._entries.items() if entry.expires_at <= now
-        ]
+        expired = [key for key, entry in self._entries.items() if entry.expires_at <= now]
         for key in expired:
             self._entries.pop(key, None)
         if len(self._entries) >= self.max_entries:
-            raise CacheFeatureError(
-                "The in-memory atomic cache has reached its configured entry capacity."
-            )
+            raise CacheFeatureError("The in-memory atomic cache has reached its configured entry capacity.")
 
     def _revision(self) -> CacheRevision:
         self._next_revision += 1
@@ -183,9 +177,7 @@ class InMemoryAtomicCache:
 
     def bind_lease_fence(self, leases: InMemoryLeaseCache) -> None:
         if self.leases is not None and self.leases is not leases:
-            raise CacheFeatureError(
-                "Atomic cache lease fencing is already bound to another lease cache."
-            )
+            raise CacheFeatureError("Atomic cache lease fencing is already bound to another lease cache.")
         self.leases = leases
 
     @asynccontextmanager
@@ -195,9 +187,7 @@ class InMemoryAtomicCache:
                 yield
             return
         if self.leases is None:
-            raise CacheFeatureError(
-                "Atomic cache does not support lease-fenced writes."
-            )
+            raise CacheFeatureError("Atomic cache does not support lease-fenced writes.")
         async with self.leases.hold_fence(lease) as validate:
             async with self._lock:
                 validate(lease)

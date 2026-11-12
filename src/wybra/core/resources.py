@@ -73,9 +73,7 @@ def _logical_path_parts(logical_path: str) -> tuple[str, ...]:
 
     parts = tuple(part for part in path.parts if part != ".")
     if not parts or any(part == ".." for part in parts):
-        raise ResourcePathError(
-            f"Resource path must stay within package: {logical_path}"
-        )
+        raise ResourcePathError(f"Resource path must stay within package: {logical_path}")
 
     return parts
 

@@ -4,16 +4,10 @@ ProviderOAuthPurpose = Literal["login", "link"]
 
 PROVIDER_OAUTH_LOGIN_PURPOSE: Final[ProviderOAuthPurpose] = "login"
 PROVIDER_OAUTH_LINK_PURPOSE: Final[ProviderOAuthPurpose] = "link"
-PROVIDER_OAUTH_PURPOSES: Final = frozenset(
-    (PROVIDER_OAUTH_LOGIN_PURPOSE, PROVIDER_OAUTH_LINK_PURPOSE)
-)
+PROVIDER_OAUTH_PURPOSES: Final = frozenset((PROVIDER_OAUTH_LOGIN_PURPOSE, PROVIDER_OAUTH_LINK_PURPOSE))
 
-PROVIDER_EMAIL_MATCH_USER_UNRESOLVED_REASON: Final = (
-    "Provider email-match user could not be resolved."
-)
-PROVIDER_LINKING_USER_UNAVAILABLE_REASON: Final = (
-    "Linking user is inactive or unavailable."
-)
+PROVIDER_EMAIL_MATCH_USER_UNRESOLVED_REASON: Final = "Provider email-match user could not be resolved."
+PROVIDER_LINKING_USER_UNAVAILABLE_REASON: Final = "Linking user is inactive or unavailable."
 
 
 def is_provider_oauth_purpose(value: object) -> TypeGuard[ProviderOAuthPurpose]:

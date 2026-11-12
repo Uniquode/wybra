@@ -38,9 +38,7 @@ class CacheExtension(Extension):
         super().__init__(environment)
         self.cache_provider: CacheProvider | None = None
         self.cache_key_normalisers: dict[type[object], CacheKeyNormaliser] = {}
-        self._template_fingerprints: WeakKeyDictionary[Template, str] = (
-            WeakKeyDictionary()
-        )
+        self._template_fingerprints: WeakKeyDictionary[Template, str] = WeakKeyDictionary()
         cast(dict[str, Any], environment.globals)["cache_key"] = self.cache_key
 
     def cache_key(
@@ -84,9 +82,7 @@ class CacheExtension(Extension):
         caller: FragmentCaller,
     ) -> str:
         if not isinstance(fragment_name, str) or not fragment_name:
-            raise TemplateRuntimeError(
-                "Cache fragment names must be non-empty strings."
-            )
+            raise TemplateRuntimeError("Cache fragment names must be non-empty strings.")
         try:
             cache_ttl = validate_cache_ttl(ttl)
         except ValueError as exc:
@@ -242,9 +238,7 @@ def _validate_normalisers(
     validated: dict[type[object], CacheKeyNormaliser] = {}
     for value_type, normaliser in normalisers.items():
         if not isinstance(value_type, type) or not callable(normaliser):
-            raise TypeError(
-                "Cache-key normalisers must map types to callable normalisers."
-            )
+            raise TypeError("Cache-key normalisers must map types to callable normalisers.")
         validated[value_type] = normaliser
     return validated
 

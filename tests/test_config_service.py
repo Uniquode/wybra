@@ -72,9 +72,7 @@ class RaisingSource:
 
 
 def test_config_service_loads_required_sources() -> None:
-    service = ConfigService(
-        [MappingConfigSource({"identity": {"totp_mode": "required"}})]
-    )
+    service = ConfigService([MappingConfigSource({"identity": {"totp_mode": "required"}})])
 
     config = service.get_config("identity")
 
@@ -343,9 +341,7 @@ def test_environment_source_invalid_bool_records_diagnostic() -> None:
     assert len(service.diagnostics) == 1
     diagnostic = service.diagnostics[0]
     assert diagnostic.code == "environment_config_error"
-    assert diagnostic.message == (
-        "APP_DEBUG for debug: APP_DEBUG must be a boolean value."
-    )
+    assert diagnostic.message == ("APP_DEBUG for debug: APP_DEBUG must be a boolean value.")
 
 
 def test_required_environment_source_error_fails_loading() -> None:
@@ -440,9 +436,7 @@ def test_optional_file_source_diagnostic_includes_source_location(
     config_path = tmp_path / "app.toml"
     config_path.write_text("[app\n", encoding="utf-8")
 
-    service = ConfigService(
-        [FileConfigSource(config_path, project_root=tmp_path, required=False)]
-    )
+    service = ConfigService([FileConfigSource(config_path, project_root=tmp_path, required=False)])
 
     assert len(service.diagnostics) == 1
     diagnostic = service.diagnostics[0]
@@ -729,9 +723,7 @@ def test_base_settings_infers_single_config_section() -> None:
 
         enabled: bool = False
 
-    settings = ExampleSettings.load_settings(
-        ConfigService(config_defs=(ExampleSettings.module_config,))
-    )
+    settings = ExampleSettings.load_settings(ConfigService(config_defs=(ExampleSettings.module_config,)))
 
     assert settings == ExampleSettings(enabled=True)
 
@@ -750,9 +742,7 @@ def test_base_settings_requires_section_for_multi_section_config_def() -> None:
 
     with pytest.raises(
         ConfigDefinitionError,
-        match=(
-            "config_section must be set when module_config declares multiple sections"
-        ),
+        match=("config_section must be set when module_config declares multiple sections"),
     ):
         ExampleSettings.load_settings({"name": "configured"})
 
@@ -804,9 +794,7 @@ def test_base_settings_reports_invalid_module_config_type() -> None:
 def test_base_settings_section_values_does_not_leak_non_mapping_source_value() -> None:
     @dataclass(frozen=True, slots=True)
     class ExampleSettings(BaseSettings):
-        module_config = ConfigDef(
-            {"example": ConfigGroup(fields=(ConfigField(name="secret"),))}
-        )
+        module_config = ConfigDef({"example": ConfigGroup(fields=(ConfigField(name="secret"),))})
 
         secret: str = ""
 
@@ -823,9 +811,7 @@ def test_base_settings_section_values_does_not_leak_non_mapping_source_value() -
 def test_base_settings_section_values_does_not_leak_non_mapping_section() -> None:
     @dataclass(frozen=True, slots=True)
     class ExampleSettings(BaseSettings):
-        module_config = ConfigDef(
-            {"example": ConfigGroup(fields=(ConfigField(name="secret"),))}
-        )
+        module_config = ConfigDef({"example": ConfigGroup(fields=(ConfigField(name="secret"),))})
 
         secret: str = ""
 
@@ -846,11 +832,7 @@ def test_base_settings_transform_errors_do_not_leak_raw_values() -> None:
     @dataclass(frozen=True, slots=True)
     class ExampleSettings(BaseSettings):
         module_config = ConfigDef(
-            {
-                "example": ConfigGroup(
-                    fields=(ConfigField(name="secret", transform=reject_secret),)
-                )
-            }
+            {"example": ConfigGroup(fields=(ConfigField(name="secret", transform=reject_secret),))}
         )
 
         secret: str = ""
@@ -1002,9 +984,7 @@ def test_config_def_rejects_conflicting_field_transforms() -> None:
         ConfigService(config_defs=(first, second))
 
 
-def test_module_config_def_is_discovered_from_module_root(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_module_config_def_is_discovered_from_module_root(tmp_path: Path, monkeypatch) -> None:
     module_root = tmp_path / "example_module"
     module_root.mkdir()
     module_root.joinpath("__init__.py").write_text(
@@ -1018,9 +998,7 @@ def test_module_config_def_is_discovered_from_module_root(
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    service = ConfigService(
-        [MappingConfigSource({"app": {"modules": ("example_module",)}})]
-    )
+    service = ConfigService([MappingConfigSource({"app": {"modules": ("example_module",)}})])
 
     assert service.get_config("example") == {"enabled": True}
 

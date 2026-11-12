@@ -58,12 +58,8 @@ from .shared import (
     logger,
 )
 
-TOTP_CONFIRMATION_MESSAGE = (
-    "Confirm this action with your password, authenticator code, or a recovery code."
-)
-TOTP_LAST_METHOD_MESSAGE = (
-    "Add another sign-in method before disabling authenticator verification."
-)
+TOTP_CONFIRMATION_MESSAGE = "Confirm this action with your password, authenticator code, or a recovery code."
+TOTP_LAST_METHOD_MESSAGE = "Add another sign-in method before disabling authenticator verification."
 
 
 @account_router.api_route(
@@ -89,9 +85,7 @@ async def totp_setup(request: Request) -> Response:
             command_text(form, "return_to"),
             default=return_to,
         )
-        setup_challenge_id = (
-            command_text(form, "setup_challenge_id") or setup_challenge_id
-        )
+        setup_challenge_id = command_text(form, "setup_challenge_id") or setup_challenge_id
         setup_code = command_text(form, "setup_totp_code").strip()
 
     scope_factory = _persistence_scope_from_request(request)
@@ -111,16 +105,11 @@ async def totp_setup(request: Request) -> Response:
                     default=return_to,
                 )
 
-        challenge_user = (
-            await _load_user_by_id(scope, setup_challenge.user_id)
-            if setup_challenge is not None
-            else None
-        )
+        challenge_user = await _load_user_by_id(scope, setup_challenge.user_id) if setup_challenge is not None else None
         if authenticated_user is not None and challenge_user is not None:
             if str(authenticated_user.id) != str(challenge_user.id):
                 logger.warning(
-                    "TOTP setup challenge user mismatch: "
-                    "authenticated_user_id=%s challenge_user_id=%s challenge_id=%s",
+                    "TOTP setup challenge user mismatch: authenticated_user_id=%s challenge_user_id=%s challenge_id=%s",
                     log_safe_uuid(authenticated_user.id),
                     log_safe_uuid(challenge_user.id),
                     log_safe_uuid(setup_challenge_id),
@@ -205,9 +194,7 @@ async def totp_setup(request: Request) -> Response:
                 setup_challenge_id=setup_challenge_id or "",
                 setup_totp_secret=setup_totp_secret,
                 setup_totp_uri=totp_uri,
-                setup_error=(
-                    setup_challenge_error or TOTP_SETUP_PAGE_MESSAGES["invalid_code"]
-                ),
+                setup_error=(setup_challenge_error or TOTP_SETUP_PAGE_MESSAGES["invalid_code"]),
             )
 
         await store.activate_totp_credential(str(credential.id))
@@ -411,9 +398,7 @@ async def _totp_action_confirmation_page(
             "single_confirmation_field": single_confirmation_field,
             "form": SecurityAssertionCommandForm(),
             "recovery_codes": recovery_codes,
-            "recovery_codes_download_href": recovery_codes_download_href(
-                recovery_codes
-            ),
+            "recovery_codes_download_href": recovery_codes_download_href(recovery_codes),
             "recovery_codes_download_filename": RECOVERY_CODES_DOWNLOAD_FILENAME,
         },
         status_code=status_code,
@@ -437,9 +422,5 @@ async def reset_totp(request: Request) -> Response:
         await store.clear_totp_credentials(str(user.id))
 
     options = _identity_options(request)
-    redirect_to = (
-        "/account/totp/setup"
-        if options.totp_mode == TOTP_REQUIRED and user.is_verified
-        else "/account"
-    )
+    redirect_to = "/account/totp/setup" if options.totp_mode == TOTP_REQUIRED and user.is_verified else "/account"
     return RedirectResponse(url=redirect_to, status_code=303)

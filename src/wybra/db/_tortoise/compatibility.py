@@ -19,9 +19,7 @@ def ensure_supported_tortoise_version() -> None:
     try:
         installed = version("tortoise-orm")
     except PackageNotFoundError as exc:  # pragma: no cover - required dependency
-        raise TortoiseCompatibilityError(
-            "Wybra database instrumentation requires tortoise-orm."
-        ) from exc
+        raise TortoiseCompatibilityError("Wybra database instrumentation requires tortoise-orm.") from exc
     parsed = _parse_version(installed)
     if not _MINIMUM_VERSION <= parsed < _MAXIMUM_VERSION:
         raise TortoiseCompatibilityError(

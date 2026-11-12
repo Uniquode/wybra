@@ -118,8 +118,7 @@ class PostgreSQLProvisioner:
                 await _execute(
                     maintenance,
                     render_sql(
-                        t"CREATE DATABASE {ident(target_database)} "
-                        t"OWNER {ident(service_user)}",
+                        t"CREATE DATABASE {ident(target_database)} OWNER {ident(service_user)}",
                         dialect="postgresql",
                     ),
                 )
@@ -314,12 +313,8 @@ class PostgreSQLProvisioner:
         request: DatabaseMaintenanceRequest,
     ) -> tuple[ProvisioningPhaseResult, ...]:
         task = request.task.strip()
-        if task not in {
-            maintenance_task.name for maintenance_task in _POSTGRESQL_MAINTENANCE_TASKS
-        }:
-            raise DatabaseProvisioningConfigurationError(
-                f"Unknown postgresql maintenance task: {request.task}."
-            )
+        if task not in {maintenance_task.name for maintenance_task in _POSTGRESQL_MAINTENANCE_TASKS}:
+            raise DatabaseProvisioningConfigurationError(f"Unknown postgresql maintenance task: {request.task}.")
 
         runtime_connection = context.runtime_connection
         service_connection = _service_account_connection(
@@ -388,9 +383,7 @@ class PostgreSQLProvisioner:
         connection: BaseDBAsyncClient,
         table_names: tuple[str, ...],
     ) -> None:
-        quoted_tables = ", ".join(
-            self.quote_identifier(table_name) for table_name in table_names
-        )
+        quoted_tables = ", ".join(self.quote_identifier(table_name) for table_name in table_names)
         statement = render_sql(
             t"TRUNCATE TABLE {trusted_sql(quoted_tables)} RESTART IDENTITY CASCADE",
             dialect="postgresql",
@@ -413,9 +406,7 @@ class PostgreSQLProvisioner:
         except DatabaseProvisioningConfigurationError:
             raise
         except Exception as exc:
-            raise DatabaseProvisioningOperationError(
-                f"Failed to connect to PostgreSQL database: {database}"
-            ) from exc
+            raise DatabaseProvisioningOperationError(f"Failed to connect to PostgreSQL database: {database}") from exc
 
 
 async def _connect_asyncpg(credentials: Mapping[str, object]) -> PostgreSQLConnection:
@@ -434,9 +425,7 @@ async def _database_exists(connection: PostgreSQLConnection, database: str) -> b
     value = await _fetchval(
         connection,
         render_sql(
-            t"SELECT EXISTS ("
-            t"SELECT 1 FROM pg_database WHERE datname = {param(database)}"
-            t")",
+            t"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = {param(database)})",
             dialect="postgresql",
         ),
     )
@@ -458,10 +447,7 @@ async def _schema_exists(connection: PostgreSQLConnection, schema: str) -> bool:
     value = await _fetchval(
         connection,
         render_sql(
-            t"SELECT EXISTS ("
-            t"SELECT 1 FROM information_schema.schemata "
-            t"WHERE schema_name = {param(schema)}"
-            t")",
+            t"SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = {param(schema)})",
             dialect="postgresql",
         ),
     )
@@ -476,8 +462,7 @@ async def _ensure_database_owner(
     current_owner = await _fetchval(
         connection,
         render_sql(
-            t"SELECT pg_catalog.pg_get_userbyid(datdba) "
-            t"FROM pg_database WHERE datname = {param(database)}",
+            t"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = {param(database)}",
             dialect="postgresql",
         ),
     )
@@ -510,11 +495,7 @@ async def _ensure_application_role(
             )
         return False
 
-    password_clause = (
-        f" PASSWORD {_postgresql_string_literal(app_password)}"
-        if app_password is not None
-        else ""
-    )
+    password_clause = f" PASSWORD {_postgresql_string_literal(app_password)}" if app_password is not None else ""
     await _execute_raw(
         connection,
         f"CREATE ROLE {quote_sql_identifier(app_user)} LOGIN{password_clause}",
@@ -582,8 +563,7 @@ async def _ensure_schema(
     current_owner = await _fetchval(
         connection,
         render_sql(
-            t"SELECT schema_owner FROM information_schema.schemata "
-            t"WHERE schema_name = {param(schema)}",
+            t"SELECT schema_owner FROM information_schema.schemata WHERE schema_name = {param(schema)}",
             dialect="postgresql",
         ),
     )
@@ -616,13 +596,11 @@ async def _repair_privileges(
             dialect="postgresql",
         ),
         render_sql(
-            t"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES "
-            t"IN SCHEMA {ident(schema)} TO {ident(app_user)}",
+            t"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {ident(schema)} TO {ident(app_user)}",
             dialect="postgresql",
         ),
         render_sql(
-            t"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES "
-            t"IN SCHEMA {ident(schema)} TO {ident(app_user)}",
+            t"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {ident(schema)} TO {ident(app_user)}",
             dialect="postgresql",
         ),
         render_sql(
@@ -691,27 +669,21 @@ async def _execute(connection: PostgreSQLConnection, statement: RenderedSql) -> 
     try:
         return await connection.execute(statement.statement, *statement.parameters)
     except Exception as exc:
-        raise DatabaseProvisioningOperationError(
-            "PostgreSQL provisioning statement failed."
-        ) from exc
+        raise DatabaseProvisioningOperationError("PostgreSQL provisioning statement failed.") from exc
 
 
 async def _execute_raw(connection: PostgreSQLConnection, statement: str) -> object:
     try:
         return await connection.execute(statement)
     except Exception as exc:
-        raise DatabaseProvisioningOperationError(
-            "PostgreSQL provisioning statement failed."
-        ) from exc
+        raise DatabaseProvisioningOperationError("PostgreSQL provisioning statement failed.") from exc
 
 
 async def _fetchval(connection: PostgreSQLConnection, statement: RenderedSql) -> object:
     try:
         return await connection.fetchval(statement.statement, *statement.parameters)
     except Exception as exc:
-        raise DatabaseProvisioningOperationError(
-            "PostgreSQL provisioning query failed."
-        ) from exc
+        raise DatabaseProvisioningOperationError("PostgreSQL provisioning query failed.") from exc
 
 
 def _ensure_postgresql_context(context: ProvisioningContext) -> None:
@@ -728,9 +700,7 @@ def _service_account_connection(
 ) -> ResolvedDatabaseConnection:
     connection = context.provisioning_connection
     if connection is None:
-        raise DatabaseProvisioningConfigurationError(
-            f"Database {phase} requires service-account credentials."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Database {phase} requires service-account credentials.")
     _required_credential(
         connection,
         "user",
@@ -764,9 +734,7 @@ def _schema_name(connection: ResolvedDatabaseConnection) -> str:
         return _DEFAULT_POSTGRESQL_SCHEMA
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise DatabaseProvisioningConfigurationError(
-        "PostgreSQL schema must be a non-blank string."
-    )
+    raise DatabaseProvisioningConfigurationError("PostgreSQL schema must be a non-blank string.")
 
 
 def _required_credential(
@@ -789,9 +757,7 @@ def _optional_credential(
         return None
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise DatabaseProvisioningConfigurationError(
-        f"PostgreSQL credential {name} must be a non-blank string."
-    )
+    raise DatabaseProvisioningConfigurationError(f"PostgreSQL credential {name} must be a non-blank string.")
 
 
 def _ensure_destroy_confirmed(
@@ -812,8 +778,7 @@ def _ensure_lifecycle_database_is_distinct(
 ) -> None:
     if service_database == target_database:
         raise DatabaseProvisioningConfigurationError(
-            "PostgreSQL lifecycle must connect through a different "
-            "service-account database."
+            "PostgreSQL lifecycle must connect through a different service-account database."
         )
 
 
@@ -825,21 +790,15 @@ def _normalise_count(value: object) -> int:
     if value is None:
         return 0
     if isinstance(value, bool):
-        raise DatabaseProvisioningOperationError(
-            "PostgreSQL migration recorder count was invalid."
-        )
+        raise DatabaseProvisioningOperationError("PostgreSQL migration recorder count was invalid.")
     if isinstance(value, int):
         return value
     if not isinstance(value, str):
-        raise DatabaseProvisioningOperationError(
-            "PostgreSQL migration recorder count was invalid."
-        )
+        raise DatabaseProvisioningOperationError("PostgreSQL migration recorder count was invalid.")
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise DatabaseProvisioningOperationError(
-            "PostgreSQL migration recorder count was invalid."
-        ) from exc
+        raise DatabaseProvisioningOperationError("PostgreSQL migration recorder count was invalid.") from exc
 
 
 def _result(

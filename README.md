@@ -34,8 +34,11 @@ Repository: <https://github.com/Uniquode/wybra>
 - `wybra.cache`: optional named cache registry with a common byte-store
   baseline, NATS JetStream and Redis-backed baseline providers, typed advanced
   memory features, and Redis atomic, counter, lease, fencing, durable
-  work-queue, durable stream, live pub/sub, revisioned schedule, and
+  work-queue, durable stream, revisioned schedule, and
   provider-calibrated time support, including Jinja template-fragment caching.
+- `wybra.streams`: optional provider-neutral, live opaque-byte fan-out through
+  process memory, Redis, or core NATS, with independently configured provider
+  lifecycle and no durable delivery guarantee.
 - `wybra.forms`: form settings, CSRF protection, request form parsing, form
   safety helpers, form response finalisation, and forms validation.
 - `wybra.security`: web-facing security policy, COOP/security headers, CORS
@@ -79,6 +82,9 @@ check commands, SQLite URL guidance, and optional OS-service boundaries.
 
 See [`docs/CACHE.md`](docs/CACHE.md) for cache configuration and safe Jinja
 fragment-caching guidance.
+
+See [`docs/STREAMS.md`](docs/STREAMS.md) for independently configured live
+publication and subscription.
 
 See [`docs/SCOPES.md`](docs/SCOPES.md) for declarative model, view, and endpoint
 scope policy, optional auth integration, discovery, and catalogue validation.

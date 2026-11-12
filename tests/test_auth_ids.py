@@ -22,7 +22,4 @@ def test_log_safe_uuid_returns_single_line_identifier() -> None:
 
 
 def test_log_safe_line_strips_line_breaks() -> None:
-    assert (
-        log_safe_line("first\r\nsecond\nthird\rfourth\tunchanged")
-        == "firstsecondthirdfourth\tunchanged"
-    )
+    assert log_safe_line("first\r\nsecond\nthird\rfourth\tunchanged") == "firstsecondthirdfourth\tunchanged"

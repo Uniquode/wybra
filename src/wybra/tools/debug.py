@@ -77,9 +77,7 @@ class JsonRpcConnection:
         if type(response_id) is not int:
             raise DebugProtocolError("Received an invalid JSON-RPC response.")
         if response_id != request_id:
-            raise DebugProtocolError(
-                "Received a response with an unexpected request ID."
-            )
+            raise DebugProtocolError("Received a response with an unexpected request ID.")
         has_result = "result" in response
         has_error = "error" in response
         if has_result == has_error:
@@ -95,13 +93,9 @@ class JsonRpcConnection:
         while True:
             raw, message = await self._receive_message()
             if message.get("method") != "diagnostics.notification":
-                raise DebugProtocolError(
-                    "Received an unexpected JSON-RPC notification."
-                )
+                raise DebugProtocolError("Received an unexpected JSON-RPC notification.")
             if not isinstance(message.get("params"), dict):
-                raise DebugProtocolError(
-                    "Received a diagnostics notification without parameters."
-                )
+                raise DebugProtocolError("Received a diagnostics notification without parameters.")
             yield raw
 
     async def _receive_message(self) -> tuple[str, dict[str, object]]:
@@ -110,9 +104,7 @@ class JsonRpcConnection:
             try:
                 raw = raw.decode("utf-8")
             except UnicodeDecodeError as exc:
-                raise DebugProtocolError(
-                    "Received a non-UTF-8 binary WebSocket message."
-                ) from exc
+                raise DebugProtocolError("Received a non-UTF-8 binary WebSocket message.") from exc
         try:
             message = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -144,9 +136,7 @@ async def _connect(url: str) -> AsyncIterator[JsonRpcConnection]:
         await websocket.close()
 
 
-def _validate_websocket_url(
-    _ctx: click.Context, _param: click.Parameter, value: str
-) -> str:
+def _validate_websocket_url(_ctx: click.Context, _param: click.Parameter, value: str) -> str:
     parsed = urlsplit(value)
     try:
         port = parsed.port
@@ -154,19 +144,11 @@ def _validate_websocket_url(
         valid_port = False
     else:
         valid_port = port != 0
-    if not (
-        parsed.scheme in {"ws", "wss"}
-        and parsed.hostname
-        and parsed.path
-        and valid_port
-    ):
-        raise click.BadParameter(
-            "WebSocket URL must include a supported scheme, host, port, and path."
-        )
+    if not (parsed.scheme in {"ws", "wss"} and parsed.hostname and parsed.path and valid_port):
+        raise click.BadParameter("WebSocket URL must include a supported scheme, host, port, and path.")
     if parsed.scheme == "ws" and not _is_loopback_host(parsed.hostname):
         raise click.BadParameter(
-            "Unencrypted WebSocket URLs are permitted only for loopback endpoints; "
-            "use WSS for remote diagnostics."
+            "Unencrypted WebSocket URLs are permitted only for loopback endpoints; use WSS for remote diagnostics."
         )
     return value
 
@@ -188,9 +170,7 @@ def _is_loopback_host(hostname: str) -> bool:
     help="Stream diagnostics from an enabled Wybra debug WebSocket.",
 )
 @click.argument("url", callback=_validate_websocket_url)
-@click.option(
-    "--list-scopes", is_flag=True, help="List available diagnostic scopes and exit."
-)
+@click.option("--list-scopes", is_flag=True, help="List available diagnostic scopes and exit.")
 @click.option(
     "--scope",
     "scopes",

@@ -66,9 +66,7 @@ def _asset_cors_options(config: Mapping[str, Any]) -> CorsPolicySet:
 def _asset_export_mode(config: Mapping[str, Any]) -> AssetExportMode:
     value = config.get("export_mode", AssetExportMode.NORMAL)
     try:
-        return parse_asset_export_mode(
-            value, name="Config section app.assets.export_mode"
-        )
+        return parse_asset_export_mode(value, name="Config section app.assets.export_mode")
     except ValueError as exc:
         raise CompositionError(str(exc)) from exc
 
@@ -78,22 +76,14 @@ def _route_prefixes(config: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise CompositionError(
-            "Config section 'app.routes' prefixes must be a mapping."
-        )
+        raise CompositionError("Config section 'app.routes' prefixes must be a mapping.")
 
     prefixes: dict[str, dict[str, str]] = {}
     for module_name, route_prefixes in value.items():
         if not isinstance(module_name, str) or not module_name.strip():
-            raise CompositionError(
-                "Config section 'app.routes' prefixes must contain only "
-                "non-blank module names."
-            )
+            raise CompositionError("Config section 'app.routes' prefixes must contain only non-blank module names.")
         if not isinstance(route_prefixes, Mapping):
-            raise CompositionError(
-                "Config section 'app.routes' prefixes for "
-                f"{module_name!r} must be a mapping."
-            )
+            raise CompositionError(f"Config section 'app.routes' prefixes for {module_name!r} must be a mapping.")
 
         prefixes[module_name] = _route_label_prefixes(module_name, route_prefixes)
 
@@ -108,13 +98,11 @@ def _route_label_prefixes(
     for label, prefix in config.items():
         if not isinstance(label, str) or not label.strip():
             raise CompositionError(
-                "Config section 'app.routes' prefixes for "
-                f"{module_name!r} must contain only non-blank router labels."
+                f"Config section 'app.routes' prefixes for {module_name!r} must contain only non-blank router labels."
             )
         if not isinstance(prefix, str):
             raise CompositionError(
-                "Config section 'app.routes' prefix for "
-                f"{module_name!r} router {label!r} must be a string."
+                f"Config section 'app.routes' prefix for {module_name!r} router {label!r} must be a string."
             )
 
         prefixes[label] = prefix

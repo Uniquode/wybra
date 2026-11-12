@@ -140,11 +140,7 @@ class RedisAtomicCache:
         value_type, payload, revision_value = result
         if value_type == b"counter":
             raise CacheConflictError("The requested atomic key contains a counter.")
-        if (
-            value_type != b"value"
-            or not isinstance(payload, bytes)
-            or revision_value is None
-        ):
+        if value_type != b"value" or not isinstance(payload, bytes) or revision_value is None:
             raise CacheFeatureError("Redis atomic cache state is invalid.")
         return AtomicCacheValue(payload, CacheRevision(_integer(revision_value)))
 
@@ -249,9 +245,7 @@ class RedisAtomicCache:
         if result[0] == -2:
             raise CacheConflictError("Lease is stale or no longer held.")
         if result[0] not in {0, 1}:
-            raise CacheFeatureError(
-                "Redis atomic cache operation returned invalid state."
-            )
+            raise CacheFeatureError("Redis atomic cache operation returned invalid state.")
         return result[0] == 1
 
     async def increment(
@@ -279,9 +273,7 @@ class RedisAtomicCache:
 
         result = _script_result(await self.runtime.feature_call(increment_value))
         if result[0] == -1:
-            raise CacheConflictError(
-                "The requested counter key contains an atomic byte value."
-            )
+            raise CacheConflictError("The requested counter key contains an atomic byte value.")
         _require_success(result, length=3)
         return CounterCacheValue(
             _integer(result[1]),

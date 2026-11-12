@@ -92,9 +92,7 @@ class NatsScheduleCache:
     def __post_init__(self) -> None:
         validate_positive_integer(self.max_records, label="maximum schedule records")
         if self.max_records > MAX_CACHE_FEATURE_LIMIT:
-            raise ValueError(
-                f"Maximum schedule records cannot exceed {MAX_CACHE_FEATURE_LIMIT}."
-            )
+            raise ValueError(f"Maximum schedule records cannot exceed {MAX_CACHE_FEATURE_LIMIT}.")
 
     @property
     def maximum_records(self) -> int:
@@ -124,8 +122,7 @@ class NatsScheduleCache:
                     current is None or current.state.status == _STATE_DELETED
                 ) and await self._record_count() >= self.max_records:
                     raise CacheFeatureError(
-                        "The NATS JetStream schedule store has reached its configured "
-                        "record capacity."
+                        "The NATS JetStream schedule store has reached its configured record capacity."
                     )
                 state = _ScheduleState(
                     _STATE_LIVE,
@@ -141,9 +138,7 @@ class NatsScheduleCache:
                     state,
                 )
                 if sequence is None:
-                    raise CacheConflictError(
-                        "NATS JetStream schedule creation conflicted."
-                    )
+                    raise CacheConflictError("NATS JetStream schedule creation conflicted.")
                 return _record(state, sequence)
 
     async def update(
@@ -226,11 +221,7 @@ class NatsScheduleCache:
         now = await self.runtime.refresh_time()
         records: list[tuple[int, _ScheduleState]] = []
         for sequence, state in await self._owner_states(owner):
-            if (
-                state.status == _STATE_DELETED
-                or state.next_due_at > before
-                or _claim_live(state.claim, now)
-            ):
+            if state.status == _STATE_DELETED or state.next_due_at > before or _claim_live(state.claim, now):
                 continue
             if after is not None and (
                 state.next_due_at,
@@ -241,17 +232,11 @@ class NatsScheduleCache:
         records.sort(key=lambda entry: (entry[1].next_due_at, entry[1].identity))
         selected: list[ScheduleRecord] = []
         for sequence, metadata in records[:limit]:
-            current = await self._state(
-                _address(self.runtime, owner, metadata.identity)
-            )
+            current = await self._state(_address(self.runtime, owner, metadata.identity))
             if current is None or current.sequence != sequence:
                 continue
             state = current.state
-            if (
-                state.status == _STATE_DELETED
-                or state.next_due_at > before
-                or _claim_live(state.claim, now)
-            ):
+            if state.status == _STATE_DELETED or state.next_due_at > before or _claim_live(state.claim, now):
                 continue
             selected.append(_record(state, current.sequence))
         return tuple(selected)
@@ -330,9 +315,7 @@ class NatsScheduleCache:
                     ttl=_DELETED_STATE_TTL_SECONDS,
                 )
                 if sequence is None:
-                    raise CacheConflictError(
-                        "NATS JetStream schedule completion conflicted."
-                    )
+                    raise CacheConflictError("NATS JetStream schedule completion conflicted.")
                 await self._release_committed_schedule_claim(claim)
                 return None
             next_due_at = _next_due_at(
@@ -350,9 +333,7 @@ class NatsScheduleCache:
             )
             sequence = await self._write_state(address, current.sequence, state)
             if sequence is None:
-                raise CacheConflictError(
-                    "NATS JetStream schedule completion conflicted."
-                )
+                raise CacheConflictError("NATS JetStream schedule completion conflicted.")
             await self._release_committed_schedule_claim(claim)
             return _record(state, sequence)
 
@@ -463,19 +444,11 @@ class NatsScheduleCache:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream schedule state read failed (%s).", type(exc).__name__
-            )
-            raise CacheFeatureError(
-                "NATS JetStream schedule state read failed."
-            ) from None
+            logger.warning("NATS JetStream schedule state read failed (%s).", type(exc).__name__)
+            raise CacheFeatureError("NATS JetStream schedule state read failed.") from None
         sequence = getattr(message, "seq", None)
         data = getattr(message, "data", None)
-        if (
-            not isinstance(sequence, int)
-            or sequence <= 0
-            or not isinstance(data, bytes)
-        ):
+        if not isinstance(sequence, int) or sequence <= 0 or not isinstance(data, bytes):
             raise CacheFeatureError("NATS JetStream schedule state is invalid.")
         return _StateRecord(sequence, _decode_state(data))
 
@@ -506,12 +479,8 @@ class NatsScheduleCache:
         except Exception as exc:
             if _is_sequence_conflict(exc):
                 return None
-            logger.warning(
-                "NATS JetStream schedule state write failed (%s).", type(exc).__name__
-            )
-            raise CacheFeatureError(
-                "NATS JetStream schedule state write failed."
-            ) from None
+            logger.warning("NATS JetStream schedule state write failed (%s).", type(exc).__name__)
+            raise CacheFeatureError("NATS JetStream schedule state write failed.") from None
         sequence = getattr(acknowledgement, "seq", None)
         if not isinstance(sequence, int) or sequence <= 0:
             raise CacheFeatureError("NATS JetStream schedule state is invalid.")
@@ -532,12 +501,8 @@ class NatsScheduleCache:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream schedule index read failed (%s).", type(exc).__name__
-            )
-            raise CacheFeatureError(
-                "NATS JetStream schedule index read failed."
-            ) from None
+            logger.warning("NATS JetStream schedule index read failed (%s).", type(exc).__name__)
+            raise CacheFeatureError("NATS JetStream schedule index read failed.") from None
         for message in messages:
             sequence = getattr(
                 getattr(getattr(message, "metadata", None), "sequence", None),
@@ -556,10 +521,7 @@ class NatsScheduleCache:
             f"{self.runtime.coordination_state_subject_prefix}.schedule.>",
             headers_only=True,
         )
-        return sum(
-            _decode_metadata(getattr(message, "headers", None)).status != _STATE_DELETED
-            for message in messages
-        )
+        return sum(_decode_metadata(getattr(message, "headers", None)).status != _STATE_DELETED for message in messages)
 
     async def _next_revision(self, owner: str) -> int:
         revision = await self.coordination.increment_internal(
@@ -639,10 +601,7 @@ class NatsScheduleCache:
                 return
             raise
         except Exception as cleanup_error:
-            error.add_note(
-                "NATS JetStream schedule claim cleanup failed "
-                f"({type(cleanup_error).__name__})."
-            )
+            error.add_note(f"NATS JetStream schedule claim cleanup failed ({type(cleanup_error).__name__}).")
             logger.warning(
                 "NATS JetStream schedule claim cleanup failed (%s).",
                 type(cleanup_error).__name__,
@@ -695,9 +654,7 @@ def _owner_digest(owner: str) -> str:
 
 
 def _owner_subject_prefix(runtime: NatsJetStreamRuntime, owner: str) -> str:
-    return (
-        f"{runtime.coordination_state_subject_prefix}.schedule.{_owner_digest(owner)}."
-    )
+    return f"{runtime.coordination_state_subject_prefix}.schedule.{_owner_digest(owner)}."
 
 
 def _claim_resource(address: _ScheduleAddress) -> str:

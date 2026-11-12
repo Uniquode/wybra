@@ -61,9 +61,7 @@ class NatsPubSubSubscription:
     async def receive(self, *, timeout: float | None = None) -> bytes:
         if timeout is not None:
             timeout = validate_positive_finite(timeout, label="subscription timeout")
-        deadline = (
-            None if timeout is None else asyncio.get_running_loop().time() + timeout
-        )
+        deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
         await self._acquire_receive_lock(deadline)
         try:
             self._require_open()
@@ -116,9 +114,7 @@ class NatsPubSubSubscription:
                 except Exception as exc:
                     if self._runtime.is_timeout_error(exc):
                         raise TimeoutError("NATS pub/sub receive timed out.") from None
-                    logger.warning(
-                        "NATS pub/sub receive failed (%s).", type(exc).__name__
-                    )
+                    logger.warning("NATS pub/sub receive failed (%s).", type(exc).__name__)
                     raise CacheFeatureError("NATS pub/sub receive failed.") from None
             read.cancel()
             await asyncio.gather(read, return_exceptions=True)
@@ -221,9 +217,7 @@ class NatsPubSubCache:
             async with self._lock:
                 self._closed = True
                 subscriptions = tuple(self._subscriptions)
-            errors = await close_all(
-                subscription.close for subscription in subscriptions
-            )
+            errors = await close_all(subscription.close for subscription in subscriptions)
             raise_cleanup_errors("NATS pub/sub subscription cleanup failed.", errors)
 
     def _require_open(self) -> None:
@@ -255,9 +249,7 @@ async def _remove_after_failed_activation(
             return
         raise
     except Exception as cleanup_error:
-        error.add_note(
-            f"NATS pub/sub activation cleanup failed ({type(cleanup_error).__name__})."
-        )
+        error.add_note(f"NATS pub/sub activation cleanup failed ({type(cleanup_error).__name__}).")
         logger.warning(
             "NATS pub/sub activation cleanup failed (%s).",
             type(cleanup_error).__name__,

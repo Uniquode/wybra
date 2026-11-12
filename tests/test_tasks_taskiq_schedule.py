@@ -117,9 +117,7 @@ async def test_interval_schedule_uses_the_selected_cache_time() -> None:
         cache_time=InMemoryCacheTime(provider_clock),
     )
 
-    assert (
-        _dispatch_task(await consumer.get_schedules(), task).task_name == task.task_name
-    )
+    assert _dispatch_task(await consumer.get_schedules(), task).task_name == task.task_name
 
 
 @pytest.mark.anyio
@@ -533,6 +531,4 @@ async def test_shutdown_releases_live_claims_after_a_stale_claim() -> None:
     await deleting_source.delete_schedule("first")
     await source.shutdown()
 
-    assert (
-        await schedules.claim("taskiq-scheduler", "second", "other", ttl=30) is not None
-    )
+    assert await schedules.claim("taskiq-scheduler", "second", "other", ttl=30) is not None

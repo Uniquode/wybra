@@ -553,9 +553,7 @@ async def test_cache_taskiq_broker_publishes_taskiq_retry_delay(
         )
     )
 
-    assert work_queue.publications == [
-        ("taskiq-broker", "default", b"taskiq-message", expected_delay, 3)
-    ]
+    assert work_queue.publications == [("taskiq-broker", "default", b"taskiq-message", expected_delay, 3)]
 
 
 @pytest.mark.anyio
@@ -644,9 +642,7 @@ async def test_cache_taskiq_broker_failed_startup_leaves_listening_stopped() -> 
 
 
 @pytest.mark.anyio
-async def test_cache_taskiq_broker_serialises_overlapping_startup_and_shutdown() -> (
-    None
-):
+async def test_cache_taskiq_broker_serialises_overlapping_startup_and_shutdown() -> None:
     startup_started = asyncio.Event()
     release_startup = asyncio.Event()
     broker = CacheTaskiqBroker(
@@ -800,9 +796,7 @@ async def test_cache_taskiq_broker_does_not_revive_old_listener_after_restart() 
         ),
     )
     listener_task = asyncio.create_task(anext(broker.listen()))
-    second_reservation = asyncio.create_task(
-        work_queue.second_reservation_started.wait()
-    )
+    second_reservation = asyncio.create_task(work_queue.second_reservation_started.wait())
 
     try:
         await work_queue.first_reservation_started.wait()

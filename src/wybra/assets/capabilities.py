@@ -90,11 +90,7 @@ async def setup_site(site: Site) -> None:
                 project_root=settings.project_root,
                 static_root=None,
                 static_sources=capability.sources,
-                cors=(
-                    _security_cors_resolver(site)
-                    if security_provider_configured(site.modules)
-                    else None
-                ),
+                cors=(_security_cors_resolver(site) if security_provider_configured(site.modules) else None),
                 url_path=capability.url_path,
             ),
             name="static",

@@ -128,10 +128,7 @@ class TestProviderCredentialOutcomes:
         status_code: int,
         expected: str,
     ) -> None:
-        assert (
-            _provider_completion_credential_outcome(Response(status_code=status_code))
-            == expected
-        )
+        assert _provider_completion_credential_outcome(Response(status_code=status_code)) == expected
 
 
 class FakeGoogleJwksClient:
@@ -174,9 +171,7 @@ class TestProvidersSettings:
         assert provider.allowed_domains == ("example.com",)
 
     def test_email_match_linking_defaults_to_disabled(self) -> None:
-        provider = _providers_settings(
-            {GOOGLE_PROVIDER_NAME: {"enabled": True}}
-        ).provider(GOOGLE_PROVIDER_NAME)
+        provider = _providers_settings({GOOGLE_PROVIDER_NAME: {"enabled": True}}).provider(GOOGLE_PROVIDER_NAME)
 
         assert provider.email_match_linking_enabled is False
 
@@ -332,16 +327,10 @@ class TestProvidersSettings:
         assert settings.client_id == "google-client-id"
         assert settings.scopes == ("openid", "email", "profile")
         assert settings.issuer == "https://accounts.google.com"
-        assert (
-            settings.authorisation_endpoint
-            == "https://accounts.google.com/o/oauth2/v2/auth"
-        )
+        assert settings.authorisation_endpoint == "https://accounts.google.com/o/oauth2/v2/auth"
         assert settings.token_endpoint == "https://oauth2.googleapis.com/token"
         assert settings.jwks_uri == "https://www.googleapis.com/oauth2/v3/certs"
-        assert (
-            settings.discovery_document_url
-            == "https://accounts.google.com/.well-known/openid-configuration"
-        )
+        assert settings.discovery_document_url == "https://accounts.google.com/.well-known/openid-configuration"
         assert settings.client_secret_reference == (
             "keychain",
             "auth/providers/google/client-secret",
@@ -352,17 +341,13 @@ class TestProvidersSettings:
             ConfigurationError,
             match=f"provider {GOOGLE_PROVIDER_NAME!r}",
         ):
-            google_oauth_settings_from_provider(
-                ProviderSettings(name=GITHUB_PROVIDER_NAME)
-            )
+            google_oauth_settings_from_provider(ProviderSettings(name=GITHUB_PROVIDER_NAME))
 
     def test_google_oauth_settings_require_client_id_and_secret_reference(
         self,
     ) -> None:
         with pytest.raises(ConfigurationError, match=PROVIDER_CLIENT_ID_FIELD):
-            google_oauth_settings_from_provider(
-                ProviderSettings(name=GOOGLE_PROVIDER_NAME)
-            )
+            google_oauth_settings_from_provider(ProviderSettings(name=GOOGLE_PROVIDER_NAME))
 
         with pytest.raises(ConfigurationError, match=PROVIDER_CLIENT_SECRET_KEY_FIELD):
             google_oauth_settings_from_provider(
@@ -402,17 +387,13 @@ class TestProvidersSettings:
             ConfigurationError,
             match=f"provider {GITHUB_PROVIDER_NAME!r}",
         ):
-            github_oauth_settings_from_provider(
-                ProviderSettings(name=GOOGLE_PROVIDER_NAME)
-            )
+            github_oauth_settings_from_provider(ProviderSettings(name=GOOGLE_PROVIDER_NAME))
 
     def test_github_oauth_settings_require_client_id_and_secret_reference(
         self,
     ) -> None:
         with pytest.raises(ConfigurationError, match=PROVIDER_CLIENT_ID_FIELD):
-            github_oauth_settings_from_provider(
-                ProviderSettings(name=GITHUB_PROVIDER_NAME)
-            )
+            github_oauth_settings_from_provider(ProviderSettings(name=GITHUB_PROVIDER_NAME))
 
         with pytest.raises(ConfigurationError, match=PROVIDER_CLIENT_SECRET_KEY_FIELD):
             github_oauth_settings_from_provider(
@@ -513,9 +494,7 @@ class TestProvidersSettings:
             ConfigurationError,
             match=f"provider {APPLE_PROVIDER_NAME!r}",
         ):
-            apple_oauth_settings_from_provider(
-                ProviderSettings(name=GOOGLE_PROVIDER_NAME)
-            )
+            apple_oauth_settings_from_provider(ProviderSettings(name=GOOGLE_PROVIDER_NAME))
 
     @pytest.mark.parametrize(
         ("provider", "field_name"),
@@ -748,9 +727,7 @@ class TestProviderSecretValidation:
                 }
             }
         )
-        secrets = RecordingSecretsCapability(
-            {("environment", "GOOGLE_SECRET"): "secret"}
-        )
+        secrets = RecordingSecretsCapability({("environment", "GOOGLE_SECRET"): "secret"})
 
         validate_provider_secret_settings(settings, secrets)
 
@@ -840,9 +817,7 @@ class TestProviderSecretValidation:
                 }
             }
         )
-        secrets = RecordingSecretsCapability(
-            {("environment", "GOOGLE_SECRET"): "secret"}
-        )
+        secrets = RecordingSecretsCapability({("environment", "GOOGLE_SECRET"): "secret"})
 
         value = resolve_provider_client_secret(settings, GOOGLE_PROVIDER_NAME, secrets)
 
@@ -862,9 +837,7 @@ class TestProviderSecretValidation:
                 }
             }
         )
-        secrets = RecordingSecretsCapability(
-            {("environment", "APPLE_PRIVATE_KEY"): "private-key"}
-        )
+        secrets = RecordingSecretsCapability({("environment", "APPLE_PRIVATE_KEY"): "private-key"})
 
         validate_provider_secret_settings(settings, secrets)
 
@@ -907,9 +880,7 @@ class TestProviderSecretValidation:
                 }
             }
         )
-        secrets = RecordingSecretsCapability(
-            {("environment", "APPLE_PRIVATE_KEY"): "private-key"}
-        )
+        secrets = RecordingSecretsCapability({("environment", "APPLE_PRIVATE_KEY"): "private-key"})
 
         value = resolve_provider_private_key(settings, APPLE_PROVIDER_NAME, secrets)
 
@@ -1117,12 +1088,8 @@ class TestGoogleIDTokenValidation:
         self,
         claim_overrides: dict[str, object],
     ) -> None:
-        token, public_key = self._signed_google_id_token(
-            claim_overrides=claim_overrides
-        )
-        validator = GoogleOIDCIDTokenValidator(
-            jwks_client_factory=lambda _jwks_uri: FakeGoogleJwksClient(public_key)
-        )
+        token, public_key = self._signed_google_id_token(claim_overrides=claim_overrides)
+        validator = GoogleOIDCIDTokenValidator(jwks_client_factory=lambda _jwks_uri: FakeGoogleJwksClient(public_key))
 
         with pytest.raises(GoogleIDTokenValidationError, match="invalid"):
             await validator.validate(
@@ -1237,9 +1204,7 @@ class TestAppleIDTokenValidation:
         claim_overrides: dict[str, object],
     ) -> None:
         token, public_key = self._signed_apple_id_token(claim_overrides=claim_overrides)
-        validator = AppleOIDCIDTokenValidator(
-            jwks_client_factory=lambda _jwks_uri: FakeGoogleJwksClient(public_key)
-        )
+        validator = AppleOIDCIDTokenValidator(jwks_client_factory=lambda _jwks_uri: FakeGoogleJwksClient(public_key))
 
         with pytest.raises(AppleIDTokenValidationError, match="invalid"):
             await validator.validate(
@@ -1315,9 +1280,7 @@ async def test_provider_capability_is_available_when_module_is_configured(
     try:
         providers = site.require_capability(ProvidersCapability)
 
-        assert (
-            providers.settings.provider(GOOGLE_PROVIDER_NAME).client_id == "client-id"
-        )
+        assert providers.settings.provider(GOOGLE_PROVIDER_NAME).client_id == "client-id"
     finally:
         await site.close()
 

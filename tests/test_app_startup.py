@@ -16,9 +16,7 @@ def test_normalise_config_source_rejects_blank_value_with_neutral_message() -> N
 
 
 def test_normalise_cli_config_source_rejects_blank_config_option() -> None:
-    with pytest.raises(
-        ProjectToolConfigurationError, match="--config must not be blank"
-    ):
+    with pytest.raises(ProjectToolConfigurationError, match="--config must not be blank"):
         normalise_cli_config_source("   ")
 
 

@@ -193,9 +193,7 @@ class TestCacheSettings:
         ConfigService.set_runtime_environment(
             {
                 "WYBRA_CACHE__TASKS__BACKEND": "nats-jetstream",
-                "WYBRA_CACHE__TASKS__SERVERS": (
-                    "nats://first.internal:4222,nats://second.internal:4222"
-                ),
+                "WYBRA_CACHE__TASKS__SERVERS": ("nats://first.internal:4222,nats://second.internal:4222"),
             }
         )
         config = ConfigService(
@@ -342,9 +340,7 @@ url = "redis://cache/1"
             "cache. session ",
         ),
     )
-    def test_rejects_invalid_or_reserved_named_cache_sections(
-        self, section: str
-    ) -> None:
+    def test_rejects_invalid_or_reserved_named_cache_sections(self, section: str) -> None:
         with pytest.raises(ConfigurationError, match="cache name"):
             CachesSettings.load_settings({"cache": {}, section: {}})
 
@@ -390,27 +386,10 @@ url = "redis://cache/1"
         assert settings.require("messages").features == ("atomic",)
         assert settings.require("baseline").features == ()
 
-    def test_accepts_redis_live_pubsub_feature_selection(self) -> None:
-        settings = CachesSettings.load_settings(
-            {
-                "cache": {
-                    "backend": "redis",
-                    "url": "redis://cache/0",
-                    "features": ["pub-sub"],
-                }
-            }
-        )
-
-        assert settings.require("default").features == ("pub-sub",)
-
     def test_treats_blank_environment_feature_selection_as_unset(self) -> None:
         ConfigService.set_runtime_environment({"WYBRA_CACHE_FEATURES": "   "})
         config = ConfigService(
-            [
-                MappingConfigSource(
-                    {"cache": {"backend": "redis", "url": "redis://cache"}}
-                )
-            ],
+            [MappingConfigSource({"cache": {"backend": "redis", "url": "redis://cache"}})],
             config_defs=(CacheSettings.module_config,),
             discover_module_config=False,
         )
@@ -510,7 +489,6 @@ url = "redis://cache/1"
         assert diagnostics[0].features == (
             "atomic",
             "lease",
-            "pub-sub",
             "schedule",
             "stream",
             "time",
@@ -519,7 +497,6 @@ url = "redis://cache/1"
         assert diagnostics[1].features == (
             "atomic",
             "lease",
-            "pub-sub",
             "schedule",
             "stream",
             "time",
@@ -685,9 +662,7 @@ class TestInMemoryCache:
             observed.append(event)
 
         async with _started_events_site() as site:
-            await site.require_capability(EventsCapability).subscribe(
-                EVT_CACHE, handler
-            )
+            await site.require_capability(EventsCapability).subscribe(EVT_CACHE, handler)
             cache = InMemoryCache()
 
             assert await cache.get("template", "private-user-key") is None
@@ -717,11 +692,7 @@ class TestInMemoryCache:
             "cache.read.completed",
             "cache.fill.failed",
         ]
-        completed = [
-            event
-            for event in observed
-            if isinstance(event, CacheOperationCompletedEvent)
-        ]
+        completed = [event for event in observed if isinstance(event, CacheOperationCompletedEvent)]
         assert [event.outcome for event in completed] == [
             "miss",
             "stored",
@@ -731,16 +702,12 @@ class TestInMemoryCache:
             "miss",
         ]
         assert all(event.owner == "template" for event in completed)
-        assert all(
-            "private-user-key" not in event.key_fingerprint for event in completed
-        )
+        assert all("private-user-key" not in event.key_fingerprint for event in completed)
         assert isinstance(observed[-1], CacheOperationFailedEvent)
         assert observed[-1].error_type == "RuntimeError"
 
     @pytest.mark.anyio
-    async def test_expires_entries_after_ttl(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_expires_entries_after_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
         now = 100.0
         monkeypatch.setattr("wybra.cache.capabilities.time.monotonic", lambda: now)
         cache = InMemoryCache()
@@ -767,9 +734,7 @@ class TestInMemoryCache:
             raise asyncio.CancelledError()
 
         async with _started_events_site() as site:
-            await site.require_capability(EventsCapability).subscribe(
-                EVT_CACHE, cancelling_handler
-            )
+            await site.require_capability(EventsCapability).subscribe(EVT_CACHE, cancelling_handler)
             cache = InMemoryCache()
 
             await cache.set("template", "fragment", b"content", ttl=60)
@@ -793,14 +758,8 @@ class TestInMemoryCache:
             calls += 1
             return b"value"
 
-        assert (
-            await cache.get_or_set("template", "fragment", ttl=60, factory=factory)
-            == b"value"
-        )
-        assert (
-            await cache.get_or_set("template", "fragment", ttl=60, factory=factory)
-            == b"value"
-        )
+        assert await cache.get_or_set("template", "fragment", ttl=60, factory=factory) == b"value"
+        assert await cache.get_or_set("template", "fragment", ttl=60, factory=factory) == b"value"
         assert calls == 1
 
     @pytest.mark.parametrize("cached", (False, True), ids=("miss", "hit"))
@@ -847,9 +806,7 @@ class TestInMemoryCache:
         async def unexpected_factory() -> bytes:
             pytest.fail("A waiting cache caller must not run its factory.")
 
-        first = asyncio.create_task(
-            cache.get_or_set("template", "fragment", ttl=60, factory=factory)
-        )
+        first = asyncio.create_task(cache.get_or_set("template", "fragment", ttl=60, factory=factory))
         await started.wait()
         second = asyncio.create_task(
             cache.get_or_set(
@@ -901,35 +858,23 @@ class TestInMemoryCache:
             observed.append(event)
 
         async with _started_events_site() as site:
-            await site.require_capability(EventsCapability).subscribe(
-                EVT_CACHE, handler
-            )
-            first = asyncio.create_task(
-                cache.get_or_set("template", "oversized", ttl=60, factory=factory)
-            )
+            await site.require_capability(EventsCapability).subscribe(EVT_CACHE, handler)
+            first = asyncio.create_task(cache.get_or_set("template", "oversized", ttl=60, factory=factory))
             await asyncio.wait_for(factory_started.wait(), timeout=60)
-            second = asyncio.create_task(
-                cache.get_or_set("template", "oversized", ttl=60, factory=factory)
-            )
+            second = asyncio.create_task(cache.get_or_set("template", "oversized", ttl=60, factory=factory))
             await asyncio.wait_for(cache.waiting_for_fill.wait(), timeout=60)
             release_factory.set()
 
-            assert await asyncio.wait_for(
-                asyncio.gather(first, second), timeout=60
-            ) == [
+            assert await asyncio.wait_for(asyncio.gather(first, second), timeout=60) == [
                 b"x" * (MAX_CACHE_VALUE_BYTES + 1),
                 b"x" * (MAX_CACHE_VALUE_BYTES + 1),
             ]
 
         assert factory_calls == 1
         assert await cache.get("template", "oversized") is None
-        assert not any(
-            isinstance(event, CacheOperationFailedEvent) for event in observed
-        )
+        assert not any(isinstance(event, CacheOperationFailedEvent) for event in observed)
         assert any(
-            isinstance(event, CacheOperationCompletedEvent)
-            and event.outcome == "uncached"
-            for event in observed
+            isinstance(event, CacheOperationCompletedEvent) and event.outcome == "uncached" for event in observed
         )
 
     @pytest.mark.anyio
@@ -954,13 +899,9 @@ class TestInMemoryCache:
             return b"value"
 
         async with _started_events_site() as site:
-            await site.require_capability(EventsCapability).subscribe(
-                EVT_CACHE, handler
-            )
+            await site.require_capability(EventsCapability).subscribe(EVT_CACHE, handler)
             cache = InMemoryCache()
-            fill = asyncio.create_task(
-                cache.get_or_set("template", "fragment", ttl=60, factory=factory)
-            )
+            fill = asyncio.create_task(cache.get_or_set("template", "fragment", ttl=60, factory=factory))
             await factory_started.wait()
             await asyncio.sleep(0)
             await asyncio.sleep(0)
@@ -976,17 +917,12 @@ class TestInMemoryCache:
         release_event = asyncio.Event()
 
         async def slow_handler(event: Event) -> None:
-            if (
-                isinstance(event, CacheOperationCompletedEvent)
-                and event.outcome == "filled"
-            ):
+            if isinstance(event, CacheOperationCompletedEvent) and event.outcome == "filled":
                 event_started.set()
                 await release_event.wait()
 
         async with _started_events_site() as site:
-            await site.require_capability(EventsCapability).subscribe(
-                EVT_CACHE, slow_handler
-            )
+            await site.require_capability(EventsCapability).subscribe(EVT_CACHE, slow_handler)
             cache = InMemoryCache()
             factory_started = asyncio.Event()
             release_factory = asyncio.Event()
@@ -996,18 +932,14 @@ class TestInMemoryCache:
                 await release_factory.wait()
                 return b"value"
 
-            first = asyncio.create_task(
-                cache.get_or_set("template", "fragment", ttl=60, factory=factory)
-            )
+            first = asyncio.create_task(cache.get_or_set("template", "fragment", ttl=60, factory=factory))
             await factory_started.wait()
             second = asyncio.create_task(
                 cache.get_or_set(
                     "template",
                     "fragment",
                     ttl=60,
-                    factory=lambda: pytest.fail(
-                        "A waiting cache caller must not fill."
-                    ),
+                    factory=lambda: pytest.fail("A waiting cache caller must not fill."),
                 )
             )
             release_factory.set()
@@ -1027,9 +959,7 @@ class TestInMemoryCache:
             await asyncio.sleep(1)
 
         async with _started_events_site() as site:
-            await site.require_capability(EventsCapability).subscribe(
-                EVT_CACHE, slow_handler
-            )
+            await site.require_capability(EventsCapability).subscribe(EVT_CACHE, slow_handler)
             cache = InMemoryCache()
             factory_started = asyncio.Event()
 
@@ -1038,20 +968,14 @@ class TestInMemoryCache:
                 await asyncio.sleep(0.35)
                 return b"value"
 
-            first = asyncio.create_task(
-                cache.get_or_set(
-                    "template", "fragment", ttl=60, factory=factory, timeout=0.8
-                )
-            )
+            first = asyncio.create_task(cache.get_or_set("template", "fragment", ttl=60, factory=factory, timeout=0.8))
             await factory_started.wait()
             second = asyncio.create_task(
                 cache.get_or_set(
                     "template",
                     "fragment",
                     ttl=60,
-                    factory=lambda: pytest.fail(
-                        "A waiting cache caller must not fill."
-                    ),
+                    factory=lambda: pytest.fail("A waiting cache caller must not fill."),
                     timeout=0.8,
                 )
             )
@@ -1145,9 +1069,7 @@ class TestRedisCache:
             )
         )
 
-        assert resolve_redis_urls(full_url, secrets) == {
-            "default": "redis://cache.internal/4"
-        }
+        assert resolve_redis_urls(full_url, secrets) == {"default": "redis://cache.internal/4"}
         assert resolve_redis_urls(split_credentials, secrets) == {
             "default": "rediss://service:pass%3A%40word%2F%3F@cache.internal/4"
         }
@@ -1163,9 +1085,7 @@ class TestRedisCache:
                 ),
             )
         )
-        secrets = DefaultSecretsCapability.from_drivers(
-            (EnvironmentSecretSourceDriver({}),)
-        )
+        secrets = DefaultSecretsCapability.from_drivers((EnvironmentSecretSourceDriver({}),))
 
         with pytest.raises(ConfigurationError) as raised:
             resolve_redis_urls(settings, secrets)
@@ -1194,15 +1114,11 @@ class TestRedisCache:
         ):
             await build_caches(settings)
 
-    def test_requires_the_optional_cache_dependency(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_requires_the_optional_cache_dependency(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def missing_redis(_: str) -> None:
             raise ImportError("redis is not installed")
 
-        monkeypatch.setattr(
-            "wybra.cache.redis_runtime.importlib.import_module", missing_redis
-        )
+        monkeypatch.setattr("wybra.cache.redis_runtime.importlib.import_module", missing_redis)
 
         with pytest.raises(ConfigurationError, match=r"Install wybra\[cache\]"):
             awaitable = RedisCache("redis://cache").get("test", "missing")
@@ -1273,9 +1189,7 @@ class TestRedisCache:
         assert client.close_count == 1
 
     @pytest.mark.anyio
-    async def test_uses_binary_redis_values(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_uses_binary_redis_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class FakeRedis:
             def __init__(self) -> None:
                 self.values: dict[str, bytes] = {}
@@ -1296,9 +1210,7 @@ class TestRedisCache:
         client = FakeRedis()
         monkeypatch.setattr(
             "wybra.cache.redis_runtime.importlib.import_module",
-            lambda _: SimpleNamespace(
-                Redis=SimpleNamespace(from_url=lambda *_args, **_kwargs: client)
-            ),
+            lambda _: SimpleNamespace(Redis=SimpleNamespace(from_url=lambda *_args, **_kwargs: client)),
         )
         cache = RedisCache("redis://cache")
 
@@ -1331,9 +1243,7 @@ class TestRedisCache:
         client.aclose = close
         monkeypatch.setattr(
             "wybra.cache.redis_runtime.importlib.import_module",
-            lambda _: SimpleNamespace(
-                Redis=SimpleNamespace(from_url=lambda *_args, **_kwargs: client)
-            ),
+            lambda _: SimpleNamespace(Redis=SimpleNamespace(from_url=lambda *_args, **_kwargs: client)),
         )
         runtime = RedisCacheRuntime("redis://cache")
         runtime.client()
@@ -1650,9 +1560,7 @@ class TestNatsJetStreamCache:
             }
         )
 
-        with pytest.raises(
-            ConfigurationError, match="stream configuration is incompatible"
-        ):
+        with pytest.raises(ConfigurationError, match="stream configuration is incompatible"):
             await build_caches(settings)
 
         assert client.close_count == 1
@@ -1763,15 +1671,11 @@ class TestNatsJetStreamCache:
             await release_factory.wait()
             return UncachedCacheValue(b"uncached")
 
-        first = asyncio.create_task(
-            cache.get_or_set("template", "uncached", ttl=60, factory=factory)
-        )
+        first = asyncio.create_task(cache.get_or_set("template", "uncached", ttl=60, factory=factory))
         second: asyncio.Task[bytes] | None = None
         try:
             await factory_started.wait()
-            second = asyncio.create_task(
-                cache.get_or_set("template", "uncached", ttl=60, factory=factory)
-            )
+            second = asyncio.create_task(cache.get_or_set("template", "uncached", ttl=60, factory=factory))
             await cache.waiting_for_fill.wait()
             release_factory.set()
 
@@ -1997,9 +1901,7 @@ class TestCacheModule:
     async def test_missing_named_cache_error_identifies_name_and_consumer(self) -> None:
         site = await start(
             FastAPI(),
-            config_source=MappingConfigSource(
-                {"app": {"modules": ("wybra.cache",)}, "cache": {}}
-            ),
+            config_source=MappingConfigSource({"app": {"modules": ("wybra.cache",)}, "cache": {}}),
         )
         caches = site.require_capability(CachesCapability)
 
@@ -2012,9 +1914,7 @@ class TestCacheModule:
         await site.close()
 
     @pytest.mark.anyio
-    async def test_registry_closes_each_named_backend_once(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_registry_closes_each_named_backend_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
         clients: list[SimpleNamespace] = []
 
         def from_url(*_args: object, **_kwargs: object) -> SimpleNamespace:
@@ -2086,10 +1986,7 @@ class TestCacheModule:
 
         with pytest.raises(
             SiteCapabilityError,
-            match=(
-                "module=wybra.cache.*attribute=setup_finalisation.*"
-                "error_type=ConfigurationError"
-            ),
+            match=("module=wybra.cache.*attribute=setup_finalisation.*error_type=ConfigurationError"),
         ) as raised:
             await start(
                 FastAPI(),
@@ -2266,9 +2163,7 @@ class TestCacheModule:
 
     @pytest.mark.anyio
     async def test_registry_attempts_every_close_when_one_backend_fails(self) -> None:
-        settings = CachesSettings.load_settings(
-            {"cache": {}, "cache.session": {"backend": "memory"}}
-        )
+        settings = CachesSettings.load_settings({"cache": {}, "cache.session": {"backend": "memory"}})
         close_calls: list[str] = []
 
         async def factory(settings: CacheSettings) -> CacheBackend:
@@ -2288,9 +2183,7 @@ class TestCacheModule:
 
     @pytest.mark.anyio
     async def test_registry_retries_only_failed_backend_cleanup(self) -> None:
-        settings = CachesSettings.load_settings(
-            {"cache": {}, "cache.session": {"backend": "memory"}}
-        )
+        settings = CachesSettings.load_settings({"cache": {}, "cache.session": {"backend": "memory"}})
         close_calls: list[str] = []
         session_attempts = 0
 
@@ -2318,9 +2211,7 @@ class TestCacheModule:
     async def test_registry_preserves_cancellation_after_closing_every_backend(
         self,
     ) -> None:
-        settings = CachesSettings.load_settings(
-            {"cache": {}, "cache.session": {"backend": "memory"}}
-        )
+        settings = CachesSettings.load_settings({"cache": {}, "cache.session": {"backend": "memory"}})
         close_calls: list[str] = []
 
         async def factory(settings: CacheSettings) -> CacheBackend:
@@ -2340,9 +2231,7 @@ class TestCacheModule:
 
     @pytest.mark.anyio
     async def test_registry_retries_only_cancelled_backend_cleanup(self) -> None:
-        settings = CachesSettings.load_settings(
-            {"cache": {}, "cache.session": {"backend": "memory"}}
-        )
+        settings = CachesSettings.load_settings({"cache": {}, "cache.session": {"backend": "memory"}})
         close_calls: list[str] = []
         session_attempts = 0
 
@@ -2410,9 +2299,7 @@ class TestCacheModule:
         client.aclose = close_client
         monkeypatch.setattr(
             "wybra.cache.redis_runtime.importlib.import_module",
-            lambda _: SimpleNamespace(
-                Redis=SimpleNamespace(from_url=lambda *_args, **_kwargs: client)
-            ),
+            lambda _: SimpleNamespace(Redis=SimpleNamespace(from_url=lambda *_args, **_kwargs: client)),
         )
         original_close = RedisCacheFeatures.close
 
@@ -2448,9 +2335,7 @@ class TestCacheModule:
 
     @pytest.mark.anyio
     async def test_registry_closes_shared_lifecycle_owner_once(self) -> None:
-        settings = CachesSettings.load_settings(
-            {"cache": {}, "cache.session": {"backend": "memory"}}
-        )
+        settings = CachesSettings.load_settings({"cache": {}, "cache.session": {"backend": "memory"}})
         close_count = 0
         owner = object()
 
@@ -2485,9 +2370,7 @@ class TestTemplateFragmentCache:
             configure_cache_extension(Environment(), None)
 
     @pytest.mark.anyio
-    async def test_template_module_resolves_cache_capability_at_render_time(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_template_module_resolves_cache_capability_at_render_time(self, tmp_path: Path) -> None:
         (tmp_path / "fragment.html").write_text(
             '{% cache "greeting" ttl=60 %}{{ value }}{% endcache %}',
             encoding="utf-8",
@@ -2504,18 +2387,12 @@ class TestTemplateFragmentCache:
         )
         templates = site.require_capability(TemplateCapability)
 
-        assert await templates.render_template("fragment.html", {"value": "first"}) == (
-            "first"
-        )
-        assert await templates.render_template(
-            "fragment.html", {"value": "second"}
-        ) == ("first")
+        assert await templates.render_template("fragment.html", {"value": "first"}) == ("first")
+        assert await templates.render_template("fragment.html", {"value": "second"}) == ("first")
         await site.close()
 
     @pytest.mark.anyio
-    async def test_caches_fragments_when_a_cache_provider_is_available(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_caches_fragments_when_a_cache_provider_is_available(self, tmp_path: Path) -> None:
         (tmp_path / "fragment.html").write_text(
             '{% cache "greeting" ttl=60 vary_by=locale %}{{ value }}{% endcache %}',
             encoding="utf-8",
@@ -2526,24 +2403,9 @@ class TestTemplateFragmentCache:
             cache_provider=lambda: _cache_provider(cache),
         )
 
-        assert (
-            await templates.render_template(
-                "fragment.html", {"locale": "en-AU", "value": "first"}
-            )
-            == "first"
-        )
-        assert (
-            await templates.render_template(
-                "fragment.html", {"locale": "en-AU", "value": "second"}
-            )
-            == "first"
-        )
-        assert (
-            await templates.render_template(
-                "fragment.html", {"locale": "fr", "value": "troisième"}
-            )
-            == "troisième"
-        )
+        assert await templates.render_template("fragment.html", {"locale": "en-AU", "value": "first"}) == "first"
+        assert await templates.render_template("fragment.html", {"locale": "en-AU", "value": "second"}) == "first"
+        assert await templates.render_template("fragment.html", {"locale": "fr", "value": "troisième"}) == "troisième"
 
     @pytest.mark.anyio
     @pytest.mark.parametrize(
@@ -2572,12 +2434,10 @@ class TestTemplateFragmentCache:
             cache_provider=lambda: _cache_provider(cache),
         )
 
-        assert (
-            await templates.render_template("fragment.html", {"value": value}) == value
+        assert await templates.render_template("fragment.html", {"value": value}) == value
+        assert await templates.render_template("fragment.html", {"value": "replacement"}) == (
+            value if is_cached else "replacement"
         )
-        assert await templates.render_template(
-            "fragment.html", {"value": "replacement"}
-        ) == (value if is_cached else "replacement")
 
     @pytest.mark.anyio
     async def test_fragment_cache_shares_concurrent_oversized_rendering(
@@ -2658,8 +2518,7 @@ class TestTemplateFragmentCache:
     @pytest.mark.anyio
     async def test_isolates_user_scoped_fragments(self, tmp_path: Path) -> None:
         (tmp_path / "fragment.html").write_text(
-            '{% cache "greeting" ttl=60 vary_by=request.user.id %}'
-            "{{ request.user.name }}{% endcache %}",
+            '{% cache "greeting" ttl=60 vary_by=request.user.id %}{{ request.user.name }}{% endcache %}',
             encoding="utf-8",
         )
         cache = InMemoryCache()
@@ -2670,21 +2529,11 @@ class TestTemplateFragmentCache:
         first_request = SimpleNamespace(user=SimpleNamespace(id=1, name="Ada"))
         second_request = SimpleNamespace(user=SimpleNamespace(id=2, name="Grace"))
 
-        assert (
-            await templates.render_template("fragment.html", {"request": first_request})
-            == "Ada"
-        )
-        assert (
-            await templates.render_template(
-                "fragment.html", {"request": second_request}
-            )
-            == "Grace"
-        )
+        assert await templates.render_template("fragment.html", {"request": first_request}) == "Ada"
+        assert await templates.render_template("fragment.html", {"request": second_request}) == "Grace"
 
     @pytest.mark.anyio
-    async def test_cache_key_helper_normalises_registered_value_types(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_cache_key_helper_normalises_registered_value_types(self, tmp_path: Path) -> None:
         class Audience:
             def __init__(self, identifier: int) -> None:
                 self.identifier = identifier
@@ -2728,9 +2577,7 @@ class TestTemplateFragmentCache:
         )
 
     @pytest.mark.anyio
-    async def test_rejects_unsupported_fragment_variation_values(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_rejects_unsupported_fragment_variation_values(self, tmp_path: Path) -> None:
         (tmp_path / "fragment.html").write_text(
             '{% cache "greeting" ttl=60 vary_by=audience %}{{ value }}{% endcache %}',
             encoding="utf-8",
@@ -2751,9 +2598,7 @@ class TestTemplateFragmentCache:
             )
 
     @pytest.mark.anyio
-    async def test_fragment_keys_are_isolated_by_template_fingerprint(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_fragment_keys_are_isolated_by_template_fingerprint(self, tmp_path: Path) -> None:
         (tmp_path / "first.html").write_text(
             '{% cache "summary" ttl=60 %}First {{ value }}{% endcache %}',
             encoding="utf-8",
@@ -2768,12 +2613,8 @@ class TestTemplateFragmentCache:
             cache_provider=lambda: _cache_provider(cache),
         )
 
-        assert await templates.render_template("first.html", {"value": "one"}) == (
-            "First one"
-        )
-        assert await templates.render_template("second.html", {"value": "two"}) == (
-            "Second two"
-        )
+        assert await templates.render_template("first.html", {"value": "one"}) == ("First one")
+        assert await templates.render_template("second.html", {"value": "two"}) == ("Second two")
 
     @pytest.mark.anyio
     async def test_cache_hits_do_not_reload_template_source(
@@ -2800,38 +2641,24 @@ class TestTemplateFragmentCache:
 
         monkeypatch.setattr(loader, "get_source", counted_get_source)
 
-        assert await templates.render_template("fragment.html", {"value": "first"}) == (
-            "first"
-        )
+        assert await templates.render_template("fragment.html", {"value": "first"}) == ("first")
         calls_after_first_render = calls
-        assert await templates.render_template(
-            "fragment.html", {"value": "second"}
-        ) == ("first")
+        assert await templates.render_template("fragment.html", {"value": "second"}) == ("first")
         assert calls == calls_after_first_render
 
     @pytest.mark.anyio
-    async def test_cache_tag_renders_normally_without_a_cache_provider(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_cache_tag_renders_normally_without_a_cache_provider(self, tmp_path: Path) -> None:
         (tmp_path / "fragment.html").write_text(
             '{% cache "greeting" ttl=60 %}{{ value }}{% endcache %}',
             encoding="utf-8",
         )
         templates = DefaultTemplateCapability(template_root=tmp_path)
 
-        assert (
-            await templates.render_template("fragment.html", {"value": "first"})
-            == "first"
-        )
-        assert (
-            await templates.render_template("fragment.html", {"value": "second"})
-            == "second"
-        )
+        assert await templates.render_template("fragment.html", {"value": "first"}) == "first"
+        assert await templates.render_template("fragment.html", {"value": "second"}) == "second"
 
     @pytest.mark.anyio
-    async def test_template_module_renders_cache_tag_without_cache_module(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_template_module_renders_cache_tag_without_cache_module(self, tmp_path: Path) -> None:
         (tmp_path / "fragment.html").write_text(
             '{% cache "greeting" ttl=60 %}{{ value }}{% endcache %}',
             encoding="utf-8",
@@ -2847,10 +2674,6 @@ class TestTemplateFragmentCache:
         )
         templates = site.require_capability(TemplateCapability)
 
-        assert await templates.render_template("fragment.html", {"value": "first"}) == (
-            "first"
-        )
-        assert await templates.render_template(
-            "fragment.html", {"value": "second"}
-        ) == ("second")
+        assert await templates.render_template("fragment.html", {"value": "first"}) == ("first")
+        assert await templates.render_template("fragment.html", {"value": "second"}) == ("second")
         await site.close()

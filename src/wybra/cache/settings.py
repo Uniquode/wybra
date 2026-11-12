@@ -103,10 +103,7 @@ class CacheSettings(BaseSettings):
         except (TypeError, ValueError) as exc:
             raise ConfigurationError(f"{_section_name(name)}.namespace: {exc}") from exc
         if backend == "memory" and namespace is not None:
-            raise ConfigurationError(
-                f"{_section_name(name)}.namespace is not valid when backend is "
-                "'memory'."
-            )
+            raise ConfigurationError(f"{_section_name(name)}.namespace is not valid when backend is 'memory'.")
         try:
             features = to_cache_features(self.features)
         except (TypeError, ValueError) as exc:
@@ -116,9 +113,7 @@ class CacheSettings(BaseSettings):
             if unavailable:
                 raise ConfigurationError(
                     f"{_section_name(name)}.features contains feature(s) not "
-                    f"implemented by backend {backend!r}: "
-                    + ", ".join(unavailable)
-                    + "."
+                    f"implemented by backend {backend!r}: " + ", ".join(unavailable) + "."
                 )
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "backend", backend)
@@ -138,15 +133,12 @@ class CacheSettings(BaseSettings):
         if self.backend == "nats-jetstream":
             if not self.servers:
                 raise ConfigurationError(
-                    f"{_section_name(self.name)}.servers is required when backend is "
-                    "'nats-jetstream'."
+                    f"{_section_name(self.name)}.servers is required when backend is 'nats-jetstream'."
                 )
             return _nats_jetstream_partition(self.servers, self.resolved_namespace)
         url_reference = self.url_reference
         if self.url is None and url_reference is None:
-            raise ConfigurationError(
-                f"{_section_name(self.name)}.url is required when backend is 'redis'."
-            )
+            raise ConfigurationError(f"{_section_name(self.name)}.url is required when backend is 'redis'.")
         if self.url is not None:
             return _redis_partition(self.url, self.resolved_namespace)
         assert url_reference is not None
@@ -194,18 +186,13 @@ class CacheSettings(BaseSettings):
                 )
             )
         credentials_reference = self.credentials_reference
-        if (
-            credentials_reference is not None
-            and credentials_reference[0] == KEYCHAIN_SOURCE
-        ):
+        if credentials_reference is not None and credentials_reference[0] == KEYCHAIN_SOURCE:
             references.append(
                 CredentialReference(
                     name=_credential_reference_name(self.name, "credentials"),
                     key=credentials_reference[1],
                     owner="cache",
-                    description=(
-                        f"Configured Redis credentials for cache {self.name!r}."
-                    ),
+                    description=(f"Configured Redis credentials for cache {self.name!r}."),
                     source=KEYCHAIN_SOURCE,
                     required=True,
                 )
@@ -233,11 +220,7 @@ class CachesSettings(BaseSettings):
         names = tuple(settings.name for settings in self.instances)
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
-            raise ConfigurationError(
-                "Configured cache names contain duplicates: "
-                + ", ".join(duplicates)
-                + "."
-            )
+            raise ConfigurationError("Configured cache names contain duplicates: " + ", ".join(duplicates) + ".")
         if DEFAULT_CACHE_NAME not in names:
             raise ConfigurationError("Configured caches must include 'default'.")
 
@@ -302,14 +285,10 @@ def _cache_sections(
     source = config.config.values if isinstance(config, ConfigService) else config
     sections: dict[str, Mapping[str, Any]] = {}
     for section_name, values in source.items():
-        if section_name != CACHE_CONFIG_SECTION and not section_name.startswith(
-            f"{CACHE_CONFIG_SECTION}."
-        ):
+        if section_name != CACHE_CONFIG_SECTION and not section_name.startswith(f"{CACHE_CONFIG_SECTION}."):
             continue
         if not isinstance(values, Mapping):
-            raise ConfigurationError(
-                f"Config section {section_name!r} must be a mapping."
-            )
+            raise ConfigurationError(f"Config section {section_name!r} must be a mapping.")
         sections[section_name] = values
     return sections
 
@@ -324,10 +303,7 @@ def _load_cache_settings(
     section_name = _section_name(name)
     unknown = set(configured) - CACHE_INSTANCE_CONFIG.field_names
     if unknown:
-        raise ConfigurationError(
-            f"{section_name} contains unsupported field(s): "
-            + ", ".join(sorted(unknown))
-        )
+        raise ConfigurationError(f"{section_name} contains unsupported field(s): " + ", ".join(sorted(unknown)))
     values = dict(configured)
     backend_value = values.get("backend", DEFAULT_CACHE_BACKEND)
     try:
@@ -403,9 +379,7 @@ def _redis_partition(url: str, namespace: str) -> str:
             endpoint = f"unix:{unquote(parsed.path)}"
         else:
             port = parsed.port or 6379
-            endpoint = (
-                f"{parsed.scheme.lower()}:{parsed.hostname or 'localhost'}:{port}"
-            )
+            endpoint = f"{parsed.scheme.lower()}:{parsed.hostname or 'localhost'}:{port}"
         target = f"{endpoint}:{database}:{namespace}"
     except ValueError:
         target = f"redis:configured:{namespace}"
@@ -435,18 +409,13 @@ def _validate_nats_server_urls(servers: tuple[str, ...], *, section_name: str) -
     for server in servers:
         try:
             parsed = urlsplit(server)
-            if (
-                parsed.scheme.lower() not in _NATS_SERVER_SCHEMES
-                or parsed.hostname is None
-            ):
+            if parsed.scheme.lower() not in _NATS_SERVER_SCHEMES or parsed.hostname is None:
                 raise ValueError
             port = parsed.port
             if port is not None and not 0 < port <= 65_535:
                 raise ValueError
         except ValueError:
-            raise ConfigurationError(
-                f"{section_name}.servers must contain valid NATS server URLs."
-            ) from None
+            raise ConfigurationError(f"{section_name}.servers must contain valid NATS server URLs.") from None
 
 
 def _secret_source(
@@ -492,33 +461,22 @@ def _validate_connection_settings(
     secret_values = (url_source, url_key, credentials_source, credentials_key)
     if backend == "memory":
         if servers is not None:
-            raise ConfigurationError(
-                f"{section_name}.servers is not valid when backend is 'memory'."
-            )
+            raise ConfigurationError(f"{section_name}.servers is not valid when backend is 'memory'.")
         if url is not None:
-            raise ConfigurationError(
-                f"{section_name}.url is not valid when backend is 'memory'."
-            )
+            raise ConfigurationError(f"{section_name}.url is not valid when backend is 'memory'.")
         for field_name, value in zip(
             ("url_source", "url_key", "credentials_source", "credentials_key"),
             secret_values,
             strict=True,
         ):
             if value is not None:
-                raise ConfigurationError(
-                    f"{section_name}.{field_name} is not valid when backend is "
-                    "'memory'."
-                )
+                raise ConfigurationError(f"{section_name}.{field_name} is not valid when backend is 'memory'.")
         return
     if backend == "nats-jetstream":
         if servers is None:
-            raise ConfigurationError(
-                f"{section_name}.servers is required when backend is 'nats-jetstream'."
-            )
+            raise ConfigurationError(f"{section_name}.servers is required when backend is 'nats-jetstream'.")
         if not servers:
-            raise ConfigurationError(
-                f"{section_name}.servers must contain at least one NATS server."
-            )
+            raise ConfigurationError(f"{section_name}.servers must contain at least one NATS server.")
         _validate_nats_server_urls(servers, section_name=section_name)
         for field_name, value in zip(
             ("url", "url_source", "url_key", "credentials_source", "credentials_key"),
@@ -526,41 +484,26 @@ def _validate_connection_settings(
             strict=True,
         ):
             if value is not None:
-                raise ConfigurationError(
-                    f"{section_name}.{field_name} is not valid when backend is "
-                    "'nats-jetstream'."
-                )
+                raise ConfigurationError(f"{section_name}.{field_name} is not valid when backend is 'nats-jetstream'.")
         return
     if servers is not None:
-        raise ConfigurationError(
-            f"{section_name}.servers is not valid when backend is 'redis'."
-        )
+        raise ConfigurationError(f"{section_name}.servers is not valid when backend is 'redis'.")
     for source, field_name in (
         (url_source, "url_source"),
         (credentials_source, "credentials_source"),
     ):
         if source is not None and source not in {ENVIRONMENT_SOURCE, KEYCHAIN_SOURCE}:
-            raise ConfigurationError(
-                f"{section_name}.{field_name} must be 'environment' or 'keychain'."
-            )
+            raise ConfigurationError(f"{section_name}.{field_name} must be 'environment' or 'keychain'.")
     if url_key is not None and url_source is None:
-        raise ConfigurationError(
-            f"{section_name}.url_key requires {section_name}.url_source."
-        )
+        raise ConfigurationError(f"{section_name}.url_key requires {section_name}.url_source.")
     if credentials_key is not None and credentials_source is None:
-        raise ConfigurationError(
-            f"{section_name}.credentials_key requires "
-            f"{section_name}.credentials_source."
-        )
+        raise ConfigurationError(f"{section_name}.credentials_key requires {section_name}.credentials_source.")
     if url_source is None and url is None:
         raise ConfigurationError(
-            f"{section_name}.url or {section_name}.url_source is required when "
-            "backend is 'redis'."
+            f"{section_name}.url or {section_name}.url_source is required when backend is 'redis'."
         )
     if url_source is not None and url is not None:
-        raise ConfigurationError(
-            f"{section_name}.url cannot be configured with {section_name}.url_source."
-        )
+        raise ConfigurationError(f"{section_name}.url cannot be configured with {section_name}.url_source.")
     if url_source == ENVIRONMENT_SOURCE and url_key is None:
         raise ConfigurationError(
             f"{section_name}.url_source='environment' requires {section_name}.url_key. "
@@ -569,19 +512,14 @@ def _validate_connection_settings(
         )
     if url_source is not None and credentials_source is not None:
         raise ConfigurationError(
-            f"{section_name}.url_source cannot be configured with "
-            f"{section_name}.credentials_source."
+            f"{section_name}.url_source cannot be configured with {section_name}.credentials_source."
         )
     if credentials_source is not None:
         if url is None:
-            raise ConfigurationError(
-                f"{section_name}.url is required with "
-                f"{section_name}.credentials_source."
-            )
+            raise ConfigurationError(f"{section_name}.url is required with {section_name}.credentials_source.")
         if _url_has_userinfo(url):
             raise ConfigurationError(
-                f"{section_name}.url must not contain credentials when "
-                f"{section_name}.credentials_source is configured."
+                f"{section_name}.url must not contain credentials when {section_name}.credentials_source is configured."
             )
 
 
@@ -598,9 +536,7 @@ def _default_url_key(name: str, source: SecretSource) -> str:
         if name == DEFAULT_CACHE_NAME:
             return "cache/redis/url"
         return f"cache/{name}/redis/url"
-    raise ConfigurationError(
-        "Redis URL secret references without a key support only the keychain source."
-    )
+    raise ConfigurationError("Redis URL secret references without a key support only the keychain source.")
 
 
 def _default_credentials_key(source: SecretSource) -> str:
@@ -608,10 +544,7 @@ def _default_credentials_key(source: SecretSource) -> str:
         return "cache/redis/credentials"
     if source == ENVIRONMENT_SOURCE:
         return "WYBRA_REDIS_CREDENTIALS"
-    raise ConfigurationError(
-        "Redis credential secret references support only the environment and "
-        "keychain sources."
-    )
+    raise ConfigurationError("Redis credential secret references support only the environment and keychain sources.")
 
 
 def _credential_reference_name(name: str, kind: str) -> str:

@@ -101,15 +101,11 @@ class ConfigGroup:
 
     @property
     def defaults(self) -> Mapping[str, Any]:
-        return MappingProxyType(
-            {field.name: field.default for field in self.fields if field.has_default}
-        )
+        return MappingProxyType({field.name: field.default for field in self.fields if field.has_default})
 
     @property
     def env(self) -> Mapping[str, tuple[str, ...]]:
-        return MappingProxyType(
-            {field.name: field.env for field in self.fields if field.env}
-        )
+        return MappingProxyType({field.name: field.env for field in self.fields if field.env})
 
 
 def _field_map(fields: tuple[ConfigField, ...]) -> dict[str, ConfigField]:
@@ -117,16 +113,12 @@ def _field_map(fields: tuple[ConfigField, ...]) -> dict[str, ConfigField]:
     duplicates: set[str] = set()
     for field_def in fields:
         if not isinstance(field_def, ConfigField):
-            raise ConfigDefinitionError(
-                "ConfigGroup fields must be ConfigField instances."
-            )
+            raise ConfigDefinitionError("ConfigGroup fields must be ConfigField instances.")
         if field_def.name in values:
             duplicates.add(field_def.name)
         values[field_def.name] = field_def
     if duplicates:
-        raise ConfigDefinitionError(
-            "Config fields contain duplicate names: " + ", ".join(sorted(duplicates))
-        )
+        raise ConfigDefinitionError("Config fields contain duplicate names: " + ", ".join(sorted(duplicates)))
     return values
 
 
@@ -148,31 +140,23 @@ class RepeatedConfigSection:
         name_validator: ConfigNameValidator | None = None,
     ) -> None:
         if not isinstance(group, ConfigGroup):
-            raise ConfigDefinitionError(
-                "RepeatedConfigSection group must be a ConfigGroup."
-            )
+            raise ConfigDefinitionError("RepeatedConfigSection group must be a ConfigGroup.")
         prefix = environment_prefix.strip() if environment_prefix is not None else None
         if environment_prefix is not None:
             if not prefix:
-                raise ConfigDefinitionError(
-                    "RepeatedConfigSection environment prefix must not be blank."
-                )
+                raise ConfigDefinitionError("RepeatedConfigSection environment prefix must not be blank.")
             if environment_prefix != prefix:
                 raise ConfigDefinitionError(
-                    "RepeatedConfigSection environment prefix must not contain "
-                    "surrounding whitespace."
+                    "RepeatedConfigSection environment prefix must not contain surrounding whitespace."
                 )
         fields = frozenset(environment_fields)
         unknown_fields = fields - group.field_names
         if unknown_fields:
             raise ConfigDefinitionError(
-                "RepeatedConfigSection environment fields are not declared: "
-                + ", ".join(sorted(unknown_fields))
+                "RepeatedConfigSection environment fields are not declared: " + ", ".join(sorted(unknown_fields))
             )
         if name_validator is not None and not callable(name_validator):
-            raise ConfigDefinitionError(
-                "RepeatedConfigSection name validator must be callable."
-            )
+            raise ConfigDefinitionError("RepeatedConfigSection name validator must be callable.")
         object.__setattr__(self, "group", group)
         object.__setattr__(self, "environment_prefix", prefix)
         object.__setattr__(self, "environment_fields", fields)
@@ -249,9 +233,7 @@ def merge_config_defs(definitions: tuple[ConfigDef, ...]) -> ConfigDef:
                 repeated_sections[section_name] = repeated
                 continue
             if existing_repeated != repeated:
-                raise ConfigDefinitionError(
-                    f"Conflicting repeated section definition for {section_name}."
-                )
+                raise ConfigDefinitionError(f"Conflicting repeated section definition for {section_name}.")
     return ConfigDef(sections, repeated_sections=repeated_sections)
 
 
@@ -267,9 +249,7 @@ def _merge_fields(
             merged[field_name] = field_def
             continue
         if existing != field_def:
-            raise ConfigDefinitionError(
-                f"Conflicting definition for field {section_name}.{field_name}."
-            )
+            raise ConfigDefinitionError(f"Conflicting definition for field {section_name}.{field_name}.")
     return tuple(merged.values())
 
 
@@ -290,8 +270,5 @@ def _freeze_nested_mapping(
     """
 
     return MappingProxyType(
-        {
-            section: MappingProxyType(dict(section_values))
-            for section, section_values in values.items()
-        }
+        {section: MappingProxyType(dict(section_values)) for section, section_values in values.items()}
     )

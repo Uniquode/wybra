@@ -29,9 +29,7 @@ from wybra.auth.result import (
 )
 
 TIMESTAMP_FIELDS: frozenset[str] = frozenset(USER_TIMESTAMP_FIELDS)
-PASSKEY_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
-    {"created_at", "last_used_at", "revoked_at"}
-)
+PASSKEY_TIMESTAMP_FIELDS: frozenset[str] = frozenset({"created_at", "last_used_at", "revoked_at"})
 USER_NESTED_RECORD_FIELDS: tuple[str, ...] = ("passkeys",)
 
 
@@ -53,9 +51,7 @@ def _print_failure(error_type: str | None, message: str | None) -> int:
         ERROR_SUPERUSER_PROTECTED: "Superuser accounts are protected.",
         ERROR_UNSUPPORTED_ORDER: "Requested ordering is not supported.",
     }
-    fallback_message = (
-        fallback_messages.get(error_type) if error_type is not None else None
-    )
+    fallback_message = fallback_messages.get(error_type) if error_type is not None else None
     print(
         message or fallback_message or "User management failed.",
         file=sys.stderr,
@@ -92,19 +88,13 @@ def _print_records(
     json_output: bool,
     csv_output: bool,
 ) -> None:
-    cleaned_records = [
-        _record_without_nulls_for_fields(record, field_names) for record in records
-    ]
+    cleaned_records = [_record_without_nulls_for_fields(record, field_names) for record in records]
     if json_output:
         print(json.dumps(cleaned_records))
         return
 
     formatted_records = [
-        {
-            field_name: _format_record_value(value)
-            for field_name, value in record.items()
-        }
-        for record in cleaned_records
+        {field_name: _format_record_value(value) for field_name, value in record.items()} for record in cleaned_records
     ]
     if csv_output:
         writer = csv.DictWriter(sys.stdout, fieldnames=list(field_names))
@@ -113,13 +103,7 @@ def _print_records(
         return
 
     for record in formatted_records:
-        print(
-            " ".join(
-                f"{field_name}={record.get(field_name)}"
-                for field_name in field_names
-                if field_name in record
-            )
-        )
+        print(" ".join(f"{field_name}={record.get(field_name)}" for field_name in field_names if field_name in record))
 
 
 def _print_single_record(record: dict[str, Any], *, json_output: bool) -> None:
@@ -176,9 +160,7 @@ def _records_for_human_output(
 
 
 def _format_human_value(field_name: str, value: Any) -> Any:
-    if (
-        field_name in TIMESTAMP_FIELDS or field_name in PASSKEY_TIMESTAMP_FIELDS
-    ) and isinstance(value, (int, float)):
+    if (field_name in TIMESTAMP_FIELDS or field_name in PASSKEY_TIMESTAMP_FIELDS) and isinstance(value, (int, float)):
         try:
             return datetime.fromtimestamp(float(value), UTC).isoformat()
         except OverflowError:

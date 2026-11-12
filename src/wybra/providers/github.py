@@ -39,9 +39,7 @@ GITHUB_OAUTH_STATE_EXPIRY_SECONDS: Final[float] = 300.0
 GITHUB_OAUTH_STATE_BYTES: Final = 32
 GITHUB_PKCE_VERIFIER_BYTES: Final = 64
 GITHUB_DEFAULT_SCOPES: Final = ("read:user", "user:email")
-GITHUB_DEFAULT_AUTHORISATION_ENDPOINT: Final = (
-    "https://github.com/login/oauth/authorize"
-)
+GITHUB_DEFAULT_AUTHORISATION_ENDPOINT: Final = "https://github.com/login/oauth/authorize"
 GITHUB_DEFAULT_TOKEN_ENDPOINT: Final = "https://github.com/login/oauth/access_token"
 GITHUB_DEFAULT_USER_API_ENDPOINT: Final = "https://api.github.com/user"
 GITHUB_DEFAULT_EMAILS_API_ENDPOINT: Final = "https://api.github.com/user/emails"
@@ -166,9 +164,7 @@ class GitHubOAuthState:
 
     def __post_init__(self) -> None:
         if self.provider_name != GITHUB_PROVIDER_NAME:
-            raise ValueError(
-                f"GitHub OAuth state requires provider {GITHUB_PROVIDER_NAME!r}."
-            )
+            raise ValueError(f"GitHub OAuth state requires provider {GITHUB_PROVIDER_NAME!r}.")
         if not is_provider_oauth_purpose(self.purpose):
             raise ValueError("GitHub OAuth state purpose must be login or link.")
         for field_name in ("state", "code_verifier", "return_to", "redirect_uri"):
@@ -189,19 +185,13 @@ def github_oauth_settings_from_provider(
     provider: ProviderSettings,
 ) -> GitHubOAuthSettings:
     if provider.name != GITHUB_PROVIDER_NAME:
-        raise ConfigurationError(
-            f"GitHub OAuth settings require provider {GITHUB_PROVIDER_NAME!r}."
-        )
+        raise ConfigurationError(f"GitHub OAuth settings require provider {GITHUB_PROVIDER_NAME!r}.")
     if provider.client_id is None:
-        raise ConfigurationError(
-            f"GitHub provider must configure {PROVIDER_CLIENT_ID_FIELD!r}."
-        )
+        raise ConfigurationError(f"GitHub provider must configure {PROVIDER_CLIENT_ID_FIELD!r}.")
     client_secret_reference = provider.required_client_secret_reference()
     if client_secret_reference is None:
         raise ConfigurationError(
-            "GitHub provider must configure both "
-            f"{PROVIDER_SECRETS_FIELD!r} and "
-            f"{PROVIDER_CLIENT_SECRET_KEY_FIELD!r}."
+            f"GitHub provider must configure both {PROVIDER_SECRETS_FIELD!r} and {PROVIDER_CLIENT_SECRET_KEY_FIELD!r}."
         )
     return GitHubOAuthSettings(
         provider_name=provider.name,
@@ -225,8 +215,7 @@ def create_github_oauth_state(
         code_verifier=token_urlsafe(GITHUB_PKCE_VERIFIER_BYTES),
         return_to=return_to,
         redirect_uri=redirect_uri,
-        expires_at=(current_timestamp() if now is None else now)
-        + GITHUB_OAUTH_STATE_EXPIRY_SECONDS,
+        expires_at=(current_timestamp() if now is None else now) + GITHUB_OAUTH_STATE_EXPIRY_SECONDS,
         user_id=user_id,
     )
 
@@ -482,9 +471,7 @@ def _optional_payload_str(
         return None
     if isinstance(value, str):
         return value
-    raise GitHubTokenExchangeError(
-        f"GitHub token exchange response field {field_name!r} must be a string."
-    )
+    raise GitHubTokenExchangeError(f"GitHub token exchange response field {field_name!r} must be a string.")
 
 
 def _optional_payload_int(
@@ -496,9 +483,7 @@ def _optional_payload_int(
         return None
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    raise GitHubTokenExchangeError(
-        f"GitHub token exchange response field {field_name!r} must be an integer."
-    )
+    raise GitHubTokenExchangeError(f"GitHub token exchange response field {field_name!r} must be an integer.")
 
 
 def _github_subject(value: object) -> str:

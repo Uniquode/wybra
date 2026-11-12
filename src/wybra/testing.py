@@ -182,9 +182,7 @@ def _application_table_names(
                 for models in apps.values()
                 for model in models.values()
                 if isinstance(
-                    table_name := getattr(
-                        getattr(model, "_meta", None), "db_table", None
-                    ),
+                    table_name := getattr(getattr(model, "_meta", None), "db_table", None),
                     str,
                 )
             }
@@ -221,9 +219,7 @@ def create_test_application(
 ) -> FastAPI:
     """Create a FastAPI application with Wybra lifecycle composition."""
     application = app or FastAPI()
-    application.router.lifespan_context = start_site(
-        config_source=MappingConfigSource(config_values)
-    )
+    application.router.lifespan_context = start_site(config_source=MappingConfigSource(config_values))
     return application
 
 
@@ -340,9 +336,7 @@ def configuration_with_overrides(
     overrides: Mapping[str, Mapping[str, object]],
 ) -> dict[str, dict[str, object]]:
     """Return a copied config mapping with per-section test overrides applied."""
-    combined = {
-        section: dict(section_values) for section, section_values in values.items()
-    }
+    combined = {section: dict(section_values) for section, section_values in values.items()}
     for section, section_overrides in overrides.items():
         combined.setdefault(section, {}).update(section_overrides)
     return combined
@@ -535,9 +529,7 @@ def _test_database_is_in_memory(database: WybraDatabaseCapability) -> bool:
     if not isinstance(connections, dict):
         return False
     default_connection = connections.get("default")
-    return isinstance(default_connection, str) and is_memory_database_url(
-        default_connection
-    )
+    return isinstance(default_connection, str) and is_memory_database_url(default_connection)
 
 
 async def _migrate_application_database(app: FastAPI) -> MigratedTestDatabase:
@@ -575,9 +567,7 @@ async def _migrate_application_database(app: FastAPI) -> MigratedTestDatabase:
         _capability=database,
         database_url=app_config.database_url,
         modules=site.modules,
-        table_names=_application_table_names(
-            cast(Mapping[str, Mapping[str, object]], Tortoise.apps)
-        ),
+        table_names=_application_table_names(cast(Mapping[str, Mapping[str, object]], Tortoise.apps)),
     )
 
 

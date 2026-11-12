@@ -350,10 +350,7 @@ async def _complete_login_ceremony(
     return_to: str,
 ) -> Response:
     ceremony_result = await complete_authentication_ceremony(request, user)
-    if (
-        ceremony_result.is_failure()
-        and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
-    ):
+    if ceremony_result.is_failure() and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
         return await _verification_required_response(request, email=user.email)
 
     if ceremony_result.is_failure() or ceremony_result.value is None:
@@ -365,9 +362,7 @@ async def _complete_login_ceremony(
         )
 
     response = RedirectResponse(url=return_to, status_code=303)
-    set_session_cookie(
-        response, request, ceremony_result.value, _identity_options(request)
-    )
+    set_session_cookie(response, request, ceremony_result.value, _identity_options(request))
     return response
 
 

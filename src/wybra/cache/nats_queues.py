@@ -149,9 +149,7 @@ class NatsWorkQueue:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream work publication failed (%s).", type(exc).__name__
-            )
+            logger.warning("NATS JetStream work publication failed (%s).", type(exc).__name__)
             if _is_queue_capacity_error(exc):
                 raise CacheWorkQueueRejectedError(
                     f"Queue {queue!r} has reached its configured item capacity."
@@ -290,20 +288,14 @@ class NatsWorkQueue:
         address = _address(self.runtime, owner, queue)
         limit = validate_limit(limit)
         try:
-            info = await (await self.runtime.coordination_jetstream()).stream_info(
-                address.dead_stream_name
-            )
+            info = await (await self.runtime.coordination_jetstream()).stream_info(address.dead_stream_name)
         except self.runtime.not_found_error():
             return ()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream dead-letter lookup failed (%s).", type(exc).__name__
-            )
-            raise CacheFeatureError(
-                "NATS JetStream dead-letter lookup failed."
-            ) from None
+            logger.warning("NATS JetStream dead-letter lookup failed (%s).", type(exc).__name__)
+            raise CacheFeatureError("NATS JetStream dead-letter lookup failed.") from None
         stream_state = getattr(info, "state", None)
         first = getattr(stream_state, "first_seq", 0)
         last = getattr(stream_state, "last_seq", 0)
@@ -325,12 +317,8 @@ class NatsWorkQueue:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning(
-                    "NATS JetStream dead-letter read failed (%s).", type(exc).__name__
-                )
-                raise CacheFeatureError(
-                    "NATS JetStream dead-letter read failed."
-                ) from None
+                logger.warning("NATS JetStream dead-letter read failed (%s).", type(exc).__name__)
+                raise CacheFeatureError("NATS JetStream dead-letter read failed.") from None
             delivery = _dead_delivery(queue, message)
             if delivery is not None:
                 deliveries.append(delivery)
@@ -387,9 +375,7 @@ class NatsWorkQueue:
         except Exception as exc:
             if self.runtime.is_timeout_error(exc):
                 return None
-            logger.warning(
-                "NATS JetStream work reservation failed (%s).", type(exc).__name__
-            )
+            logger.warning("NATS JetStream work reservation failed (%s).", type(exc).__name__)
             raise CacheFeatureError("NATS JetStream work reservation failed.") from None
         return messages[0] if messages else None
 
@@ -433,9 +419,7 @@ class NatsWorkQueue:
                 await self._flush()
                 return None
             if state.status == _STATE_DEAD_PENDING:
-                await self._complete_pending_dead_letter(
-                    address, message, state, payload
-                )
+                await self._complete_pending_dead_letter(address, message, state, payload)
                 return None
             if state.status == _STATE_DELAYED and state.deadline > now:
                 await message.nak(delay=max(0.001, state.deadline - now))
@@ -445,9 +429,7 @@ class NatsWorkQueue:
                 await message.nak(delay=max(0.001, state.deadline - now))
                 await self._flush()
                 return None
-            next_attempt = (
-                state.attempt if state.status == _STATE_RELEASED else state.attempt + 1
-            )
+            next_attempt = state.attempt if state.status == _STATE_RELEASED else state.attempt + 1
             if next_attempt > state.maximum_attempts:
                 pending = _WorkState(
                     identity=state.identity,
@@ -457,9 +439,7 @@ class NatsWorkQueue:
                 )
                 if not await self._write_state(address, current.sequence, pending):
                     continue
-                await self._complete_pending_dead_letter(
-                    address, message, pending, payload
-                )
+                await self._complete_pending_dead_letter(address, message, pending, payload)
                 return None
             receipt = uuid4().hex
             active = _WorkState(
@@ -498,28 +478,19 @@ class NatsWorkQueue:
             if current is None or not _owns(current.state, delivery):
                 self._deliveries.pop(delivery.receipt, None)
                 raise _stale_delivery(delivery)
-            terminal = (
-                action == _STATE_DELAYED
-                and current.state.attempt >= current.state.maximum_attempts
-            )
+            terminal = action == _STATE_DELAYED and current.state.attempt >= current.state.maximum_attempts
             updated = _WorkState(
                 identity=current.state.identity,
                 maximum_attempts=current.state.maximum_attempts,
                 attempt=current.state.attempt,
                 status=_STATE_DEAD_PENDING if terminal else action,
-                deadline=now + delay
-                if action == _STATE_DELAYED and not terminal
-                else 0,
+                deadline=now + delay if action == _STATE_DELAYED and not terminal else 0,
             )
             if await self._write_state(
                 local.address,
                 current.sequence,
                 updated,
-                ttl=(
-                    _TERMINAL_STATE_TTL_SECONDS
-                    if updated.status == _STATE_ACKNOWLEDGED
-                    else None
-                ),
+                ttl=(_TERMINAL_STATE_TTL_SECONDS if updated.status == _STATE_ACKNOWLEDGED else None),
             ):
                 return updated
         raise CacheConflictError("NATS JetStream delivery settlement conflicted.")
@@ -558,17 +529,11 @@ class NatsWorkQueue:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream work state read failed (%s).", type(exc).__name__
-            )
+            logger.warning("NATS JetStream work state read failed (%s).", type(exc).__name__)
             raise CacheFeatureError("NATS JetStream work state read failed.") from None
         sequence = getattr(message, "seq", None)
         data = getattr(message, "data", None)
-        if (
-            not isinstance(sequence, int)
-            or sequence <= 0
-            or not isinstance(data, bytes)
-        ):
+        if not isinstance(sequence, int) or sequence <= 0 or not isinstance(data, bytes):
             raise CacheFeatureError("NATS JetStream work state is invalid.")
         return _StateRecord(sequence, _decode_state(data))
 
@@ -599,9 +564,7 @@ class NatsWorkQueue:
         except Exception as exc:
             if _is_sequence_conflict(exc):
                 return False
-            logger.warning(
-                "NATS JetStream work state write failed (%s).", type(exc).__name__
-            )
+            logger.warning("NATS JetStream work state write failed (%s).", type(exc).__name__)
             raise CacheFeatureError("NATS JetStream work state write failed.") from None
         return True
 
@@ -636,9 +599,7 @@ class NatsWorkQueue:
                 "NATS JetStream dead-letter publication failed (%s).",
                 type(exc).__name__,
             )
-            raise CacheFeatureError(
-                "NATS JetStream dead-letter publication failed."
-            ) from None
+            raise CacheFeatureError("NATS JetStream dead-letter publication failed.") from None
 
     async def _mark_dead(
         self,
@@ -700,9 +661,7 @@ class NatsWorkQueue:
                 "NATS JetStream work settlement flush failed (%s).",
                 type(exc).__name__,
             )
-            raise CacheFeatureError(
-                "NATS JetStream work settlement confirmation failed."
-            ) from None
+            raise CacheFeatureError("NATS JetStream work settlement confirmation failed.") from None
 
     def _required_delivery(self, delivery: WorkDelivery) -> _LocalDelivery:
         if not isinstance(delivery, WorkDelivery):
@@ -868,9 +827,7 @@ def _owns(state: _WorkState, delivery: WorkDelivery) -> bool:
 
 
 def _stale_delivery(delivery: WorkDelivery) -> CacheConflictError:
-    return CacheConflictError(
-        f"Delivery {delivery.identity.value!r} is stale or no longer reserved."
-    )
+    return CacheConflictError(f"Delivery {delivery.identity.value!r} is stale or no longer reserved.")
 
 
 def _is_sequence_conflict(error: Exception) -> bool:

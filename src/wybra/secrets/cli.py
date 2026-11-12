@@ -133,18 +133,8 @@ def set_command(
     settings = _secret_command_settings_from_context(ctx)
     driver = KeychainSecretSourceDriver(settings.keychain)
     if json_input:
-        if (
-            raw_key is not None
-            or development
-            or name is not None
-            or value is not None
-            or stdin_source
-            or prompt_source
-        ):
-            raise click.UsageError(
-                "--json cannot be combined with --key, --dev, NAME, VALUE, "
-                "--stdin, or --prompt."
-            )
+        if raw_key is not None or development or name is not None or value is not None or stdin_source or prompt_source:
+            raise click.UsageError("--json cannot be combined with --key, --dev, NAME, VALUE, --stdin, or --prompt.")
         stored = _store_json_values(driver, sys.stdin)
         _write_json({"stored": [_stored_payload(driver, item) for item in stored]})
         return
@@ -239,23 +229,15 @@ def list_command(ctx: click.Context, development: bool, json_output: bool) -> No
     settings = _secret_command_settings_from_context(ctx)
     driver = KeychainSecretSourceDriver(settings.keychain)
     credential_references = (
-        configured_keychain_credential_references(development=True)
-        if development
-        else settings.credential_references
+        configured_keychain_credential_references(development=True) if development else settings.credential_references
     )
-    records = [
-        _credential_reference_record(driver, reference)
-        for reference in credential_references
-    ]
+    records = [_credential_reference_record(driver, reference) for reference in credential_references]
     if json_output:
         _write_json({"keys": {str(record["name"]): record for record in records}})
         return
     for record in records:
         state = "present" if record["exists"] else "missing"
-        click.echo(
-            f"{state}\t{record['name']}\t{record['key']}\t"
-            f"{record['owner']}\t{record['description']}"
-        )
+        click.echo(f"{state}\t{record['name']}\t{record['key']}\t{record['owner']}\t{record['description']}")
 
 
 @secret_command.group(name="rotate")
@@ -277,9 +259,7 @@ def rotate_system_command(
     settings = _secret_command_settings_from_context(ctx)
     crypto = settings.secrets.crypto
     if crypto.source != KEYCHAIN_SOURCE:
-        raise click.ClickException(
-            "System rotation is limited to keychain-backed system secret keys."
-        )
+        raise click.ClickException("System rotation is limited to keychain-backed system secret keys.")
 
     driver = KeychainSecretSourceDriver(settings.keychain)
     previous_keys = cast(str, crypto.previous_keys)
@@ -328,14 +308,10 @@ def rotate_csrf_command(
     current_reference = forms_settings.csrf_token_secret_reference
     previous_reference = forms_settings.csrf_token_secret_previous_reference
     if current_reference is None or current_reference[0] != KEYCHAIN_SOURCE:
-        raise click.ClickException(
-            "CSRF token-secret rotation is limited to keychain-backed CSRF token "
-            "secrets."
-        )
+        raise click.ClickException("CSRF token-secret rotation is limited to keychain-backed CSRF token secrets.")
     if previous_reference is None or previous_reference[0] != KEYCHAIN_SOURCE:
         raise click.ClickException(
-            "CSRF token-secret rotation requires a keychain-backed previous "
-            "CSRF token secret reference."
+            "CSRF token-secret rotation requires a keychain-backed previous CSRF token secret reference."
         )
 
     driver = KeychainSecretSourceDriver(settings.keychain)
@@ -444,9 +420,7 @@ def _config_source_from_context(ctx: click.Context) -> str | None:
     if config_source is None:
         return None
     if not isinstance(config_source, str):
-        raise click.UsageError(
-            f"--config must be a string, got {type(config_source).__name__}."
-        )
+        raise click.UsageError(f"--config must be a string, got {type(config_source).__name__}.")
     try:
         return normalise_cli_config_source(config_source)
     except ProjectToolConfigurationError as exc:
@@ -500,9 +474,7 @@ def _forms_settings_from_command_settings(
     settings: SecretCommandSettings,
 ) -> FormsSettings:
     if settings.raw_config is None:
-        raise click.ClickException(
-            "CSRF token-secret rotation requires application configuration."
-        )
+        raise click.ClickException("CSRF token-secret rotation requires application configuration.")
     config = ConfigService(
         [MappingConfigSource(settings.raw_config)],
         config_defs=(FormsSettings.module_config,),
@@ -522,9 +494,7 @@ def _auth_settings_from_context(ctx: click.Context) -> AuthSettings:
     except ProjectToolConfigurationError as exc:
         raise click.ClickException(str(exc)) from exc
     except CompositionError as exc:
-        raise click.ClickException(
-            f"{str(exc).rstrip('.')}. Pass --config or set {APP_CONFIG_ENV}."
-        ) from exc
+        raise click.ClickException(f"{str(exc).rstrip('.')}. Pass --config or set {APP_CONFIG_ENV}.") from exc
     try:
         config = ConfigService(
             [AppConfigSource(app_config)],
@@ -541,9 +511,7 @@ def _secret_envelope_service_from_command_settings(
 ) -> SecretEnvelopeService:
     crypto = settings.secrets.crypto
     if crypto.source != KEYCHAIN_SOURCE:
-        raise click.ClickException(
-            "Persisted secret re-encryption requires keychain-backed [secrets.crypto]."
-        )
+        raise click.ClickException("Persisted secret re-encryption requires keychain-backed [secrets.crypto].")
 
     driver = KeychainSecretSourceDriver(settings.keychain)
     previous_keys = cast(str, crypto.previous_keys)
@@ -567,9 +535,7 @@ async def _reencrypt_secrets(
         modules=("wybra.auth",),
     )
     try:
-        async with database.transaction_for(
-            database.routes.connection().for_write()
-        ) as connection:
+        async with database.transaction_for(database.routes.connection().for_write()) as connection:
             return await reencrypt_persisted_secrets(
                 connection,
                 secret_service,
@@ -587,9 +553,7 @@ def _resolve_required_secret(
     try:
         return driver.resolve(key).reveal()
     except MissingSecretError as exc:
-        raise click.ClickException(
-            f"Configured {label} is missing from the keychain: key={key}."
-        ) from exc
+        raise click.ClickException(f"Configured {label} is missing from the keychain: key={key}.") from exc
     except click.ClickException:
         raise
     except Exception as exc:
@@ -620,13 +584,9 @@ def _validate_secret_key_rotation(
     previous = _resolve_required_secret(driver, previous_keys, "previous secret keys")
     key_ring = parse_secret_key_bundle(current=current, previous=previous)
     if key_ring.current.version != plan.new_version:
-        raise click.ClickException(
-            "Post-rotation current secret key validation failed."
-        )
+        raise click.ClickException("Post-rotation current secret key validation failed.")
     if plan.retired_version not in {key.version for key in key_ring.keys}:
-        raise click.ClickException(
-            "Post-rotation previous secret keys do not include the retired current key."
-        )
+        raise click.ClickException("Post-rotation previous secret keys do not include the retired current key.")
 
 
 def _validate_csrf_token_secret_rotation(
@@ -698,17 +658,11 @@ def _key_for_name(
         return builtin_keychain_secret_key(normalised_name, development=development)
     except ConfigurationError:
         if development:
-            raise click.UsageError(
-                f"No development key is available for {normalised_name}."
-            ) from None
+            raise click.UsageError(f"No development key is available for {normalised_name}.") from None
 
     if not development:
         configured_key = next(
-            (
-                reference.key
-                for reference in settings.credential_references
-                if reference.name == normalised_name
-            ),
+            (reference.key for reference in settings.credential_references if reference.name == normalised_name),
             None,
         )
         if configured_key is not None:
@@ -870,9 +824,7 @@ def _reencrypt_result_payload(
         "rewritten": result.rewritten,
         "skipped_current": result.skipped_current,
         "skipped_plaintext": result.skipped_plaintext,
-        "unsupported_recovery_code_verifiers": (
-            result.unsupported_recovery_code_verifiers
-        ),
+        "unsupported_recovery_code_verifiers": (result.unsupported_recovery_code_verifiers),
         "fields": [
             {
                 "table": field.table,
@@ -881,10 +833,7 @@ def _reencrypt_result_payload(
                 "rewritten": field.rewritten,
                 "skipped_current": field.skipped_current,
                 "skipped_plaintext": field.skipped_plaintext,
-                "versions": [
-                    {"version": version.version, "count": version.count}
-                    for version in field.versions
-                ],
+                "versions": [{"version": version.version, "count": version.count} for version in field.versions],
             }
             for field in result.fields
         ],

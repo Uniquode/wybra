@@ -55,9 +55,7 @@ async def test_migrated_test_database_clears_data_but_retains_migrations() -> No
         await database.clear()
 
         assert await SessionRecordModel.all().count() == 0
-        _count, rows = await database.connection().execute_query(
-            "SELECT COUNT(*) AS count FROM tortoise_migrations"
-        )
+        _count, rows = await database.connection().execute_query("SELECT COUNT(*) AS count FROM tortoise_migrations")
 
     assert rows[0]["count"] > 0
 
@@ -66,10 +64,7 @@ async def test_migrated_test_database_clears_data_but_retains_migrations() -> No
 async def test_migrated_test_database_exposes_live_database_capability() -> None:
     async with migrated_test_database(modules=("wybra.db",)) as database:
         capability = database.capability()
-        assert (
-            tortoise_connection(capability, capability.database().default())
-            is database.connection()
-        )
+        assert tortoise_connection(capability, capability.database().default()) is database.connection()
 
 
 @pytest.mark.anyio
@@ -122,14 +117,10 @@ async def test_wybra_test_client_uses_composed_app_and_migrated_tables() -> None
             database.database().for_write(),
         )
         await connection.execute_query(
-            "INSERT INTO sessions_session "
-            "(id, data, created_at, updated_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO sessions_session (id, data, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?)",
             [session_id, "{}", 1.0, 1.0, 2.0],
         )
-        _count, rows = await connection.execute_query(
-            "SELECT COUNT(*) AS count FROM sessions_session"
-        )
+        _count, rows = await connection.execute_query("SELECT COUNT(*) AS count FROM sessions_session")
         return {"count": int(rows[0]["count"])}
 
     application = create_test_application(
@@ -190,8 +181,7 @@ async def test_ad_hoc_wybra_test_client_rejects_in_memory_database() -> None:
             WybraTestClient(app).get("/")
 
         _count, rows = await application.database.connection().execute_query(
-            "SELECT name FROM sqlite_master "
-            "WHERE type = 'table' AND name = 'sessions_session'"
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions_session'"
         )
 
     assert [row["name"] for row in rows] == ["sessions_session"]

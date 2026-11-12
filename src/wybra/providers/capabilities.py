@@ -55,15 +55,9 @@ async def setup_site(site: Site) -> None:
 async def post_setup_site(site: Site) -> None:
     site.require_capability(AuthCapability)
     capability = site.require_capability(ProvidersCapability)
-    secrets = (
-        site.optional_capability(SecretsCapability)
-        if capability.settings.enabled_providers
-        else None
-    )
+    secrets = site.optional_capability(SecretsCapability) if capability.settings.enabled_providers else None
     secret_issues = (
-        capability.deactivate_unavailable_providers(secrets)
-        if isinstance(capability, SiteProvidersCapability)
-        else ()
+        capability.deactivate_unavailable_providers(secrets) if isinstance(capability, SiteProvidersCapability) else ()
     )
     for issue in secret_issues:
         logger.error(

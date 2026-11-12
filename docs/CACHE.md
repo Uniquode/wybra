@@ -84,7 +84,7 @@ configuration when a Redis cache must provide only the baseline byte-cache API.
 ### NATS JetStream cache
 
 The `nats-jetstream` backend provides a shared baseline byte cache plus
-`atomic`, `lease`, `time`, `pub-sub`, `stream`, `work-queue`, and `schedule`
+`atomic`, `lease`, `time`, `stream`, `work-queue`, and `schedule`
 features. It requires a reachable JetStream-enabled NATS Server `2.11` or
 newer; startup verifies the server version, JetStream availability, and the
 required stream configuration before the cache is registered.
@@ -98,8 +98,7 @@ namespace = "website_default"
 
 Each namespace owns baseline and private coordination streams. Logical durable
 streams, work queues, and dead-letter streams create additional bounded
-JetStream streams on first use; live pub/sub uses core NATS subjects and
-retains nothing. Namespaces therefore isolate named caches even when they use
+JetStream streams on first use. Namespaces therefore isolate named caches even when they use
 the same NATS account. Wybra derives each subject token from a deterministic
 SHA-256 digest of the logical owner and key, so raw cache keys do not appear in
 NATS subject names or diagnostics. Subject tokens are not a credential
@@ -124,10 +123,9 @@ minute, targets a refresh after five minutes, and refuses to use a calibration
 older than ten minutes. This avoids a provider request for every visibility or
 schedule comparison while keeping shared cache decisions on provider time.
 
-The `pub-sub` feature provides live namespace-isolated fan-out only. A
-publication confirms provider acceptance but does not promise a subscriber
-count, replay, acknowledgement, or delivery to an offline subscriber. Use the
-durable `stream` feature when a consumer needs replay or a resumable position.
+For live application fan-out, configure the independent
+[`wybra.streams`](STREAMS.md) module. Use the durable `stream` cache feature
+when a consumer needs replay or a resumable position.
 
 The `work-queue` feature uses JetStream work-queue streams and explicit pull
 consumer acknowledgement. Wybra keeps each opaque delivery receipt in private
@@ -382,7 +380,6 @@ guarantees rather than changing application code:
 | Baseline values | Process-local, volatile | Shared, expiring | Shared, durable, expiring |
 | Atomic values and leases | Process-local | Shared, provider-atomic | Shared, serialised through private coordination |
 | Provider time | Configured process clock | Redis `TIME` calibration | JetStream timestamp calibration |
-| Pub/sub | Process-local live fan-out | Shared live fan-out | Shared core-NATS live fan-out |
 | Streams | Process-local bounded replay | Shared durable replay | Shared durable replay |
 | Work queues | Process-local at-least-once | Shared durable at-least-once | Shared durable at-least-once |
 | Schedules | Process-local fenced records | Shared durable fenced records | Shared durable fenced records |
@@ -403,7 +400,6 @@ logic and adapters can be exercised without external infrastructure.
 | Leases and fencing | Process-local, volatile, ordered per resource |
 | Work queues | Process-local at-least-once delivery with acknowledgement, visibility recovery, delayed retry, and dead-lettering |
 | Streams | Process-local ordered replay, bounded retention, and consumer positions |
-| Pub/sub | Process-local live fan-out with no replay |
 | Schedules | Process-local revisioned records, due ordering, and fenced claims |
 | Time | Process-local time from the configured clock |
 
@@ -443,10 +439,6 @@ the operator then owns verification of persistence and eviction policy. Redis
 Cluster is not yet supported for these advanced features; use a standalone or
 compatible non-clustered deployment.
 
-The live `pub-sub` feature needs a reachable Redis server plus permission to
-subscribe and publish. It does not require persistence, scripting, or a
-particular eviction policy because it retains no messages or feature state.
-
 Upgrading an existing Redis baseline cache with omitted `features` enables the
 implemented advanced features and therefore requires these prerequisites.
 Configure `features = []` to retain baseline-only behaviour while planning a
@@ -461,7 +453,6 @@ operation reports a safe cache error if the provider later becomes unavailable.
 | Baseline byte cache | Shared expiring values, isolated by named namespace |
 | Atomic values and counters | Shared atomic create, compare-and-swap, compare-and-delete, and increment with persistent revisions |
 | Leases and fencing | Shared renewable leases with opaque holder tokens and persistent monotonic fencing tokens |
-| Pub/sub | Shared live fan-out with no replay or retained history |
 | Work queues | Shared Redis Streams consumer-group delivery with acknowledgement, visibility recovery, delayed retry, and bounded dead letters |
 | Schedules | Shared revisioned one-time and interval records with due ordering and fenced claims |
 | Streams | Shared ordered replay with a fixed 1,000-record retained history and durable consumer positions |
@@ -526,11 +517,10 @@ the provider-private receipt state to honour the provider-neutral visibility
 deadline. Atomic and lease feature TTLs retain the provider-neutral positive
 finite contract.
 
-NATS live pub/sub is core-NATS fan-out and is intentionally non-durable. Use
-the `stream` feature for replay. Durable NATS stream and dead-letter history is
-bounded to 1,000 records per logical stream. Schedule metadata and opaque
-payloads remain namespace-private; cache diagnostics expose logical identities
-but never credentials, raw keys, queue receipts, or payloads.
+Durable NATS stream and dead-letter history is bounded to 1,000 records per
+logical stream. Schedule metadata and opaque payloads remain namespace-private;
+cache diagnostics expose logical identities but never credentials, raw keys,
+queue receipts, or payloads.
 
 ### Deployment patterns
 
@@ -602,20 +592,6 @@ claims, scripts, sorted sets, and settlement operations; a server that lacks
 that command surface cannot advertise the feature. The generic cache-backed
 Taskiq result adapter uses only the baseline byte-value cache; Taskiq broker and
 schedule adapters remain separate work.
-
-### Redis pub/sub
-
-The Redis `pub-sub` feature provides live fan-out for one logical owner and
-topic across application instances. Each channel is private to the configured
-cache namespace, so named caches sharing a Redis database cannot cross-deliver
-messages. `publish()` confirms that the provider accepted the publication; the
-cache contract does not promise a subscriber count.
-
-Pub/sub retains no messages and does not promise replay, acknowledgement,
-redelivery, or delivery to offline subscribers. Each subscription owns a Redis
-pub/sub handle; close it explicitly, or allow cache-registry shutdown to close
-it. Use the `stream` feature when consumers require durable replay or resumable
-positions.
 
 ### Redis schedules
 
@@ -778,14 +754,13 @@ retains the item for another attempt until its configured attempt boundary.
 `visible_until` is a Unix timestamp float. `dead_letters()` returns retained
 entries in their original dead-letter order, oldest first.
 
-### Streams and pub/sub
+### Streams
 
 Use streams when a consumer needs ordered replay, retained history, or a
-resumable position. Use pub/sub only for live notifications where offline
-consumers are expected to miss messages:
+resumable position:
 
 ```python
-from wybra.cache import PubSubCacheCapability, StreamCacheCapability
+from wybra.cache import StreamCacheCapability
 
 stream = tasks.require(StreamCacheCapability, consumer="task lifecycle")
 position = await stream.append("tasks", "lifecycle", event_payload)
@@ -807,18 +782,11 @@ await stream.forget_consumer(
     "lifecycle",
     "retired-status-projection",
 )
-
-pubsub = tasks.require(PubSubCacheCapability, consumer="live task updates")
-subscription = await pubsub.subscribe("tasks", "updates")
-try:
-    message = await subscription.receive(timeout=10)
-finally:
-    await subscription.close()
 ```
 
 A replay request older than retained stream history raises
-`CachePositionExpiredError`. Pub/sub never promises replay; publishing before a
-subscriber connects returns no delivery for that subscriber.
+`CachePositionExpiredError`. Configure [`STREAMS.md`](STREAMS.md) for live
+notifications where offline consumers may miss messages.
 
 For Redis, a logical stream retains exactly 1,000 records. A projection that
 cannot tolerate missed history must acknowledge frequently enough to remain

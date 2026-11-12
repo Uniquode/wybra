@@ -48,9 +48,7 @@ class DefaultSecretsCapability:
     ) -> DefaultSecretsCapability:
         return cls.from_drivers(
             (
-                EnvironmentSecretSourceDriver(
-                    environ if environ is not None else os.environ
-                ),
+                EnvironmentSecretSourceDriver(environ if environ is not None else os.environ),
                 AwsSecretsManagerSourceDriver(settings.kms),
                 KeychainSecretSourceDriver(settings.keychain),
                 VaultSecretSourceDriver(settings.vault),

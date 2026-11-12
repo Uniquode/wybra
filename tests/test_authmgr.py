@@ -266,9 +266,7 @@ async def initialise_app_identity_database(app: FastAPI) -> None:
         )
         site.provide_capability(
             AuthPersistenceCapability,
-            TortoiseAuthPersistenceCapability(
-                site.capability_proxy(DatabaseCapability)
-            ),
+            TortoiseAuthPersistenceCapability(site.capability_proxy(DatabaseCapability)),
         )
 
 
@@ -296,9 +294,7 @@ async def app_connection_scope(app: FastAPI) -> AsyncIterator[BaseDBAsyncClient]
 def run_auth_migration(argv: list[str]) -> int:
     def load_settings(database_url: str | None) -> MigrationTestSettings:
         if database_url is None:
-            raise migrate_module.MigrationConfigurationError(
-                "Test database URL is required."
-            )
+            raise migrate_module.MigrationConfigurationError("Test database URL is required.")
 
         return MigrationTestSettings(database_url=database_url)
 
@@ -433,30 +429,19 @@ def initialise_legacy_identity_database(database_path: Path) -> None:
 
 def sqlite_table_names(database_path: Path) -> set[str]:
     with closing(sqlite3.connect(database_path)) as connection:
-        return {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
+        return {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
 def sqlite_table_columns(database_path: Path, table_name: str) -> set[str]:
     quoted_table_name = _quote_sqlite_identifier(table_name)
     with closing(sqlite3.connect(database_path)) as connection:
-        return {
-            row[1]
-            for row in connection.execute(f"PRAGMA table_info({quoted_table_name})")
-        }
+        return {row[1] for row in connection.execute(f"PRAGMA table_info({quoted_table_name})")}
 
 
 def sqlite_table_indexes(database_path: Path, table_name: str) -> set[str]:
     quoted_table_name = _quote_sqlite_identifier(table_name)
     with closing(sqlite3.connect(database_path)) as connection:
-        return {
-            row[1]
-            for row in connection.execute(f"PRAGMA index_list({quoted_table_name})")
-        }
+        return {row[1] for row in connection.execute(f"PRAGMA index_list({quoted_table_name})")}
 
 
 def _quote_sqlite_identifier(value: str) -> str:
@@ -495,11 +480,7 @@ async def totp_credentials_from_database(
 
     async def _load(connection: BaseDBAsyncClient) -> list[IdentityTotpCredential]:
         user = await User.get(email=email, using_db=connection)
-        return list(
-            await IdentityTotpCredential.filter(user_id=user.id)
-            .using_db(connection)
-            .order_by("created_at")
-        )
+        return list(await IdentityTotpCredential.filter(user_id=user.id).using_db(connection).order_by("created_at"))
 
     return await load_credentials()
 
@@ -564,9 +545,7 @@ async def webauthn_credentials_from_database(
     async def _load(connection: BaseDBAsyncClient) -> list[IdentityWebAuthnCredential]:
         user = await User.get(email=email, using_db=connection)
         return list(
-            await IdentityWebAuthnCredential.filter(user_id=user.id)
-            .using_db(connection)
-            .order_by("created_at")
+            await IdentityWebAuthnCredential.filter(user_id=user.id).using_db(connection).order_by("created_at")
         )
 
     return await load_credentials()
@@ -574,10 +553,7 @@ async def webauthn_credentials_from_database(
 
 async def access_tokens_from_database(database_url: str) -> list[str]:
     async def load_tokens(connection: BaseDBAsyncClient) -> list[str]:
-        return [
-            token.token
-            for token in await AccessToken.all().using_db(connection).order_by("token")
-        ]
+        return [token.token for token in await AccessToken.all().using_db(connection).order_by("token")]
 
     return await _with_identity_connection(database_url, load_tokens)
 
@@ -618,16 +594,8 @@ async def user_group_abbrevs_from_database(database_url: str, email: str) -> lis
 
     async def _load(connection: BaseDBAsyncClient) -> list[str]:
         user = await User.get(email=email, using_db=connection)
-        group_ids = (
-            await GroupUser.filter(user_id=user.id)
-            .using_db(connection)
-            .values_list("group_id", flat=True)
-        )
-        return sorted(
-            await Group.filter(id__in=tuple(group_ids))
-            .using_db(connection)
-            .values_list("abbrev", flat=True)
-        )
+        group_ids = await GroupUser.filter(user_id=user.id).using_db(connection).values_list("group_id", flat=True)
+        return sorted(await Group.filter(id__in=tuple(group_ids)).using_db(connection).values_list("abbrev", flat=True))
 
     return await load_user_groups()
 
@@ -663,9 +631,7 @@ class TestAuthmgrBehaviour:
     def test_authmgr_project_script_is_defined(self) -> None:
         data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-        assert (
-            data["project"]["scripts"]["wybra-authmgr"] == "wybra.auth.cli.authmgr:main"
-        )
+        assert data["project"]["scripts"]["wybra-authmgr"] == "wybra.auth.cli.authmgr:main"
 
     def test_authmgr_create_positional_is_email(self) -> None:
         result = CliRunner().invoke(
@@ -732,12 +698,7 @@ class TestAuthmgrBehaviour:
             args_prefix = ["--config", str(config_path)]
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
-        assert (
-            await run_authmgr_command(
-                [*args_prefix, "user", "create", email, "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command([*args_prefix, "user", "create", email, "--password", "-"]) == 0
 
         [user] = await identity_users_from_database(database_url)
         assert user.email == email
@@ -749,9 +710,7 @@ class TestAuthmgrBehaviour:
     ) -> None:
         configured_key_name = "AUTHMGR_CONFIGURED_SECRET_KEY"
         monkeypatch.setenv(ENV_WYBRA_SECRET_KEY, secret_key_entry_for_tests())
-        monkeypatch.setenv(
-            configured_key_name, secret_key_entry_for_tests("configured")
-        )
+        monkeypatch.setenv(configured_key_name, secret_key_entry_for_tests("configured"))
         config_path = write_auth_app_toml(tmp_path / "app.toml")
         with config_path.open("a", encoding="utf-8") as handle:
             handle.write(
@@ -788,9 +747,7 @@ class TestAuthmgrBehaviour:
         monkeypatch.setenv("APP_CONFIG", str(ambient_config))
         monkeypatch.chdir(tmp_path)
 
-        exit_code = await run_authmgr_command(
-            ["--config", str(selected_config), "user", "list"]
-        )
+        exit_code = await run_authmgr_command(["--config", str(selected_config), "user", "list"])
 
         captured = capsys.readouterr()
         assert exit_code == 0
@@ -843,9 +800,7 @@ class TestAuthmgrBehaviour:
         stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
         monkeypatch.setattr(sys, "stdin", stdin)
 
-        exit_code = authmgr.main(
-            ["user", "create", "missing-config@example.com", "--password", "-"]
-        )
+        exit_code = authmgr.main(["user", "create", "missing-config@example.com", "--password", "-"])
 
         assert exit_code == 1
         assert stdin.tell() == 0
@@ -882,10 +837,7 @@ class TestAuthmgrBehaviour:
             tmp_path / "app.toml",
             database_url=urls["config"],
         )
-        environ = {
-            key: urls[value] if value in urls else value
-            for key, value in environ_template.items()
-        }
+        environ = {key: urls[value] if value in urls else value for key, value in environ_template.items()}
         ConfigService.set_runtime_environment(environ)
 
         settings = load_auth_settings(
@@ -924,9 +876,7 @@ class TestAuthmgrBehaviour:
             app_config=app_config,
         )
 
-        assert settings.database_url == sqlite_file_url(
-            tmp_path / "relative-auth.sqlite3"
-        )
+        assert settings.database_url == sqlite_file_url(tmp_path / "relative-auth.sqlite3")
 
     def test_auth_settings_use_structured_database_config(self, tmp_path: Path) -> None:
         config_path = tmp_path / "app.toml"
@@ -1016,9 +966,7 @@ class TestAuthmgrBehaviour:
             },
         }
 
-    def test_app_database_url_error_names_app_config_section(
-        self, tmp_path: Path
-    ) -> None:
+    def test_app_database_url_error_names_app_config_section(self, tmp_path: Path) -> None:
         app_config = AppConfig(
             config_path=tmp_path / "app.toml",
             project_root=tmp_path,
@@ -1046,9 +994,7 @@ class TestAuthmgrBehaviour:
                 app_config=app_config,
             )
 
-    def test_app_auth_config_rejects_stale_auth_database_url(
-        self, tmp_path: Path
-    ) -> None:
+    def test_app_auth_config_rejects_stale_auth_database_url(self, tmp_path: Path) -> None:
         app_config = load_auth_test_app_config(
             tmp_path / "app.toml",
             'database_url = "sqlite:///stale-auth.sqlite3"',
@@ -1060,9 +1006,7 @@ class TestAuthmgrBehaviour:
                 app_config=app_config,
             )
 
-    def test_app_auth_config_applies_identity_env_overrides(
-        self, tmp_path: Path
-    ) -> None:
+    def test_app_auth_config_applies_identity_env_overrides(self, tmp_path: Path) -> None:
         app_config = load_auth_test_app_config(
             tmp_path / "app.toml",
             "provider_enabled = true",
@@ -1119,14 +1063,10 @@ class TestAuthmgrBehaviour:
         assert settings.identity_options.passkey_enabled is True
         assert settings.identity_options.passkey_rp_id == "app.example.com"
         assert settings.identity_options.passkey_rp_name == "Example App"
-        assert settings.identity_options.passkey_allowed_origins == (
-            "https://app.example.com",
-        )
+        assert settings.identity_options.passkey_allowed_origins == ("https://app.example.com",)
         assert settings.identity_options.passkey_timeout_seconds == 180
         assert settings.identity_options.passkey_user_verification == "required"
-        assert (
-            settings.identity_options.passkey_user_verification_satisfies_totp is False
-        )
+        assert settings.identity_options.passkey_user_verification_satisfies_totp is False
         assert settings.identity_options.passkey_discoverable_credentials == "required"
         assert settings.identity_options.passkey_counter_policy == "reject-regression"
 
@@ -1170,13 +1110,9 @@ class TestAuthmgrBehaviour:
 
         assert settings.identity_options.passkey_rp_id == "app.example.com"
         assert settings.identity_options.passkey_rp_name == "Example App"
-        assert settings.identity_options.passkey_allowed_origins == (
-            "https://login.example.com",
-        )
+        assert settings.identity_options.passkey_allowed_origins == ("https://login.example.com",)
         assert settings.identity_options.passkey_user_verification == "required"
-        assert (
-            settings.identity_options.passkey_user_verification_satisfies_totp is False
-        )
+        assert settings.identity_options.passkey_user_verification_satisfies_totp is False
 
     def test_auth_settings_uses_section_passkey_config_when_inline_config_missing(
         self,
@@ -1212,9 +1148,7 @@ class TestAuthmgrBehaviour:
 
         assert settings.identity_options.passkey_rp_id == "app.example.com"
         assert settings.identity_options.passkey_rp_name == "Example App"
-        assert settings.identity_options.passkey_allowed_origins == (
-            "https://app.example.com",
-        )
+        assert settings.identity_options.passkey_allowed_origins == ("https://app.example.com",)
 
     def test_app_auth_rejects_unknown_passkey_options(self, tmp_path: Path) -> None:
         app_config = load_auth_test_app_config(
@@ -1292,9 +1226,7 @@ class TestAuthmgrBehaviour:
                 app_config=app_config,
             )
 
-    def test_auth_settings_load_from_central_config_provider(
-        self, tmp_path: Path
-    ) -> None:
+    def test_auth_settings_load_from_central_config_provider(self, tmp_path: Path) -> None:
         config_path = tmp_path / "app.toml"
         app_config = load_auth_test_app_config(config_path)
         config = ConfigService(
@@ -1319,9 +1251,7 @@ class TestAuthmgrBehaviour:
             app_config=app_config,
         )
 
-        assert settings.database_url == sqlite_file_url(
-            app_config.project_root / "from-config.sqlite3"
-        )
+        assert settings.database_url == sqlite_file_url(app_config.project_root / "from-config.sqlite3")
         assert settings.owner == AUTH_SETTINGS_OWNER
         assert settings.integration_enabled(PROVIDER) is True
         assert settings.is_totp_enabled() is True
@@ -1357,9 +1287,7 @@ class TestAuthmgrBehaviour:
                 app_config=app_config,
             )
 
-    def test_auth_settings_rejects_non_table_app_config_auth(
-        self, tmp_path: Path
-    ) -> None:
+    def test_auth_settings_rejects_non_table_app_config_auth(self, tmp_path: Path) -> None:
         config_path = tmp_path / "app.toml"
         app_config = load_auth_test_app_config(config_path)
         object.__setattr__(app_config, "auth", ["not-a-table"])
@@ -1594,9 +1522,7 @@ class TestAuthmgrBehaviour:
                 app_config=app_config,
             )
 
-    def test_auth_settings_rejects_non_table_password_config(
-        self, tmp_path: Path
-    ) -> None:
+    def test_auth_settings_rejects_non_table_password_config(self, tmp_path: Path) -> None:
         config_path = tmp_path / "app.toml"
         app_config = load_auth_test_app_config(config_path)
         config = ConfigService(
@@ -1648,9 +1574,7 @@ class TestAuthmgrBehaviour:
             discover_module_config=False,
         )
 
-        with pytest.raises(
-            ConfigurationError, match=r"\[auth\.password\.policy\] table"
-        ):
+        with pytest.raises(ConfigurationError, match=r"\[auth\.password\.policy\] table"):
             load_auth_settings(
                 config,
                 app_config=app_config,
@@ -1681,9 +1605,7 @@ class TestAuthmgrBehaviour:
                 app_config=app_config,
             )
 
-    def test_app_auth_rejects_unknown_password_policy_options(
-        self, tmp_path: Path
-    ) -> None:
+    def test_app_auth_rejects_unknown_password_policy_options(self, tmp_path: Path) -> None:
         app_config = load_auth_test_app_config(
             tmp_path / "app.toml",
             "",
@@ -1698,9 +1620,7 @@ class TestAuthmgrBehaviour:
             )
 
     @pytest.mark.parametrize("command", ["group", "scope", "user"])
-    def test_authmgr_root_help_exposes_resource_command_groups(
-        self, command: str
-    ) -> None:
+    def test_authmgr_root_help_exposes_resource_command_groups(self, command: str) -> None:
         result = CliRunner().invoke(authmgr.authmgr_command, ["--help"])
 
         assert result.exit_code == 0
@@ -1774,9 +1694,7 @@ class TestAuthmgrBehaviour:
             pytest.param(["help"], ["--help"], id="root"),
             pytest.param(["help", "user"], ["user", "--help"], id="root-user-group"),
             pytest.param(["help", "scope"], ["scope", "--help"], id="root-scope-group"),
-            pytest.param(
-                ["help", "group"], ["group", "--help"], id="root-group-command"
-            ),
+            pytest.param(["help", "group"], ["group", "--help"], id="root-group-command"),
             pytest.param(
                 ["help", "user", "create"],
                 ["user", "create", "--help"],
@@ -1984,9 +1902,7 @@ class TestAuthmgrBehaviour:
         assert "--password" in result.output
 
     @pytest.mark.parametrize("expires_at", ["4102444800", "0"])
-    def test_authmgr_rejects_conflicting_expiry_update_options(
-        self, expires_at: str
-    ) -> None:
+    def test_authmgr_rejects_conflicting_expiry_update_options(self, expires_at: str) -> None:
         result = CliRunner().invoke(
             authmgr.authmgr_command,
             [
@@ -2013,9 +1929,7 @@ class TestAuthmgrBehaviour:
             ["user", "update", "person@example.com", "--no-preferred-name"],
         ),
     )
-    def test_authmgr_rejects_removed_profile_name_options(
-        self, argv: list[str]
-    ) -> None:
+    def test_authmgr_rejects_removed_profile_name_options(self, argv: list[str]) -> None:
         result = CliRunner().invoke(
             authmgr.authmgr_command,
             argv,
@@ -2025,10 +1939,7 @@ class TestAuthmgrBehaviour:
         assert "No such option" in result.output
 
     def test_authmgr_accepts_flexible_expiry_timestamp_values(self) -> None:
-        assert (
-            authmgr_timestamps.parse_timestamp_filter("2100-01-01T00:00:00Z")
-            == 4102444800.0
-        )
+        assert authmgr_timestamps.parse_timestamp_filter("2100-01-01T00:00:00Z") == 4102444800.0
         assert authmgr_timestamps.parse_timestamp_filter("4102444800") == 4102444800.0
         assert authmgr_timestamps.parse_timestamp_filter("20250101") == 20250101.0
 
@@ -2050,9 +1961,7 @@ class TestAuthmgrBehaviour:
 
     def test_user_model_exposes_management_metadata_columns(self) -> None:
         user_fields = set(User._meta.fields_map)
-        user_indexes = {
-            tuple(index.describe()["fields"]) for index in User._meta.indexes
-        }
+        user_indexes = {tuple(index.describe()["fields"]) for index in User._meta.indexes}
 
         assert {
             "is_admin",
@@ -2292,9 +2201,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        database_url = sqlite_file_url(
-            tmp_path / "authenticate-secondary-owner.sqlite3"
-        )
+        database_url = sqlite_file_url(tmp_path / "authenticate-secondary-owner.sqlite3")
         await initialise_identity_database(database_url)
         web_app = create_auth_test_app(database_url=database_url)
 
@@ -2344,9 +2251,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        database_url = sqlite_file_url(
-            tmp_path / "request-password-reset-secondary.sqlite3"
-        )
+        database_url = sqlite_file_url(tmp_path / "request-password-reset-secondary.sqlite3")
         await initialise_identity_database(database_url)
         web_app = create_auth_test_app(database_url=database_url)
         web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
@@ -2393,9 +2298,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        database_url = sqlite_file_url(
-            tmp_path / "request-password-reset-unknown.sqlite3"
-        )
+        database_url = sqlite_file_url(tmp_path / "request-password-reset-unknown.sqlite3")
         await initialise_identity_database(database_url)
         web_app = create_auth_test_app(database_url=database_url)
         web_app.state.identity_delivery = ResetPasswordDelivery(reset_tokens=[])
@@ -2523,9 +2426,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        database_url = sqlite_file_url(
-            tmp_path / "request-verification-secondary.sqlite3"
-        )
+        database_url = sqlite_file_url(tmp_path / "request-verification-secondary.sqlite3")
         await initialise_identity_database(database_url)
         web_app = create_auth_test_app(database_url=database_url)
         web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
@@ -2610,9 +2511,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        database_url = sqlite_file_url(
-            tmp_path / "create-duplicate-secondary-email.sqlite3"
-        )
+        database_url = sqlite_file_url(tmp_path / "create-duplicate-secondary-email.sqlite3")
         await initialise_identity_database(database_url)
         web_app = create_auth_test_app(database_url=database_url)
 
@@ -2621,9 +2520,7 @@ class TestAuthmgrBehaviour:
                 del user_email
                 raise UserNotExists()
 
-        async def assert_duplicate_secondary_email_returns_user_already_exists() -> (
-            None
-        ):
+        async def assert_duplicate_secondary_email_returns_user_already_exists() -> None:
             await initialise_app_identity_database(web_app)
 
             async with app_connection_scope(web_app) as session:
@@ -2719,12 +2616,8 @@ class TestAuthmgrBehaviour:
             "scope",
             "description",
         }
-        assert {"group_id", "scope"}.issubset(
-            sqlite_table_columns(database_path, "identity_group_scope")
-        )
-        assert {"group_id", "user_id"}.issubset(
-            sqlite_table_columns(database_path, "identity_group_user")
-        )
+        assert {"group_id", "scope"}.issubset(sqlite_table_columns(database_path, "identity_group_scope"))
+        assert {"group_id", "user_id"}.issubset(sqlite_table_columns(database_path, "identity_group_user"))
         assert {"parent_group_id", "child_group_id"}.issubset(
             sqlite_table_columns(database_path, "identity_group_group")
         )
@@ -2786,9 +2679,7 @@ class TestAuthmgrBehaviour:
         stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
         monkeypatch.setattr(sys, "stdin", stdin)
 
-        exit_code = authmgr.main(
-            ["user", "create", "outdated@example.com", "--password", "-"]
-        )
+        exit_code = authmgr.main(["user", "create", "outdated@example.com", "--password", "-"])
 
         assert exit_code == 1
         assert stdin.tell() == 0
@@ -2823,9 +2714,7 @@ class TestAuthmgrBehaviour:
         stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
         monkeypatch.setattr(sys, "stdin", stdin)
 
-        exit_code = await run_authmgr_command(
-            ["user", "create", "missing-groups@example.com", "--password", "-"]
-        )
+        exit_code = await run_authmgr_command(["user", "create", "missing-groups@example.com", "--password", "-"])
 
         assert exit_code == 1
         assert stdin.tell() == 0
@@ -2844,9 +2733,7 @@ class TestAuthmgrBehaviour:
         stdin = io.StringIO(f"{STRONG_TEST_PASSWORD}\n")
         monkeypatch.setattr(sys, "stdin", stdin)
 
-        exit_code = authmgr.main(
-            ["user", "create", "missing@example.com", "--password", "-"]
-        )
+        exit_code = authmgr.main(["user", "create", "missing@example.com", "--password", "-"])
 
         assert exit_code == 1
         assert stdin.tell() == 0
@@ -2938,13 +2825,8 @@ class TestAuthmgrBehaviour:
     ) -> None:
         async def assert_column_case_normalised(connection: BaseDBAsyncClient) -> None:
             for model in authmgr_schema._identity_schema_models():
-                columns = ", ".join(
-                    f'"{column.upper()}" TEXT'
-                    for column in authmgr_schema._model_column_names(model)
-                )
-                await connection.execute_script(
-                    f"CREATE TABLE {model._meta.db_table} ({columns});"
-                )
+                columns = ", ".join(f'"{column.upper()}" TEXT' for column in authmgr_schema._model_column_names(model))
+                await connection.execute_script(f"CREATE TABLE {model._meta.db_table} ({columns});")
             status = await authmgr_schema._identity_schema_status(connection)
 
             assert status.table_exists is True
@@ -2982,9 +2864,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        web_app = create_auth_test_app(
-            database_url=sqlite_file_url(tmp_path / "last-login-finalisation.sqlite3")
-        )
+        web_app = create_auth_test_app(database_url=sqlite_file_url(tmp_path / "last-login-finalisation.sqlite3"))
 
         async def assert_last_login_update() -> None:
             await initialise_app_identity_database(web_app)
@@ -3025,9 +2905,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        web_app = create_auth_test_app(
-            database_url=sqlite_file_url(tmp_path / "expired-finalisation.sqlite3")
-        )
+        web_app = create_auth_test_app(database_url=sqlite_file_url(tmp_path / "expired-finalisation.sqlite3"))
 
         async def assert_expired_user_rejected() -> None:
             await initialise_app_identity_database(web_app)
@@ -3068,9 +2946,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        web_app = create_auth_test_app(
-            database_url=sqlite_file_url(tmp_path / "inactive-finalisation.sqlite3")
-        )
+        web_app = create_auth_test_app(database_url=sqlite_file_url(tmp_path / "inactive-finalisation.sqlite3"))
 
         async def assert_inactive_user_rejected() -> None:
             await initialise_app_identity_database(web_app)
@@ -3111,9 +2987,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        web_app = create_auth_test_app(
-            database_url=sqlite_file_url(tmp_path / "unverified-finalisation.sqlite3")
-        )
+        web_app = create_auth_test_app(database_url=sqlite_file_url(tmp_path / "unverified-finalisation.sqlite3"))
 
         async def assert_unverified_user_rejected() -> None:
             await initialise_app_identity_database(web_app)
@@ -3163,9 +3037,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        web_app = create_auth_test_app(
-            database_url=sqlite_file_url(tmp_path / "verification-timestamp.sqlite3")
-        )
+        web_app = create_auth_test_app(database_url=sqlite_file_url(tmp_path / "verification-timestamp.sqlite3"))
         web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
         async def assert_verification_timestamp() -> None:
@@ -3201,11 +3073,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        web_app = create_auth_test_app(
-            database_url=sqlite_file_url(
-                tmp_path / "verification-delivery-fails.sqlite3"
-            )
-        )
+        web_app = create_auth_test_app(database_url=sqlite_file_url(tmp_path / "verification-delivery-fails.sqlite3"))
         web_app.state.identity_delivery = FailingVerificationDelivery()
 
         async def assert_failed_delivery_does_not_throttle_user() -> None:
@@ -3231,9 +3099,7 @@ class TestAuthmgrBehaviour:
                 )
 
             async with app_connection_scope(web_app) as session:
-                user = await User.get(
-                    email="verify-atomic@example.com", using_db=session
-                )
+                user = await User.get(email="verify-atomic@example.com", using_db=session)
                 assert user.email_verification_sent_at is None
 
         await run_auth_app_test(web_app, assert_failed_delivery_does_not_throttle_user)
@@ -3243,9 +3109,7 @@ class TestAuthmgrBehaviour:
         self,
         tmp_path: Path,
     ) -> None:
-        web_app = create_auth_test_app(
-            database_url=sqlite_file_url(tmp_path / "verification-missing-user.sqlite3")
-        )
+        web_app = create_auth_test_app(database_url=sqlite_file_url(tmp_path / "verification-missing-user.sqlite3"))
         web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
         async def assert_missing_user_is_ignored() -> None:
@@ -3269,9 +3133,7 @@ class TestAuthmgrBehaviour:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        web_app = create_auth_test_app(
-            database_url=sqlite_file_url(tmp_path / "verification-rate-limit.sqlite3")
-        )
+        web_app = create_auth_test_app(database_url=sqlite_file_url(tmp_path / "verification-rate-limit.sqlite3"))
         web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
         async def assert_recent_delivery_is_rate_limited() -> None:
@@ -3323,9 +3185,7 @@ class TestAuthmgrBehaviour:
         tmp_path: Path,
     ) -> None:
         web_app = create_auth_test_app(
-            database_url=sqlite_file_url(
-                tmp_path / f"verification-ineligible-{field_name}.sqlite3"
-            )
+            database_url=sqlite_file_url(tmp_path / f"verification-ineligible-{field_name}.sqlite3")
         )
         web_app.state.identity_delivery = CaptureDelivery(verification_tokens=[])
 
@@ -3432,14 +3292,10 @@ class TestAuthmgrBehaviour:
         assert "TOTP secret:" in captured.err
         assert "otpauth://totp/Wybra:totp-create%40example.com?" in captured.err
         assert "Recovery codes:" in captured.err
-        credentials = await totp_credentials_from_database(
-            database_url, "totp-create@example.com"
-        )
+        credentials = await totp_credentials_from_database(database_url, "totp-create@example.com")
         assert [credential.status for credential in credentials] == ["active"]
         assert credentials[0].crypt_secret not in captured.err
-        recovery_codes = await totp_recovery_codes_from_database(
-            database_url, credentials[0]
-        )
+        recovery_codes = await totp_recovery_codes_from_database(database_url, credentials[0])
         assert len(recovery_codes) == 10
         assert all(code.code_verifier not in captured.err for code in recovery_codes)
 
@@ -3521,12 +3377,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "duplicate-totp@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "duplicate-totp@example.com", "--password", "-"]) == 0
         capsys.readouterr()
 
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
@@ -3550,12 +3401,7 @@ class TestAuthmgrBehaviour:
         assert "TOTP secret:" not in captured.err
         assert "otpauth://" not in captured.err
         assert "Recovery codes:" not in captured.err
-        assert (
-            await totp_credentials_from_database(
-                database_url, "duplicate-totp@example.com"
-            )
-            == []
-        )
+        assert await totp_credentials_from_database(database_url, "duplicate-totp@example.com") == []
 
     @pytest.mark.anyio
     async def test_authmgr_update_totp_replaces_existing_credential_and_recovery_codes(
@@ -3603,19 +3449,14 @@ class TestAuthmgrBehaviour:
         assert payload["user"]["email"] == "totp-update@example.com"
         assert payload["totp"]["secret"]
         assert len(payload["totp"]["recovery_codes"]) == 10
-        credentials = await totp_credentials_from_database(
-            database_url, "totp-update@example.com"
-        )
+        credentials = await totp_credentials_from_database(database_url, "totp-update@example.com")
         assert [credential.status for credential in credentials] == [
             "disabled",
             "active",
         ]
         assert credentials[0].id == old_credentials[0].id
         assert credentials[1].id != old_credentials[0].id
-        assert (
-            len(await totp_recovery_codes_from_database(database_url, credentials[1]))
-            == 10
-        )
+        assert len(await totp_recovery_codes_from_database(database_url, credentials[1])) == 10
 
     @pytest.mark.anyio
     async def test_authmgr_update_rcodes_rotates_codes_without_replacing_totp_key(
@@ -3628,26 +3469,14 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "rcodes@example.com", "--password", "-", "--totp"]
-            )
-            == 0
-        )
-        [credential] = await totp_credentials_from_database(
-            database_url, "rcodes@example.com"
-        )
+        assert await run_authmgr_command(["user", "create", "rcodes@example.com", "--password", "-", "--totp"]) == 0
+        [credential] = await totp_credentials_from_database(database_url, "rcodes@example.com")
         original_verifiers = {
-            code.code_verifier
-            for code in await totp_recovery_codes_from_database(
-                database_url, credential
-            )
+            code.code_verifier for code in await totp_recovery_codes_from_database(database_url, credential)
         }
         capsys.readouterr()
 
-        exit_code = await run_authmgr_command(
-            ["user", "update", "rcodes@example.com", "--rcodes", "--json"]
-        )
+        exit_code = await run_authmgr_command(["user", "update", "rcodes@example.com", "--rcodes", "--json"])
 
         assert exit_code == 0
         payload = json.loads(capsys.readouterr().out)
@@ -3696,9 +3525,7 @@ class TestAuthmgrBehaviour:
         )
         capsys.readouterr()
 
-        exit_code = await run_authmgr_command(
-            ["user", "update", "disable-totp@example.com", "--no-totp"]
-        )
+        exit_code = await run_authmgr_command(["user", "update", "disable-totp@example.com", "--no-totp"])
 
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -3778,9 +3605,7 @@ class TestAuthmgrBehaviour:
         assert expected_message in result.output
 
     def test_authmgr_rejects_passkey_csv_output_combination(self) -> None:
-        result = CliRunner().invoke(
-            authmgr.authmgr_command, ["user", "list", "--csv", "--passkeys"]
-        )
+        result = CliRunner().invoke(authmgr.authmgr_command, ["user", "list", "--csv", "--passkeys"])
 
         assert result.exit_code == 2
         assert "not allowed with option '--passkeys'" in result.output
@@ -3796,17 +3621,10 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "no-totp@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "no-totp@example.com", "--password", "-"]) == 0
         capsys.readouterr()
 
-        exit_code = await run_authmgr_command(
-            ["user", "update", "no-totp@example.com", "--rcodes"]
-        )
+        exit_code = await run_authmgr_command(["user", "update", "no-totp@example.com", "--rcodes"])
 
         assert exit_code == 1
         assert "User does not have active TOTP." in capsys.readouterr().err
@@ -3822,12 +3640,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "passkeys@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "passkeys@example.com", "--password", "-"]) == 0
         row_id = await add_webauthn_credential_to_database(
             database_url,
             "passkeys@example.com",
@@ -3874,12 +3687,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "revoke-all@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "revoke-all@example.com", "--password", "-"]) == 0
         await add_webauthn_credential_to_database(
             database_url,
             "revoke-all@example.com",
@@ -3899,9 +3707,7 @@ class TestAuthmgrBehaviour:
         assert exit_code == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["user"]["email"] == "revoke-all@example.com"
-        assert {
-            passkey["credential_id"] for passkey in payload["passkeys"]["revoked"]
-        } == {
+        assert {passkey["credential_id"] for passkey in payload["passkeys"]["revoked"]} == {
             "first-credential",
             "second-credential",
         }
@@ -3926,12 +3732,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "revoke-one@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "revoke-one@example.com", "--password", "-"]) == 0
         row_id = await add_webauthn_credential_to_database(
             database_url,
             "revoke-one@example.com",
@@ -3944,9 +3745,7 @@ class TestAuthmgrBehaviour:
         )
         capsys.readouterr()
 
-        exit_code = await run_authmgr_command(
-            ["user", "update", "revoke-one@example.com", "--revoke-passkey", row_id]
-        )
+        exit_code = await run_authmgr_command(["user", "update", "revoke-one@example.com", "--revoke-passkey", row_id])
 
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -3972,12 +3771,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "revoke-public@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "revoke-public@example.com", "--password", "-"]) == 0
         await add_webauthn_credential_to_database(
             database_url,
             "revoke-public@example.com",
@@ -4013,17 +3807,10 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "no-passkeys@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "no-passkeys@example.com", "--password", "-"]) == 0
         capsys.readouterr()
 
-        exit_code = await run_authmgr_command(
-            ["user", "update", "no-passkeys@example.com", "--revoke-passkey"]
-        )
+        exit_code = await run_authmgr_command(["user", "update", "no-passkeys@example.com", "--revoke-passkey"])
 
         assert exit_code == 1
         assert "User does not have active passkeys." in capsys.readouterr().err
@@ -4089,19 +3876,12 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
 
         assert await run_authmgr_command(["scope", "create", "admin:read"]) == 0
-        assert (
-            await run_authmgr_command(
-                ["group", "create", "admins", "--scope", "admin:read"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["group", "create", "admins", "--scope", "admin:read"]) == 0
 
         assert await run_authmgr_command(["scope", "delete", "admin:read"]) == 1
 
         assert "Scope is assigned to one or more groups." in capsys.readouterr().err
-        assert [scope.scope for scope in await scopes_from_database(database_url)] == [
-            "admin:read"
-        ]
+        assert [scope.scope for scope in await scopes_from_database(database_url)] == ["admin:read"]
 
     @pytest.mark.anyio
     async def test_authmgr_group_target_first_commands_manage_group(
@@ -4152,9 +3932,7 @@ class TestAuthmgrBehaviour:
         assert shown["abbrev"] == "project"
         assert shown["description"] == "Project operators"
         assert shown["scopes"] == ["project:write"]
-        assert await group_scopes_from_database(database_url, "project") == [
-            "project:write"
-        ]
+        assert await group_scopes_from_database(database_url, "project") == ["project:write"]
 
         assert await run_authmgr_command(["group", "project", "delete", "--force"]) == 0
 
@@ -4170,20 +3948,10 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "member@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "member@example.com", "--password", "-"]) == 0
         assert await run_authmgr_command(["group", "create", "parent"]) == 0
         assert await run_authmgr_command(["group", "create", "child"]) == 0
-        assert (
-            await run_authmgr_command(
-                ["group", "parent", "add-user", "member@example.com"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["group", "parent", "add-user", "member@example.com"]) == 0
         assert await run_authmgr_command(["group", "parent", "add-group", "child"]) == 0
         assert await run_authmgr_command(["group", "parent", "show", "--json"]) == 0
         shown = json.loads(capsys.readouterr().out.splitlines()[-1])
@@ -4191,15 +3959,8 @@ class TestAuthmgrBehaviour:
         assert shown["users"] == ["member@example.com"]
         assert shown["child_groups"] == ["child"]
 
-        assert (
-            await run_authmgr_command(
-                ["group", "parent", "remove-user", "member@example.com"]
-            )
-            == 0
-        )
-        assert (
-            await run_authmgr_command(["group", "parent", "remove-group", "child"]) == 0
-        )
+        assert await run_authmgr_command(["group", "parent", "remove-user", "member@example.com"]) == 0
+        assert await run_authmgr_command(["group", "parent", "remove-group", "child"]) == 0
         assert await run_authmgr_command(["group", "parent", "delete", "--force"]) == 0
 
     def test_authmgr_group_parser_disambiguates_user_and_group_targets(self) -> None:
@@ -4209,9 +3970,7 @@ class TestAuthmgrBehaviour:
             ctx,
             ("parent", "add-user", "member@example.com"),
         )
-        group_args = authmgr_groups._target_group_args(
-            ctx, ("parent", "add-group", "child")
-        )
+        group_args = authmgr_groups._target_group_args(ctx, ("parent", "add-group", "child"))
 
         assert user_args.user_target == "member@example.com"
         assert user_args.child_group_target == ""
@@ -4252,9 +4011,7 @@ class TestAuthmgrBehaviour:
             )
             == 0
         )
-        assert await user_group_abbrevs_from_database(
-            database_url, "grouped@example.com"
-        ) == [
+        assert await user_group_abbrevs_from_database(database_url, "grouped@example.com") == [
             "alpha",
             "beta",
         ]
@@ -4274,9 +4031,7 @@ class TestAuthmgrBehaviour:
             == 0
         )
         assert "updated user: grouped@example.com" in capsys.readouterr().out
-        assert await user_group_abbrevs_from_database(
-            database_url, "grouped@example.com"
-        ) == [
+        assert await user_group_abbrevs_from_database(database_url, "grouped@example.com") == [
             "beta",
             "gamma",
         ]
@@ -4293,9 +4048,7 @@ class TestAuthmgrBehaviour:
             )
             == 0
         )
-        assert await user_group_abbrevs_from_database(
-            database_url, "grouped@example.com"
-        ) == ["alpha"]
+        assert await user_group_abbrevs_from_database(database_url, "grouped@example.com") == ["alpha"]
 
     @pytest.mark.anyio
     async def test_authmgr_create_with_missing_group_does_not_create_user(
@@ -4325,12 +4078,7 @@ class TestAuthmgrBehaviour:
         )
 
         assert stdin.tell() == 0
-        assert (
-            await identity_user_from_database(
-                database_url, "missing-create-group@example.com"
-            )
-            is None
-        )
+        assert await identity_user_from_database(database_url, "missing-create-group@example.com") is None
 
     @pytest.mark.anyio
     async def test_authmgr_set_group_validates_targets_before_replacing_memberships(
@@ -4375,9 +4123,7 @@ class TestAuthmgrBehaviour:
             == 1
         )
 
-        assert await user_group_abbrevs_from_database(
-            database_url, "invalid-set@example.com"
-        ) == ["alpha"]
+        assert await user_group_abbrevs_from_database(database_url, "invalid-set@example.com") == ["alpha"]
 
     def test_authmgr_update_rejects_group_replacement_shortcut(self) -> None:
         result = CliRunner().invoke(
@@ -4407,10 +4153,7 @@ class TestAuthmgrBehaviour:
         )
 
         assert result.exit_code == 2
-        assert (
-            "--set-group cannot be used with --add-group or --rm-group."
-            in result.output
-        )
+        assert "--set-group cannot be used with --add-group or --rm-group." in result.output
 
     def test_authmgr_record_formatting_json_encodes_nested_values(
         self,
@@ -4463,31 +4206,11 @@ class TestAuthmgrBehaviour:
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
         assert await run_authmgr_command(["scope", "create", "project:read"]) == 0
-        assert (
-            await run_authmgr_command(
-                ["group", "create", "readers", "--scope", "project:read"]
-            )
-            == 0
-        )
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "reader@example.com", "--password", "-"]
-            )
-            == 0
-        )
-        assert (
-            await run_authmgr_command(
-                ["group", "readers", "add-user", "reader@example.com"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["group", "create", "readers", "--scope", "project:read"]) == 0
+        assert await run_authmgr_command(["user", "create", "reader@example.com", "--password", "-"]) == 0
+        assert await run_authmgr_command(["group", "readers", "add-user", "reader@example.com"]) == 0
 
-        assert (
-            await run_authmgr_command(
-                ["group", "effective-scopes", "reader@example.com", "--json"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["group", "effective-scopes", "reader@example.com", "--json"]) == 0
         effective_scopes = json.loads(capsys.readouterr().out.splitlines()[-1])
 
         assert effective_scopes["scopes"] == ["project:read"]
@@ -4583,9 +4306,7 @@ class TestAuthmgrBehaviour:
     ) -> None:
         monkeypatch.setattr(sys, "stdin", io.StringIO("correct horse\nextra\n"))
 
-        with pytest.raises(
-            authmgr_passwords.PasswordSourceError, match="exactly one line"
-        ):
+        with pytest.raises(authmgr_passwords.PasswordSourceError, match="exactly one line"):
             authmgr_passwords._read_password("-")
 
     def test_authmgr_password_from_stdin_preserves_whitespace_and_strips_newline(
@@ -4602,9 +4323,7 @@ class TestAuthmgrBehaviour:
     ) -> None:
         monkeypatch.setattr(sys, "stdin", io.StringIO(""))
 
-        with pytest.raises(
-            authmgr_passwords.PasswordSourceError, match="No password received"
-        ):
+        with pytest.raises(authmgr_passwords.PasswordSourceError, match="No password received"):
             authmgr_passwords._read_password("-")
 
     def test_authmgr_password_from_stdin_rejects_tty(
@@ -4615,15 +4334,11 @@ class TestAuthmgrBehaviour:
         stdin.isatty = lambda: True  # type: ignore[method-assign]
         monkeypatch.setattr(sys, "stdin", stdin)
 
-        with pytest.raises(
-            authmgr_passwords.PasswordSourceError, match="interactive stdin"
-        ):
+        with pytest.raises(authmgr_passwords.PasswordSourceError, match="interactive stdin"):
             authmgr_passwords._read_password("-")
 
     def test_authmgr_read_password_rejects_invalid_source(self) -> None:
-        with pytest.raises(
-            authmgr_passwords.PasswordSourceError, match="Unsupported password source"
-        ):
+        with pytest.raises(authmgr_passwords.PasswordSourceError, match="Unsupported password source"):
             authmgr_passwords._read_password("invalid")
 
     @pytest.mark.anyio
@@ -4638,17 +4353,10 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
 
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "duplicate@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "duplicate@example.com", "--password", "-"]) == 0
 
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        exit_code = await run_authmgr_command(
-            ["user", "create", "duplicate@example.com", "--password", "-"]
-        )
+        exit_code = await run_authmgr_command(["user", "create", "duplicate@example.com", "--password", "-"])
 
         assert exit_code == 1
         assert "already exists" in capsys.readouterr().err
@@ -4692,9 +4400,7 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
 
-        exit_code = await run_authmgr_command(
-            ["user", "create", "linked@example.com", "--password", "-"]
-        )
+        exit_code = await run_authmgr_command(["user", "create", "linked@example.com", "--password", "-"])
 
         assert exit_code == 1
         assert "already exists" in capsys.readouterr().err
@@ -4744,12 +4450,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "update@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "update@example.com", "--password", "-"]) == 0
         [created_user] = await identity_users_from_database(database_url)
 
         exit_code = await run_authmgr_command(
@@ -4786,18 +4487,11 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "no-expiry@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "no-expiry@example.com", "--password", "-"]) == 0
         [created_user] = await identity_users_from_database(database_url)
         capsys.readouterr()
 
-        exit_code = await run_authmgr_command(
-            ["user", "update", "no-expiry@example.com", "--no-expires-at"]
-        )
+        exit_code = await run_authmgr_command(["user", "update", "no-expiry@example.com", "--no-expires-at"])
 
         assert exit_code == 1
         assert "No user changes" in capsys.readouterr().err
@@ -4815,12 +4509,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "clear@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "clear@example.com", "--password", "-"]) == 0
         assert (
             await run_authmgr_command(
                 [
@@ -4883,16 +4572,9 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "root@example.com", "--password", "-", "--superuser"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "root@example.com", "--password", "-", "--superuser"]) == 0
 
-        exit_code = await run_authmgr_command(
-            ["user", "update", "root@example.com", "--no-superuser"]
-        )
+        exit_code = await run_authmgr_command(["user", "update", "root@example.com", "--no-superuser"])
 
         assert exit_code == 1
         assert "final superuser" in capsys.readouterr().err
@@ -4924,18 +4606,8 @@ class TestAuthmgrBehaviour:
             == 0
         )
 
-        assert (
-            await run_authmgr_command(
-                ["user", "delete", "protected@example.com", "--force"]
-            )
-            == 1
-        )
-        assert (
-            await run_authmgr_command(
-                ["user", "deactivate", "protected@example.com", "--force"]
-            )
-            == 1
-        )
+        assert await run_authmgr_command(["user", "delete", "protected@example.com", "--force"]) == 1
+        assert await run_authmgr_command(["user", "deactivate", "protected@example.com", "--force"]) == 1
 
         captured = capsys.readouterr()
         assert "superuser" in captured.err
@@ -4954,22 +4626,13 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         for email in ("first-root@example.com", "second-root@example.com"):
             monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-            assert (
-                await run_authmgr_command(
-                    ["user", "create", email, "--password", "-", "--superuser"]
-                )
-                == 0
-            )
+            assert await run_authmgr_command(["user", "create", email, "--password", "-", "--superuser"]) == 0
 
-        exit_code = await run_authmgr_command(
-            ["user", "delete", "first-root@example.com", "--force"]
-        )
+        exit_code = await run_authmgr_command(["user", "delete", "first-root@example.com", "--force"])
 
         assert exit_code == 1
         assert "cannot be deleted" in capsys.readouterr().err
-        assert {
-            user.email for user in await identity_users_from_database(database_url)
-        } == {
+        assert {user.email for user in await identity_users_from_database(database_url)} == {
             "first-root@example.com",
             "second-root@example.com",
         }
@@ -4984,22 +4647,10 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "delete@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "delete@example.com", "--password", "-"]) == 0
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "deactivate@example.com", "--password", "-"]
-            )
-            == 0
-        )
-        delete_token = await create_session_token_for_user(
-            database_url, "delete@example.com"
-        )
+        assert await run_authmgr_command(["user", "create", "deactivate@example.com", "--password", "-"]) == 0
+        delete_token = await create_session_token_for_user(database_url, "delete@example.com")
         deactivate_token = await create_session_token_for_user(
             database_url,
             "deactivate@example.com",
@@ -5009,20 +4660,10 @@ class TestAuthmgrBehaviour:
             deactivate_token,
         }
 
-        assert (
-            await run_authmgr_command(
-                ["user", "delete", "delete@example.com", "--force"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "delete", "delete@example.com", "--force"]) == 0
         assert await access_tokens_from_database(database_url) == [deactivate_token]
 
-        assert (
-            await run_authmgr_command(
-                ["user", "deactivate", "deactivate@example.com", "--force"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "deactivate", "deactivate@example.com", "--force"]) == 0
 
         [remaining_user] = await identity_users_from_database(database_url)
         assert remaining_user.email == "deactivate@example.com"
@@ -5040,26 +4681,16 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         for email in ("alice@example.com", "bob@example.com"):
             monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-            assert (
-                await run_authmgr_command(["user", "create", email, "--password", "-"])
-                == 0
-            )
+            assert await run_authmgr_command(["user", "create", email, "--password", "-"]) == 0
 
-        alice_token = await create_session_token_for_user(
-            database_url, "alice@example.com"
-        )
+        alice_token = await create_session_token_for_user(database_url, "alice@example.com")
         bob_token = await create_session_token_for_user(database_url, "bob@example.com")
         assert set(await access_tokens_from_database(database_url)) == {
             alice_token,
             bob_token,
         }
 
-        assert (
-            await run_authmgr_command(
-                ["user", "deactivate", "alice@example.com", "--force"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "deactivate", "alice@example.com", "--force"]) == 0
 
         assert await access_tokens_from_database(database_url) == [bob_token]
 
@@ -5074,12 +4705,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "confirm@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "confirm@example.com", "--password", "-"]) == 0
         [user] = await identity_users_from_database(database_url)
         monkeypatch.setattr("builtins.input", lambda prompt: print(prompt) or "no")
         capsys.readouterr()
@@ -5100,23 +4726,12 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "password@example.com", "--password", "-"]
-            )
-            == 0
-        )
-        token = await create_session_token_for_user(
-            database_url, "password@example.com"
-        )
+        assert await run_authmgr_command(["user", "create", "password@example.com", "--password", "-"]) == 0
+        token = await create_session_token_for_user(database_url, "password@example.com")
         assert await access_tokens_from_database(database_url) == [token]
 
-        monkeypatch.setattr(
-            sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n")
-        )
-        exit_code = await run_authmgr_command(
-            ["user", "password", "password@example.com", "--password", "-"]
-        )
+        monkeypatch.setattr(sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n"))
+        exit_code = await run_authmgr_command(["user", "password", "password@example.com", "--password", "-"])
 
         assert exit_code == 0
         assert await access_tokens_from_database(database_url) == []
@@ -5131,23 +4746,12 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "update-password@example.com", "--password", "-"]
-            )
-            == 0
-        )
-        token = await create_session_token_for_user(
-            database_url, "update-password@example.com"
-        )
+        assert await run_authmgr_command(["user", "create", "update-password@example.com", "--password", "-"]) == 0
+        token = await create_session_token_for_user(database_url, "update-password@example.com")
         assert await access_tokens_from_database(database_url) == [token]
 
-        monkeypatch.setattr(
-            sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n")
-        )
-        exit_code = await run_authmgr_command(
-            ["user", "update", "update-password@example.com", "--password", "-"]
-        )
+        monkeypatch.setattr(sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n"))
+        exit_code = await run_authmgr_command(["user", "update", "update-password@example.com", "--password", "-"])
 
         assert exit_code == 0
         assert await access_tokens_from_database(database_url) == []
@@ -5162,19 +4766,10 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "preserve@example.com", "--password", "-"]
-            )
-            == 0
-        )
-        token = await create_session_token_for_user(
-            database_url, "preserve@example.com"
-        )
+        assert await run_authmgr_command(["user", "create", "preserve@example.com", "--password", "-"]) == 0
+        token = await create_session_token_for_user(database_url, "preserve@example.com")
 
-        monkeypatch.setattr(
-            sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n")
-        )
+        monkeypatch.setattr(sys, "stdin", io.StringIO(f"{UPDATED_STRONG_TEST_PASSWORD}\n"))
         exit_code = await run_authmgr_command(
             [
                 "user",
@@ -5204,9 +4799,7 @@ class TestAuthmgrBehaviour:
             stderr,
             output,
         ):
-            exit_code = await run_authmgr_command(
-                ["user", "create", "mismatch@example.com"]
-            )
+            exit_code = await run_authmgr_command(["user", "create", "mismatch@example.com"])
 
         assert exit_code == 1
         rendered = output.getvalue().decode()
@@ -5227,16 +4820,9 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
 
         with CliRunner().isolation(
-            input=(
-                "first password\n"
-                "second password\n"
-                f"{STRONG_TEST_PASSWORD}\n"
-                f"{STRONG_TEST_PASSWORD}\n"
-            ),
+            input=(f"first password\nsecond password\n{STRONG_TEST_PASSWORD}\n{STRONG_TEST_PASSWORD}\n"),
         ) as (_stdout, stderr, output):
-            exit_code = await run_authmgr_command(
-                ["user", "create", "retry@example.com"]
-            )
+            exit_code = await run_authmgr_command(["user", "create", "retry@example.com"])
 
         assert exit_code == 0
         rendered = output.getvalue().decode()
@@ -5257,9 +4843,7 @@ class TestAuthmgrBehaviour:
     ) -> None:
         source_name = "dash" if password_source == "-" else password_source
         email = f"{source_name}@example.com"
-        database_url = sqlite_file_url(
-            tmp_path / f"stdin-password-{source_name}.sqlite3"
-        )
+        database_url = sqlite_file_url(tmp_path / f"stdin-password-{source_name}.sqlite3")
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
 
@@ -5307,12 +4891,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "default-prompt@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "default-prompt@example.com", "--password", "-"]) == 0
 
         with CliRunner().isolation(
             input=(f"{UPDATED_STRONG_TEST_PASSWORD}\n{UPDATED_STRONG_TEST_PASSWORD}\n"),
@@ -5338,40 +4917,18 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         for email in ("alpha@example.com", "beta@example.org", "gamma@example.com"):
             monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-            assert (
-                await run_authmgr_command(["user", "create", email, "--password", "-"])
-                == 0
-            )
-        assert (
-            await run_authmgr_command(
-                ["user", "update", "alpha@example.com", "--admin"]
-            )
-            == 0
-        )
-        assert (
-            await run_authmgr_command(
-                ["user", "deactivate", "beta@example.org", "--force"]
-            )
-            == 0
-        )
-        await update_user_fields(
-            database_url, "gamma@example.com", expires_at=time() - 60
-        )
+            assert await run_authmgr_command(["user", "create", email, "--password", "-"]) == 0
+        assert await run_authmgr_command(["user", "update", "alpha@example.com", "--admin"]) == 0
+        assert await run_authmgr_command(["user", "deactivate", "beta@example.org", "--force"]) == 0
+        await update_user_fields(database_url, "gamma@example.com", expires_at=time() - 60)
         capsys.readouterr()
 
-        assert (
-            await run_authmgr_command(
-                ["user", "list", "--json", "--domain", "example.com", "--admin"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "list", "--json", "--domain", "example.com", "--admin"]) == 0
         [admin_record] = json.loads(capsys.readouterr().out)
         assert admin_record["email"] == "alpha@example.com"
 
         assert await run_authmgr_command(["user", "list", "--json", "--inactive"]) == 0
-        inactive_emails = {
-            record["email"] for record in json.loads(capsys.readouterr().out)
-        }
+        inactive_emails = {record["email"] for record in json.loads(capsys.readouterr().out)}
         assert inactive_emails == {"beta@example.org", "gamma@example.com"}
 
     @pytest.mark.anyio
@@ -5385,12 +4942,7 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "boundary@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "boundary@example.com", "--password", "-"]) == 0
         await update_user_fields(database_url, "boundary@example.com", expires_at=200.0)
         capsys.readouterr()
 
@@ -5417,16 +4969,9 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "boundary@example.com", "--password", "-"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "create", "boundary@example.com", "--password", "-"]) == 0
         await update_user_fields(database_url, "boundary@example.com", expires_at=200.0)
-        monkeypatch.setattr(
-            "wybra.auth.admin.management.current_timestamp", lambda: 200.0
-        )
+        monkeypatch.setattr("wybra.auth.admin.management.current_timestamp", lambda: 200.0)
         capsys.readouterr()
 
         assert await run_authmgr_command(["user", "list", "--json"]) == 0
@@ -5454,10 +4999,7 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         for email in ("first@z.example", "second@y.example", "third@y.example"):
             monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-            assert (
-                await run_authmgr_command(["user", "create", email, "--password", "-"])
-                == 0
-            )
+            assert await run_authmgr_command(["user", "create", email, "--password", "-"]) == 0
 
         await update_user_fields(
             database_url,
@@ -5521,22 +5063,12 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         for email in ("never@example.com", "recent@example.com"):
             monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-            assert (
-                await run_authmgr_command(["user", "create", email, "--password", "-"])
-                == 0
-            )
+            assert await run_authmgr_command(["user", "create", email, "--password", "-"]) == 0
 
-        await update_user_fields(
-            database_url, "recent@example.com", last_login_at=100.0
-        )
+        await update_user_fields(database_url, "recent@example.com", last_login_at=100.0)
         capsys.readouterr()
 
-        assert (
-            await run_authmgr_command(
-                ["user", "list", "--json", "--order", "last-login-at"]
-            )
-            == 0
-        )
+        assert await run_authmgr_command(["user", "list", "--json", "--order", "last-login-at"]) == 0
 
         records = json.loads(capsys.readouterr().out)
         assert [record["email"] for record in records] == [
@@ -5576,9 +5108,7 @@ class TestAuthmgrBehaviour:
                 "primary@z.example",
             ]
 
-        await _with_generated_identity_connection(
-            database_url, assert_email_domain_order
-        )
+        await _with_generated_identity_connection(database_url, assert_email_domain_order)
 
     @pytest.mark.anyio
     async def test_authmgr_list_filters_by_login_presence(
@@ -5592,20 +5122,12 @@ class TestAuthmgrBehaviour:
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         for email in ("never@example.com", "recent@example.com"):
             monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-            assert (
-                await run_authmgr_command(["user", "create", email, "--password", "-"])
-                == 0
-            )
+            assert await run_authmgr_command(["user", "create", email, "--password", "-"]) == 0
 
-        await update_user_fields(
-            database_url, "recent@example.com", last_login_at=100.0
-        )
+        await update_user_fields(database_url, "recent@example.com", last_login_at=100.0)
         capsys.readouterr()
 
-        assert (
-            await run_authmgr_command(["user", "list", "--json", "--never-logged-in"])
-            == 0
-        )
+        assert await run_authmgr_command(["user", "list", "--json", "--never-logged-in"]) == 0
         [never_record] = json.loads(capsys.readouterr().out)
         assert never_record["email"] == "never@example.com"
 
@@ -5618,13 +5140,8 @@ class TestAuthmgrBehaviour:
     ) -> None:
         assert authmgr_timestamps.parse_timestamp_filter("4102444800") == 4102444800.0
         assert authmgr_timestamps.parse_timestamp_filter("20250101") == 20250101.0
-        assert (
-            authmgr_timestamps.parse_timestamp_filter("2100-01-01T00:00:00Z")
-            == 4102444800.0
-        )
-        assert isinstance(
-            authmgr_timestamps.parse_timestamp_filter("1 June 2030"), float
-        )
+        assert authmgr_timestamps.parse_timestamp_filter("2100-01-01T00:00:00Z") == 4102444800.0
+        assert isinstance(authmgr_timestamps.parse_timestamp_filter("1 June 2030"), float)
 
     def test_authmgr_timestamp_parser_rejects_invalid_values(self) -> None:
         with pytest.raises(ValueError, match="Invalid timestamp value"):
@@ -5672,9 +5189,7 @@ class TestAuthmgrBehaviour:
         assert relative_url is not None
         assert relative_url.path == Path("relative.db")
         assert relative_url.is_absolute is False
-        assert resolve_database_url(
-            "sqlite:///relative.db", tmp_path
-        ) == sqlite_file_url(tmp_path / "relative.db")
+        assert resolve_database_url("sqlite:///relative.db", tmp_path) == sqlite_file_url(tmp_path / "relative.db")
 
     def test_auth_database_url_parser_handles_posix_absolute_sqlite_paths(
         self,
@@ -5685,10 +5200,7 @@ class TestAuthmgrBehaviour:
         assert absolute_url is not None
         assert absolute_url.path.as_posix() == "/tmp/auth.db"
         assert absolute_url.is_absolute is True
-        assert (
-            resolve_database_url("sqlite:////tmp/auth.db", tmp_path)
-            == "sqlite:////tmp/auth.db"
-        )
+        assert resolve_database_url("sqlite:////tmp/auth.db", tmp_path) == "sqlite:////tmp/auth.db"
 
     def test_auth_database_url_parser_handles_windows_absolute_sqlite_path(
         self,
@@ -5708,14 +5220,8 @@ class TestAuthmgrBehaviour:
         assert resolve_database_url(database_url, tmp_path) == database_url
 
     def test_authmgr_human_output_formats_only_known_timestamp_fields(self) -> None:
-        assert (
-            authmgr_output._format_human_value("created_at", 4102444800.0)
-            == "2100-01-01T00:00:00+00:00"
-        )
-        assert (
-            authmgr_output._format_human_value("created_at", 4102444800)
-            == "2100-01-01T00:00:00+00:00"
-        )
+        assert authmgr_output._format_human_value("created_at", 4102444800.0) == "2100-01-01T00:00:00+00:00"
+        assert authmgr_output._format_human_value("created_at", 4102444800) == "2100-01-01T00:00:00+00:00"
         assert authmgr_output._format_human_value("quota", 1.5) == 1.5
 
     @pytest.mark.parametrize(
@@ -5754,8 +5260,7 @@ class TestAuthmgrBehaviour:
         )
 
         assert capsys.readouterr().out == (
-            "partial@example.com id=user-1 admin=False "
-            "superuser=False active=False verified=False\n"
+            "partial@example.com id=user-1 admin=False superuser=False active=False verified=False\n"
         )
 
     @pytest.mark.anyio
@@ -5769,15 +5274,8 @@ class TestAuthmgrBehaviour:
         await initialise_identity_database(database_url)
         set_authmgr_database_url(monkeypatch, tmp_path, database_url)
         monkeypatch.setattr(sys, "stdin", io.StringIO(f"{STRONG_TEST_PASSWORD}\n"))
-        assert (
-            await run_authmgr_command(
-                ["user", "create", "csv@example.com", "--password", "-"]
-            )
-            == 0
-        )
-        await update_user_fields(
-            database_url, "csv@example.com", created_at=4102444800.0
-        )
+        assert await run_authmgr_command(["user", "create", "csv@example.com", "--password", "-"]) == 0
+        await update_user_fields(database_url, "csv@example.com", created_at=4102444800.0)
         capsys.readouterr()
 
         assert await run_authmgr_command(["user", "list", "--csv"]) == 0

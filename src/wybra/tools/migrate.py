@@ -82,9 +82,7 @@ def _command_environment(
     environment = dict(os.environ)
     if database_url is not None:
         if not database_url.strip():
-            raise data_migrate.MigrationConfigurationError(
-                "DATABASE_URL must not be blank."
-            )
+            raise data_migrate.MigrationConfigurationError("DATABASE_URL must not be blank.")
         environment[ENV_DATABASE_URL] = database_url.strip()
     if config_source is not None:
         environment[APP_CONFIG_ENV] = normalise_cli_config_source(config_source)
@@ -95,9 +93,7 @@ async def run_migration(
     database_url: str | None,
     *,
     config_source: str | None,
-    operation: Callable[
-        [data_migrate.MigrationBackend, data_migrate.MigrationContext], Awaitable[None]
-    ],
+    operation: Callable[[data_migrate.MigrationBackend, data_migrate.MigrationContext], Awaitable[None]],
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,
     include_provisioning_connection: bool = False,
@@ -119,9 +115,7 @@ async def run_migration(
 def _run_migration(
     database_url: str | None,
     config_source: str | None,
-    operation: Callable[
-        [data_migrate.MigrationBackend, data_migrate.MigrationContext], Awaitable[None]
-    ],
+    operation: Callable[[data_migrate.MigrationBackend, data_migrate.MigrationContext], Awaitable[None]],
     *,
     database_credential_purpose: CredentialPurpose = "runtime",
     fallback_to_runtime_credentials: bool = False,

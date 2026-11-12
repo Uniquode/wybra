@@ -46,11 +46,7 @@ async def _resolve_effective_scope_sets(
 ) -> tuple[set[str], set[str]]:
     direct_group_ids = cast(
         set[UUID],
-        set(
-            await GroupUser.filter(user_id=user_id)
-            .using_db(connection)
-            .values_list("group_id", flat=True)
-        ),
+        set(await GroupUser.filter(user_id=user_id).using_db(connection).values_list("group_id", flat=True)),
     )
     if not direct_group_ids:
         return set(), set()
@@ -75,19 +71,11 @@ async def _resolve_effective_scope_sets(
 
     scopes = cast(
         set[str],
-        set(
-            await GroupScope.filter(group_id__in=visited)
-            .using_db(connection)
-            .values_list("scope", flat=True)
-        ),
+        set(await GroupScope.filter(group_id__in=visited).using_db(connection).values_list("scope", flat=True)),
     )
     group_abbrevs = cast(
         set[str],
-        set(
-            await Group.filter(id__in=visited)
-            .using_db(connection)
-            .values_list("abbrev", flat=True)
-        ),
+        set(await Group.filter(id__in=visited).using_db(connection).values_list("abbrev", flat=True)),
     )
 
     return scopes, group_abbrevs

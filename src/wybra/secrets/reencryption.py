@@ -102,9 +102,7 @@ async def reencrypt_persisted_secrets(
             )
         )
 
-    unsupported_recovery_code_verifiers = await _count_recovery_code_verifiers(
-        connection
-    )
+    unsupported_recovery_code_verifiers = await _count_recovery_code_verifiers(connection)
     result = ReencryptSecretsResult(
         fields=tuple(fields),
         unsupported_recovery_code_verifiers=unsupported_recovery_code_verifiers,
@@ -155,8 +153,7 @@ async def _reencrypt_secret_field(
         skipped_current=skipped_current,
         skipped_plaintext=skipped_plaintext,
         versions=tuple(
-            ReencryptedSecretVersionCount(version=version, count=count)
-            for version, count in sorted(versions.items())
+            ReencryptedSecretVersionCount(version=version, count=count) for version, count in sorted(versions.items())
         ),
     )
 

@@ -69,26 +69,14 @@ class DatabaseMaintenanceTask:
         name = self.name.strip()
         description = self.description.strip()
         if not name:
-            raise DatabaseProvisioningConfigurationError(
-                "Maintenance task name must not be blank."
-            )
+            raise DatabaseProvisioningConfigurationError("Maintenance task name must not be blank.")
         if not description:
-            raise DatabaseProvisioningConfigurationError(
-                "Maintenance task description must not be blank."
-            )
+            raise DatabaseProvisioningConfigurationError("Maintenance task description must not be blank.")
         if self.credential_scope not in {"runtime", "service_account"}:
-            raise DatabaseProvisioningConfigurationError(
-                "Maintenance task credential scope is invalid."
-            )
-        recommended_frequency = (
-            self.recommended_frequency.strip()
-            if self.recommended_frequency is not None
-            else None
-        )
+            raise DatabaseProvisioningConfigurationError("Maintenance task credential scope is invalid.")
+        recommended_frequency = self.recommended_frequency.strip() if self.recommended_frequency is not None else None
         if recommended_frequency == "":
-            raise DatabaseProvisioningConfigurationError(
-                "Maintenance task recommended frequency must not be blank."
-            )
+            raise DatabaseProvisioningConfigurationError("Maintenance task recommended frequency must not be blank.")
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "description", description)
         object.__setattr__(self, "recommended_frequency", recommended_frequency)
@@ -114,14 +102,10 @@ class CredentialTransition:
 
     def __post_init__(self) -> None:
         if not self.current.strip():
-            raise DatabaseProvisioningConfigurationError(
-                "Current credential value must not be blank."
-            )
+            raise DatabaseProvisioningConfigurationError("Current credential value must not be blank.")
         previous = tuple(value.strip() for value in self.previous if value.strip())
         if len(previous) != len(self.previous):
-            raise DatabaseProvisioningConfigurationError(
-                "Previous credential values must not be blank."
-            )
+            raise DatabaseProvisioningConfigurationError("Previous credential values must not be blank.")
         object.__setattr__(self, "current", self.current.strip())
         object.__setattr__(self, "previous", previous)
 
@@ -187,22 +171,16 @@ def database_family_for_backend(backend: DatabaseBackend) -> DatabaseFamily:
         return "mssql"
     if backend.tortoise_scheme == "oracle":
         return "oracle"
-    raise DatabaseProvisioningConfigurationError(
-        f"Unsupported database family for backend: {backend.scheme}."
-    )
+    raise DatabaseProvisioningConfigurationError(f"Unsupported database family for backend: {backend.scheme}.")
 
 
 def provisioner_for_family(
     family: DatabaseFamily,
     provisioners: Mapping[DatabaseFamily, DatabaseProvisioner] | None = None,
 ) -> DatabaseProvisioner:
-    provisioner = (DEFAULT_PROVISIONERS if provisioners is None else provisioners).get(
-        family
-    )
+    provisioner = (DEFAULT_PROVISIONERS if provisioners is None else provisioners).get(family)
     if provisioner is None:
-        raise DatabaseProvisioningConfigurationError(
-            f"Unsupported database family: {family}."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Unsupported database family: {family}.")
     return provisioner
 
 
@@ -218,15 +196,12 @@ def provisioning_context(
     context = ProvisioningContext(
         family=family,
         runtime_connection=runtime_connection,
-        provisioning_connection=(
-            runtime_connection if family == "sqlite" else provisioning_connection
-        ),
+        provisioning_connection=(runtime_connection if family == "sqlite" else provisioning_connection),
         project_root=project_root.resolve(),
         modules=modules,
     )
     if runtime_connection.aws is None and (
-        context.provisioning_connection is None
-        or context.provisioning_connection.aws is None
+        context.provisioning_connection is None or context.provisioning_connection.aws is None
     ):
         return context
 
@@ -249,9 +224,7 @@ async def destroy_database(
     request: DestroyDatabaseRequest,
 ) -> tuple[ProvisioningPhaseResult, ...]:
     if not request.confirm.strip():
-        raise DatabaseProvisioningConfigurationError(
-            "Destroy confirmation must not be blank."
-        )
+        raise DatabaseProvisioningConfigurationError("Destroy confirmation must not be blank.")
     return await provisioner_for_family(context.family).destroy(context, request)
 
 
@@ -261,25 +234,15 @@ async def run_database_maintenance(
 ) -> tuple[ProvisioningPhaseResult, ...]:
     task_name = request.task.strip()
     if not task_name:
-        raise DatabaseProvisioningConfigurationError(
-            "Maintenance task name must not be blank."
-        )
+        raise DatabaseProvisioningConfigurationError("Maintenance task name must not be blank.")
     task = next(
-        (
-            available_task
-            for available_task in database_maintenance_tasks(context)
-            if available_task.name == task_name
-        ),
+        (available_task for available_task in database_maintenance_tasks(context) if available_task.name == task_name),
         None,
     )
     if task is not None and task.requires_confirmation and request.confirm != task.name:
-        raise DatabaseProvisioningConfigurationError(
-            "Maintenance task requires confirmation."
-        )
+        raise DatabaseProvisioningConfigurationError("Maintenance task requires confirmation.")
     normalised_request = (
-        request
-        if request.task == task_name
-        else DatabaseMaintenanceRequest(task=task_name, confirm=request.confirm)
+        request if request.task == task_name else DatabaseMaintenanceRequest(task=task_name, confirm=request.confirm)
     )
     return await provisioner_for_family(context.family).run_maintenance(
         context,
@@ -304,9 +267,7 @@ async def clear_test_database_data(
         return
     backend = database_backend_for_url(database_url)
     if backend is None:
-        raise DatabaseProvisioningConfigurationError(
-            "Test database URL uses an unsupported database scheme."
-        )
+        raise DatabaseProvisioningConfigurationError("Test database URL uses an unsupported database scheme.")
     family = database_family_for_backend(backend)
     await provisioner_for_family(family).clear_test_data(connection, table_names)
 
@@ -325,17 +286,11 @@ def _require_service_account_connection(
 ) -> ResolvedDatabaseConnection:
     connection = context.provisioning_connection
     if connection is None:
-        raise DatabaseProvisioningConfigurationError(
-            f"Database {phase} requires service-account credentials."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Database {phase} requires service-account credentials.")
     if connection.credentials.get("user") is None:
-        raise DatabaseProvisioningConfigurationError(
-            f"Database {phase} requires a service-account database user."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Database {phase} requires a service-account database user.")
     if connection.credentials.get("password") is None:
-        raise DatabaseProvisioningConfigurationError(
-            f"Database {phase} requires a service-account database password."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Database {phase} requires a service-account database password.")
     return connection
 
 
@@ -357,9 +312,7 @@ def _default_provisioners() -> Mapping[DatabaseFamily, DatabaseProvisioner]:
     }
 
 
-DEFAULT_PROVISIONERS: Mapping[DatabaseFamily, DatabaseProvisioner] = (
-    _default_provisioners()
-)
+DEFAULT_PROVISIONERS: Mapping[DatabaseFamily, DatabaseProvisioner] = _default_provisioners()
 
 
 __all__ = (

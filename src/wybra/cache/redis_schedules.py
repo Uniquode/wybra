@@ -65,9 +65,7 @@ class RedisScheduleCache:
     def __post_init__(self) -> None:
         validate_positive_integer(self.max_records, label="maximum schedule records")
         if self.max_records > MAX_CACHE_FEATURE_LIMIT:
-            raise ValueError(
-                f"Maximum schedule records cannot exceed {MAX_CACHE_FEATURE_LIMIT}."
-            )
+            raise ValueError(f"Maximum schedule records cannot exceed {MAX_CACHE_FEATURE_LIMIT}.")
 
     @property
     def maximum_records(self) -> int:
@@ -112,9 +110,7 @@ class RedisScheduleCache:
         if result[0] == 0:
             return None
         if result[0] == -1:
-            raise CacheFeatureError(
-                "The Redis schedule store has reached its configured record capacity."
-            )
+            raise CacheFeatureError("The Redis schedule store has reached its configured record capacity.")
         _require_success(result, length=2, label="create")
         return ScheduleRecord(
             identity=identity,
@@ -264,9 +260,7 @@ class RedisScheduleCache:
             owner=owner,
             record=record,
             claimant=claimant,
-            fencing_token=FencingToken(
-                _integer(result[6], label="schedule fencing token")
-            ),
+            fencing_token=FencingToken(_integer(result[6], label="schedule fencing token")),
             expires_at=_number(result[7], label="schedule claim expiry"),
             token=token,
         )
@@ -395,9 +389,7 @@ class RedisScheduleCache:
 
         result = _script_result(await self.runtime.feature_call(held_claim))
         if len(result) != 1 or result[0] not in (0, 1):
-            raise CacheFeatureError(
-                "Redis schedule claim check returned invalid state."
-            )
+            raise CacheFeatureError("Redis schedule claim check returned invalid state.")
         return result[0] == 1
 
     async def release(self, claim: ScheduleClaim) -> None:
@@ -475,9 +467,7 @@ def _require_success(result: tuple[object, ...], *, length: int, label: str) -> 
 
 def _record(value: object) -> ScheduleRecord:
     if not isinstance(value, list | tuple) or len(value) != 5:
-        raise CacheFeatureError(
-            "Redis schedule operation returned invalid record state."
-        )
+        raise CacheFeatureError("Redis schedule operation returned invalid record state.")
     identity, payload, revision, due_at, interval = value
     return ScheduleRecord(
         identity=_text(identity, label="schedule identity"),

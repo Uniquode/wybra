@@ -70,8 +70,7 @@ def test_parse_secret_key_entry_parses_checksummed_keys() -> None:
 
 def test_parse_secret_key_entry_rejects_invalid_checksum() -> None:
     key = _key_bundle_key()
-    actual_checksum = f"{
-        (zlib.crc32(base64.urlsafe_b64decode(key.decode('ascii'))) & 0xFFFFFFFF):08x}"
+    actual_checksum = f"{(zlib.crc32(base64.urlsafe_b64decode(key.decode('ascii'))) & 0xFFFFFFFF):08x}"
 
     with pytest.raises(SecretDataError, match="checksum"):
         parse_secret_key_entry(f"v1:{key.decode('ascii')}:00000000")
@@ -219,9 +218,7 @@ def test_parse_secret_key_ring_from_secrets_reads_current_and_previous_keys() ->
     ]
 
 
-def test_parse_secret_key_ring_from_secrets_treats_missing_previous_as_optional() -> (
-    None
-):
+def test_parse_secret_key_ring_from_secrets_treats_missing_previous_as_optional() -> None:
     current = _key_entry("current", _key_bundle_key())
     secrets = FakeSecretsCapability({("vault", "current-key"): current})
 
@@ -239,9 +236,7 @@ def test_parse_secret_key_ring_from_secrets_treats_missing_previous_as_optional(
 
 def test_parse_secret_key_ring_from_secrets_returns_none_without_source() -> None:
     assert parse_secret_key_ring_from_secrets(None, source="keychain") is None
-    assert (
-        parse_secret_key_ring_from_secrets(FakeSecretsCapability(), source=None) is None
-    )
+    assert parse_secret_key_ring_from_secrets(FakeSecretsCapability(), source=None) is None
 
 
 def test_parse_secret_key_ring_from_secrets_rejects_missing_current() -> None:
@@ -296,9 +291,7 @@ def test_encrypt_and_decrypt_current_and_previous_versions() -> None:
     current = _key_bundle_key()
     previous = _key_bundle_key()
 
-    previous_service = SecretEnvelopeService.from_key_bundle(
-        _key_entry("previous", previous)
-    )
+    previous_service = SecretEnvelopeService.from_key_bundle(_key_entry("previous", previous))
     previous_blob = previous_service.encrypt("previous-token")
 
     service = _service_with_keys(current=current, previous=previous)
@@ -350,9 +343,7 @@ def test_create_and_verify_current_and_previous_verifiers() -> None:
     current = _key_bundle_key()
     previous = _key_bundle_key()
 
-    previous_service = SecretEnvelopeService.from_key_bundle(
-        _key_entry("previous", previous)
-    )
+    previous_service = SecretEnvelopeService.from_key_bundle(_key_entry("previous", previous))
     previous_verifier = previous_service.create_verifier_required(
         "recovery-code",
         context="test",
@@ -459,8 +450,7 @@ def test_parse_secret_key_entry_rejects_reserved_plain_text_version() -> None:
     key = _key_bundle_key()
     with pytest.raises(SecretDataError, match="reserved plaintext"):
         parse_secret_key_entry(
-            f"{PLAIN_TEXT_VERSION}:{key.decode('ascii')}:"
-            f"{(zlib.crc32(base64.urlsafe_b64decode(key)) & 0xFFFFFFFF):08x}"
+            f"{PLAIN_TEXT_VERSION}:{key.decode('ascii')}:{(zlib.crc32(base64.urlsafe_b64decode(key)) & 0xFFFFFFFF):08x}"
         )
 
 

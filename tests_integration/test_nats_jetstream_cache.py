@@ -28,7 +28,6 @@ from tests.cache_feature_conformance import (
     assert_atomic_conformance,
     assert_baseline_cache_conformance,
     assert_lease_conformance,
-    assert_pubsub_conformance,
     assert_schedule_conformance,
     assert_stream_conformance,
     assert_work_queue_conformance,
@@ -44,7 +43,6 @@ from wybra.cache import (
     CacheTimeCapability,
     LeaseCacheCapability,
     NatsJetStreamCache,
-    PubSubCacheCapability,
     ScheduleCacheCapability,
     StreamCacheCapability,
     StreamRecord,
@@ -81,9 +79,7 @@ def _nats_container() -> DockerContainer:
 
 
 def _nats_url(container: DockerContainer) -> str:
-    return (
-        f"nats://{container.get_container_host_ip()}:{container.get_exposed_port(4222)}"
-    )
+    return f"nats://{container.get_container_host_ip()}:{container.get_exposed_port(4222)}"
 
 
 def nats_settings(nats_url: str, namespace: str) -> CachesSettings:
@@ -190,7 +186,6 @@ async def test_nats_jetstream_cache_round_trips_with_native_ttl(
         assert first.features == (
             "atomic",
             "lease",
-            "pub-sub",
             "schedule",
             "stream",
             "time",
@@ -199,7 +194,6 @@ async def test_nats_jetstream_cache_round_trips_with_native_ttl(
         assert second.features == (
             "atomic",
             "lease",
-            "pub-sub",
             "schedule",
             "stream",
             "time",
@@ -254,18 +248,14 @@ async def test_nats_jetstream_cache_coordinates_concurrent_fills(
         await release_fill.wait()
         return b"filled"
 
-    first_fill = asyncio.create_task(
-        cache.get_or_set("integration", "single-flight", ttl=60, factory=factory)
-    )
+    first_fill = asyncio.create_task(cache.get_or_set("integration", "single-flight", ttl=60, factory=factory))
     second_fill: asyncio.Task[bytes] | None = None
     try:
         await asyncio.wait_for(
             fill_started.wait(),
             timeout=CONFORMANCE_TIMEOUT_SECONDS,
         )
-        second_fill = asyncio.create_task(
-            cache.get_or_set("integration", "single-flight", ttl=60, factory=factory)
-        )
+        second_fill = asyncio.create_task(cache.get_or_set("integration", "single-flight", ttl=60, factory=factory))
         await asyncio.wait_for(
             cache.waiting_for_fill.wait(),
             timeout=CONFORMANCE_TIMEOUT_SECONDS,
@@ -327,10 +317,7 @@ async def test_nats_jetstream_cache_registers_atomic_and_lease_features(
 
         lease = await leases.acquire("integration", "resource", "holder", ttl=30)
         assert lease is not None
-        assert (
-            await second_leases.acquire("integration", "resource", "other", ttl=30)
-            is None
-        )
+        assert await second_leases.acquire("integration", "resource", "other", ttl=30) is None
         created = await atomic.create(
             "integration",
             "value",
@@ -342,12 +329,7 @@ async def test_nats_jetstream_cache_registers_atomic_and_lease_features(
         assert created is not None
         assert created.value == b"created"
         assert await second_atomic.get("integration", "value") == created
-        assert (
-            await second_atomic.create(
-                "integration", "value", b"duplicate", ttl=30, lease=lease
-            )
-            is None
-        )
+        assert await second_atomic.create("integration", "value", b"duplicate", ttl=30, lease=lease) is None
 
         updated = await second_atomic.compare_and_swap(
             "integration",
@@ -359,37 +341,27 @@ async def test_nats_jetstream_cache_registers_atomic_and_lease_features(
         )
         assert updated is not None
         assert updated.value == b"updated"
-        assert await atomic.compare_and_delete(
-            "integration", "value", updated.revision, lease=lease
-        )
+        assert await atomic.compare_and_delete("integration", "value", updated.revision, lease=lease)
         assert await second_atomic.get("integration", "value") is None
 
         counter = await atomic.increment("integration", "counter", amount=2, ttl=30)
         assert counter.value == 2
-        assert (
-            await second_atomic.increment("integration", "counter", ttl=30)
-        ).value == 3
+        assert (await second_atomic.increment("integration", "counter", ttl=30)).value == 3
         with pytest.raises(CacheConflictError, match="counter"):
             await atomic.get("integration", "counter")
 
-        short_value = await atomic.create(
-            "integration", "short-value", b"value", ttl=0.2
-        )
+        short_value = await atomic.create("integration", "short-value", b"value", ttl=0.2)
         assert short_value is not None
         short_counter = await atomic.increment("integration", "short-counter", ttl=0.2)
         assert short_counter.value == 1
         await asyncio.sleep(0.3)
         assert await atomic.get("integration", "short-value") is None
-        assert (
-            await atomic.increment("integration", "short-counter", ttl=30)
-        ).value == 1
+        assert (await atomic.increment("integration", "short-counter", ttl=30)).value == 1
 
         renewed = await second_leases.renew(lease, ttl=30)
         assert renewed.fencing_token == lease.fencing_token
         await leases.release(renewed)
-        replacement = await second_leases.acquire(
-            "integration", "resource", "other", ttl=30
-        )
+        replacement = await second_leases.acquire("integration", "resource", "other", ttl=30)
         assert replacement is not None
         assert replacement.fencing_token > renewed.fencing_token
         with pytest.raises(CacheConflictError, match="stale"):
@@ -402,59 +374,6 @@ async def test_nats_jetstream_cache_registers_atomic_and_lease_features(
                 ttl=30,
                 lease=renewed,
             )
-
-
-@pytest.mark.anyio
-async def test_nats_pubsub_delivers_across_registries_and_isolates_namespaces(
-    nats_url: str,
-) -> None:
-    namespace = f"pubsub_{uuid4().hex}"
-    settings = CachesSettings(
-        instances=(
-            CacheSettings(
-                backend="nats-jetstream",
-                servers=(nats_url,),
-                namespace=namespace,
-                features=("pub-sub",),
-            ),
-        )
-    )
-    isolated_settings = CachesSettings(
-        instances=(
-            CacheSettings(
-                backend="nats-jetstream",
-                servers=(nats_url,),
-                namespace=f"{namespace}_other",
-                features=("pub-sub",),
-            ),
-        )
-    )
-
-    async with AsyncExitStack() as cleanup:
-        first_caches = await build_caches(settings)
-        cleanup.push_async_callback(first_caches.close)
-        second_caches = await build_caches(settings)
-        cleanup.push_async_callback(second_caches.close)
-        isolated_caches = await build_caches(isolated_settings)
-        cleanup.push_async_callback(isolated_caches.close)
-        publisher = first_caches.require("default").require(PubSubCacheCapability)
-        subscriber = second_caches.require("default").require(PubSubCacheCapability)
-        isolated = isolated_caches.require("default").require(PubSubCacheCapability)
-
-        await assert_pubsub_conformance(subscriber, owner="nats-pubsub")
-        subscription = await subscriber.subscribe("events", "updates")
-        unrelated = await isolated.subscribe("events", "updates")
-        try:
-            await publisher.publish("events", "updates", b"shared")
-            assert (
-                await subscription.receive(timeout=CONFORMANCE_TIMEOUT_SECONDS)
-                == b"shared"
-            )
-            with pytest.raises(TimeoutError):
-                await unrelated.receive(timeout=0.1)
-        finally:
-            await subscription.close()
-            await unrelated.close()
 
 
 @pytest.mark.anyio
@@ -596,9 +515,7 @@ async def test_nats_work_queue_reserves_and_acknowledges_work(
         assert terminal is not None
         assert terminal.identity == exhausted
         await queue.reject(terminal)
-        assert [
-            entry.identity for entry in await queue.dead_letters("nats-work", "jobs")
-        ] == [exhausted]
+        assert [entry.identity for entry in await queue.dead_letters("nats-work", "jobs")] == [exhausted]
 
 
 @pytest.mark.anyio
@@ -666,9 +583,7 @@ async def test_nats_work_queue_recovers_abandoned_delivery_after_registry_close(
 
         recovered_caches = await build_caches(settings)
         try:
-            recovered = recovered_caches.require("default").require(
-                WorkQueueCacheCapability
-            )
+            recovered = recovered_caches.require("default").require(WorkQueueCacheCapability)
             recovered_at = time.monotonic()
             delivery = await recovered.reserve(
                 "nats-work",
@@ -772,9 +687,7 @@ async def test_nats_schedule_capacity_is_namespace_wide_after_deletion(
     coordination = NatsCoordination(runtime)
     schedules = NatsScheduleCache(runtime, coordination, max_records=2)
     try:
-        external = await coordination.acquire(
-            "schedule-capacity", "records", "external", ttl=30
-        )
+        external = await coordination.acquire("schedule-capacity", "records", "external", ttl=30)
         assert external is not None
         assert await schedules.create(
             "first-owner",
@@ -835,9 +748,7 @@ async def test_nats_schedule_claim_write_failure_releases_its_lease(
 
     monkeypatch.setattr(NatsScheduleCache, "_write_state", fail_claim_write)
     try:
-        assert await schedules.create(
-            "owner", "schedule", b"payload", next_due_at=time.time() - 1
-        )
+        assert await schedules.create("owner", "schedule", b"payload", next_due_at=time.time() - 1)
         with pytest.raises(CacheFeatureError, match="simulated"):
             await schedules.claim("owner", "schedule", "scheduler", ttl=30)
         assert await schedules.claim("owner", "schedule", "scheduler", ttl=30)
@@ -869,9 +780,7 @@ async def test_nats_schedule_settlement_failure_retains_its_claim(
         return await original(self, address, expected_sequence, state, ttl=ttl)
 
     try:
-        assert await schedules.create(
-            "owner", "schedule", b"payload", next_due_at=time.time() - 1
-        )
+        assert await schedules.create("owner", "schedule", b"payload", next_due_at=time.time() - 1)
         claim = await schedules.claim("owner", "schedule", "scheduler", ttl=30)
         assert claim is not None
         monkeypatch.setattr(NatsScheduleCache, "_write_state", fail_release_write)
@@ -1053,9 +962,7 @@ async def test_nats_taskiq_retry_moves_between_worker_runtimes(
 ) -> None:
     namespace = f"taskiq_retry_{uuid4().hex}"
 
-    @task(
-        name=f"tests.nats_taskiq_retry_{uuid4().hex}", retry=RetryPolicy(max_attempts=2)
-    )
+    @task(name=f"tests.nats_taskiq_retry_{uuid4().hex}", retry=RetryPolicy(max_attempts=2))
     async def operation() -> None:
         context = current_task_context()
         assert context is not None
@@ -1089,12 +996,8 @@ async def test_nats_taskiq_retry_moves_between_worker_runtimes(
         cleanup.push_async_callback(second_listener.aclose)
 
         handle = await submitter.submit(operation, operation.payload())
-        await first_worker.receiver().callback(
-            await _next_taskiq_delivery(first_listener)
-        )
-        await second_worker.receiver().callback(
-            await _next_taskiq_delivery(second_listener)
-        )
+        await first_worker.receiver().callback(await _next_taskiq_delivery(first_listener))
+        await second_worker.receiver().callback(await _next_taskiq_delivery(second_listener))
 
         status = await submitter.status(handle.task_id)
         lifecycle = await submitter.lifecycle(handle.task_id)
@@ -1109,11 +1012,10 @@ async def test_nats_taskiq_retry_moves_between_worker_runtimes(
             TaskLifecycleKind.STARTED,
             TaskLifecycleKind.SUCCEEDED,
         ]
-        assert [
-            event.worker_id
-            for event in lifecycle
-            if event.kind is TaskLifecycleKind.STARTED
-        ] == ["worker-one", "worker-two"]
+        assert [event.worker_id for event in lifecycle if event.kind is TaskLifecycleKind.STARTED] == [
+            "worker-one",
+            "worker-two",
+        ]
 
 
 @pytest.mark.anyio
@@ -1163,18 +1065,13 @@ async def test_nats_taskiq_recovers_delivery_after_worker_loss(nats_url: str) ->
         second_delivery = await _next_taskiq_delivery(second_listener)
 
         first_message = first_worker.broker.formatter.loads(message=first_delivery.data)
-        second_message = second_worker.broker.formatter.loads(
-            message=second_delivery.data
-        )
+        second_message = second_worker.broker.formatter.loads(message=second_delivery.data)
         assert first_message.task_id == second_message.task_id == str(handle.task_id)
         assert [
             first_message.labels[DELIVERY_ATTEMPT_LABEL],
             second_message.labels[DELIVERY_ATTEMPT_LABEL],
         ] == [1, 2]
-        assert (
-            first_message.labels[DELIVERY_IDENTITY_LABEL]
-            == second_message.labels[DELIVERY_IDENTITY_LABEL]
-        )
+        assert first_message.labels[DELIVERY_IDENTITY_LABEL] == second_message.labels[DELIVERY_IDENTITY_LABEL]
         with pytest.raises(CacheConflictError):
             acknowledgement = first_delivery.ack()
             assert acknowledgement is not None
@@ -1300,10 +1197,9 @@ async def test_nats_streams_preserve_replay_and_durable_consumer_positions(
             second_position,
         ]
         await first.acknowledge("events", "shared", "projection", first_position)
-        assert [
-            record.position
-            for record in await second.read_consumer("events", "shared", "projection")
-        ] == [second_position]
+        assert [record.position for record in await second.read_consumer("events", "shared", "projection")] == [
+            second_position
+        ]
 
 
 @pytest.mark.parametrize(
@@ -1358,9 +1254,7 @@ async def test_nats_jetstream_rejects_incompatible_existing_stream(
                 ),
             )
         )
-        with pytest.raises(
-            ConfigurationError, match="stream configuration is incompatible"
-        ):
+        with pytest.raises(ConfigurationError, match="stream configuration is incompatible"):
             await build_caches(settings)
 
         stream = await jetstream.stream_info(stream_name)
@@ -1433,9 +1327,7 @@ async def test_nats_jetstream_rejects_unsafe_existing_feature_stream(
         async with AsyncExitStack() as cleanup:
             caches = await build_caches(settings)
             cleanup.push_async_callback(caches.close)
-            with pytest.raises(
-                ConfigurationError, match="configuration is incompatible"
-            ):
+            with pytest.raises(ConfigurationError, match="configuration is incompatible"):
                 if feature == "stream":
                     streams = caches.require("default").require(StreamCacheCapability)
                     await streams.append(owner, resource, b"payload")
@@ -1485,9 +1377,7 @@ async def test_nats_jetstream_rejects_incompatible_existing_coordinator_consumer
             ),
         )
     )
-    with pytest.raises(
-        ConfigurationError, match="consumer configuration is incompatible"
-    ):
+    with pytest.raises(ConfigurationError, match="consumer configuration is incompatible"):
         await build_caches(settings)
 
 
@@ -1616,19 +1506,11 @@ async def test_nats_jetstream_recovers_durable_cache_features_after_restart() ->
         recovered_caches = await build_caches(recovered_settings)
         recovered = recovered_caches.require("default")
         assert await recovered.values.get("restart", "value") == b"baseline"
-        assert (
-            await recovered.require(AtomicCacheCapability).get("restart", "atomic")
-            == created
+        assert await recovered.require(AtomicCacheCapability).get("restart", "atomic") == created
+        assert await recovered.require(StreamCacheCapability).read("restart", "events") == (
+            StreamRecord("events", position, b"event"),
         )
-        assert await recovered.require(StreamCacheCapability).read(
-            "restart", "events"
-        ) == (StreamRecord("events", position, b"event"),)
-        assert (
-            await recovered.require(ScheduleCacheCapability).due(
-                "restart", before=time.time() + 1
-            )
-            == ()
-        )
+        assert await recovered.require(ScheduleCacheCapability).due("restart", before=time.time() + 1) == ()
         delivery = await recovered.require(WorkQueueCacheCapability).reserve(
             "restart", "jobs", "worker", visibility_timeout=1, wait_timeout=2
         )

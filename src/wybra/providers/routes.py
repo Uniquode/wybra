@@ -786,9 +786,7 @@ async def _provider_resolution_user(request: Request, user_id: str) -> User | No
     if parsed_user_id is None:
         return None
     database = get_site(request.app).require_capability(DatabaseCapability)
-    async with tortoise_transaction(
-        database, database.database().for_write()
-    ) as session:
+    async with tortoise_transaction(database, database.database().for_write()) as session:
         user = await User.get_or_none(id=parsed_user_id, using_db=session)
         return user if user is not None and is_user_effectively_active(user) else None
 
@@ -1494,9 +1492,7 @@ def _oauth_state_secret(request: Request) -> str:
 
 
 def _raise_invalid_configured_client_type(name: str, value: object) -> NoReturn:
-    raise TypeError(
-        f"Configured {name} is invalid: actual_type={type(value).__name__}."
-    )
+    raise TypeError(f"Configured {name} is invalid: actual_type={type(value).__name__}.")
 
 
 def _route_path(request: Request, route_name: str) -> str:

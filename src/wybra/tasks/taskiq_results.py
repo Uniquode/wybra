@@ -84,8 +84,7 @@ class CacheTaskiqResultBackend(AsyncResultBackend[Any]):
         payload = self._policy.serialise(result)
         if not isinstance(payload, bytes):
             raise TypeError(
-                "Taskiq result encoder must return bytes, "
-                f"got {type(payload).__name__} for task_id={task_id!r}."
+                f"Taskiq result encoder must return bytes, got {type(payload).__name__} for task_id={task_id!r}."
             )
         payload_bytes = len(payload)
         if payload_bytes > self._policy.maximum_serialised_bytes:

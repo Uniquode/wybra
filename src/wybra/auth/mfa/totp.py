@@ -29,9 +29,7 @@ def generate_totp_secret(*, byte_count: int = DEFAULT_TOTP_SECRET_BYTES) -> str:
     if byte_count <= 0:
         raise ValueError("TOTP secret byte count must be positive.")
 
-    return _normalise_totp_secret(
-        base64.b32encode(token_bytes(byte_count)).decode("ascii")
-    )
+    return _normalise_totp_secret(base64.b32encode(token_bytes(byte_count)).decode("ascii"))
 
 
 def totp_auth_uri(
@@ -114,9 +112,7 @@ def totp_recovery_window_expiry_timestamp(
     timestamp: float | None = None,
     recovery_window_seconds: int = DEFAULT_TOTP_RECOVERY_WINDOW_SECONDS,
 ) -> float:
-    return (timestamp if timestamp is not None else current_timestamp()) + (
-        float(recovery_window_seconds)
-    )
+    return (timestamp if timestamp is not None else current_timestamp()) + (float(recovery_window_seconds))
 
 
 def _normalise_totp_secret(secret: str) -> str:
@@ -126,10 +122,7 @@ def _normalise_totp_secret(secret: str) -> str:
 def _normalise_totp_algorithm(algorithm: str) -> str:
     normalised_algorithm = algorithm.strip().upper()
     if normalised_algorithm not in SUPPORTED_TOTP_ALGORITHMS:
-        raise ValueError(
-            "Unsupported TOTP algorithm. Supported values: "
-            + ", ".join(SUPPORTED_TOTP_ALGORITHMS)
-        )
+        raise ValueError("Unsupported TOTP algorithm. Supported values: " + ", ".join(SUPPORTED_TOTP_ALGORITHMS))
 
     return normalised_algorithm
 

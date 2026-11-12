@@ -27,9 +27,7 @@ class UnsupportedFamilyProvisioner:
     ) -> tuple[ProvisioningPhaseResult, ...]:
         _ensure_family(context, self.family)
         _require_service_account_connection(context, phase="init")
-        raise DatabaseProvisioningOperationError(
-            f"Database family {self.family} init provisioning is not implemented."
-        )
+        raise DatabaseProvisioningOperationError(f"Database family {self.family} init provisioning is not implemented.")
 
     async def destroy(
         self,
@@ -39,9 +37,7 @@ class UnsupportedFamilyProvisioner:
         del request
         _ensure_family(context, self.family)
         _require_service_account_connection(context, phase="destroy")
-        raise DatabaseProvisioningOperationError(
-            f"Database family {self.family} destroy is not implemented."
-        )
+        raise DatabaseProvisioningOperationError(f"Database family {self.family} destroy is not implemented.")
 
     def maintenance_tasks(
         self,
@@ -60,9 +56,7 @@ class UnsupportedFamilyProvisioner:
             context,
             phase=f"maintenance:{request.task}",
         )
-        raise DatabaseProvisioningConfigurationError(
-            f"Unknown {self.family} maintenance task: {request.task}."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Unknown {self.family} maintenance task: {request.task}.")
 
     async def clear_test_data(
         self,
@@ -70,9 +64,7 @@ class UnsupportedFamilyProvisioner:
         table_names: tuple[str, ...],
     ) -> None:
         del connection, table_names
-        raise DatabaseProvisioningOperationError(
-            f"Database family {self.family} test data cleanup is not implemented."
-        )
+        raise DatabaseProvisioningOperationError(f"Database family {self.family} test data cleanup is not implemented.")
 
     def quote_identifier(self, identifier: str) -> str:
         return quote_sql_identifier(identifier)

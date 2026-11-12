@@ -37,6 +37,4 @@ class SecuritySettings(BaseSettings):
 
     @property
     def header_options(self) -> SecurityHeaderOptions:
-        return SecurityHeaderOptions(
-            cross_origin_opener_policy=self.cross_origin_opener_policy
-        )
+        return SecurityHeaderOptions(cross_origin_opener_policy=self.cross_origin_opener_policy)

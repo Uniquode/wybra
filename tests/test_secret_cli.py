@@ -314,9 +314,7 @@ async def _reencrypt_database_values(database_url: str) -> dict[str, str | None]
             connection = database.connection()
             provider = await IdentityProvider.all().using_db(connection).first()
             credential = await IdentityTotpCredential.all().using_db(connection).first()
-            recovery_code = (
-                await IdentityTotpRecoveryCode.all().using_db(connection).first()
-            )
+            recovery_code = await IdentityTotpRecoveryCode.all().using_db(connection).first()
             if provider is None or credential is None or recovery_code is None:
                 raise AssertionError("Expected re-encryption test rows to exist.")
             return {
@@ -366,9 +364,7 @@ def test_set_get_and_list_use_default_keychain_mapping(monkeypatch) -> None:
     assert records["secret-prev"]["key"] == SECRET_KEY_PREVIOUS
     assert records["secret-prev"]["exists"] is False
     assert records[SECRET_KEY_TYPE_CSRF]["key"] == CSRF_TOKEN_SECRET_KEY_CURRENT
-    assert records[SECRET_KEY_TYPE_GOOGLE]["key"] == (
-        "auth/providers/google/client-secret"
-    )
+    assert records[SECRET_KEY_TYPE_GOOGLE]["key"] == ("auth/providers/google/client-secret")
 
 
 def test_set_supports_json_bulk_input(monkeypatch) -> None:
@@ -450,13 +446,9 @@ def test_list_json_dev_reports_development_default_keys(monkeypatch) -> None:
     keys = json.loads(result.output)["keys"]
     assert keys[SECRET_KEY_TYPE_SECRET]["key"] == "secrets/key/dev/current"
     assert keys[SECRET_KEY_TYPE_SECRET]["exists"] is True
-    assert keys[SECRET_KEY_TYPE_GITHUB]["key"] == (
-        "auth/providers/github/dev/client-secret"
-    )
+    assert keys[SECRET_KEY_TYPE_GITHUB]["key"] == ("auth/providers/github/dev/client-secret")
     assert keys[SECRET_KEY_TYPE_GITHUB]["exists"] is True
-    assert keys[SECRET_KEY_TYPE_GOOGLE]["key"] == (
-        "auth/providers/google/dev/client-secret"
-    )
+    assert keys[SECRET_KEY_TYPE_GOOGLE]["key"] == ("auth/providers/google/dev/client-secret")
     assert keys[SECRET_KEY_TYPE_GOOGLE]["exists"] is False
 
 
@@ -506,9 +498,7 @@ def test_name_uses_configured_database_credential_reference(
     )
 
     assert result.exit_code == 0, result.output
-    assert keyring.values == {
-        ("uniquode.io", "database/uniquode/app/user"): "uniquode_user"
-    }
+    assert keyring.values == {("uniquode.io", "database/uniquode/app/user"): "uniquode_user"}
 
     result = runner.invoke(
         secret_cli.secret_command,
@@ -642,20 +632,14 @@ def test_list_uses_configured_keychain_metadata_and_app_key_refs(
     assert records["secret-prev"]["key"] == "SYSTEM_SECRET_KEYS_PREVIOUS"
     assert records["secret-prev"]["exists"] is False
     assert records[SECRET_KEY_TYPE_CSRF]["owner"] == "forms"
-    assert records[SECRET_KEY_TYPE_CSRF]["description"] == (
-        "Configured current forms CSRF token secret."
-    )
+    assert records[SECRET_KEY_TYPE_CSRF]["description"] == ("Configured current forms CSRF token secret.")
     assert records[SECRET_KEY_TYPE_CSRF]["key"] == CSRF_TOKEN_SECRET_KEY_CURRENT
     assert records[SECRET_KEY_TYPE_CSRF]["exists"] is True
     assert records["csrf-prev"]["owner"] == "forms"
-    assert records["csrf-prev"]["description"] == (
-        "Configured previous forms CSRF token secrets."
-    )
+    assert records["csrf-prev"]["description"] == ("Configured previous forms CSRF token secrets.")
     assert records["csrf-prev"]["key"] == CSRF_TOKEN_SECRET_KEY_PREVIOUS
     assert records["csrf-prev"]["exists"] is True
-    assert records[SECRET_KEY_TYPE_GOOGLE]["key"] == (
-        "auth/providers/google/client-secret"
-    )
+    assert records[SECRET_KEY_TYPE_GOOGLE]["key"] == ("auth/providers/google/client-secret")
     assert records[SECRET_KEY_TYPE_GOOGLE]["exists"] is True
     assert SECRET_KEY_TYPE_GITHUB not in records
     assert "apple" not in records
@@ -709,13 +693,9 @@ def test_list_includes_configured_database_keychain_references(
         "account": "database/uniquode/app/password",
     }
     assert records["database-sa-user"]["exists"] is True
-    assert records["database-sa-user"]["key"] == (
-        "database/uniquode/service-account/user"
-    )
+    assert records["database-sa-user"]["key"] == ("database/uniquode/service-account/user")
     assert records["database-sa-password"]["exists"] is False
-    assert records["database-sa-password"]["key"] == (
-        "database/uniquode/service-account/password"
-    )
+    assert records["database-sa-password"]["key"] == ("database/uniquode/service-account/password")
     assert "app_user" not in result.output
     assert "service_user" not in result.output
 
@@ -758,9 +738,7 @@ def test_list_applies_environment_redis_url_for_cache_credentials(
 ) -> None:
     keyring = FakeKeyring({("uniquode.io", "cache/redis/credentials"): "user:password"})
     _install_fake_keyring(monkeypatch, keyring)
-    ConfigService.set_runtime_environment(
-        {"WYBRA_CACHE_URL": "rediss://cache.internal/0"}
-    )
+    ConfigService.set_runtime_environment({"WYBRA_CACHE_URL": "rediss://cache.internal/0"})
     config_path = _cache_environment_url_config(tmp_path / "app.toml")
 
     result = CliRunner().invoke(

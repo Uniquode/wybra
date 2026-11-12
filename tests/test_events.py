@@ -34,9 +34,7 @@ class MissingKind(Event):
     identifier: str
 
 
-def test_root_event_package_exposes_core_primitives_and_subscription_selectors() -> (
-    None
-):
+def test_root_event_package_exposes_core_primitives_and_subscription_selectors() -> None:
     assert wybra.events.__all__ == (
         "Event",
         "EventScope",
@@ -79,9 +77,7 @@ def test_observe_rejects_synchronous_callables() -> None:
         return None
 
     with pytest.raises(TypeError, match="Observed functions must be async callables"):
-        wybra.events.observe(descriptor)(
-            cast(Callable[[], Awaitable[None]], synchronous_operation)
-        )
+        wybra.events.observe(descriptor)(cast(Callable[[], Awaitable[None]], synchronous_operation))
 
 
 @pytest.mark.anyio
@@ -132,9 +128,7 @@ async def test_context_decorator_derives_and_restores_immutable_context() -> Non
 
 
 @pytest.mark.anyio
-async def test_context_is_inherited_by_child_tasks_without_leaking_to_the_caller() -> (
-    None
-):
+async def test_context_is_inherited_by_child_tasks_without_leaking_to_the_caller() -> None:
     @context(["request", "operation"])
     async def create_child() -> EventContext:
         child = asyncio.create_task(_current_context())

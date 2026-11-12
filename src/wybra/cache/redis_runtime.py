@@ -49,9 +49,7 @@ _CACHE_TIME_TARGET_REFRESH_SECONDS = 300.0
 _CACHE_TIME_MAXIMUM_REFRESH_SECONDS = 600.0
 _CACHE_TIME_DRIFT_TOLERANCE_SECONDS = 1.0
 
-_ADVANCED_FEATURES = frozenset(
-    {"atomic", "lease", "pub-sub", "schedule", "stream", "work-queue"}
-)
+_ADVANCED_FEATURES = frozenset({"atomic", "lease", "schedule", "stream", "work-queue"})
 _READINESS_FEATURES = _ADVANCED_FEATURES | {"time"}
 _DURABLE_FEATURES = frozenset({"atomic", "lease", "schedule", "stream", "work-queue"})
 _ATOMIC_READINESS_SCRIPT = """
@@ -168,8 +166,7 @@ class RedisCacheRuntime:
                 redis_module = importlib.import_module("redis.asyncio")
             except ImportError as exc:
                 raise ConfigurationError(
-                    "Redis cache backend requires the optional cache dependency. "
-                    "Install wybra[cache]."
+                    "Redis cache backend requires the optional cache dependency. Install wybra[cache]."
                 ) from exc
             self._client = redis_module.Redis.from_url(
                 self.url,
@@ -186,9 +183,7 @@ class RedisCacheRuntime:
             raise
         except Exception as exc:
             _log_failure("health check", exc)
-            raise ConfigurationError(
-                "Redis cache backend health check failed."
-            ) from None
+            raise ConfigurationError("Redis cache backend health check failed.") from None
         if healthy is not True:
             raise ConfigurationError("Redis cache backend health check failed.")
 
@@ -237,12 +232,7 @@ class RedisCacheRuntime:
         provider_time = self._time_provider_at_calibration
         wall_at_calibration = self._time_wall_at_calibration
         monotonic_at_calibration = self._time_monotonic_at_calibration
-        if (
-            offset is None
-            or provider_time is None
-            or wall_at_calibration is None
-            or monotonic_at_calibration is None
-        ):
+        if offset is None or provider_time is None or wall_at_calibration is None or monotonic_at_calibration is None:
             raise CacheFeatureError("Redis cache time has not been calibrated.")
         wall_time = validate_finite(self._wall_clock(), label="system time")
         monotonic_time = validate_finite(
@@ -296,9 +286,7 @@ class RedisCacheRuntime:
         if not features & _READINESS_FEATURES:
             return
         if features & _ADVANCED_FEATURES and self.namespace is None:
-            raise ConfigurationError(
-                "Advanced Redis cache features require an instance namespace."
-            )
+            raise ConfigurationError("Advanced Redis cache features require an instance namespace.")
         suffix = uuid4().hex
         try:
             client = self.client()
@@ -330,39 +318,6 @@ class RedisCacheRuntime:
                     1_000,
                 )
                 _validate_readiness_result(result)
-            if "pub-sub" in features:
-                channel = self.key("readiness", "pub-sub", suffix)
-                subscription = await self.open_pubsub()
-                try:
-                    await self.subscribe_pubsub(subscription, channel)
-                    await client.publish(channel, b"readiness")
-                    message = await self.subscription_call(
-                        lambda: subscription.get_message(
-                            ignore_subscribe_messages=True,
-                            timeout=1,
-                        )
-                    )
-                    _validate_pubsub_readiness_result(message, channel)
-                except asyncio.CancelledError as cancellation:
-                    try:
-                        await self.subscription_call(subscription.aclose)
-                    except BaseException as cleanup_error:
-                        cancellation.add_note(
-                            "Redis pub/sub readiness cleanup after cancellation "
-                            f"failed ({type(cleanup_error).__name__})."
-                        )
-                    raise
-                except BaseException as readiness_error:
-                    try:
-                        await self.subscription_call(subscription.aclose)
-                    except BaseException as cleanup_error:
-                        raise BaseExceptionGroup(
-                            "Redis pub/sub readiness and cleanup failed.",
-                            [readiness_error, cleanup_error],
-                        ) from readiness_error
-                    raise
-                else:
-                    await self.subscription_call(subscription.aclose)
             if "work-queue" in features:
                 queue_key = self.key("readiness", "cache", f"queue-{suffix}")
                 delayed_key = self.key("readiness", "cache", f"queue-delay-{suffix}")
@@ -800,9 +755,7 @@ class RedisCacheRuntime:
             raise
         except Exception as exc:
             _log_failure("advanced-feature readiness", exc)
-            raise ConfigurationError(
-                "Redis cache backend cannot provide the configured advanced features."
-            ) from None
+            raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.") from None
 
     def _require_open(self) -> None:
         if self._closed or self._closing:
@@ -824,8 +777,7 @@ class RedisCacheRuntime:
             return
         if appendonly != "yes" or eviction_policy.startswith("allkeys-"):
             raise ConfigurationError(
-                "Redis advanced cache features require append-only persistence "
-                "and a non-allkeys eviction policy."
+                "Redis advanced cache features require append-only persistence and a non-allkeys eviction policy."
             )
 
     async def feature_call(
@@ -887,9 +839,7 @@ class RedisCacheRuntime:
 
     def key(self, domain: str, owner: str, key: str) -> str:
         if self.namespace is None:
-            raise CacheFeatureError(
-                "Advanced Redis cache features require an instance namespace."
-            )
+            raise CacheFeatureError("Advanced Redis cache features require an instance namespace.")
         namespace = validate_resource(self.namespace, label="cache namespace")
         if ":" in namespace:
             raise ValueError("Cache namespace must not contain ':'.")
@@ -907,9 +857,7 @@ class RedisCacheRuntime:
 
     def sequence_key(self, domain: str) -> str:
         if self.namespace is None:
-            raise CacheFeatureError(
-                "Advanced Redis cache features require an instance namespace."
-            )
+            raise CacheFeatureError("Advanced Redis cache features require an instance namespace.")
         namespace = validate_resource(self.namespace, label="cache namespace")
         if ":" in namespace:
             raise ValueError("Cache namespace must not contain ':'.")
@@ -958,27 +906,21 @@ class RedisCacheRuntime:
             except Exception as exc:
                 self._closing = False
                 _log_failure("shutdown", exc)
-                raise CacheFeatureError(
-                    "Redis cache backend shutdown failed."
-                ) from None
+                raise CacheFeatureError("Redis cache backend shutdown failed.") from None
             self._client = None
             self._closed = True
 
 
 def _configuration_value(configuration: object, key: str) -> str:
     if not isinstance(configuration, dict):
-        raise ConfigurationError(
-            "Redis cache backend cannot inspect advanced feature configuration."
-        )
+        raise ConfigurationError("Redis cache backend cannot inspect advanced feature configuration.")
     value = configuration.get(key)
     if value is None:
         value = configuration.get(key.encode("utf-8"))
     if isinstance(value, bytes):
         value = value.decode("utf-8")
     if not isinstance(value, str):
-        raise ConfigurationError(
-            "Redis cache backend cannot inspect advanced feature configuration."
-        )
+        raise ConfigurationError("Redis cache backend cannot inspect advanced feature configuration.")
     return value.lower()
 
 
@@ -1006,16 +948,12 @@ def _redis_time_component(value: object) -> int:
 
 def _validate_readiness_result(result: object) -> None:
     if not isinstance(result, list | tuple) or len(result) != 3:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
 
 
 def _validate_work_queue_readiness_result(result: object) -> None:
     if not isinstance(result, list | tuple) or len(result) != 2:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
 
 
 def _validate_stream_result(result: object) -> None:
@@ -1023,27 +961,7 @@ def _validate_stream_result(result: object) -> None:
         return
     if isinstance(result, bytes | str) and result in (b"1", "1"):
         return
-    raise ConfigurationError(
-        "Redis cache backend cannot provide the configured advanced features."
-    )
-
-
-def _validate_pubsub_readiness_result(result: object, channel: str) -> None:
-    if not isinstance(result, dict):
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
-    message_type = result.get("type")
-    received_channel = result.get("channel")
-    payload = result.get("data")
-    if (
-        message_type not in ("message", b"message")
-        or received_channel not in (channel, channel.encode())
-        or payload != b"readiness"
-    ):
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+    raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
 
 
 def _validate_pubsub_subscription_result(result: object, channel: str) -> None:
@@ -1060,34 +978,22 @@ def _validate_pubsub_subscription_result(result: object, channel: str) -> None:
 
 def _validate_stream_readiness_result(result: object) -> None:
     if not isinstance(result, list | tuple) or len(result) < 2:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
     _validate_stream_result(result[0])
 
 
 def _validate_schedule_result(result: object, *, length: int) -> None:
-    if (
-        isinstance(result, list | tuple)
-        and len(result) == length
-        and result[0] in (1, b"1", "1")
-    ):
+    if isinstance(result, list | tuple) and len(result) == length and result[0] in (1, b"1", "1"):
         return
-    raise ConfigurationError(
-        "Redis cache backend cannot provide the configured advanced features."
-    )
+    raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
 
 
 def _validate_schedule_due_result(result: object) -> None:
     if not isinstance(result, list | tuple) or len(result) != 1:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
     record = result[0]
     if not isinstance(record, list | tuple) or len(record) != 5:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
     identity, payload, revision, due_at, interval = record
     try:
         _readiness_resource(identity)
@@ -1099,9 +1005,7 @@ def _validate_schedule_due_result(result: object) -> None:
         if interval not in (b"", "", None):
             _readiness_number(interval, positive=True)
     except TypeError, ValueError, UnicodeDecodeError:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        ) from None
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.") from None
 
 
 def _readiness_resource(value: object) -> None:
@@ -1137,24 +1041,16 @@ def _readiness_number(value: object, *, positive: bool) -> None:
 
 def _readiness_entry_id(records: object) -> object:
     if not isinstance(records, list | tuple) or not records:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
     stream = records[0]
     if not isinstance(stream, list | tuple) or len(stream) != 2:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
     entries = stream[1]
     if not isinstance(entries, list | tuple) or not entries:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
     entry = entries[0]
     if not isinstance(entry, list | tuple) or len(entry) != 2:
-        raise ConfigurationError(
-            "Redis cache backend cannot provide the configured advanced features."
-        )
+        raise ConfigurationError("Redis cache backend cannot provide the configured advanced features.")
     return entry[0]
 
 

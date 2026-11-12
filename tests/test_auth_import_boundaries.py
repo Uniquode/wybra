@@ -37,9 +37,7 @@ def test_source_and_tests_do_not_import_fastapi_users() -> None:
                 imported
                 for imported in imports
                 if imported in FASTAPI_USERS_IMPORTS
-                or imported.startswith(
-                    tuple(f"{name}." for name in FASTAPI_USERS_IMPORTS)
-                )
+                or imported.startswith(tuple(f"{name}." for name in FASTAPI_USERS_IMPORTS))
             }
             if blocked_imports:
                 imported_modules[path] = blocked_imports
@@ -54,8 +52,7 @@ def test_source_does_not_import_removed_persistence_packages() -> None:
         persistence_imports = {
             imported
             for imported in imports
-            if imported in PERSISTENCE_IMPORTS
-            or imported.startswith(tuple(f"{name}." for name in PERSISTENCE_IMPORTS))
+            if imported in PERSISTENCE_IMPORTS or imported.startswith(tuple(f"{name}." for name in PERSISTENCE_IMPORTS))
         }
         if persistence_imports:
             blocked_imports[path] = persistence_imports
@@ -66,14 +63,9 @@ def test_source_does_not_import_removed_persistence_packages() -> None:
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module is not None
     }
     imported_modules.update(
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
+        alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
     )
     return imported_modules

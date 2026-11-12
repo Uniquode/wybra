@@ -80,9 +80,7 @@ def database_statement_event(
     )
 
 
-def database_connection_event(
-    call: BoundArguments, outcome: EventOutcome | None
-) -> Event | None:
+def database_connection_event(call: BoundArguments, outcome: EventOutcome | None) -> Event | None:
     """Build a configured-connection observation from its opaque name."""
     if outcome is None:
         return None
@@ -101,9 +99,7 @@ async def record_database_connection(connection_name: str) -> None:
     del connection_name
 
 
-def database_transaction_event(
-    call: BoundArguments, outcome: EventOutcome | None
-) -> Event | None:
+def database_transaction_event(call: BoundArguments, outcome: EventOutcome | None) -> Event | None:
     """Build a transaction or savepoint event from opaque boundary metadata."""
     if outcome is None:
         return None
@@ -111,10 +107,7 @@ def database_transaction_event(
     connection_name = arguments["connection_name"]
     transaction_kind = arguments["transaction_kind"]
     transaction_outcome = arguments["outcome"]
-    if not all(
-        isinstance(value, str)
-        for value in (connection_name, transaction_kind, transaction_outcome)
-    ):
+    if not all(isinstance(value, str) for value in (connection_name, transaction_kind, transaction_outcome)):
         raise TypeError("Database transaction events require string metadata.")
     if transaction_kind == "savepoint":
         return DatabaseSavepointEvent(

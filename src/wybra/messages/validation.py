@@ -76,10 +76,7 @@ def _record_settings_check(
         checks,
         errors,
         passed=True,
-        description=(
-            "messages settings load: "
-            f"storage_backend={messages_settings.resolved_storage_backend.value}"
-        ),
+        description=(f"messages settings load: storage_backend={messages_settings.resolved_storage_backend.value}"),
     )
     if messages_settings.resolved_storage_backend is MessageStorageBackend.DATABASE:
         record_check(
@@ -117,10 +114,7 @@ def _record_named_cache_check(
             errors,
             passed=False,
             description=description,
-            error=(
-                "Cache-backed messages require a configured cache capability "
-                "such as wybra.cache."
-            ),
+            error=("Cache-backed messages require a configured cache capability such as wybra.cache."),
         )
         return
     try:
@@ -131,10 +125,7 @@ def _record_named_cache_check(
             errors,
             passed=False,
             description=description,
-            error=(
-                f"Cache {cache_name!r} for consumer 'queued request messages' "
-                f"is invalid: {exc}"
-            ),
+            error=(f"Cache {cache_name!r} for consumer 'queued request messages' is invalid: {exc}"),
         )
         return
     record_check(
@@ -165,9 +156,7 @@ def _record_context_provider_check(
     record_check(
         checks,
         errors,
-        passed=any(
-            provider.__module__ == "wybra.messages.context" for provider in providers
-        ),
+        passed=any(provider.__module__ == "wybra.messages.context" for provider in providers),
         description="messages context provider is registered",
         error="Messages context provider is not registered.",
     )
@@ -185,8 +174,7 @@ def _record_resource_checks(
     record_check(
         checks,
         errors,
-        passed=first_existing_resource((template_source,), ALERT_COMPONENT_TEMPLATE)
-        is not None,
+        passed=first_existing_resource((template_source,), ALERT_COMPONENT_TEMPLATE) is not None,
         description=f"alert template exists: {ALERT_COMPONENT_TEMPLATE}",
         error=f"Missing alert template: {ALERT_COMPONENT_TEMPLATE}",
     )

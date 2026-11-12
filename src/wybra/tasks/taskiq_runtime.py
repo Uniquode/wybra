@@ -26,14 +26,9 @@ def load_taskiq() -> ModuleType:
                 "Install wybra[tasks] to enable the Taskiq backend."
             )
         else:
-            message = (
-                "Taskiq could not be loaded. Check its installed version and "
-                "dependencies."
-            )
+            message = "Taskiq could not be loaded. Check its installed version and dependencies."
     except Exception:
-        message = (
-            "Taskiq could not be loaded. Check its installed version and dependencies."
-        )
+        message = "Taskiq could not be loaded. Check its installed version and dependencies."
     raise ConfigurationError(message)
 
 

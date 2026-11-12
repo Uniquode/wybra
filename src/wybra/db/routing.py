@@ -23,9 +23,7 @@ type DatabaseRotationPolicy = Literal[
     "adaptive",
 ]
 
-DATABASE_ROUTE_ROLES: frozenset[DatabaseRouteRole] = frozenset(
-    {"default", "reader", "writer"}
-)
+DATABASE_ROUTE_ROLES: frozenset[DatabaseRouteRole] = frozenset({"default", "reader", "writer"})
 DATABASE_ROTATION_POLICIES: frozenset[DatabaseRotationPolicy] = frozenset(
     {"default", "queue", "random", "weighted", "load", "adaptive"}
 )
@@ -112,9 +110,7 @@ class DatabaseRouteRegistry:
         init=False,
         repr=False,
     )
-    _metrics: dict[str, _RouteMetrics] = field(
-        default_factory=dict, init=False, repr=False
-    )
+    _metrics: dict[str, _RouteMetrics] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         aliases = [instance.alias for instance in self.instances]
@@ -136,9 +132,7 @@ class DatabaseRouteRegistry:
             candidates = self._candidates(database_name, "default")
             selection_role = "default"
         if not candidates:
-            raise ConfigurationError(
-                f"No eligible {role} database route is configured for {database_name}."
-            )
+            raise ConfigurationError(f"No eligible {role} database route is configured for {database_name}.")
         selected = self._select_candidate(
             database_name,
             selection_role,
@@ -156,9 +150,7 @@ class DatabaseRouteRegistry:
         """Return the deterministic bootstrap alias for Tortoise app defaults."""
         candidates = self._candidates(database_name, "default")
         if not candidates:
-            raise ConfigurationError(
-                f"No eligible default database route is configured for {database_name}."
-            )
+            raise ConfigurationError(f"No eligible default database route is configured for {database_name}.")
         return candidates[0].alias
 
     def begin_statement(self, route: DbRoute) -> float:
@@ -193,9 +185,7 @@ class DatabaseRouteRegistry:
     ) -> tuple[DatabaseRouteInstance, ...]:
         self._require_database(database_name)
         return tuple(
-            instance
-            for instance in self.instances
-            if instance.name == database_name and role in instance.roles
+            instance for instance in self.instances if instance.name == database_name and role in instance.roles
         )
 
     def _select_candidate(
@@ -253,9 +243,7 @@ class DatabaseRouteRegistry:
             instance.alias,
         )
 
-    def _adaptive_key(
-        self, instance: DatabaseRouteInstance
-    ) -> tuple[float, float, str]:
+    def _adaptive_key(self, instance: DatabaseRouteInstance) -> tuple[float, float, str]:
         load, alias = self._load_key(instance)
         latency = self._metrics[instance.alias].latency_seconds
         return (load, latency if latency is not None else 0.0, alias)

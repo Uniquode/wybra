@@ -172,9 +172,7 @@ class AppleOAuthState:
 
     def __post_init__(self) -> None:
         if self.provider_name != APPLE_PROVIDER_NAME:
-            raise ValueError(
-                f"Apple OAuth state requires provider {APPLE_PROVIDER_NAME!r}."
-            )
+            raise ValueError(f"Apple OAuth state requires provider {APPLE_PROVIDER_NAME!r}.")
         if not is_provider_oauth_purpose(self.purpose):
             raise ValueError("Apple OAuth state purpose must be login or link.")
         for field_name in ("state", "nonce", "return_to", "redirect_uri"):
@@ -191,21 +189,13 @@ def apple_oauth_settings_from_provider(
     provider: ProviderSettings,
 ) -> AppleOAuthSettings:
     if provider.name != APPLE_PROVIDER_NAME:
-        raise ConfigurationError(
-            f"Apple OAuth settings require provider {APPLE_PROVIDER_NAME!r}."
-        )
+        raise ConfigurationError(f"Apple OAuth settings require provider {APPLE_PROVIDER_NAME!r}.")
     if provider.client_id is None:
-        raise ConfigurationError(
-            f"Apple provider must configure {PROVIDER_CLIENT_ID_FIELD!r}."
-        )
+        raise ConfigurationError(f"Apple provider must configure {PROVIDER_CLIENT_ID_FIELD!r}.")
     if provider.team_id is None:
-        raise ConfigurationError(
-            f"Apple provider must configure {PROVIDER_TEAM_ID_FIELD!r}."
-        )
+        raise ConfigurationError(f"Apple provider must configure {PROVIDER_TEAM_ID_FIELD!r}.")
     if provider.key_id is None:
-        raise ConfigurationError(
-            f"Apple provider must configure {PROVIDER_KEY_ID_FIELD!r}."
-        )
+        raise ConfigurationError(f"Apple provider must configure {PROVIDER_KEY_ID_FIELD!r}.")
     private_key_reference = provider.required_private_key_reference()
     if private_key_reference is None:
         raise ConfigurationError(
@@ -237,8 +227,7 @@ def create_apple_oauth_state(
         nonce=token_urlsafe(APPLE_OAUTH_NONCE_BYTES),
         return_to=return_to,
         redirect_uri=redirect_uri,
-        expires_at=(current_timestamp() if now is None else now)
-        + APPLE_OAUTH_STATE_EXPIRY_SECONDS,
+        expires_at=(current_timestamp() if now is None else now) + APPLE_OAUTH_STATE_EXPIRY_SECONDS,
         user_id=user_id,
     )
 
@@ -436,9 +425,7 @@ def _optional_payload_str(
         return None
     if isinstance(value, str):
         return value
-    raise AppleTokenExchangeError(
-        f"Apple token exchange response field {field_name!r} must be a string."
-    )
+    raise AppleTokenExchangeError(f"Apple token exchange response field {field_name!r} must be a string.")
 
 
 def _optional_payload_int(
@@ -450,9 +437,7 @@ def _optional_payload_int(
         return None
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    raise AppleTokenExchangeError(
-        f"Apple token exchange response field {field_name!r} must be an integer."
-    )
+    raise AppleTokenExchangeError(f"Apple token exchange response field {field_name!r} must be an integer.")
 
 
 def _required_payload_str(
@@ -462,9 +447,7 @@ def _required_payload_str(
     value = payload.get(field_name)
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise AppleIDTokenValidationError(
-        f"Apple ID token claim {field_name!r} must be a non-blank string."
-    )
+    raise AppleIDTokenValidationError(f"Apple ID token claim {field_name!r} must be a non-blank string.")
 
 
 def _required_payload_boolish(
@@ -480,9 +463,7 @@ def _required_payload_boolish(
             return True
         if lowered == "false":
             return False
-    raise AppleIDTokenValidationError(
-        f"Apple ID token claim {field_name!r} must be a boolean."
-    )
+    raise AppleIDTokenValidationError(f"Apple ID token claim {field_name!r} must be a boolean.")
 
 
 __all__ = (

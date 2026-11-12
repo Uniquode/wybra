@@ -49,31 +49,23 @@ VALID_TOTP_MODES: Final[tuple[str, ...]] = (
     TOTP_OPT_IN,
     TOTP_REQUIRED,
 )
-VALID_PASSKEY_USER_VERIFICATION_VALUES: Final[
-    tuple[Literal["required", "preferred", "discouraged"], ...]
-] = (
+VALID_PASSKEY_USER_VERIFICATION_VALUES: Final[tuple[Literal["required", "preferred", "discouraged"], ...]] = (
     PASSKEY_USER_VERIFICATION_REQUIRED,
     PASSKEY_USER_VERIFICATION_PREFERRED,
     PASSKEY_USER_VERIFICATION_DISCOURAGED,
 )
-VALID_PASSKEY_ATTESTATION_VALUES: Final[
-    tuple[Literal["none", "indirect", "direct", "enterprise"], ...]
-] = (
+VALID_PASSKEY_ATTESTATION_VALUES: Final[tuple[Literal["none", "indirect", "direct", "enterprise"], ...]] = (
     PASSKEY_ATTESTATION_NONE,
     PASSKEY_ATTESTATION_INDIRECT,
     PASSKEY_ATTESTATION_DIRECT,
     PASSKEY_ATTESTATION_ENTERPRISE,
 )
-VALID_PASSKEY_DISCOVERABLE_VALUES: Final[
-    tuple[Literal["discouraged", "preferred", "required"], ...]
-] = (
+VALID_PASSKEY_DISCOVERABLE_VALUES: Final[tuple[Literal["discouraged", "preferred", "required"], ...]] = (
     PASSKEY_DISCOVERABLE_DISCOURAGED,
     PASSKEY_DISCOVERABLE_PREFERRED,
     PASSKEY_DISCOVERABLE_REQUIRED,
 )
-VALID_PASSKEY_COUNTER_POLICIES: Final[tuple[Literal["reject-regression"], ...]] = (
-    PASSKEY_COUNTER_REJECT_REGRESSION,
-)
+VALID_PASSKEY_COUNTER_POLICIES: Final[tuple[Literal["reject-regression"], ...]] = (PASSKEY_COUNTER_REJECT_REGRESSION,)
 
 IdentityIntegration = Literal["provider", "totp", "passkey"]
 VALID_IDENTITY_INTEGRATIONS: Final[tuple[IdentityIntegration, ...]] = (
@@ -81,17 +73,13 @@ VALID_IDENTITY_INTEGRATIONS: Final[tuple[IdentityIntegration, ...]] = (
     TOTP,
     PASSKEY,
 )
-VALID_ACCOUNT_CREATION_POLICIES: Final[
-    tuple[Literal["admin-created", "public-signup"], ...]
-] = (
+VALID_ACCOUNT_CREATION_POLICIES: Final[tuple[Literal["admin-created", "public-signup"], ...]] = (
     "admin-created",
     "public-signup",
 )
 AccountCreationPolicy = Literal["admin-created", "public-signup"]
 ACCOUNT_CREATION_POLICY_ERROR: Final = (
-    "Account creation policy must be one of: "
-    + ", ".join(VALID_ACCOUNT_CREATION_POLICIES)
-    + "."
+    "Account creation policy must be one of: " + ", ".join(VALID_ACCOUNT_CREATION_POLICIES) + "."
 )
 
 _GENERATE_LOCAL_SECRET = "__generate-local-identity-secret__"
@@ -124,21 +112,11 @@ class IdentityOptions:
     passkey_rp_name: str = ""
     passkey_allowed_origins: tuple[str, ...] = ()
     passkey_timeout_seconds: int = DEFAULT_PASSKEY_TIMEOUT_SECONDS
-    passkey_user_verification: Literal["required", "preferred", "discouraged"] = (
-        PASSKEY_USER_VERIFICATION_PREFERRED
-    )
-    passkey_user_verification_satisfies_totp: bool = (
-        DEFAULT_PASSKEY_USER_VERIFICATION_SATISFIES_TOTP
-    )
-    passkey_attestation: Literal["none", "indirect", "direct", "enterprise"] = (
-        PASSKEY_ATTESTATION_NONE
-    )
-    passkey_discoverable_credentials: Literal[
-        "discouraged", "preferred", "required"
-    ] = PASSKEY_DISCOVERABLE_PREFERRED
-    passkey_counter_policy: Literal["reject-regression"] = (
-        PASSKEY_COUNTER_REJECT_REGRESSION
-    )
+    passkey_user_verification: Literal["required", "preferred", "discouraged"] = PASSKEY_USER_VERIFICATION_PREFERRED
+    passkey_user_verification_satisfies_totp: bool = DEFAULT_PASSKEY_USER_VERIFICATION_SATISFIES_TOTP
+    passkey_attestation: Literal["none", "indirect", "direct", "enterprise"] = PASSKEY_ATTESTATION_NONE
+    passkey_discoverable_credentials: Literal["discouraged", "preferred", "required"] = PASSKEY_DISCOVERABLE_PREFERRED
+    passkey_counter_policy: Literal["reject-regression"] = PASSKEY_COUNTER_REJECT_REGRESSION
     totp_allowed_drift: int = DEFAULT_TOTP_ALLOWED_DRIFT
     totp_period_seconds: int = DEFAULT_TOTP_PERIOD_SECONDS
     totp_challenge_expiry_seconds: float = DEFAULT_TOTP_CHALLENGE_EXPIRY_SECONDS
@@ -159,9 +137,7 @@ class IdentityOptions:
             raise ConfigurationError(ACCOUNT_CREATION_POLICY_ERROR)
 
         if self.session_lifetime_seconds <= 0:
-            raise ConfigurationError(
-                "Session lifetime must be a positive number of seconds."
-            )
+            raise ConfigurationError("Session lifetime must be a positive number of seconds.")
 
         self._configure_password_policy()
         self._reject_blank_secret(
@@ -219,14 +195,10 @@ class IdentityOptions:
             raise ConfigurationError("Password minimum length must be positive.")
 
         if not 0 <= self.password_minimum_strength <= 1:
-            raise ConfigurationError(
-                "Password minimum strength must be between 0 and 1."
-            )
+            raise ConfigurationError("Password minimum strength must be between 0 and 1.")
 
         if self.password_minimum_character_categories <= 0:
-            raise ConfigurationError(
-                "Password minimum character categories must be positive."
-            )
+            raise ConfigurationError("Password minimum character categories must be positive.")
 
         common_fragments = self._normalise_password_common_fragments()
         object.__setattr__(self, "password_common_fragments", common_fragments)
@@ -238,9 +210,7 @@ class IdentityOptions:
                 DefaultPasswordPolicy(
                     minimum_length=self.password_minimum_length,
                     minimum_score=self.password_minimum_strength,
-                    minimum_character_categories=(
-                        self.password_minimum_character_categories
-                    ),
+                    minimum_character_categories=(self.password_minimum_character_categories),
                     common_fragments=common_fragments,
                 ),
             )
@@ -249,22 +219,16 @@ class IdentityOptions:
         try:
             common_fragments = tuple(self.password_common_fragments)
         except TypeError as exc:
-            raise ConfigurationError(
-                "Password common fragments must be a list of strings."
-            ) from exc
+            raise ConfigurationError("Password common fragments must be a list of strings.") from exc
 
         if not all(isinstance(fragment, str) for fragment in common_fragments):
-            raise ConfigurationError(
-                "Password common fragments must be a list of strings."
-            )
+            raise ConfigurationError("Password common fragments must be a list of strings.")
 
         return common_fragments
 
     def _validate_totp_mode(self) -> None:
         if self.totp_mode not in VALID_TOTP_MODES:
-            raise ConfigurationError(
-                "TOTP mode must be one of: disabled, opt_in, required."
-            )
+            raise ConfigurationError("TOTP mode must be one of: disabled, opt_in, required.")
 
     @staticmethod
     def _reject_blank_secret(label: str, value: str) -> None:
@@ -273,34 +237,23 @@ class IdentityOptions:
 
     def _validate_totp_settings(self) -> None:
         if self.totp_allowed_drift < 0:
-            raise ConfigurationError(
-                "TOTP allowed drift must be a non-negative integer."
-            )
+            raise ConfigurationError("TOTP allowed drift must be a non-negative integer.")
         if self.totp_allowed_drift > MAX_TOTP_ALLOWED_DRIFT:
-            raise ConfigurationError(
-                f"TOTP allowed drift must not exceed {MAX_TOTP_ALLOWED_DRIFT}."
-            )
+            raise ConfigurationError(f"TOTP allowed drift must not exceed {MAX_TOTP_ALLOWED_DRIFT}.")
 
         if self.totp_period_seconds <= 0:
             raise ConfigurationError("TOTP period must be a positive integer.")
         if self.totp_period_seconds > MAX_TOTP_PERIOD_SECONDS:
-            raise ConfigurationError(
-                f"TOTP period must not exceed {MAX_TOTP_PERIOD_SECONDS} seconds."
-            )
+            raise ConfigurationError(f"TOTP period must not exceed {MAX_TOTP_PERIOD_SECONDS} seconds.")
 
         if self.totp_challenge_expiry_seconds <= 0:
-            raise ConfigurationError(
-                "TOTP challenge expiry must be a positive number of seconds."
-            )
+            raise ConfigurationError("TOTP challenge expiry must be a positive number of seconds.")
 
         if self.totp_recovery_window_seconds <= 0:
-            raise ConfigurationError(
-                "TOTP recovery window must be a positive number of seconds."
-            )
+            raise ConfigurationError("TOTP recovery window must be a positive number of seconds.")
         if self.totp_recovery_window_seconds > MAX_TOTP_RECOVERY_WINDOW_SECONDS:
             raise ConfigurationError(
-                "TOTP recovery window must not exceed "
-                f"{MAX_TOTP_RECOVERY_WINDOW_SECONDS} seconds."
+                f"TOTP recovery window must not exceed {MAX_TOTP_RECOVERY_WINDOW_SECONDS} seconds."
             )
 
     def _validate_passkey_settings(self) -> None:
@@ -311,40 +264,29 @@ class IdentityOptions:
         )
 
         if self.passkey_timeout_seconds <= 0:
-            raise ConfigurationError(
-                "Passkey timeout must be a positive number of seconds."
-            )
+            raise ConfigurationError("Passkey timeout must be a positive number of seconds.")
 
         if self.passkey_user_verification not in VALID_PASSKEY_USER_VERIFICATION_VALUES:
             raise ConfigurationError(
-                "Passkey user verification must be one of: "
-                f"{', '.join(VALID_PASSKEY_USER_VERIFICATION_VALUES)}."
+                f"Passkey user verification must be one of: {', '.join(VALID_PASSKEY_USER_VERIFICATION_VALUES)}."
             )
 
         if not isinstance(self.passkey_user_verification_satisfies_totp, bool):
-            raise ConfigurationError(
-                "Passkey user verification TOTP policy must be a boolean."
-            )
+            raise ConfigurationError("Passkey user verification TOTP policy must be a boolean.")
 
         if self.passkey_attestation not in VALID_PASSKEY_ATTESTATION_VALUES:
             raise ConfigurationError(
-                "Passkey attestation must be one of: "
-                f"{', '.join(VALID_PASSKEY_ATTESTATION_VALUES)}."
+                f"Passkey attestation must be one of: {', '.join(VALID_PASSKEY_ATTESTATION_VALUES)}."
             )
 
-        if (
-            self.passkey_discoverable_credentials
-            not in VALID_PASSKEY_DISCOVERABLE_VALUES
-        ):
+        if self.passkey_discoverable_credentials not in VALID_PASSKEY_DISCOVERABLE_VALUES:
             raise ConfigurationError(
-                "Passkey discoverable credentials must be one of: "
-                f"{', '.join(VALID_PASSKEY_DISCOVERABLE_VALUES)}."
+                f"Passkey discoverable credentials must be one of: {', '.join(VALID_PASSKEY_DISCOVERABLE_VALUES)}."
             )
 
         if self.passkey_counter_policy not in VALID_PASSKEY_COUNTER_POLICIES:
             raise ConfigurationError(
-                "Passkey counter policy must be one of: "
-                f"{', '.join(VALID_PASSKEY_COUNTER_POLICIES)}."
+                f"Passkey counter policy must be one of: {', '.join(VALID_PASSKEY_COUNTER_POLICIES)}."
             )
 
         if not self.passkey_enabled:
@@ -353,9 +295,7 @@ class IdentityOptions:
         if not self.passkey_rp_id.strip():
             raise ConfigurationError("Passkey relying-party ID must be configured.")
         if _origin_like(self.passkey_rp_id):
-            raise ConfigurationError(
-                "Passkey relying-party ID must be a domain, not a URL."
-            )
+            raise ConfigurationError("Passkey relying-party ID must be a domain, not a URL.")
 
         if not self.passkey_rp_name.strip():
             raise ConfigurationError("Passkey relying-party name must be configured.")
@@ -370,14 +310,10 @@ class IdentityOptions:
         try:
             origins = tuple(self.passkey_allowed_origins)
         except TypeError as exc:
-            raise ConfigurationError(
-                "Passkey allowed origins must be a list of origin strings."
-            ) from exc
+            raise ConfigurationError("Passkey allowed origins must be a list of origin strings.") from exc
 
         if not all(isinstance(origin, str) for origin in origins):
-            raise ConfigurationError(
-                "Passkey allowed origins must be a list of origin strings."
-            )
+            raise ConfigurationError("Passkey allowed origins must be a list of origin strings.")
 
         return tuple(origin.strip().rstrip("/") for origin in origins if origin.strip())
 
@@ -390,10 +326,6 @@ def _origin_like(value: str) -> bool:
 def _validate_passkey_origin(origin: str) -> None:
     parsed = urlsplit(origin)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ConfigurationError(
-            "Passkey allowed origins must include scheme and host."
-        )
+        raise ConfigurationError("Passkey allowed origins must include scheme and host.")
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise ConfigurationError(
-            "Passkey allowed origins must not include a path, query, or fragment."
-        )
+        raise ConfigurationError("Passkey allowed origins must not include a path, query, or fragment.")

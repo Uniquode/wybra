@@ -114,11 +114,7 @@ class GenericView(View):
 
         match request.method.upper():
             case "GET" | "HEAD":
-                return (
-                    ScopeAction.VIEW
-                    if kwargs.get("id") is not None
-                    else ScopeAction.LIST
-                )
+                return ScopeAction.VIEW if kwargs.get("id") is not None else ScopeAction.LIST
             case "POST" if action_name := kwargs.get("action"):
                 return self._bulk_scope_action(str(action_name))
             case "POST":
@@ -146,8 +142,7 @@ class GenericView(View):
             return ScopeAction(action)
         except (TypeError, ValueError) as exc:
             raise ScopeDeclarationError(
-                f"Bulk action {action_name!r} declares unknown scope action: "
-                f"{action!r}."
+                f"Bulk action {action_name!r} declares unknown scope action: {action!r}."
             ) from exc
 
     def _scope_action_available(
@@ -240,9 +235,7 @@ class ModelGenericView(GenericView):
     bulk_actions: ClassVar[dict[str, BulkAction]] = {}
     database_name: ClassVar[str] = "default"
     _generated_form: ClassVar[type[ModelForm] | None] = None
-    _transient_collection_parameters = frozenset(
-        {"edit", "delete", "confirm_delete", "highlight"}
-    )
+    _transient_collection_parameters = frozenset({"edit", "delete", "confirm_delete", "highlight"})
     _event_bulk_counts: tuple[int, int, int] | None = None
 
     @observe(generic_view_event)
@@ -258,9 +251,7 @@ class ModelGenericView(GenericView):
     def _bulk_scope_action(self, action_name: str) -> ScopeAction:
         action = self.bulk_actions.get(action_name)
         if action is None:
-            raise _RequestValidationError(
-                "action", f"Bulk action is not registered: {action_name}."
-            )
+            raise _RequestValidationError("action", f"Bulk action is not registered: {action_name}.")
         return self._normalise_bulk_scope_action(action_name, action)
 
     async def list_objects(self, request: Request) -> HandlerResult:
@@ -393,26 +384,17 @@ class ModelGenericView(GenericView):
         """Run an explicitly registered action over visible selected records."""
         action = self.bulk_actions.get(action_name)
         if action is None:
-            raise _RequestValidationError(
-                "action", f"Bulk action is not registered: {action_name}."
-            )
+            raise _RequestValidationError("action", f"Bulk action is not registered: {action_name}.")
         values = await self.request_values(request)
         selected = _selected_values(values)
         if isinstance(action, BulkDeleteAction) and not _is_confirmed(values):
             return await self._bulk_confirmation_error(request)
         selected_ids = tuple(dict.fromkeys(str(value) for value in selected))
         visible_records = {
-            str(getattr(record, record._meta.pk_attr)): record
-            for record in await self.get_collection(request)
+            str(getattr(record, record._meta.pk_attr)): record for record in await self.get_collection(request)
         }
-        records = tuple(
-            visible_records[record_id]
-            for record_id in selected_ids
-            if record_id in visible_records
-        )
-        skipped_ids = tuple(
-            record_id for record_id in selected_ids if record_id not in visible_records
-        )
+        records = tuple(visible_records[record_id] for record_id in selected_ids if record_id in visible_records)
+        skipped_ids = tuple(record_id for record_id in selected_ids if record_id not in visible_records)
         result = await action.execute(self, request, records)
         if skipped_ids:
             result = BulkActionResult(
@@ -430,9 +412,7 @@ class ModelGenericView(GenericView):
     def _content_type_identifier(self, request: Request) -> str | None:
         """Return content-type identity when it is already available to the view."""
 
-        content_types = get_site(request.app).optional_capability(
-            ContentTypesCapability
-        )
+        content_types = get_site(request.app).optional_capability(ContentTypesCapability)
         if content_types is None:
             return None
         try:
@@ -458,19 +438,13 @@ class ModelGenericView(GenericView):
         """Return the ordered collection through the selected reader route."""
         model = self.get_model()
         client = self._read_client(request)
-        return tuple(
-            await model.all().using_db(client).order_by(*self.get_list_ordering())
-        )
+        return tuple(await model.all().using_db(client).order_by(*self.get_list_ordering()))
 
     async def get_object(self, request: Request, object_id: str) -> Model:
         """Return one record by its configured model primary key."""
         model = self.get_model()
         primary_key = model._meta.pk_attr
-        record = (
-            await model.filter(**{primary_key: object_id})
-            .using_db(self._read_client(request))
-            .first()
-        )
+        record = await model.filter(**{primary_key: object_id}).using_db(self._read_client(request)).first()
         if record is None:
             from fastapi import HTTPException
 
@@ -493,10 +467,7 @@ class ModelGenericView(GenericView):
         request: Request,
         action: ScopeAction,
     ) -> bool:
-        return (
-            action is ScopeAction.MANAGE
-            or action.value in self.get_content_type(request).actions
-        )
+        return action is ScopeAction.MANAGE or action.value in self.get_content_type(request).actions
 
     def get_list_ordering(self) -> tuple[str, ...]:
         """Return model-specific ordering, falling back to its primary key."""
@@ -578,14 +549,10 @@ class ModelGenericView(GenericView):
             try:
                 values = await request.json()
             except ValueError as exc:
-                raise _RequestValidationError(
-                    "body", "Generic API request body must be valid JSON."
-                ) from exc
+                raise _RequestValidationError("body", "Generic API request body must be valid JSON.") from exc
             if isinstance(values, Mapping):
                 return values
-            raise _RequestValidationError(
-                "body", "Generic API request body must be a JSON object."
-            )
+            raise _RequestValidationError("body", "Generic API request body must be a JSON object.")
         return await request_form_data(request)
 
     async def _request_validation_response(
@@ -597,9 +564,7 @@ class ModelGenericView(GenericView):
             return (
                 get_site(request.app)
                 .require_capability(ApiCapability)
-                .validation_error_response(
-                    [{"field": error.field, "messages": [str(error)]}]
-                )
+                .validation_error_response([{"field": error.field, "messages": [str(error)]}])
             )
         context = await self._collection_context(request)
         context["bulk_error"] = str(error)
@@ -616,15 +581,8 @@ class ModelGenericView(GenericView):
         form: ModelForm,
     ) -> HandlerResult:
         if self.is_api_request(request):
-            errors = [
-                {"field": field, "messages": list(messages)}
-                for field, messages in form.result.errors.items()
-            ]
-            return (
-                get_site(request.app)
-                .require_capability(ApiCapability)
-                .validation_error_response(errors)
-            )
+            errors = [{"field": field, "messages": list(messages)} for field, messages in form.result.errors.items()]
+            return get_site(request.app).require_capability(ApiCapability).validation_error_response(errors)
         content_type = self.get_content_type(request)
         context: dict[str, object] = {
             "content_type": content_type,
@@ -678,9 +636,7 @@ class ModelGenericView(GenericView):
             return (
                 get_site(request.app)
                 .require_capability(ApiCapability)
-                .validation_error_response(
-                    [{"field": "confirm", "messages": ["Confirmation is required."]}]
-                )
+                .validation_error_response([{"field": "confirm", "messages": ["Confirmation is required."]}])
             )
         context = await self._collection_context(request)
         context["bulk_error"] = "Confirmation is required."
@@ -703,8 +659,7 @@ class ModelGenericView(GenericView):
             model=self._scope_model(),
         )
         visibility = {
-            action: allowed and self._scope_action_available(request, action)
-            for action, allowed in visibility.items()
+            action: allowed and self._scope_action_available(request, action) for action, allowed in visibility.items()
         }
         context["scope_visibility"] = ScopeVisibility(
             list=visibility[ScopeAction.LIST],
@@ -722,9 +677,7 @@ class ModelGenericView(GenericView):
             if visibility[self._bulk_scope_action(name)]
         }
         context["bulk_actions"] = bulk_actions
-        bulk_action_urls = {
-            name: self._bulk_action_url(request, name) for name in bulk_actions
-        }
+        bulk_action_urls = {name: self._bulk_action_url(request, name) for name in bulk_actions}
         context["bulk_action_urls"] = bulk_action_urls
         if bulk_action_urls:
             context["bulk_action_url"] = next(iter(bulk_action_urls.values()))
@@ -734,10 +687,7 @@ class ModelGenericView(GenericView):
 
     def serialise_object(self, record: Model) -> dict[str, object]:
         """Map database fields to a transport-neutral record representation."""
-        return {
-            name: _serialise_api_value(getattr(record, name))
-            for name in record._meta.db_fields
-        }
+        return {name: _serialise_api_value(getattr(record, name)) for name in record._meta.db_fields}
 
     def is_api_request(self, request: Request) -> bool:
         """Determine representation through the configured API capability."""
@@ -859,16 +809,9 @@ def _selected_values(values: Mapping[str, object]) -> tuple[object, ...]:
         return ()
     selected = values["selected"]
     if not isinstance(selected, (list, tuple)):
-        raise _RequestValidationError(
-            "selected", "Bulk action selections must be an array."
-        )
-    if not all(
-        isinstance(value, (str, int)) and not isinstance(value, bool)
-        for value in selected
-    ):
-        raise _RequestValidationError(
-            "selected", "Bulk action selections must contain string or integer IDs."
-        )
+        raise _RequestValidationError("selected", "Bulk action selections must be an array.")
+    if not all(isinstance(value, (str, int)) and not isinstance(value, bool) for value in selected):
+        raise _RequestValidationError("selected", "Bulk action selections must contain string or integer IDs.")
     return tuple(selected)
 
 
@@ -886,9 +829,7 @@ def _generated_model_form_fields(model: type[Model]) -> tuple[str, ...]:
             continue
         if bool(getattr(field, "generated", False)):
             continue
-        if bool(getattr(field, "auto_now", False)) or bool(
-            getattr(field, "auto_now_add", False)
-        ):
+        if bool(getattr(field, "auto_now", False)) or bool(getattr(field, "auto_now_add", False)):
             continue
         if name == meta.pk_attr and getattr(field, "default", None) is not None:
             continue

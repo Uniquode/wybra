@@ -66,9 +66,7 @@ class DiagnosticsSettings(BaseSettings):
 
 
 def _event_scopes(value: object) -> tuple[EventScope, ...]:
-    if isinstance(value, tuple) and all(
-        isinstance(scope, EventScope) for scope in value
-    ):
+    if isinstance(value, tuple) and all(isinstance(scope, EventScope) for scope in value):
         return cast(tuple[EventScope, ...], value)
     if isinstance(value, str):
         return parse_event_scopes(value)
@@ -81,9 +79,7 @@ def _allowed_hosts(value: str | Iterable[str]) -> tuple[str, ...]:
     if not hosts:
         raise ValueError("wybra.diagnostics.debug_allowed_hosts must not be empty.")
     if any("/" in host or "://" in host for host in hosts):
-        raise ValueError(
-            "wybra.diagnostics.debug_allowed_hosts must contain host names only."
-        )
+        raise ValueError("wybra.diagnostics.debug_allowed_hosts must contain host names only.")
     return hosts
 
 

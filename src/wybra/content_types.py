@@ -79,26 +79,19 @@ class ContentTypeRegistry:
         try:
             return self._by_identifier[identifier]
         except KeyError as exc:
-            raise UnknownContentTypeError(
-                f"Unknown content type identifier: {identifier}."
-            ) from exc
+            raise UnknownContentTypeError(f"Unknown content type identifier: {identifier}.") from exc
 
     def all(self) -> tuple[ContentType, ...]:
         """Return finalised content types in stable identifier order."""
 
-        return tuple(
-            self._by_identifier[identifier]
-            for identifier in sorted(self._by_identifier)
-        )
+        return tuple(self._by_identifier[identifier] for identifier in sorted(self._by_identifier))
 
     def for_model(self, model: type[Model]) -> ContentType:
         """Return metadata for a configured model class."""
         try:
             return self._by_model[model]
         except KeyError as exc:
-            raise UnknownContentTypeError(
-                f"Model has no registered content type: {model.__name__}."
-            ) from exc
+            raise UnknownContentTypeError(f"Model has no registered content type: {model.__name__}.") from exc
 
 
 @dataclass(slots=True)
@@ -121,9 +114,7 @@ class SiteContentTypesCapability:
 
     def _require_registry(self) -> ContentTypeRegistry:
         if self._registry is None:
-            raise SiteCapabilityError(
-                "Content types capability has not been finalised."
-            )
+            raise SiteCapabilityError("Content types capability has not been finalised.")
         return self._registry
 
 
@@ -136,28 +127,20 @@ async def post_setup_site(site: Site) -> None:
     """Populate content types after all configured modules have set up."""
     capability = site.require_capability(ContentTypesCapability)
     if not isinstance(capability, SiteContentTypesCapability):
-        raise SiteCapabilityError(
-            "Content types capability has an unsupported provider."
-        )
+        raise SiteCapabilityError("Content types capability has an unsupported provider.")
     capability.finalise(site.require_capability(DatabaseCapability))
 
 
 def _content_type_for_model(model: type[Model]) -> ContentType:
     meta = model._meta
     if not meta.app or not meta.db_table:
-        raise ContentTypeError(
-            f"Model has no finalised app/table identity: {model.__name__}."
-        )
+        raise ContentTypeError(f"Model has no finalised app/table identity: {model.__name__}.")
     verbose_name = _model_meta_value(model, "verbose_name") or _humanise(model.__name__)
-    verbose_name_plural = _model_meta_value(model, "verbose_name_plural") or _pluralise(
-        verbose_name
-    )
+    verbose_name_plural = _model_meta_value(model, "verbose_name_plural") or _pluralise(verbose_name)
     actions = _effective_actions(model)
     identifier_parts = (meta.app, meta.schema, meta.db_table)
     if any("." in part for part in identifier_parts[1:] if part):
-        raise ContentTypeError(
-            f"Model schema and table names must not contain dots: {model.__name__}."
-        )
+        raise ContentTypeError(f"Model schema and table names must not contain dots: {model.__name__}.")
     identifier = ".".join(part for part in identifier_parts if part)
     return ContentType(identifier, model, verbose_name, verbose_name_plural, actions)
 
@@ -167,9 +150,7 @@ def _model_meta_value(model: type[Model], name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value:
-        raise ContentTypeError(
-            f"Model Meta.{name} must be a non-empty string: {model.__name__}."
-        )
+        raise ContentTypeError(f"Model Meta.{name} must be a non-empty string: {model.__name__}.")
     return value
 
 
@@ -179,10 +160,7 @@ def _effective_actions(model: type[Model]) -> frozenset[str]:
     unknown = (selected | excluded) - DEFAULT_CONTENT_ACTIONS
     if unknown:
         names = ", ".join(sorted(unknown))
-        raise ContentTypeError(
-            f"Model Meta contains unknown content action(s): {names} "
-            f"for {model.__name__}."
-        )
+        raise ContentTypeError(f"Model Meta contains unknown content action(s): {names} for {model.__name__}.")
     return selected - excluded
 
 
@@ -193,14 +171,10 @@ def _model_meta_actions(
 ) -> frozenset[str]:
     value = getattr(model.Meta, name, default)
     if isinstance(value, str) or not isinstance(value, Iterable):
-        raise ContentTypeError(
-            f"Model Meta.{name} must be an iterable of action names: {model.__name__}."
-        )
+        raise ContentTypeError(f"Model Meta.{name} must be an iterable of action names: {model.__name__}.")
     values = frozenset(value)
     if not all(isinstance(action, str) for action in values):
-        raise ContentTypeError(
-            f"Model Meta.{name} must contain only action names: {model.__name__}."
-        )
+        raise ContentTypeError(f"Model Meta.{name} must contain only action names: {model.__name__}.")
     return values
 
 

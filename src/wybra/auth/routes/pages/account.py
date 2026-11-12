@@ -103,9 +103,7 @@ async def signup(request: Request) -> Response:
         page_title="Create account",
         email=email,
         form_message=("Account created. You can now sign in." if created else None),
-        form_error=(
-            None if created else "Unable to create account with those details."
-        ),
+        form_error=(None if created else "Unable to create account with those details."),
         form=form,
     )
     return await render_page(
@@ -417,11 +415,7 @@ async def _security_passkey_section(
         "auth:passkey-register-complete",
     )
     revoke_path = _optional_route_path(request, "auth:security-passkey-revoke")
-    if (
-        register_options_path is None
-        or register_complete_path is None
-        or revoke_path is None
-    ):
+    if register_options_path is None or register_complete_path is None or revoke_path is None:
         return {"available": False}
 
     credentials: list[dict[str, object]] = []
@@ -431,11 +425,7 @@ async def _security_passkey_section(
         if db_user is None:
             return {"available": False}
 
-        active_credentials = (
-            await scope.webauthn_credentials.list_active_webauthn_credentials(
-                str(db_user.id)
-            )
-        )
+        active_credentials = await scope.webauthn_credentials.list_active_webauthn_credentials(str(db_user.id))
         for credential in active_credentials:
             credentials.append(
                 {
@@ -444,9 +434,7 @@ async def _security_passkey_section(
                     "created_at": credential.created_at,
                     "last_used_at": credential.last_used_at,
                     "backed_up": credential.credential_backed_up,
-                    "form": PasskeyRevokeCommandForm(
-                        values={"credential_id": credential.id}
-                    ),
+                    "form": PasskeyRevokeCommandForm(values={"credential_id": credential.id}),
                 }
             )
         email_verified = db_user.is_verified
@@ -551,9 +539,7 @@ async def _security_named_provider_section(
                 {
                     "id": str(provider.id),
                     "account_email": provider.account_email,
-                    "form": ProviderUnlinkCommandForm(
-                        values={"provider_id": str(provider.id)}
-                    ),
+                    "form": ProviderUnlinkCommandForm(values={"provider_id": str(provider.id)}),
                 }
             )
 
@@ -650,9 +636,7 @@ async def verify(request: Request) -> Response:
         request,
         page_title="Verify email",
         email=email,
-        form_message=(
-            "If the account can be verified, a verification link has been queued."
-        ),
+        form_message=("If the account can be verified, a verification link has been queued."),
         request_form=form,
         confirm_form=VerificationConfirmCommandForm(),
     )
@@ -675,17 +659,13 @@ async def verify_confirm(request: Request) -> Response:
     if did_verify and options.totp_mode == TOTP_REQUIRED and verification_result.value:
         scope_factory = _persistence_scope_from_request(request)
         async with scope_factory() as scope:
-            totp_setup_required = (
-                await _load_active_totp_credential_id(scope, verification_result.value)
-            ) is None
+            totp_setup_required = (await _load_active_totp_credential_id(scope, verification_result.value)) is None
 
     context = _identity_context(
         request,
         page_title="Verify email",
         form_message="Email verification complete." if did_verify else None,
-        form_error=(
-            None if did_verify else "The verification token is invalid or expired."
-        ),
+        form_error=(None if did_verify else "The verification token is invalid or expired."),
         totp_setup_required=totp_setup_required,
         totp_login_path=request.url_for("auth:login"),
         request_form=VerificationRequestCommandForm(),

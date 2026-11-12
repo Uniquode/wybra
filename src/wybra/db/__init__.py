@@ -50,10 +50,7 @@ async def setup_site(site: Site) -> None:
         configured_database_url=app_config.database_url,
     )
     if database_routing is None:
-        raise SiteCapabilityError(
-            "Database capability requires [app.database] or [app].database_url "
-            "to be configured."
-        )
+        raise SiteCapabilityError("Database capability requires [app.database] or [app].database_url to be configured.")
     site.provide_capability(
         DatabaseCapability,
         await _WybraDatabaseCapability.from_database_routing(
