@@ -27,9 +27,7 @@ _CACHE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 def to_cache_backend(value: object) -> str:
     backend = to_non_blank_string(value).lower()
     if backend not in {"memory", "nats-jetstream", "redis"}:
-        raise ValueError(
-            "cache backend must be 'memory', 'nats-jetstream', or 'redis'."
-        )
+        raise ValueError("cache backend must be 'memory', 'nats-jetstream', or 'redis'.")
     return backend
 
 
@@ -41,9 +39,7 @@ def to_cache_servers(value: object) -> tuple[str, ...] | None:
     elif isinstance(value, list | tuple):
         servers = tuple(value)
     else:
-        raise ValueError(
-            "cache servers must be a list, tuple, or comma-separated string."
-        )
+        raise ValueError("cache servers must be a list, tuple, or comma-separated string.")
     normalised_servers: list[str] = []
     for server in servers:
         if not isinstance(server, str):
@@ -58,15 +54,11 @@ def to_cache_features(value: object) -> tuple[str, ...] | None:
     if isinstance(value, str):
         if not value.strip():
             return None
-        features: tuple[object, ...] = tuple(
-            feature.strip() for feature in value.split(",") if feature.strip()
-        )
+        features: tuple[object, ...] = tuple(feature.strip() for feature in value.split(",") if feature.strip())
     elif isinstance(value, list | tuple):
         features = tuple(value)
     else:
-        raise ValueError(
-            "cache features must be a list, tuple, or comma-separated string."
-        )
+        raise ValueError("cache features must be a list, tuple, or comma-separated string.")
     feature_names: list[str] = []
     for feature in features:
         if not isinstance(feature, str):
@@ -75,19 +67,9 @@ def to_cache_features(value: object) -> tuple[str, ...] | None:
     feature_names_tuple = tuple(feature_names)
     for feature in feature_names_tuple:
         validate_feature_name(feature, label="cache feature name")
-    duplicates = sorted(
-        {
-            feature
-            for feature in feature_names_tuple
-            if feature_names_tuple.count(feature) > 1
-        }
-    )
+    duplicates = sorted({feature for feature in feature_names_tuple if feature_names_tuple.count(feature) > 1})
     if duplicates:
-        raise ValueError(
-            "cache feature names must not contain duplicates: "
-            + ", ".join(duplicates)
-            + "."
-        )
+        raise ValueError("cache feature names must not contain duplicates: " + ", ".join(duplicates) + ".")
     return feature_names_tuple
 
 
@@ -175,13 +157,10 @@ def to_cache_name(value: object, *, nested: bool = False) -> str:
     if value != value.strip():
         raise ValueError("cache name must not contain surrounding whitespace.")
     if nested and value == DEFAULT_CACHE_NAME:
-        raise ValueError(
-            "cache name 'default' is reserved for the root [cache] section."
-        )
+        raise ValueError("cache name 'default' is reserved for the root [cache] section.")
     if not _CACHE_NAME_PATTERN.fullmatch(value):
         raise ValueError(
-            f"invalid cache name {value!r}; use lower-case letters, numbers, "
-            "and underscores, starting with a letter."
+            f"invalid cache name {value!r}; use lower-case letters, numbers, and underscores, starting with a letter."
         )
     return value
 

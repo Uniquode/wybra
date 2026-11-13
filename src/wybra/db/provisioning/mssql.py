@@ -109,8 +109,7 @@ class SQLServerProvisioner:
             if app_password is None:
                 if not await _login_exists(maintenance, app_user):
                     raise DatabaseProvisioningConfigurationError(
-                        "SQL Server application login must exist when runtime "
-                        "password is not configured."
+                        "SQL Server application login must exist when runtime password is not configured."
                     )
                 external_login_ready = True
             database_created = await _ensure_database(maintenance, target_database)
@@ -141,10 +140,7 @@ class SQLServerProvisioner:
                         (
                             f"Created SQL Server application login: {app_user}"
                             if login_created
-                            else (
-                                "SQL Server application login already exists: "
-                                f"{app_user}"
-                            )
+                            else (f"SQL Server application login already exists: {app_user}")
                         ),
                     )
                 )
@@ -294,8 +290,7 @@ class SQLServerProvisioner:
                     _result(
                         "destroy",
                         "skipped",
-                        "Skipped SQL Server application login removal because "
-                        "server-level dependencies were detected.",
+                        "Skipped SQL Server application login removal because server-level dependencies were detected.",
                     )
                 )
             else:
@@ -332,12 +327,8 @@ class SQLServerProvisioner:
     ) -> tuple[ProvisioningPhaseResult, ...]:
         _ensure_mssql_context(context)
         task = request.task.strip()
-        if task not in {
-            maintenance_task.name for maintenance_task in _MSSQL_MAINTENANCE_TASKS
-        }:
-            raise DatabaseProvisioningConfigurationError(
-                f"Unknown mssql maintenance task: {request.task}."
-            )
+        if task not in {maintenance_task.name for maintenance_task in _MSSQL_MAINTENANCE_TASKS}:
+            raise DatabaseProvisioningConfigurationError(f"Unknown mssql maintenance task: {request.task}.")
 
         runtime_connection = context.runtime_connection
         service_connection = _service_account_connection(
@@ -384,9 +375,7 @@ class SQLServerProvisioner:
                         phase="maintenance",
                     ),
                 )
-            raise DatabaseProvisioningConfigurationError(
-                f"Unknown mssql maintenance task: {request.task}."
-            )
+            raise DatabaseProvisioningConfigurationError(f"Unknown mssql maintenance task: {request.task}.")
         finally:
             await target.close()
 
@@ -395,13 +384,9 @@ class SQLServerProvisioner:
         connection: BaseDBAsyncClient,
         table_names: tuple[str, ...],
     ) -> None:
-        quoted_tables = tuple(
-            self.quote_identifier(table_name) for table_name in table_names
-        )
+        quoted_tables = tuple(self.quote_identifier(table_name) for table_name in table_names)
         for table_name in quoted_tables:
-            await connection.execute_query(
-                f"ALTER TABLE {table_name} NOCHECK CONSTRAINT ALL"
-            )
+            await connection.execute_query(f"ALTER TABLE {table_name} NOCHECK CONSTRAINT ALL")
         try:
             for table_name in quoted_tables:
                 # The provisioner has already quoted this identifier. It is SQL,
@@ -413,9 +398,7 @@ class SQLServerProvisioner:
                 await connection.execute_query(statement.statement)
         finally:
             for table_name in quoted_tables:
-                await connection.execute_query(
-                    f"ALTER TABLE {table_name} WITH CHECK CHECK CONSTRAINT ALL"
-                )
+                await connection.execute_query(f"ALTER TABLE {table_name} WITH CHECK CHECK CONSTRAINT ALL")
 
     def quote_identifier(self, identifier: str) -> str:
         return quote_mssql_identifier(identifier)
@@ -450,10 +433,7 @@ class SQLServerProvisioner:
                 (
                     f"SQL Server managed application login exists: {app_user}"
                     if login_exists
-                    else (
-                        "SQL Server managed application login will be created "
-                        f"during init: {app_user}"
-                    )
+                    else (f"SQL Server managed application login will be created during init: {app_user}")
                 ),
             ),
         )
@@ -471,9 +451,7 @@ class SQLServerProvisioner:
         except DatabaseProvisioningConfigurationError:
             raise
         except Exception as exc:
-            raise DatabaseProvisioningOperationError(
-                f"Failed to connect to SQL Server database: {database}"
-            ) from exc
+            raise DatabaseProvisioningOperationError(f"Failed to connect to SQL Server database: {database}") from exc
 
 
 class _DriverSQLServerConnection:
@@ -569,14 +547,10 @@ def _driver_credentials(credentials: Mapping[str, object]) -> dict[str, object]:
 
 def _normalise_odbc_attribute(key: object) -> str:
     if not isinstance(key, str) or not key.strip():
-        raise DatabaseProvisioningConfigurationError(
-            "SQL Server ODBC attribute names must be non-blank strings."
-        )
+        raise DatabaseProvisioningConfigurationError("SQL Server ODBC attribute names must be non-blank strings.")
     normalised = key.strip().replace("_", "").replace(" ", "").casefold()
     if normalised not in _ALLOWED_ODBC_ATTRIBUTE_KEYS:
-        raise DatabaseProvisioningConfigurationError(
-            f"Unsupported SQL Server ODBC attribute: {key}."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Unsupported SQL Server ODBC attribute: {key}.")
     return _ALLOWED_ODBC_ATTRIBUTE_KEYS[normalised]
 
 
@@ -642,8 +616,7 @@ async def _login_exists(connection: SQLServerConnection, app_user: str) -> bool:
     count = await _fetchval(
         connection,
         render_sql(
-            t"SELECT COUNT(*) FROM sys.server_principals "
-            t"WHERE name = {param(app_user)}",
+            t"SELECT COUNT(*) FROM sys.server_principals WHERE name = {param(app_user)}",
             dialect="mssql",
             quote_identifier=quote_mssql_identifier,
         ),
@@ -706,8 +679,7 @@ async def _ensure_database_user(
     await _execute(
         connection,
         render_sql(
-            t"CREATE USER {ident(app_user)} FOR LOGIN {ident(app_user)} "
-            t"WITH DEFAULT_SCHEMA = {ident(schema)}",
+            t"CREATE USER {ident(app_user)} FOR LOGIN {ident(app_user)} WITH DEFAULT_SCHEMA = {ident(schema)}",
             dialect="mssql",
             quote_identifier=quote_mssql_identifier,
         ),
@@ -722,8 +694,7 @@ async def _database_user_exists(
     count = await _fetchval(
         connection,
         render_sql(
-            t"SELECT COUNT(*) FROM sys.database_principals "
-            t"WHERE name = {param(app_user)}",
+            t"SELECT COUNT(*) FROM sys.database_principals WHERE name = {param(app_user)}",
             dialect="mssql",
             quote_identifier=quote_mssql_identifier,
         ),
@@ -750,8 +721,7 @@ async def _role_exists(connection: SQLServerConnection, role: str) -> bool:
     count = await _fetchval(
         connection,
         render_sql(
-            t"SELECT COUNT(*) FROM sys.database_principals "
-            t"WHERE name = {param(role)} AND type = N'R'",
+            t"SELECT COUNT(*) FROM sys.database_principals WHERE name = {param(role)} AND type = N'R'",
             dialect="mssql",
             quote_identifier=quote_mssql_identifier,
         ),
@@ -778,8 +748,7 @@ async def _repair_privileges(
     await _execute(
         connection,
         render_sql(
-            t"GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::"
-            t"{ident(schema)} TO {ident(role)}",
+            t"GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::{ident(schema)} TO {ident(role)}",
             dialect="mssql",
             quote_identifier=quote_mssql_identifier,
         ),
@@ -838,8 +807,7 @@ async def _migration_state_result(
         await _fetchval(
             connection,
             render_sql(
-                t"SELECT COUNT(*) FROM "
-                t"{ident(schema)}.{ident(_MIGRATION_RECORDER_TABLE)}",
+                t"SELECT COUNT(*) FROM {ident(schema)}.{ident(_MIGRATION_RECORDER_TABLE)}",
                 dialect="mssql",
                 quote_identifier=quote_mssql_identifier,
             ),
@@ -908,9 +876,7 @@ async def _execute(connection: SQLServerConnection, statement: RenderedSql) -> o
     try:
         return await connection.execute(statement.statement, *statement.parameters)
     except Exception as exc:
-        raise DatabaseProvisioningOperationError(
-            "SQL Server provisioning statement failed."
-        ) from exc
+        raise DatabaseProvisioningOperationError("SQL Server provisioning statement failed.") from exc
 
 
 async def _fetchval(
@@ -920,9 +886,7 @@ async def _fetchval(
     try:
         return await connection.fetchval(statement.statement, *statement.parameters)
     except Exception as exc:
-        raise DatabaseProvisioningOperationError(
-            "SQL Server provisioning query failed."
-        ) from exc
+        raise DatabaseProvisioningOperationError("SQL Server provisioning query failed.") from exc
 
 
 def _ensure_mssql_context(context: ProvisioningContext) -> None:
@@ -939,9 +903,7 @@ def _service_account_connection(
 ) -> ResolvedDatabaseConnection:
     connection = context.provisioning_connection
     if connection is None:
-        raise DatabaseProvisioningConfigurationError(
-            f"Database {phase} requires service-account credentials."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Database {phase} requires service-account credentials.")
     _required_credential(
         connection,
         "user",
@@ -975,9 +937,7 @@ def _schema_name(connection: ResolvedDatabaseConnection) -> str:
         return _DEFAULT_SCHEMA
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise DatabaseProvisioningConfigurationError(
-        "SQL Server schema must be a non-blank string."
-    )
+    raise DatabaseProvisioningConfigurationError("SQL Server schema must be a non-blank string.")
 
 
 def _role_name(connection: ResolvedDatabaseConnection) -> str:
@@ -986,9 +946,7 @@ def _role_name(connection: ResolvedDatabaseConnection) -> str:
         return _DEFAULT_ROLE
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise DatabaseProvisioningConfigurationError(
-        "SQL Server role must be a non-blank string."
-    )
+    raise DatabaseProvisioningConfigurationError("SQL Server role must be a non-blank string.")
 
 
 def _required_credential(
@@ -1011,9 +969,7 @@ def _optional_credential(
         return None
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise DatabaseProvisioningConfigurationError(
-        f"SQL Server {name} credential must be a non-blank string."
-    )
+    raise DatabaseProvisioningConfigurationError(f"SQL Server {name} credential must be a non-blank string.")
 
 
 def _ensure_lifecycle_database_is_distinct(
@@ -1046,8 +1002,7 @@ def _external_login_prerequisite_result(
     return _result(
         phase,
         "noop",
-        "SQL Server application login requires an externally managed "
-        f"password or prerequisite setup: {app_user}",
+        f"SQL Server application login requires an externally managed password or prerequisite setup: {app_user}",
     )
 
 
@@ -1081,9 +1036,7 @@ def _normalise_count(value: object) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise DatabaseProvisioningOperationError(
-            "SQL Server count result was invalid."
-        ) from exc
+        raise DatabaseProvisioningOperationError("SQL Server count result was invalid.") from exc
 
 
 def _result(

@@ -21,9 +21,7 @@ def _completed_diagnostics(*, statement: str) -> RequestDiagnostics:
 
 
 @pytest.mark.anyio
-async def test_capability_filters_snapshots_and_notifies_matching_subscription() -> (
-    None
-):
+async def test_capability_filters_snapshots_and_notifies_matching_subscription() -> None:
     capability = DiagnosticsCapability(retention_limit=2)
     subscription = await capability.subscribe((EVT_SQL,))
     capability.record_completed(_completed_diagnostics(statement="select 1"))
@@ -31,9 +29,7 @@ async def test_capability_filters_snapshots_and_notifies_matching_subscription()
     snapshot = await subscription.receive()
 
     assert [event["category"] for event in snapshot.events] == ["sql"]
-    assert [event["attributes"]["statement"] for event in snapshot.events] == [
-        "select 1"
-    ]
+    assert [event["attributes"]["statement"] for event in snapshot.events] == ["select 1"]
     assert len(capability.snapshots(EVT_TEMPLATE)) == 1
 
 

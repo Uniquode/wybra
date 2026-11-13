@@ -73,14 +73,10 @@ def set_theme_mode_cookie(response: Response, theme_mode: ThemeMode) -> None:
 
 
 def set_theme_mode_trigger(response: Response, theme_mode: ThemeMode) -> None:
-    response.headers["HX-Trigger"] = json.dumps(
-        {"theme-mode-changed": {"theme_mode": theme_mode}}
-    )
+    response.headers["HX-Trigger"] = json.dumps({"theme-mode-changed": {"theme_mode": theme_mode}})
 
 
-def theme_template_context(
-    request: Request, *, theme_mode: ThemeMode | None = None
-) -> dict[str, str]:
+def theme_template_context(request: Request, *, theme_mode: ThemeMode | None = None) -> dict[str, str]:
     current_theme = theme_mode or resolve_theme_mode(request)
     return {
         "theme_mode": current_theme,
@@ -95,9 +91,7 @@ async def theme_state(request: Request) -> dict[str, str]:
     return {"theme_mode": resolve_theme_mode(request)}
 
 
-def theme_return_context(
-    request: Request, *, return_path: str | None = None
-) -> dict[str, str]:
+def theme_return_context(request: Request, *, return_path: str | None = None) -> dict[str, str]:
     del request
     if return_path is None:
         return {}
@@ -148,9 +142,7 @@ def _first_parsed_form_value(
 
 
 async def theme_status_partial(request: Request) -> Response:
-    return await render_partial(
-        request, THEME_STATUS_TEMPLATE, theme_return_context(request)
-    )
+    return await render_partial(request, THEME_STATUS_TEMPLATE, theme_return_context(request))
 
 
 async def theme_mode_partial(request: Request) -> Response:
@@ -163,9 +155,9 @@ async def theme_mode_partial(request: Request) -> Response:
         set_theme_mode_cookie(response, theme_mode)
         return response
 
-    context = theme_template_context(
-        request, theme_mode=theme_mode
-    ) | theme_return_context(request, return_path=redirect_path)
+    context = theme_template_context(request, theme_mode=theme_mode) | theme_return_context(
+        request, return_path=redirect_path
+    )
     response = await render_partial(request, THEME_STATUS_TEMPLATE, context)
     set_theme_mode_cookie(response, theme_mode)
     set_theme_mode_trigger(response, theme_mode)

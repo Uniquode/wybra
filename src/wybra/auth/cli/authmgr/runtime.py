@@ -640,9 +640,7 @@ def _load_command_settings_for_command(
     except ProjectToolConfigurationError as exc:
         raise ConfigurationError(str(exc)) from exc
     except CompositionError as exc:
-        raise ConfigurationError(
-            f"{str(exc).rstrip('.')}. Pass --config or set APP_CONFIG."
-        ) from exc
+        raise ConfigurationError(f"{str(exc).rstrip('.')}. Pass --config or set APP_CONFIG.") from exc
 
     return _AuthmgrCommandSettings(
         auth=load_auth_settings(
@@ -694,8 +692,7 @@ def _config_source_from_context(ctx: click.Context) -> str | None:
         ctx,
         error_factory=ConfigurationError,
         invalid_type_message=lambda value_type: (
-            "Invalid Click context for authmgr: config_source must be a string, "
-            f"got {value_type.__name__!r}."
+            f"Invalid Click context for authmgr: config_source must be a string, got {value_type.__name__!r}."
         ),
     )
 
@@ -714,9 +711,7 @@ async def _resolve_target_record(
 
 
 def _confirm_destructive(action: str, record: dict[str, Any]) -> bool:
-    answer = input(
-        f"{action} {record['email']} ({record['id']})? Type 'yes' to continue: "
-    )
+    answer = input(f"{action} {record['email']} ({record['id']})? Type 'yes' to continue: ")
     return answer == "yes"
 
 

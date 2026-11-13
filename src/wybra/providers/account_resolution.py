@@ -56,9 +56,7 @@ async def resolve_provider_account(
     linking_user: User | None,
 ) -> ProviderPolicyDecision:
     database = get_site(request.app).require_capability(DatabaseCapability)
-    async with tortoise_transaction(
-        database, database.database().for_write()
-    ) as session:
+    async with tortoise_transaction(database, database.database().for_write()) as session:
         store = provider_credential_store(
             session,
             getattr(request.app.state, "secret_envelope_service", None),
@@ -88,18 +86,10 @@ async def resolve_provider_account(
             provider=resolution.provider,
             assertion=resolution.assertion,
             linked_user_id=str(linked_user.id) if linked_user is not None else None,
-            linked_user_active=(
-                is_user_effectively_active(linked_user)
-                if linked_user is not None
-                else True
-            ),
-            email_match_user_id=(
-                str(email_match_user.id) if email_match_user is not None else None
-            ),
+            linked_user_active=(is_user_effectively_active(linked_user) if linked_user is not None else True),
+            email_match_user_id=(str(email_match_user.id) if email_match_user is not None else None),
             email_match_user_active=(
-                is_user_effectively_active(email_match_user)
-                if email_match_user is not None
-                else True
+                is_user_effectively_active(email_match_user) if email_match_user is not None else True
             ),
         )
         if decision.outcome is ProviderPolicyOutcome.EMAIL_MATCH_LINK_ALLOWED:
@@ -118,14 +108,9 @@ async def resolve_provider_account(
                 return _provider_policy_decision(
                     ProviderPolicyOutcome.INVALID_CLAIMS,
                     resolution.assertion,
-                    reason=provider_missing_access_token_reason(
-                        resolution.provider_label
-                    ),
+                    reason=provider_missing_access_token_reason(resolution.provider_label),
                 )
-        if (
-            decision.outcome is ProviderPolicyOutcome.LINKED_USER
-            and linked_user is not None
-        ):
+        if decision.outcome is ProviderPolicyOutcome.LINKED_USER and linked_user is not None:
             await _apply_verified_provider_email(store, linked_user, resolution)
         if decision.outcome is ProviderPolicyOutcome.CREATION_ALLOWED:
             return await _create_provider_user(
@@ -142,16 +127,8 @@ async def _resolve_provider_linking_account(
     linked_user: User | None,
     linking_user: User | None,
 ) -> ProviderPolicyDecision:
-    user_id = (
-        parse_uuid(resolution.state_user_id)
-        if resolution.state_user_id is not None
-        else None
-    )
-    if (
-        user_id is None
-        or linking_user is None
-        or parse_uuid(linking_user.id) != user_id
-    ):
+    user_id = parse_uuid(resolution.state_user_id) if resolution.state_user_id is not None else None
+    if user_id is None or linking_user is None or parse_uuid(linking_user.id) != user_id:
         return _provider_policy_decision(
             ProviderPolicyOutcome.INVALID_CLAIMS,
             resolution.assertion,

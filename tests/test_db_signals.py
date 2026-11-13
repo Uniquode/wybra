@@ -19,9 +19,7 @@ def test_wybra_database_signals_are_the_native_tortoise_signals() -> None:
 
 
 @pytest.mark.anyio
-async def test_wybra_database_signals_preserve_native_save_and_delete_lifecycle() -> (
-    None
-):
+async def test_wybra_database_signals_preserve_native_save_and_delete_lifecycle() -> None:
     """Handlers receive Tortoise's original notifications without an adaptor."""
 
     observed: list[str] = []

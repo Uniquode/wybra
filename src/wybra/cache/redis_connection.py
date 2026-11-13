@@ -35,9 +35,7 @@ def _resolve_redis_url(
             label="URL",
         )
     if settings.url is None:
-        raise ConfigurationError(
-            f"Cache {settings.name!r} Redis URL is not configured."
-        )
+        raise ConfigurationError(f"Cache {settings.name!r} Redis URL is not configured.")
     if credentials_reference is None:
         return settings.url
     credentials = _resolve_reference(
@@ -58,21 +56,15 @@ def _resolve_reference(
 ) -> str:
     source, key = reference
     if secrets is None:
-        raise ConfigurationError(
-            f"Cache {settings.name!r} Redis {label} reference requires the "
-            "wybra.secrets module."
-        )
+        raise ConfigurationError(f"Cache {settings.name!r} Redis {label} reference requires the wybra.secrets module.")
     try:
         value = secrets.resolve(source, key).reveal()
     except SecretsError:
         raise ConfigurationError(
-            f"Cache {settings.name!r} Redis {label} secret resolution failed "
-            f"for source {source!r}."
+            f"Cache {settings.name!r} Redis {label} secret resolution failed for source {source!r}."
         ) from None
     if not value.strip():
-        raise ConfigurationError(
-            f"Cache {settings.name!r} Redis {label} secret is blank."
-        )
+        raise ConfigurationError(f"Cache {settings.name!r} Redis {label} secret is blank.")
     return value
 
 
@@ -84,23 +76,14 @@ def _with_credentials(
     try:
         parsed = urlsplit(endpoint)
     except ValueError:
-        raise ConfigurationError(
-            f"Cache {settings.name!r} Redis endpoint is invalid."
-        ) from None
+        raise ConfigurationError(f"Cache {settings.name!r} Redis endpoint is invalid.") from None
     if parsed.scheme.lower() not in {"redis", "rediss"} or not parsed.netloc:
-        raise ConfigurationError(
-            f"Cache {settings.name!r} Redis endpoint cannot accept credentials."
-        )
+        raise ConfigurationError(f"Cache {settings.name!r} Redis endpoint cannot accept credentials.")
     if parsed.username is not None or parsed.password is not None:
-        raise ConfigurationError(
-            f"Cache {settings.name!r} Redis endpoint already contains credentials."
-        )
+        raise ConfigurationError(f"Cache {settings.name!r} Redis endpoint already contains credentials.")
     username, separator, password = credentials.partition(":")
     if not separator or (not username and not password):
-        raise ConfigurationError(
-            f"Cache {settings.name!r} Redis credentials must use "
-            "username:password form."
-        )
+        raise ConfigurationError(f"Cache {settings.name!r} Redis credentials must use username:password form.")
     userinfo = f"{quote(username, safe='')}:{quote(password, safe='')}"
     return urlunsplit(
         (

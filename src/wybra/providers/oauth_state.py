@@ -26,10 +26,7 @@ def encode_signed_oauth_state(
             separators=(",", ":"),
         ).encode("utf-8")
     )
-    return (
-        f"{encoded_payload}{_STATE_COOKIE_SEPARATOR}"
-        f"{_signature(encoded_payload, secret)}"
-    )
+    return f"{encoded_payload}{_STATE_COOKIE_SEPARATOR}{_signature(encoded_payload, secret)}"
 
 
 def decode_signed_oauth_state[StateT](

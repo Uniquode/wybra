@@ -73,9 +73,7 @@ def static_asset_storage(export_mode: AssetExportMode | str) -> StaticAssetStora
     try:
         return _STATIC_ASSET_STORAGES[resolved_mode]
     except KeyError as exc:
-        raise ConfigurationError(
-            f"static asset export mode {resolved_mode.value!r} is not implemented"
-        ) from exc
+        raise ConfigurationError(f"static asset export mode {resolved_mode.value!r} is not implemented") from exc
 
 
 def _joined_static_asset_url(url_path: str, logical_path: str) -> str:
@@ -91,22 +89,15 @@ def _normalise_url_path(path: str) -> str:
 
 def normalise_logical_asset_path(logical_path: str) -> str:
     if logical_path != logical_path.strip():
-        raise InputValidationError(
-            "Logical asset paths must not have leading or trailing whitespace."
-        )
+        raise InputValidationError("Logical asset paths must not have leading or trailing whitespace.")
 
     path = PurePosixPath(logical_path)
     if path.is_absolute():
-        raise InputValidationError(
-            "Logical asset paths must be relative and cannot start with '/'."
-        )
+        raise InputValidationError("Logical asset paths must be relative and cannot start with '/'.")
 
     parts = tuple(part for part in path.parts if part != ".")
     if not parts or any(part == ".." for part in parts):
-        raise InputValidationError(
-            "Logical asset paths must not contain '..' segments that escape "
-            "the namespace."
-        )
+        raise InputValidationError("Logical asset paths must not contain '..' segments that escape the namespace.")
     return "/".join(parts)
 
 

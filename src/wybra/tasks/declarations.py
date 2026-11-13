@@ -90,9 +90,7 @@ class TaskDefinition[**P, R]:
                     self._adapters[name],
                 )
         except (TypeError, ValueError, ValidationError) as exc:
-            raise TaskPayloadError(
-                f"Task {self.identity.name!r} arguments are invalid."
-            ) from exc
+            raise TaskPayloadError(f"Task {self.identity.name!r} arguments are invalid.") from exc
         return bound
 
 
@@ -176,16 +174,12 @@ def _declaring_module(function: Callable[..., object]) -> str:
 def _validate_signature(task_signature: Signature) -> None:
     for parameter in task_signature.parameters.values():
         if parameter.kind is Parameter.POSITIONAL_ONLY:
-            raise TaskDeclarationError(
-                "Task functions cannot declare positional-only parameters."
-            )
+            raise TaskDeclarationError("Task functions cannot declare positional-only parameters.")
         if parameter.kind in {
             Parameter.VAR_POSITIONAL,
             Parameter.VAR_KEYWORD,
         }:
-            raise TaskDeclarationError(
-                "Task functions cannot declare variadic parameters."
-            )
+            raise TaskDeclarationError("Task functions cannot declare variadic parameters.")
 
 
 def _argument_adapters(
@@ -196,10 +190,7 @@ def _argument_adapters(
         annotations = get_type_hints(function)
     except (NameError, TypeError) as exc:
         raise TaskDeclarationError("Task annotations could not be resolved.") from exc
-    return {
-        name: TypeAdapter(annotations.get(name, Any))
-        for name in task_signature.parameters
-    }
+    return {name: TypeAdapter(annotations.get(name, Any)) for name in task_signature.parameters}
 
 
 def _validated_argument(
@@ -214,19 +205,11 @@ def _validated_argument(
 def _visibility_timeout(value: float | None) -> float | None:
     if value is None:
         return None
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not isfinite(value)
-        or value <= 0
-    ):
-        raise TaskDeclarationError(
-            "Task visibility timeout must be a positive finite number."
-        )
+    if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(value) or value <= 0:
+        raise TaskDeclarationError("Task visibility timeout must be a positive finite number.")
     if value < MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS:
         raise TaskDeclarationError(
-            "Task visibility timeout must be at least "
-            f"{MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS} seconds."
+            f"Task visibility timeout must be at least {MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS} seconds."
         )
     return float(value)
 

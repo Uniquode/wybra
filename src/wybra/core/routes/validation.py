@@ -76,9 +76,7 @@ def validate_routes(settings: RouteValidationSettings) -> ValidationResult:
         passed=True,
         description=(
             "configured route modules compose: "
-            + ", ".join(
-                f"{router.module_name}.{router.label}" for router in configured_routers
-            )
+            + ", ".join(f"{router.module_name}.{router.label}" for router in configured_routers)
         ),
     )
 

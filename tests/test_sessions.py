@@ -96,9 +96,7 @@ def _settings(
     app: dict[str, object] | None = None,
     environ: dict[str, str] | None = None,
 ) -> SessionsSettings:
-    return SessionsSettings.load_settings(
-        _config(app=app, sessions=values, environ=environ)
-    )
+    return SessionsSettings.load_settings(_config(app=app, sessions=values, environ=environ))
 
 
 def _cache_session_validation_config(
@@ -462,12 +460,8 @@ async def test_database_storage_persists_session_records() -> None:
             payload_max_bytes=1024,
         )
         await storage.save("session", _record(data={"value": "database"}))
-        assert await storage.load("session", now=2.0) == _record(
-            data={"value": "database"}
-        )
-        async with tortoise_transaction(
-            capability, capability.database().for_write()
-        ) as connection:
+        assert await storage.load("session", now=2.0) == _record(data={"value": "database"})
+        async with tortoise_transaction(capability, capability.database().for_write()) as connection:
             row = await SessionRecordModel.get_or_none(
                 id="session",
                 using_db=connection,
@@ -940,9 +934,7 @@ async def test_cookie_session_backend_round_trips_through_middleware() -> None:
                     "wybra.sessions": {"storage_backend": "cookie"},
                 }
             ),
-            environ={
-                ENV_WYBRA_SECRET_KEY: generate_secret_key_entry(version="current")
-            },
+            environ={ENV_WYBRA_SECRET_KEY: generate_secret_key_entry(version="current")},
         )
     )
 
@@ -1041,9 +1033,7 @@ async def test_non_local_startup_requires_explicit_session_backend() -> None:
     with pytest.raises(ConfigurationError, match="storage_backend"):
         await start(
             FastAPI(),
-            config_source=MappingConfigSource(
-                {"app": {"modules": (), "deployment_environment": "production"}}
-            ),
+            config_source=MappingConfigSource({"app": {"modules": (), "deployment_environment": "production"}}),
             environ={},
         )
 

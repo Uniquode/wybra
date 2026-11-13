@@ -19,9 +19,7 @@ type FormErrorKey = str | None
 
 MARKUP_ERROR = "Enter plain text without HTML or markup."
 UNSAFE_CONTROL_CHARACTER_ERROR = "Enter text without unsafe control characters."
-_MARKUP_PATTERN = re.compile(
-    r"<!--|--!?>|<![A-Za-z]|<\?|\?>|</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>"
-)
+_MARKUP_PATTERN = re.compile(r"<!--|--!?>|<![A-Za-z]|<\?|\?>|</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>")
 _ALLOWED_CONTROL_CHARACTERS = {"\t", "\n", "\r"}
 _MISSING = object()
 
@@ -74,9 +72,7 @@ class FormResult:
     @property
     def values(self) -> dict[str, object]:
         return {
-            name: result.value
-            for name, result in self.fields.items()
-            if result.is_valid and result.value is not None
+            name: result.value for name, result in self.fields.items() if result.is_valid and result.value is not None
         }
 
     @property
@@ -90,9 +86,7 @@ class FormResult:
 
     @property
     def is_valid(self) -> bool:
-        return not self.form_errors and all(
-            result.is_valid for result in self.fields.values()
-        )
+        return not self.form_errors and all(result.is_valid for result in self.fields.values())
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,9 +127,7 @@ class Field:
     errors: tuple[str, ...] = dataclass_field(default=(), init=False)
 
     def __post_init__(self) -> None:
-        if self.renderer is not None and not callable(
-            getattr(self.renderer, "render", None)
-        ):
+        if self.renderer is not None and not callable(getattr(self.renderer, "render", None)):
             raise FormError("Field renderer must provide a render() method.")
         if not isinstance(self.attr, Mapping):
             raise FormError("Field attr must be a mapping.")
@@ -426,8 +418,7 @@ class ChoiceField(Field):
     def options(self) -> tuple[Option, ...]:
         selected = str(self.value) if self.value is not None else ""
         return tuple(
-            Option(value=value, label=label, selected=value == selected)
-            for value, label in self.choices.items()
+            Option(value=value, label=label, selected=value == selected) for value, label in self.choices.items()
         )
 
 
@@ -459,8 +450,7 @@ class MultiSelectField(SelectField):
     def options(self) -> tuple[Option, ...]:
         selected = set(self.value) if isinstance(self.value, tuple) else set()
         return tuple(
-            Option(value=value, label=label, selected=value in selected)
-            for value, label in self.choices.items()
+            Option(value=value, label=label, selected=value in selected) for value, label in self.choices.items()
         )
 
 
@@ -570,21 +560,15 @@ class Form:
         )
         self.errors: dict[FormErrorKey, list[str]] = {}
         self.values: dict[str, object] = {
-            name: form_field.value
-            for name, form_field in self.fields.items()
-            if form_field.value is not None
+            name: form_field.value for name, form_field in self.fields.items() if form_field.value is not None
         }
         self.raw_values: dict[str, object] = {}
         self.field_results: dict[str, FieldResult] = {
-            name: FieldResult(name=name, value=form_field.value)
-            for name, form_field in self.fields.items()
+            name: FieldResult(name=name, value=form_field.value) for name, form_field in self.fields.items()
         }
         self._defer_result_sync = False
         self._result = FormResult(
-            fields={
-                name: FieldResult(name=name, value=form_field.value)
-                for name, form_field in self.fields.items()
-            }
+            fields={name: FieldResult(name=name, value=form_field.value) for name, form_field in self.fields.items()}
         )
 
     @classmethod
@@ -688,9 +672,7 @@ class Form:
 
         original = _snapshot(target)
         changed_fields = tuple(
-            name
-            for name, value in self.bound_values.items()
-            if self._read_target_value(target, name) != value
+            name for name, value in self.bound_values.items() if self._read_target_value(target, name) != value
         )
         for name in changed_fields:
             self._write_target_value(target, name, self.bound_values[name])
@@ -741,13 +723,8 @@ class Form:
             raise FormError("Meta.renderers must be a mapping of field names.")
         unknown = set(renderers) - set(declared_fields)
         if unknown:
-            raise FormError(
-                "Unknown form renderer field(s): " + ", ".join(sorted(unknown))
-            )
-        if any(
-            not callable(getattr(renderer, "render", None))
-            for renderer in renderers.values()
-        ):
+            raise FormError("Unknown form renderer field(s): " + ", ".join(sorted(unknown)))
+        if any(not callable(getattr(renderer, "render", None)) for renderer in renderers.values()):
             raise FormError("Meta.renderers values must provide a render() method.")
         return cast(Mapping[str, FieldRenderer], renderers)
 
@@ -832,8 +809,7 @@ def has_markup(value: str) -> bool:
 
 def has_unsafe_control_character(value: str) -> bool:
     return any(
-        character not in _ALLOWED_CONTROL_CHARACTERS
-        and (ord(character) < 32 or 127 <= ord(character) <= 159)
+        character not in _ALLOWED_CONTROL_CHARACTERS and (ord(character) < 32 or 127 <= ord(character) <= 159)
         for character in value
     )
 

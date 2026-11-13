@@ -35,8 +35,7 @@ class CacheTaskiqReceiver(Receiver):
         super().__init__(*args, **kwargs)
         if self.ack_time is not AcknowledgeType.WHEN_SAVED:
             raise ValueError(
-                "CacheTaskiqReceiver requires acknowledgement after task result "
-                "and lifecycle persistence."
+                "CacheTaskiqReceiver requires acknowledgement after task result and lifecycle persistence."
             )
         lifecycle_middlewares = [
             middleware
@@ -44,9 +43,7 @@ class CacheTaskiqReceiver(Receiver):
             if isinstance(middleware, CacheTaskiqLifecycleMiddleware)
         ]
         if len(lifecycle_middlewares) != 1:
-            raise RuntimeError(
-                "CacheTaskiqReceiver requires exactly one lifecycle middleware."
-            )
+            raise RuntimeError("CacheTaskiqReceiver requires exactly one lifecycle middleware.")
         self._lifecycle = lifecycle_middlewares[0]
         if not isinstance(self.broker, CacheTaskiqBroker):
             raise RuntimeError("CacheTaskiqReceiver requires CacheTaskiqBroker.")
@@ -80,11 +77,7 @@ class CacheTaskiqReceiver(Receiver):
         only when a completed task result cannot be saved. Handler failures are
         represented through retry and lifecycle middleware.
         """
-        broker_receipt = (
-            self._cache_broker.delivery_receipt(message)
-            if isinstance(message, AckableMessage)
-            else None
-        )
+        broker_receipt = self._cache_broker.delivery_receipt(message) if isinstance(message, AckableMessage) else None
         task_message = self._task_message(message)
         if task_message is None:
             _LOGGER.warning("Taskiq delivery could not be parsed; skipping execution.")
@@ -135,9 +128,7 @@ class CacheTaskiqReceiver(Receiver):
                 await _maybe_await(message.ack())
 
         try:
-            visibility_timeout = self._cache_broker.delivery_visibility_timeout(
-                task_message.labels
-            )
+            visibility_timeout = self._cache_broker.delivery_visibility_timeout(task_message.labels)
         except ValueError:
             await self._relinquish_prefetch_delivery(broker_receipt)
             raise
@@ -233,17 +224,13 @@ class CacheTaskiqReceiver(Receiver):
         """Cancel callbacks that outlive Taskiq's bounded graceful drain."""
         current = asyncio.current_task()
         callbacks = tuple(
-            callback
-            for callback in self._active_callbacks
-            if callback is not current and not callback.done()
+            callback for callback in self._active_callbacks if callback is not current and not callback.done()
         )
         for callback in callbacks:
             callback.cancel()
         if callbacks:
             drain_timeout = (
-                _MAXIMUM_CANCELLATION_DRAIN_SECONDS
-                if self.wait_tasks_timeout is None
-                else self.wait_tasks_timeout
+                _MAXIMUM_CANCELLATION_DRAIN_SECONDS if self.wait_tasks_timeout is None else self.wait_tasks_timeout
             )
             _done, pending = await asyncio.wait(
                 callbacks,
@@ -260,9 +247,7 @@ class CacheTaskiqReceiver(Receiver):
 
     def _task_message(self, message: bytes | AckableMessage) -> TaskiqMessage | None:
         try:
-            message_data = (
-                message.data if isinstance(message, AckableMessage) else message
-            )
+            message_data = message.data if isinstance(message, AckableMessage) else message
             task_message = self.broker.formatter.loads(message=message_data)
             task_message.parse_labels()
         except Exception:

@@ -351,9 +351,7 @@ async def test_cache_taskiq_capability_rejects_task_outside_runtime_registry() -
 
 
 @pytest.mark.anyio
-async def test_cache_taskiq_capability_rejects_different_definition_with_identity() -> (
-    None
-):
+async def test_cache_taskiq_capability_rejects_different_definition_with_identity() -> None:
     capability, _broker = _capability()
 
     @task(name="tests.definition_identity")
@@ -482,9 +480,7 @@ async def test_cache_taskiq_receiver_completes_task_that_skips_result() -> None:
         acknowledged = True
         await original_acknowledge()
 
-    await capability.receiver(validate_params=False).callback(
-        AckableMessage(data=received.data, ack=acknowledge)
-    )
+    await capability.receiver(validate_params=False).callback(AckableMessage(data=received.data, ack=acknowledge))
 
     status = await handle.status()
     assert status is not None
@@ -575,9 +571,7 @@ async def test_cache_taskiq_receiver_leaves_cancelled_delivery_for_recovery() ->
         await original_acknowledge()
 
     execution = asyncio.create_task(
-        capability.receiver(validate_params=False).callback(
-            AckableMessage(data=received.data, ack=acknowledge)
-        )
+        capability.receiver(validate_params=False).callback(AckableMessage(data=received.data, ack=acknowledge))
     )
     await started.wait()
     execution.cancel()
@@ -654,9 +648,7 @@ async def test_cache_taskiq_receiver_cancels_callbacks_left_after_taskiq_drain(
 
     receiver = capability.receiver(validate_params=False)
     receiver.run_startup = False
-    execution = asyncio.create_task(
-        receiver.callback(AckableMessage(data=received.data, ack=acknowledge))
-    )
+    execution = asyncio.create_task(receiver.callback(AckableMessage(data=received.data, ack=acknowledge)))
     await started.wait()
 
     async def block_shutdown(
@@ -1094,9 +1086,7 @@ async def test_cache_taskiq_receiver_renews_while_checking_obsolete_delivery(
     )
     monkeypatch.setattr(broker, "renew_delivery", count_renewals)
 
-    await capability.receiver(validate_params=False).callback(
-        AckableMessage(data=received.data, ack=acknowledge)
-    )
+    await capability.receiver(validate_params=False).callback(AckableMessage(data=received.data, ack=acknowledge))
 
     assert renewals == 2
     await listener.aclose()
@@ -1166,12 +1156,6 @@ async def test_delivery_exhaustion_is_reconciled_to_terminal_lifecycle() -> None
     assert status.error_type == "CacheWorkQueueDeliveryExhausted"
     assert not hasattr(status, "delivery_identity")
     assert status._delivery_identity is None
-    assert all(
-        not hasattr(event, "delivery_identity")
-        for event in await capability.lifecycle(handle.task_id)
-    )
-    assert all(
-        event._delivery_identity is None
-        for event in await capability.lifecycle(handle.task_id)
-    )
+    assert all(not hasattr(event, "delivery_identity") for event in await capability.lifecycle(handle.task_id))
+    assert all(event._delivery_identity is None for event in await capability.lifecycle(handle.task_id))
     await listener.aclose()

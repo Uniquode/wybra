@@ -46,9 +46,7 @@ class CredentialAccessEvent(Event):
     error_type: str | None = None
 
 
-def account_event(
-    call: BoundArguments, observation: EventOutcome | None
-) -> Event | None:
+def account_event(call: BoundArguments, observation: EventOutcome | None) -> Event | None:
     """Build an account lifecycle event from already-redacted call metadata."""
 
     if observation is None:
@@ -108,12 +106,7 @@ def totp_verification_event(
     if observation is None:
         return None
     result = observation.result
-    accepted = (
-        isinstance(result, tuple)
-        and bool(result)
-        and isinstance(result[0], bool)
-        and result[0]
-    )
+    accepted = isinstance(result, tuple) and bool(result) and isinstance(result[0], bool) and result[0]
     return CredentialAccessEvent(
         topic=EVT_CREDENTIAL(CREDENTIAL, COMPLETED),
         operation="verify",

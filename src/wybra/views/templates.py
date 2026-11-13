@@ -41,9 +41,7 @@ class TemplateView(View):
     def get_template(self) -> str:
         """Return the declared template name for this view."""
         if self.template_name is None:
-            raise ValueError(
-                "TemplateView requires template_name or an overridden get_template()."
-            )
+            raise ValueError("TemplateView requires template_name or an overridden get_template().")
         return self.template_name
 
     async def get_context(

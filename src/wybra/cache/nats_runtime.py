@@ -178,14 +178,10 @@ class NatsJetStreamRuntime:
                 raise
             except Exception as exc:
                 _log_failure("time calibration", exc)
-                raise CacheFeatureError(
-                    "NATS JetStream cache time calibration failed."
-                ) from None
+                raise CacheFeatureError("NATS JetStream cache time calibration failed.") from None
             timestamp = getattr(message, "time", None)
             if not isinstance(timestamp, datetime):
-                raise CacheFeatureError(
-                    "NATS JetStream cache returned an invalid server time."
-                )
+                raise CacheFeatureError("NATS JetStream cache returned an invalid server time.")
             provider_time = timestamp.timestamp()
             calibrated_at = monotonic()
             self._time_provider_at_calibration = provider_time
@@ -197,14 +193,10 @@ class NatsJetStreamRuntime:
         provider_time = self._time_provider_at_calibration
         calibrated_at = self._time_monotonic_at_calibration
         if provider_time is None or calibrated_at is None:
-            raise CacheFeatureError(
-                "NATS JetStream cache time has not been calibrated."
-            )
+            raise CacheFeatureError("NATS JetStream cache time has not been calibrated.")
         elapsed = max(0.0, monotonic() - calibrated_at)
         if elapsed >= _CACHE_TIME_MAXIMUM_REFRESH_SECONDS:
-            raise CacheFeatureError(
-                "NATS JetStream cache time calibration has expired."
-            )
+            raise CacheFeatureError("NATS JetStream cache time calibration has expired.")
         return provider_time + elapsed
 
     def _time_refresh_required(self) -> bool:
@@ -274,10 +266,7 @@ class NatsJetStreamRuntime:
                     return
                 raise
             except Exception as cleanup_error:
-                error.add_note(
-                    "NATS JetStream consumer cleanup failed "
-                    f"({type(cleanup_error).__name__})."
-                )
+                error.add_note(f"NATS JetStream consumer cleanup failed ({type(cleanup_error).__name__}).")
                 _log_failure("consumer cleanup", cleanup_error)
             raise
         return subscription
@@ -323,25 +312,17 @@ class NatsJetStreamRuntime:
             while len(messages) < pending:
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
-                    raise CacheFeatureError(
-                        "NATS JetStream filtered subject query was incomplete."
-                    )
+                    raise CacheFeatureError("NATS JetStream filtered subject query was incomplete.")
                 try:
-                    batch = await subscription.fetch(
-                        pending - len(messages), timeout=remaining
-                    )
+                    batch = await subscription.fetch(pending - len(messages), timeout=remaining)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     if self.is_timeout_error(exc):
-                        raise CacheFeatureError(
-                            "NATS JetStream filtered subject query was incomplete."
-                        ) from None
+                        raise CacheFeatureError("NATS JetStream filtered subject query was incomplete.") from None
                     raise
                 if not batch:
-                    raise CacheFeatureError(
-                        "NATS JetStream filtered subject query was incomplete."
-                    )
+                    raise CacheFeatureError("NATS JetStream filtered subject query was incomplete.")
                 messages.extend(batch)
             for message in messages:
                 await message.ack()
@@ -456,9 +437,7 @@ class NatsJetStreamRuntime:
             raise CacheFeatureError("NATS JetStream cache operation failed.") from None
         value = getattr(message, "data", None)
         if not isinstance(value, bytes):
-            raise CacheFeatureError(
-                "NATS JetStream cache returned an invalid cached value."
-            )
+            raise CacheFeatureError("NATS JetStream cache returned an invalid cached value.")
         return value
 
     async def set(self, owner: str, key: str, value: bytes, *, ttl: float) -> None:
@@ -498,9 +477,7 @@ class NatsJetStreamRuntime:
             raise CacheFeatureError("NATS JetStream cache operation failed.") from None
         sequence = getattr(message, "seq", None)
         if not isinstance(sequence, int) or sequence <= 0:
-            raise CacheFeatureError(
-                "NATS JetStream cache returned an invalid cached value."
-            )
+            raise CacheFeatureError("NATS JetStream cache returned an invalid cached value.")
         try:
             await jetstream.delete_msg(self.stream_name, sequence)
         except asyncio.CancelledError:
@@ -531,9 +508,7 @@ class NatsJetStreamRuntime:
                     return
                 except Exception as exc:
                     _log_failure("shutdown", exc)
-                    raise CacheFeatureError(
-                        "NATS JetStream cache backend shutdown failed."
-                    ) from None
+                    raise CacheFeatureError("NATS JetStream cache backend shutdown failed.") from None
                 self._client = None
                 self._jetstream = None
                 self._closed = True
@@ -564,9 +539,7 @@ class NatsJetStreamRuntime:
             if self._client is not None:
                 await self._close_startup_client()
                 if self._client is not None:
-                    raise CacheFeatureError(
-                        "NATS JetStream cache backend startup cleanup is incomplete."
-                    )
+                    raise CacheFeatureError("NATS JetStream cache backend startup cleanup is incomplete.")
             client = None
             try:
                 nats = importlib.import_module("nats")
@@ -583,8 +556,7 @@ class NatsJetStreamRuntime:
             except ImportError as exc:
                 await self._close_startup_client()
                 raise ConfigurationError(
-                    "NATS JetStream cache backend requires the optional cache "
-                    "dependency. Install wybra[cache]."
+                    "NATS JetStream cache backend requires the optional cache dependency. Install wybra[cache]."
                 ) from exc
             except ConfigurationError:
                 await self._close_startup_client()
@@ -592,9 +564,7 @@ class NatsJetStreamRuntime:
             except Exception as exc:
                 await self._close_startup_client()
                 _log_failure("startup", exc)
-                raise ConfigurationError(
-                    "NATS JetStream cache backend startup failed."
-                ) from None
+                raise ConfigurationError("NATS JetStream cache backend startup failed.") from None
             self._jetstream = jetstream
 
     async def _close_startup_client(self) -> None:
@@ -640,11 +610,7 @@ class NatsJetStreamRuntime:
                 name=name,
                 subjects=subjects,
                 storage=api.StorageType.FILE,
-                retention=(
-                    api.RetentionPolicy.LIMITS
-                    if state
-                    else api.RetentionPolicy.WORK_QUEUE
-                ),
+                retention=(api.RetentionPolicy.LIMITS if state else api.RetentionPolicy.WORK_QUEUE),
                 max_msgs_per_subject=1 if state else -1,
                 max_msgs=-1 if state else MAX_CACHE_FEATURE_LIMIT,
                 max_bytes=-1,
@@ -727,48 +693,35 @@ class NatsJetStreamRuntime:
         errors = importlib.import_module("nats.js.errors")
         error_type = getattr(errors, "NotFoundError", None)
         if not isinstance(error_type, type) or not issubclass(error_type, Exception):
-            raise ConfigurationError(
-                "NATS JetStream cache backend requires a supported nats-py client."
-            )
+            raise ConfigurationError("NATS JetStream cache backend requires a supported nats-py client.")
         return error_type
 
 
 def _validate_server_version(client: Any) -> None:
     version = getattr(client, "connected_server_version", None)
     if version is None:
-        raise ConfigurationError(
-            "NATS JetStream cache backend could not determine the NATS server version."
-        )
+        raise ConfigurationError("NATS JetStream cache backend could not determine the NATS server version.")
     try:
         actual = (int(version.major), int(version.minor), int(version.patch))
     except (AttributeError, TypeError, ValueError) as exc:
-        raise ConfigurationError(
-            "NATS JetStream cache backend could not determine the NATS server version."
-        ) from exc
+        raise ConfigurationError("NATS JetStream cache backend could not determine the NATS server version.") from exc
     if actual < _MINIMUM_SERVER_VERSION:
         required = ".".join(map(str, _MINIMUM_SERVER_VERSION))
         received = ".".join(map(str, actual))
         raise ConfigurationError(
-            "NATS JetStream cache backend requires NATS server "
-            f"{required} or newer (connected to {received})."
+            f"NATS JetStream cache backend requires NATS server {required} or newer (connected to {received})."
         )
 
 
 def _validate_server_payload_limit(client: Any, *, advanced_features: bool) -> None:
     max_payload = getattr(client, "max_payload", None)
     baseline_required = MAX_CACHE_VALUE_BYTES + _NATS_HEADER_ALLOWANCE_BYTES
-    required = (
-        _NATS_ADVANCED_FEATURE_PAYLOAD_BYTES if advanced_features else baseline_required
-    )
+    required = _NATS_ADVANCED_FEATURE_PAYLOAD_BYTES if advanced_features else baseline_required
     if not isinstance(max_payload, int) or isinstance(max_payload, bool):
-        raise ConfigurationError(
-            "NATS JetStream cache backend could not determine the NATS server "
-            "payload limit."
-        )
+        raise ConfigurationError("NATS JetStream cache backend could not determine the NATS server payload limit.")
     if max_payload < required:
         raise ConfigurationError(
-            "NATS JetStream cache backend requires a NATS server payload limit "
-            f"of at least {required} bytes."
+            f"NATS JetStream cache backend requires a NATS server payload limit of at least {required} bytes."
         )
 
 
@@ -804,8 +757,7 @@ def _validate_stream_configuration(stream: Any, *, name: str, subject: str) -> N
         or getattr(config, "allow_msg_ttl", None) is not True
     ):
         raise ConfigurationError(
-            "NATS JetStream cache stream configuration is incompatible with "
-            "the required cache baseline."
+            "NATS JetStream cache stream configuration is incompatible with the required cache baseline."
         )
 
 
@@ -828,14 +780,10 @@ def _validate_coordination_stream_configuration(
         or tuple(getattr(config, "subjects", ()) or ()) != subjects
         or retention_value != ("limits" if state else "workqueue")
         or getattr(config, "max_msgs_per_subject", None) != (1 if state else -1)
-        or getattr(config, "max_msgs", None)
-        != (-1 if state else MAX_CACHE_FEATURE_LIMIT)
-        or getattr(config, "max_age", None)
-        != (0 if state else COORDINATION_COMMAND_MAX_AGE_SECONDS)
+        or getattr(config, "max_msgs", None) != (-1 if state else MAX_CACHE_FEATURE_LIMIT)
+        or getattr(config, "max_age", None) != (0 if state else COORDINATION_COMMAND_MAX_AGE_SECONDS)
         or getattr(config, "max_msg_size", None) != -1
-        or getattr(
-            getattr(config, "discard", None), "value", getattr(config, "discard", None)
-        )
+        or getattr(getattr(config, "discard", None), "value", getattr(config, "discard", None))
         != ("old" if state else "new")
         or getattr(config, "no_ack", None) is not False
         or getattr(config, "allow_direct", None) is not state
@@ -872,8 +820,7 @@ def _validate_replay_stream_configuration(
         or getattr(config, "allow_direct", None) is not True
     ):
         raise ConfigurationError(
-            "NATS JetStream replay stream configuration is incompatible with "
-            "the required stream feature."
+            "NATS JetStream replay stream configuration is incompatible with the required stream feature."
         )
 
 
@@ -902,8 +849,7 @@ def _validate_work_queue_stream_configuration(
         or getattr(config, "allow_direct", None) is not False
     ):
         raise ConfigurationError(
-            "NATS JetStream work queue configuration is incompatible with the "
-            "required queue feature."
+            "NATS JetStream work queue configuration is incompatible with the required queue feature."
         )
 
 
@@ -940,8 +886,7 @@ def _validate_pull_consumer_configuration(
         or tuple(getattr(config, "backoff", ()) or ()) != ()
     ):
         raise ConfigurationError(
-            "NATS JetStream cache consumer configuration is incompatible with "
-            "the required cache feature."
+            "NATS JetStream cache consumer configuration is incompatible with the required cache feature."
         )
 
 
@@ -1003,11 +948,7 @@ def nats_feature_ttl_header(value: float) -> str:
 
 
 def _ttl_header(ttl: float) -> str:
-    nanoseconds = int(
-        (Decimal(str(ttl)) * _NANOSECONDS_PER_SECOND).to_integral_value(
-            rounding=ROUND_CEILING
-        )
-    )
+    nanoseconds = int((Decimal(str(ttl)) * _NANOSECONDS_PER_SECOND).to_integral_value(rounding=ROUND_CEILING))
     if nanoseconds > _MAX_NATS_TTL_NANOSECONDS:
         raise ValueError("Cache TTL exceeds the NATS JetStream TTL limit.")
     return f"{nanoseconds}ns"

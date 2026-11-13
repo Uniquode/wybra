@@ -212,19 +212,13 @@ class TestAuthentication:
             for path in package_root.rglob("*.py"):
                 tree = ast.parse(path.read_text(), filename=str(path))
                 imported_modules = {
-                    alias.name
-                    for node in ast.walk(tree)
-                    if isinstance(node, ast.Import)
-                    for alias in node.names
+                    alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
                 } | {
                     node.module
                     for node in ast.walk(tree)
                     if isinstance(node, ast.ImportFrom) and node.module is not None
                 }
-                assert not any(
-                    module == "host_app" or module.startswith("host_app.")
-                    for module in imported_modules
-                )
+                assert not any(module == "host_app" or module.startswith("host_app.") for module in imported_modules)
 
     @pytest.mark.anyio
     async def test_identity_template_context_treats_session_lookup_failure_as_anonymous(
@@ -265,9 +259,7 @@ class TestAuthentication:
         assert {"parent_group", "child_group"}.issubset(GroupGroup._meta.fields_map)
         assert GroupScope._meta.unique_together == (("group_id", "scope"),)
         assert GroupUser._meta.unique_together == (("group_id", "user_id"),)
-        assert GroupGroup._meta.unique_together == (
-            ("parent_group_id", "child_group_id"),
-        )
+        assert GroupGroup._meta.unique_together == (("parent_group_id", "child_group_id"),)
 
     def test_wybra_auth_totp_seed_model_uses_encrypted_field(self) -> None:
         field = IdentityTotpCredential._meta.fields_map["crypt_secret"]
@@ -283,13 +275,9 @@ class TestAuthentication:
         assert fields["credential_id"].unique is True
 
     @pytest.mark.anyio
-    async def test_auth_persistence_scope_rolls_back_on_error(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_auth_persistence_scope_rolls_back_on_error(self, tmp_path: Path) -> None:
         async def assert_scope_rolls_back() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "auth-scope-rollback.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "auth-scope-rollback.sqlite3"))
             try:
                 with pytest.raises(RuntimeError, match="abort create"):
                     async with auth_persistence_scope(database) as scope:
@@ -304,29 +292,17 @@ class TestAuthentication:
                         raise RuntimeError("abort create")
 
                 async with connection_scope(database) as session:
-                    assert (
-                        await User.filter(email="rollback@example.com")
-                        .using_db(session)
-                        .count()
-                    ) == 0
-                    assert (
-                        await IdentityUserEmail.filter(email="rollback@example.com")
-                        .using_db(session)
-                        .count()
-                    ) == 0
+                    assert (await User.filter(email="rollback@example.com").using_db(session).count()) == 0
+                    assert (await IdentityUserEmail.filter(email="rollback@example.com").using_db(session).count()) == 0
             finally:
                 await close_database(database)
 
         await assert_scope_rolls_back()
 
     @pytest.mark.anyio
-    async def test_user_store_reduces_primary_email_rows_to_one(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_user_store_reduces_primary_email_rows_to_one(self, tmp_path: Path) -> None:
         async def assert_primary_email_repaired() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "primary-email-repair.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "primary-email-repair.sqlite3"))
             try:
                 async with auth_persistence_scope(database) as scope:
                     user = await scope.users.create_local_user(
@@ -359,31 +335,21 @@ class TestAuthentication:
 
                 async with connection_scope(database) as session:
                     emails = (
-                        await IdentityUserEmail.filter(user_id=uuid.UUID(user_id))
-                        .using_db(session)
-                        .order_by("email")
+                        await IdentityUserEmail.filter(user_id=uuid.UUID(user_id)).using_db(session).order_by("email")
                     )
                     primary_emails = [email for email in emails if email.is_primary]
 
-                assert [email.email for email in primary_emails] == [
-                    "primary-updated@example.com"
-                ]
-                assert [email.email for email in emails if not email.is_primary] == [
-                    "stale-primary@example.com"
-                ]
+                assert [email.email for email in primary_emails] == ["primary-updated@example.com"]
+                assert [email.email for email in emails if not email.is_primary] == ["stale-primary@example.com"]
             finally:
                 await close_database(database)
 
         await assert_primary_email_repaired()
 
     @pytest.mark.anyio
-    async def test_authorisation_scope_management_lifecycle(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_authorisation_scope_management_lifecycle(self, tmp_path: Path) -> None:
         async def assert_scope_lifecycle() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "scope.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "scope.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     created = await create_scope_for_management(
@@ -446,15 +412,11 @@ class TestAuthentication:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         async def assert_scope_race() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "scope-race.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "scope-race.sqlite3"))
             original_get_or_none = Scope.get_or_none
             injected = False
 
-            async def racing_get_or_none(
-                *args: object, **kwargs: object
-            ) -> Scope | None:
+            async def racing_get_or_none(*args: object, **kwargs: object) -> Scope | None:
                 nonlocal injected
                 if kwargs.get("scope") == "document:race" and not injected:
                     injected = True
@@ -498,18 +460,12 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_duplicate_claim() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "bootstrap-claim-race.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "bootstrap-claim-race.sqlite3"))
             try:
-                async with database.transaction_for(
-                    database.routes.connection().for_write()
-                ) as connection:
+                async with database.transaction_for(database.routes.connection().for_write()) as connection:
                     await InitialAdminBootstrap.create(id=1, using_db=connection)
 
-                    claimed = await auth_bootstrap._claim_initial_admin_bootstrap(
-                        connection
-                    )
+                    claimed = await auth_bootstrap._claim_initial_admin_bootstrap(connection)
                     admin = await auth_bootstrap.find_administrative_user(connection)
 
                 assert claimed is False
@@ -536,11 +492,7 @@ class TestAuthentication:
                         email="promoted@example.com",
                         is_superuser=False,
                     )
-                    await (
-                        User.filter(id=stale_user.id)
-                        .using_db(session)
-                        .update(is_superuser=True)
-                    )
+                    await User.filter(id=stale_user.id).using_db(session).update(is_superuser=True)
 
                     async def stale_resolve_user_target(
                         connection: BaseDBAsyncClient,
@@ -577,9 +529,7 @@ class TestAuthentication:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         async def assert_update_preserves_current_user_fields() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "update-current-user.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "update-current-user.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     stale_user = await create_test_user(
@@ -587,9 +537,7 @@ class TestAuthentication:
                         email="updated-current@example.com",
                     )
                     await (
-                        User.filter(id=stale_user.id)
-                        .using_db(session)
-                        .update(preferred_timezone="Australia/Melbourne")
+                        User.filter(id=stale_user.id).using_db(session).update(preferred_timezone="Australia/Melbourne")
                     )
 
                     async def stale_resolve_user_target(
@@ -624,13 +572,9 @@ class TestAuthentication:
         await assert_update_preserves_current_user_fields()
 
     @pytest.mark.anyio
-    async def test_authorisation_scope_delete_rejects_used_scope(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_authorisation_scope_delete_rejects_used_scope(self, tmp_path: Path) -> None:
         async def assert_used_scope_delete() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "used-scope.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "used-scope.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     await create_scope_for_management(session, scope="admin:write")
@@ -653,22 +597,16 @@ class TestAuthentication:
 
                 assert deleted.is_failure() is True
                 assert deleted.error_type == ERROR_SCOPE_IN_USE
-                assert listed.value == {
-                    "scopes": [{"scope": "admin:write", "description": None}]
-                }
+                assert listed.value == {"scopes": [{"scope": "admin:write", "description": None}]}
             finally:
                 await close_database(database)
 
         await assert_used_scope_delete()
 
     @pytest.mark.anyio
-    async def test_authorisation_group_management_lifecycle(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_authorisation_group_management_lifecycle(self, tmp_path: Path) -> None:
         async def assert_group_lifecycle() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "group.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "group.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     created = await create_group_for_management(
@@ -726,9 +664,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_group_target_errors() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "group-target.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "group-target.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     invalid_group, invalid_error = await resolve_group_target(
@@ -755,9 +691,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_group_scope_assignment() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "group-scope.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "group-scope.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     await create_scope_for_management(session, scope="admin:read")
@@ -798,9 +732,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_user_membership() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "group-user.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "group-user.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     await create_group_for_management(
@@ -847,9 +779,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_nested_group_membership() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "group-group.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "group-group.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     for abbrev in ("parent", "child", "grandchild"):
@@ -911,9 +841,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_removal_and_candidates() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "group-removal.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "group-removal.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     await create_scope_for_management(session, scope="staff:read")
@@ -969,9 +897,7 @@ class TestAuthentication:
                         target="staff",
                     )
 
-                assert [group["abbrev"] for group in candidates.value["groups"]] == [
-                    "candidate"
-                ]
+                assert [group["abbrev"] for group in candidates.value["groups"]] == ["candidate"]
                 assert scope_removed.is_ok() is True
                 assert user_removed.is_ok() is True
                 assert child_removed.is_ok() is True
@@ -987,9 +913,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_invalid_user_id() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "effective-invalid-user-id.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "effective-invalid-user-id.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     result = await effective_scopes_for_user_for_management(
@@ -999,23 +923,16 @@ class TestAuthentication:
 
                 assert result.is_failure() is True
                 assert result.error_type == ERROR_INVALID_USER_ID
-                assert (
-                    result.message
-                    == "User target must be an email address or valid user ID."
-                )
+                assert result.message == "User target must be an email address or valid user ID."
             finally:
                 await close_database(database)
 
         await assert_invalid_user_id()
 
     @pytest.mark.anyio
-    async def test_effective_scopes_missing_user_returns_not_found(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_effective_scopes_missing_user_returns_not_found(self, tmp_path: Path) -> None:
         async def assert_missing_user() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "effective-missing-user.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "effective-missing-user.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     result = await effective_scopes_for_user_for_management(
@@ -1037,9 +954,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_effective_scopes() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "effective.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "effective.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     await create_local_user_for_management(
@@ -1110,9 +1025,7 @@ class TestAuthentication:
         self,
         tmp_path: Path,
     ) -> None:
-        database = await initialise_auth_database(
-            sqlite_file_url(tmp_path / "authorisation-store.sqlite3")
-        )
+        database = await initialise_auth_database(sqlite_file_url(tmp_path / "authorisation-store.sqlite3"))
         try:
             async with auth_persistence_scope(database) as persistence:
                 await persistence.management.create_local_user(
@@ -1140,11 +1053,7 @@ class TestAuthentication:
                 assert user is not None
 
                 scopes = await persistence.authorisation.list_scopes()
-                effective = (
-                    await persistence.authorisation.effective_scope_sets_for_user(
-                        user.id
-                    )
-                )
+                effective = await persistence.authorisation.effective_scope_sets_for_user(user.id)
 
             assert scopes == (
                 ScopeRecord(
@@ -1165,9 +1074,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_cycle_safety_and_current_data() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "effective-current.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "effective-current.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     await create_local_user_for_management(
@@ -1210,11 +1117,9 @@ class TestAuthentication:
                         child_group_id=first_group.id,
                         using_db=session,
                     )
-                    before_second_scope = (
-                        await effective_scopes_for_user_for_management(
-                            session,
-                            user_target="current@example.com",
-                        )
+                    before_second_scope = await effective_scopes_for_user_for_management(
+                        session,
+                        user_target="current@example.com",
                     )
                     await add_scope_to_group_for_management(
                         session,
@@ -1513,15 +1418,11 @@ class TestAuthentication:
         self,
     ) -> None:
         assert (
-            public_password_failure_message(
-                "Internal breach provider matched tenant-specific denylist."
-            )
+            public_password_failure_message("Internal breach provider matched tenant-specific denylist.")
             == "Password is invalid."
         )
         assert (
-            public_password_failure_message(
-                "Password does not meet the strength requirement."
-            )
+            public_password_failure_message("Password does not meet the strength requirement.")
             == "Password does not meet the strength requirement."
         )
 
@@ -1563,16 +1464,10 @@ class TestAuthentication:
 
         assert IdentityProvider._meta.db_table == "identity_provider"
         assert AccessToken._meta.db_table == "identity_access_token"
-        assert (
-            AccessToken._meta.fields_map["token"].max_length == SESSION_TOKEN_MAX_LENGTH
-        )
+        assert AccessToken._meta.fields_map["token"].max_length == SESSION_TOKEN_MAX_LENGTH
         assert ExternalIdentityLink._meta.db_table == "identity_external_identity_link"
-        assert IdentityProvider._meta.unique_together == (
-            ("provider_name", "provider_subject"),
-        )
-        assert ExternalIdentityLink._meta.unique_together == (
-            ("user_id", "provider_id"),
-        )
+        assert IdentityProvider._meta.unique_together == (("provider_name", "provider_subject"),)
+        assert ExternalIdentityLink._meta.unique_together == (("user_id", "provider_id"),)
 
     def test_wybra_auth_generated_session_tokens_fit_configured_column(self) -> None:
         token = generate_session_token()
@@ -1585,9 +1480,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_encrypted_storage() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "provider-encrypted.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "provider-encrypted.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     store = TortoiseProviderCredentialStore(
@@ -1604,13 +1497,9 @@ class TestAuthentication:
                     provider = await store.get_provider_credential(provider_id)
 
                     assert provider is not None
-                    assert provider.crypt_access_token.startswith(
-                        f"{ENVELOPE_PREFIX}|test|"
-                    )
+                    assert provider.crypt_access_token.startswith(f"{ENVELOPE_PREFIX}|test|")
                     assert provider.crypt_refresh_token is not None
-                    assert provider.crypt_refresh_token.startswith(
-                        f"{ENVELOPE_PREFIX}|test|"
-                    )
+                    assert provider.crypt_refresh_token.startswith(f"{ENVELOPE_PREFIX}|test|")
                     assert provider.crypt_access_token != "access-token"
                     assert provider.crypt_refresh_token != "refresh-token"
                     assert isinstance(
@@ -1631,9 +1520,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_malformed_envelope_rejected() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "provider-malformed.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "provider-malformed.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     provider = await IdentityProvider.create(
@@ -1664,9 +1551,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_required_keys() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "provider-required-keys.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "provider-required-keys.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     store = TortoiseProviderCredentialStore(
@@ -1707,9 +1592,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_mismatch_rejected() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "recovery-mismatch.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "recovery-mismatch.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     owner = await create_test_user(
@@ -1725,11 +1608,9 @@ class TestAuthentication:
                         session,
                         make_test_only_secret_service(),
                     )
-                    credential_id = (
-                        await credential_store.create_pending_totp_credential(
-                            str(owner.id),
-                            "JBSWY3DPEHPK3PXP",
-                        )
+                    credential_id = await credential_store.create_pending_totp_credential(
+                        str(owner.id),
+                        "JBSWY3DPEHPK3PXP",
                     )
                     recovery_store = TortoiseRecoveryCodeStore(
                         session,
@@ -1753,9 +1634,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_encrypted_storage() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "totp-encrypted.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "totp-encrypted.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     user = await create_test_user(
@@ -1773,9 +1652,7 @@ class TestAuthentication:
                     )
                     credential = await store.get_totp_credential(credential_id)
                     assert credential is not None
-                    assert credential.crypt_secret.startswith(
-                        f"{ENVELOPE_PREFIX}|test|"
-                    )
+                    assert credential.crypt_secret.startswith(f"{ENVELOPE_PREFIX}|test|")
                     assert store.decrypt_totp_secret(credential) == "JBSWY3DPEHPK3PXP"
             finally:
                 await close_database(database)
@@ -1788,9 +1665,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_replay_rejected() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "totp-replay.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "totp-replay.sqlite3"))
             try:
                 secret_service = make_test_only_secret_service()
                 secret = "JBSWY3DPEHPK3PXP"
@@ -1861,9 +1736,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_management_secret_service_used() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "management-totp-crypto.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "management-totp-crypto.sqlite3"))
             try:
                 secret_service = SecretEnvelopeService.for_testing(version="management")
                 async with connection_scope(database) as session:
@@ -1887,24 +1760,16 @@ class TestAuthentication:
                 secret = result.value["totp"]["secret"]
 
                 async with connection_scope(database) as session:
-                    credential = (
-                        await IdentityTotpCredential.all().using_db(session).first()
-                    )
-                    recovery_codes = list(
-                        await IdentityTotpRecoveryCode.all().using_db(session)
-                    )
+                    credential = await IdentityTotpCredential.all().using_db(session).first()
+                    recovery_codes = list(await IdentityTotpRecoveryCode.all().using_db(session))
                     store = TortoiseTOTPCredentialStore(session, secret_service)
 
                     assert credential is not None
-                    assert credential.crypt_secret.startswith(
-                        f"{ENVELOPE_PREFIX}|management|"
-                    )
+                    assert credential.crypt_secret.startswith(f"{ENVELOPE_PREFIX}|management|")
                     assert store.decrypt_totp_secret(credential) == secret
                     assert recovery_codes
                     assert all(
-                        recovery_code.code_verifier.startswith(
-                            f"{VERIFIER_PREFIX}|management|"
-                        )
+                        recovery_code.code_verifier.startswith(f"{VERIFIER_PREFIX}|management|")
                         for recovery_code in recovery_codes
                     )
             finally:
@@ -1919,9 +1784,7 @@ class TestAuthentication:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         async def assert_missing_keys_handled() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "totp-missing-keys.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "totp-missing-keys.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     user = await create_test_user(
@@ -1967,9 +1830,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_recovery_verifier_storage() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "recovery-verifier.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "recovery-verifier.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     user = await create_test_user(
@@ -1982,11 +1843,9 @@ class TestAuthentication:
                         session,
                         secret_service,
                     )
-                    credential_id = (
-                        await credential_store.create_pending_totp_credential(
-                            str(user.id),
-                            "JBSWY3DPEHPK3PXP",
-                        )
+                    credential_id = await credential_store.create_pending_totp_credential(
+                        str(user.id),
+                        "JBSWY3DPEHPK3PXP",
                     )
                     await credential_store.activate_totp_credential(credential_id)
                     recovery_store = TortoiseRecoveryCodeStore(session, secret_service)
@@ -1995,14 +1854,10 @@ class TestAuthentication:
                         credential_id,
                         ("R3C0V3RY",),
                     )
-                    recovery_record = (
-                        await IdentityTotpRecoveryCode.all().using_db(session).first()
-                    )
+                    recovery_record = await IdentityTotpRecoveryCode.all().using_db(session).first()
 
                     assert recovery_record is not None
-                    assert recovery_record.code_verifier.startswith(
-                        f"{VERIFIER_PREFIX}|test|"
-                    )
+                    assert recovery_record.code_verifier.startswith(f"{VERIFIER_PREFIX}|test|")
                     assert await recovery_store.consume_recovery_code(
                         str(user.id),
                         "R3C0V3RY",
@@ -2022,9 +1877,7 @@ class TestAuthentication:
         tmp_path: Path,
     ) -> None:
         async def assert_webauthn_storage_lifecycle() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "webauthn-storage.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "webauthn-storage.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     user = await create_test_user(
@@ -2053,9 +1906,7 @@ class TestAuthentication:
                     assert credential.label == "Work laptop"
                     assert credential.public_key == b"public-key"
                     assert credential.transports == ("internal",)
-                    assert (
-                        await store.count_active_webauthn_credentials(str(user.id)) == 1
-                    )
+                    assert await store.count_active_webauthn_credentials(str(user.id)) == 1
 
                     await store.update_webauthn_authentication(
                         "credential-id",
@@ -2074,9 +1925,7 @@ class TestAuthentication:
                     assert updated.user_verified is False
 
                     assert await store.revoke_webauthn_credential(str(user.id), row_id)
-                    assert (
-                        await store.count_active_webauthn_credentials(str(user.id)) == 0
-                    )
+                    assert await store.count_active_webauthn_credentials(str(user.id)) == 0
             finally:
                 await close_database(database)
 
@@ -2173,13 +2022,9 @@ class TestAuthentication:
         )
 
     @pytest.mark.anyio
-    async def test_identity_user_email_stores_normalised_email(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_identity_user_email_stores_normalised_email(self, tmp_path: Path) -> None:
         async def assert_normalised_email() -> None:
-            database = await initialise_auth_database(
-                sqlite_file_url(tmp_path / "normalised-email.sqlite3")
-            )
+            database = await initialise_auth_database(sqlite_file_url(tmp_path / "normalised-email.sqlite3"))
             try:
                 async with connection_scope(database) as session:
                     user = await User.create(

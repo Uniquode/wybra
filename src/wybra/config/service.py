@@ -93,9 +93,7 @@ class ConfigService:
             if _has_error_diagnostic(result):
                 message = _first_error_message(result) or "Configuration source failed."
                 if source.metadata.required:
-                    raise ConfigSourceError(
-                        _source_error_message(source.metadata, message)
-                    )
+                    raise ConfigSourceError(_source_error_message(source.metadata, message))
                 continue
 
             _merge_values(source_values, value_sources, result.values, source.metadata)
@@ -132,16 +130,13 @@ def discover_module_config_defs(module_names: Iterable[str]) -> tuple[ConfigDef,
             module = import_module(module_name)
         except ImportError as exc:
             raise ConfigDefinitionError(
-                f"Failed to import module {module_name!r} while discovering "
-                f"{MODULE_CONFIG_ATTRIBUTE}."
+                f"Failed to import module {module_name!r} while discovering {MODULE_CONFIG_ATTRIBUTE}."
             ) from exc
         module_config = getattr(module, MODULE_CONFIG_ATTRIBUTE, None)
         if module_config is None:
             continue
         if not isinstance(module_config, ConfigDef):
-            raise ConfigDefinitionError(
-                f"{module_name}.{MODULE_CONFIG_ATTRIBUTE} must be a ConfigDef."
-            )
+            raise ConfigDefinitionError(f"{module_name}.{MODULE_CONFIG_ATTRIBUTE} must be a ConfigDef.")
         definitions.append(module_config)
     return tuple(definitions)
 
@@ -154,16 +149,10 @@ def _bootstrap_modules(
     if modules is None:
         return ()
     if isinstance(modules, str):
-        raise ConfigDefinitionError(
-            "[app].modules must be a list or tuple of module names."
-        )
-    if isinstance(modules, (tuple, list)) and all(
-        isinstance(module, str) for module in modules
-    ):
+        raise ConfigDefinitionError("[app].modules must be a list or tuple of module names.")
+    if isinstance(modules, (tuple, list)) and all(isinstance(module, str) for module in modules):
         return tuple(modules)
-    raise ConfigDefinitionError(
-        "[app].modules must be a list or tuple of module names."
-    )
+    raise ConfigDefinitionError("[app].modules must be a list or tuple of module names.")
 
 
 def _apply_config_defs(
@@ -182,9 +171,7 @@ def _apply_config_defs(
         ).items()
     }
     sources: dict[str, str] = {
-        f"{section}.{key}": "default"
-        for section, section_values in values.items()
-        for key in section_values
+        f"{section}.{key}": "default" for section, section_values in values.items() for key in section_values
     }
 
     _merge_indexed_values(values, sources, source_values, source_index)
@@ -257,10 +244,7 @@ def _transform_values(
 ) -> None:
     sections = {
         **definition.sections,
-        **{
-            section_name: repeated.group
-            for section_name, (_, repeated) in repeated_sections.items()
-        },
+        **{section_name: repeated.group for section_name, (_, repeated) in repeated_sections.items()},
     }
     for section_name, section in sections.items():
         section_values = values.get(section_name)
@@ -271,17 +255,12 @@ def _transform_values(
             if field_def.transform is None or field_name not in section_values:
                 continue
             try:
-                section_values[field_name] = field_def.transform(
-                    section_values[field_name]
-                )
+                section_values[field_name] = field_def.transform(section_values[field_name])
             except Exception as exc:
                 source_name = sources.get(f"{section_name}.{field_name}")
-                source_description = (
-                    f" (source: {source_name})" if source_name is not None else ""
-                )
+                source_description = f" (source: {source_name})" if source_name is not None else ""
                 raise ConfigSourceError(
-                    f"Config value {section_name}.{field_name} is invalid: "
-                    f"{exc}{source_description}"
+                    f"Config value {section_name}.{field_name} is invalid: {exc}{source_description}"
                 ) from exc
 
 
@@ -308,9 +287,7 @@ def _resolved_repeated_sections(
                 try:
                     validator(instance_name)
                 except (TypeError, ValueError) as exc:
-                    raise ConfigSourceError(
-                        f"Config section {section_name!r} is invalid: {exc}"
-                    ) from exc
+                    raise ConfigSourceError(f"Config section {section_name!r} is invalid: {exc}") from exc
             resolved[section_name] = (prefix, repeated)
             break
     return resolved
@@ -350,11 +327,7 @@ def _has_error_diagnostic(result: ConfigSourceResult) -> bool:
 
 def _first_error_message(result: ConfigSourceResult) -> str | None:
     return next(
-        (
-            diagnostic.message
-            for diagnostic in result.diagnostics
-            if diagnostic.severity == "error"
-        ),
+        (diagnostic.message for diagnostic in result.diagnostics if diagnostic.severity == "error"),
         None,
     )
 

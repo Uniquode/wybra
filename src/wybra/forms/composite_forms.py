@@ -84,10 +84,7 @@ class CompositeForm(Form):
                     continue
                 if getattr(model_field, "related_model", None) is not None:
                     continue
-                if (
-                    name.endswith("_id")
-                    and name.removesuffix("_id") in member.model._meta.fetch_fields
-                ):
+                if name.endswith("_id") and name.removesuffix("_id") in member.model._meta.fetch_fields:
                     continue
                 qualified = name if member.name is None else f"{member.name}__{name}"
                 fields[qualified] = declared.get(
@@ -96,18 +93,13 @@ class CompositeForm(Form):
                 )
         unknown = set(declared) - set(fields)
         if unknown:
-            raise ModelFormDeclarationError(
-                "Unknown composite form field(s): " + ", ".join(sorted(unknown))
-            )
+            raise ModelFormDeclarationError("Unknown composite form field(s): " + ", ".join(sorted(unknown)))
         allowed = getattr(getattr(cls, "Meta", None), "fields", None)
         if allowed is None:
             return fields
         unknown_allowed = set(allowed) - set(fields)
         if unknown_allowed:
-            raise ModelFormDeclarationError(
-                "Unknown composite model field(s): "
-                + ", ".join(sorted(unknown_allowed))
-            )
+            raise ModelFormDeclarationError("Unknown composite model field(s): " + ", ".join(sorted(unknown_allowed)))
         return {name: fields[name] for name in allowed}
 
     @observe(persistence_event)
@@ -118,9 +110,7 @@ class CompositeForm(Form):
     async def _save_members(self) -> SaveResult:
         if not self.result.is_valid:
             raise FormError("Cannot save an invalid form.")
-        client_scope = tortoise_transaction_for_route(
-            self.connection, self._writer_route
-        )
+        client_scope = tortoise_transaction_for_route(self.connection, self._writer_route)
         saved: dict[str | None, Model] = {}
         results: list[SaveResult] = []
         try:
@@ -131,18 +121,13 @@ class CompositeForm(Form):
                     self._apply_member_fields(member, instance)
                     if member.name is None:
                         for related_member in self.members:
-                            if (
-                                related_member.owner is member.model
-                                and related_member.relation_name is not None
-                            ):
+                            if related_member.owner is member.model and related_member.relation_name is not None:
                                 setattr(
                                     instance,
                                     related_member.relation_name,
                                     saved[related_member.name],
                                 )
-                    changed_fields = self._member_changed_fields(
-                        member, original, instance
-                    )
+                    changed_fields = self._member_changed_fields(member, original, instance)
                     if original is None or changed_fields:
                         await save_model_update(
                             instance,
@@ -157,9 +142,7 @@ class CompositeForm(Form):
                             changed_fields=changed_fields,
                             created=original is None,
                             updated=original is not None and bool(changed_fields),
-                            affected_count=(
-                                1 if original is None or changed_fields else 0
-                            ),
+                            affected_count=(1 if original is None or changed_fields else 0),
                         )
                     )
         except OptimisticLockConflict:
@@ -167,10 +150,7 @@ class CompositeForm(Form):
             self.add_error(None, "This record was changed by another user.")
             primary = saved.get(None, self.instances.get(None))
             if primary is None:
-                raise ModelBindingError(
-                    "A composite version conflict requires an existing primary "
-                    "instance."
-                ) from None
+                raise ModelBindingError("A composite version conflict requires an existing primary instance.") from None
             return SaveResult(primary=primary, original=self.instances.get(None))
 
         primary = saved[None]
@@ -178,11 +158,7 @@ class CompositeForm(Form):
             primary=primary,
             original=self.instances.get(None),
             changed_fields=tuple(
-                dict.fromkeys(
-                    field_name
-                    for result in results
-                    for field_name in result.changed_fields
-                )
+                dict.fromkeys(field_name for result in results for field_name in result.changed_fields)
             ),
             created=any(result.created for result in results),
             updated=any(result.updated for result in results),
@@ -194,14 +170,10 @@ class CompositeForm(Form):
     def _declared_members(cls) -> tuple[_Member, ...]:
         declared = getattr(getattr(cls, "Meta", None), "models", None)
         if not isinstance(declared, tuple) or not declared:
-            raise ModelFormDeclarationError(
-                "CompositeForm declarations require a non-empty Meta.models tuple."
-            )
+            raise ModelFormDeclarationError("CompositeForm declarations require a non-empty Meta.models tuple.")
         primary = declared[-1]
         if not isinstance(primary, type) or not issubclass(primary, Model):
-            raise ModelFormDeclarationError(
-                "The final CompositeForm Meta.models member must be a Tortoise model."
-            )
+            raise ModelFormDeclarationError("The final CompositeForm Meta.models member must be a Tortoise model.")
         members: list[_Member] = []
         for declaration in declared[:-1]:
             members.append(cls._resolve_member(declaration, primary))
@@ -212,17 +184,14 @@ class CompositeForm(Form):
     def _resolve_member(declaration: object, primary: type[Model]) -> _Member:
         if isinstance(declaration, ModelOf):
             if declaration.owner is not primary:
-                raise ModelFormDeclarationError(
-                    "model_of owner must be the CompositeForm primary model."
-                )
+                raise ModelFormDeclarationError("model_of owner must be the CompositeForm primary model.")
             field = primary._meta.fields_map.get(declaration.relation_name)
             related = getattr(field, "related_model", None)
             if isinstance(field, ManyToManyFieldInstance) or not (
                 isinstance(related, type) and issubclass(related, Model)
             ):
                 raise ModelFormDeclarationError(
-                    "model_of requires a fixed forward Tortoise relation field: "
-                    + declaration.relation_name
+                    "model_of requires a fixed forward Tortoise relation field: " + declaration.relation_name
                 )
             return _Member(
                 name=declaration.relation_name,
@@ -231,20 +200,15 @@ class CompositeForm(Form):
                 relation_name=declaration.relation_name,
             )
         if not isinstance(declaration, type) or not issubclass(declaration, Model):
-            raise ModelFormDeclarationError(
-                "CompositeForm Meta.models members must be Tortoise models or "
-                "model_of()."
-            )
+            raise ModelFormDeclarationError("CompositeForm Meta.models members must be Tortoise models or model_of().")
         candidates = [
             (name, field)
             for name, field in primary._meta.fields_map.items()
-            if getattr(field, "related_model", None) is declaration
-            and not isinstance(field, ManyToManyFieldInstance)
+            if getattr(field, "related_model", None) is declaration and not isinstance(field, ManyToManyFieldInstance)
         ]
         if len(candidates) != 1:
             raise ModelFormDeclarationError(
-                f"CompositeForm cannot infer one fixed {declaration.__name__} relation "
-                f"from {primary.__name__}."
+                f"CompositeForm cannot infer one fixed {declaration.__name__} relation from {primary.__name__}."
             )
         name, _field = candidates[0]
         return _Member(name=name, model=declaration, owner=primary, relation_name=name)
@@ -277,15 +241,11 @@ class CompositeForm(Form):
                 or isinstance(instance._meta.fields_map[field_name], VersionField)
             ):
                 continue
-            if original is None or getattr(original, field_name) != getattr(
-                instance, field_name
-            ):
+            if original is None or getattr(original, field_name) != getattr(instance, field_name):
                 changed.append(name)
         return tuple(changed)
 
-    async def _member_instance(
-        self, member: _Member, client: BaseDBAsyncClient
-    ) -> Model:
+    async def _member_instance(self, member: _Member, client: BaseDBAsyncClient) -> Model:
         supplied = self.instances.get(member.name)
         if supplied is not None:
             return supplied
@@ -303,10 +263,7 @@ class CompositeForm(Form):
         qualified = name if member.name is None else f"{member.name}__{name}"
         result = self.result.fields.get(qualified)
         if result is None or not result.is_valid or not isinstance(result.value, int):
-            raise ModelBindingError(
-                "Versioned CompositeForm members require a valid submitted "
-                "version field."
-            )
+            raise ModelBindingError("Versioned CompositeForm members require a valid submitted version field.")
         return result.value
 
     def _validate_instances(self) -> None:
@@ -314,14 +271,11 @@ class CompositeForm(Form):
         unknown = set(self.instances) - set(valid)
         if unknown:
             raise ModelBindingError(
-                "Unknown composite instance member(s): "
-                + ", ".join(sorted(str(name) for name in unknown))
+                "Unknown composite instance member(s): " + ", ".join(sorted(str(name) for name in unknown))
             )
         for name, instance in self.instances.items():
             if not isinstance(instance, valid[name]):
-                raise ModelBindingError(
-                    f"Invalid composite instance for member: {name}."
-                )
+                raise ModelBindingError(f"Invalid composite instance for member: {name}.")
 
 
 def _field_target(name: str) -> tuple[str | None, str]:

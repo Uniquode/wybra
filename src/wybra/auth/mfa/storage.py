@@ -126,9 +126,7 @@ class TortoiseTOTPCredentialStore:
         secret_service: SecretEnvelopeService | None = None,
     ):
         self._connection = connection
-        self._secret_service = secret_service or SecretEnvelopeService.from_env(
-            os.environ
-        )
+        self._secret_service = secret_service or SecretEnvelopeService.from_env(os.environ)
 
     async def create_pending_totp_credential(
         self,
@@ -175,9 +173,7 @@ class TortoiseTOTPCredentialStore:
         )
 
     def decrypt_totp_secret(self, credential: IdentityTotpCredential) -> str:
-        secret, _version = self._secret_service.decrypt_required(
-            credential.crypt_secret
-        )
+        secret, _version = self._secret_service.decrypt_required(credential.crypt_secret)
         return secret
 
     async def _active_credential(
@@ -307,11 +303,7 @@ class TortoiseTOTPCredentialStore:
             .select_for_update()
             .first()
         )
-        if (
-            credential is None
-            or str(credential.user_id) != user_id
-            or credential.status != expected_status
-        ):
+        if credential is None or str(credential.user_id) != user_id or credential.status != expected_status:
             return False, None, None
 
         verification_time = current_timestamp() if timestamp is None else timestamp
@@ -367,9 +359,7 @@ class TortoiseRecoveryCodeStore:
         secret_service: SecretEnvelopeService | None = None,
     ):
         self._connection = connection
-        self._secret_service = secret_service or SecretEnvelopeService.from_env(
-            os.environ
-        )
+        self._secret_service = secret_service or SecretEnvelopeService.from_env(os.environ)
 
     async def replace_recovery_codes(
         self,
@@ -552,11 +542,7 @@ class TortoiseWebAuthnCredentialStore:
             .using_db(self._connection)
             .order_by("-created_at")
         )
-        return tuple(
-            record
-            for credential in credentials
-            if (record := _webauthn_record(credential)) is not None
-        )
+        return tuple(record for credential in credentials if (record := _webauthn_record(credential)) is not None)
 
     async def count_active_webauthn_credentials(
         self,
@@ -572,9 +558,7 @@ class TortoiseWebAuthnCredentialStore:
             user_id=user_uuid,
             status=WEBAUTHN_ACTIVE_STATUS,
         ).using_db(self._connection)
-        excluded_uuid = (
-            parse_uuid(exclude_row_id) if exclude_row_id is not None else None
-        )
+        excluded_uuid = parse_uuid(exclude_row_id) if exclude_row_id is not None else None
         if excluded_uuid is not None:
             query = query.exclude(id=excluded_uuid)
         return await query.count()

@@ -27,10 +27,7 @@ async def setup_site(site: Site) -> None:
 
 async def post_setup_site(site: Site) -> None:
     capability = site.require_capability(TemplateCapability)
-    if (
-        isinstance(capability, DefaultTemplateCapability)
-        and capability.assets is not None
-    ):
+    if isinstance(capability, DefaultTemplateCapability) and capability.assets is not None:
         await capability.assets.finalise_optional()
 
 

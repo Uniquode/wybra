@@ -19,7 +19,6 @@ from tests.cache_feature_conformance import (
     assert_atomic_conformance,
     assert_baseline_cache_conformance,
     assert_lease_conformance,
-    assert_pubsub_conformance,
     assert_schedule_conformance,
     assert_stream_conformance,
     assert_work_queue_conformance,
@@ -34,7 +33,6 @@ from wybra.cache import (
     CacheSettings,
     CachesSettings,
     LeaseCacheCapability,
-    PubSubCacheCapability,
     RedisCache,
     ScheduleCacheCapability,
     StreamCacheCapability,
@@ -81,10 +79,7 @@ def redis_url() -> Iterator[str]:
     except Exception as exc:
         pytest.skip(f"Redis testcontainer could not start: {exc}")
     try:
-        yield (
-            f"redis://{container.get_container_host_ip()}:"
-            f"{container.get_exposed_port(6379)}/0"
-        )
+        yield (f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0")
     finally:
         container.stop()
 
@@ -99,8 +94,7 @@ def isolated_redis_container() -> Iterator[tuple[str, DockerContainer]]:
         pytest.skip(f"Redis testcontainer could not start: {exc}")
     try:
         yield (
-            f"redis://{container.get_container_host_ip()}:"
-            f"{container.get_exposed_port(6379)}/0",
+            f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0",
             container,
         )
     finally:
@@ -174,7 +168,6 @@ async def test_redis_advanced_features_pass_shared_conformance(
         assert instance.features == (
             "atomic",
             "lease",
-            "pub-sub",
             "schedule",
             "stream",
             "time",
@@ -190,10 +183,6 @@ async def test_redis_advanced_features_pass_shared_conformance(
             owner="redis-lease",
             lease_ttl=0.5,
             renewed_ttl=1.0,
-        )
-        await assert_pubsub_conformance(
-            instance.require(PubSubCacheCapability),
-            owner="redis-pubsub",
         )
         await assert_schedule_conformance(
             instance.require(ScheduleCacheCapability),
@@ -414,11 +403,10 @@ async def test_redis_taskiq_retry_moves_between_worker_runtimes(
             TaskLifecycleKind.STARTED,
             TaskLifecycleKind.SUCCEEDED,
         ]
-        assert [
-            event.worker_id
-            for event in lifecycle
-            if event.kind is TaskLifecycleKind.STARTED
-        ] == ["worker-one", "worker-two"]
+        assert [event.worker_id for event in lifecycle if event.kind is TaskLifecycleKind.STARTED] == [
+            "worker-one",
+            "worker-two",
+        ]
 
 
 @pytest.mark.anyio
@@ -480,33 +468,24 @@ async def test_redis_taskiq_recovers_a_delivery_after_worker_loss(
         )
 
         first_message = first_worker.broker.formatter.loads(message=first_delivery.data)
-        second_message = second_worker.broker.formatter.loads(
-            message=second_delivery.data
-        )
+        second_message = second_worker.broker.formatter.loads(message=second_delivery.data)
         assert first_message.task_id == second_message.task_id == str(handle.task_id)
         assert [
             first_message.labels[DELIVERY_ATTEMPT_LABEL],
             second_message.labels[DELIVERY_ATTEMPT_LABEL],
         ] == [1, 2]
-        assert (
-            first_message.labels[DELIVERY_IDENTITY_LABEL]
-            == second_message.labels[DELIVERY_IDENTITY_LABEL]
-        )
+        assert first_message.labels[DELIVERY_IDENTITY_LABEL] == second_message.labels[DELIVERY_IDENTITY_LABEL]
         with pytest.raises(CacheConflictError):
             await first_delivery.ack()
 
-        execution = asyncio.create_task(
-            second_worker.receiver().callback(second_delivery)
-        )
+        execution = asyncio.create_task(second_worker.receiver().callback(second_delivery))
         try:
             async with asyncio.timeout(5):
                 await execution_started.wait()
         except TimeoutError as exc:
             release_execution.set()
             await execution
-            raise AssertionError(
-                "Timed out waiting for recovered task execution."
-            ) from exc
+            raise AssertionError("Timed out waiting for recovered task execution.") from exc
         finally:
             release_execution.set()
         await execution
@@ -624,93 +603,6 @@ async def test_redis_taskiq_startup_requires_all_runtime_cache_features(
                 }
             ),
         )
-
-
-@pytest.mark.anyio
-async def test_redis_pubsub_delivers_across_registries_and_isolates_namespaces(
-    redis_url: str,
-) -> None:
-    namespace = f"pubsub_{uuid4().hex}"
-    first = await build_caches(redis_settings(redis_url, namespace))
-    second = await build_caches(redis_settings(redis_url, namespace))
-    isolated = await build_caches(redis_settings(redis_url, f"{namespace}_other"))
-    publisher = first.require("default").require(PubSubCacheCapability)
-    subscriber = second.require("default").require(PubSubCacheCapability)
-    other = isolated.require("default").require(PubSubCacheCapability)
-    subscription = await subscriber.subscribe("events", "updates")
-    other_owner = await subscriber.subscribe("other-events", "updates")
-    other_topic = await subscriber.subscribe("events", "other-updates")
-    isolated_subscription = await other.subscribe("events", "updates")
-    try:
-        await publisher.publish("events", "updates", b"shared")
-        assert await subscription.receive(timeout=1) == b"shared"
-        for unrelated in (other_owner, other_topic, isolated_subscription):
-            with pytest.raises(TimeoutError):
-                await unrelated.receive(timeout=0.1)
-    finally:
-        await subscription.close()
-        await other_owner.close()
-        await other_topic.close()
-        await isolated_subscription.close()
-        await first.close()
-        await second.close()
-        await isolated.close()
-
-
-@pytest.mark.anyio
-async def test_redis_pubsub_registry_close_wakes_receive_and_iteration(
-    redis_url: str,
-) -> None:
-    caches = await build_caches(
-        redis_settings(
-            redis_url,
-            f"pubsub_close_{uuid4().hex}",
-            features=("pub-sub",),
-        )
-    )
-    pubsub = caches.require("default").require(PubSubCacheCapability)
-    receiving = await pubsub.subscribe("events", "receive")
-    iterating = await pubsub.subscribe("events", "iterate")
-    receive_task = asyncio.create_task(receiving.receive())
-    iteration_task = asyncio.create_task(anext(iterating))
-    await asyncio.sleep(0)
-
-    await caches.close()
-
-    with pytest.raises(CacheFeatureError, match="subscription is closed"):
-        await receive_task
-    with pytest.raises(StopAsyncIteration):
-        await iteration_task
-
-
-@pytest.mark.anyio
-async def test_redis_pubsub_reports_a_safe_error_after_outage(
-    isolated_redis_container: tuple[str, DockerContainer],
-) -> None:
-    redis_url, container = isolated_redis_container
-    caches = await build_caches(
-        redis_settings(
-            redis_url,
-            f"pubsub_outage_{uuid4().hex}",
-            features=("pub-sub",),
-        )
-    )
-    pubsub = caches.require("default").require(PubSubCacheCapability)
-    subscription = await pubsub.subscribe("integration", "outage")
-    try:
-        container.get_wrapped_container().stop()
-        with pytest.raises(
-            CacheFeatureError,
-            match="Redis cache feature operation failed",
-        ):
-            await subscription.receive(timeout=1)
-        with pytest.raises(
-            CacheFeatureError,
-            match="Redis cache feature operation failed",
-        ):
-            await pubsub.publish("integration", "outage", b"payload")
-    finally:
-        await caches.close()
 
 
 @pytest.mark.anyio
@@ -873,10 +765,7 @@ async def test_redis_schedule_orders_equal_due_times_by_identity(
         )
         due = await schedules.due("tasks", before=time.time(), limit=2)
         assert [record.identity for record in due] == ["a0", "a:"]
-        assert [
-            record.identity
-            for record in await schedules.due("tasks", before=time.time(), limit=1)
-        ] == ["a0"]
+        assert [record.identity for record in await schedules.due("tasks", before=time.time(), limit=1)] == ["a0"]
     finally:
         await runtime.close()
 
@@ -1021,14 +910,9 @@ async def test_redis_schedule_survives_redis_restart(
         await first_caches.close()
 
     container.get_wrapped_container().restart()
-    restarted_url = (
-        f"redis://{container.get_container_host_ip()}:"
-        f"{container.get_exposed_port(6379)}/0"
-    )
+    restarted_url = f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0"
     await _wait_for_redis(restarted_url)
-    second_caches = await build_caches(
-        redis_settings(restarted_url, namespace, features=("schedule",))
-    )
+    second_caches = await build_caches(redis_settings(restarted_url, namespace, features=("schedule",)))
     second = second_caches.require("default").require(ScheduleCacheCapability)
     try:
         assert await second.due("tasks", before=time.time()) == (created,)
@@ -1210,9 +1094,7 @@ async def test_redis_work_queue_is_shared_by_independent_runtimes(
                 visibility_timeout=1,
             ),
         )
-        deliveries = [
-            delivery for delivery in (first_delivery, second_delivery) if delivery
-        ]
+        deliveries = [delivery for delivery in (first_delivery, second_delivery) if delivery]
         assert len(deliveries) == 1
         assert deliveries[0].identity == identity
         if first_delivery is not None:
@@ -1606,11 +1488,7 @@ async def test_redis_work_queue_retries_promoter_after_transient_failure(
     async def fail_promoter_once(instance: Any, keys: Any) -> None:
         nonlocal failed
         task = asyncio.current_task()
-        if (
-            not failed
-            and task is not None
-            and task.get_name() == "wybra-cache-promoter"
-        ):
+        if not failed and task is not None and task.get_name() == "wybra-cache-promoter":
             failed = True
             raise CacheFeatureError("transient Redis failure")
         await original_promote(instance, keys)
@@ -1786,10 +1664,7 @@ async def test_redis_work_queue_does_not_return_a_reclaimed_read(
         runtime: Any,
         operation: Callable[[Any], Awaitable[Any]],
     ) -> Any:
-        if (
-            runtime is first_queue.runtime
-            and getattr(operation, "__name__", "") == "issue"
-        ):
+        if runtime is first_queue.runtime and getattr(operation, "__name__", "") == "issue":
             issue_started.set()
             await resume_issue.wait()
         return await original_feature_call(runtime, operation)
@@ -1898,10 +1773,7 @@ async def test_redis_work_queue_recovers_unissued_entries_beyond_one_scan_page(
         operation: Callable[[Any], Awaitable[Any]],
     ) -> Any:
         nonlocal issue_count
-        if (
-            runtime is first_queue.runtime
-            and getattr(operation, "__name__", "") == "issue"
-        ):
+        if runtime is first_queue.runtime and getattr(operation, "__name__", "") == "issue":
             issue_count += 1
             if issue_count == 101:
                 all_issued.set()
@@ -1981,14 +1853,9 @@ async def test_redis_work_queue_recovers_pending_delivery_after_restart(
     await first.close()
 
     container.get_wrapped_container().restart()
-    restarted_url = (
-        f"redis://{container.get_container_host_ip()}:"
-        f"{container.get_exposed_port(6379)}/0"
-    )
+    restarted_url = f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0"
     await _wait_for_redis(restarted_url)
-    second = await build_caches(
-        redis_settings(restarted_url, namespace, features=("work-queue",))
-    )
+    second = await build_caches(redis_settings(restarted_url, namespace, features=("work-queue",)))
     second_queue = second.require("default").require(WorkQueueCacheCapability)
     try:
         await asyncio.sleep(0.7)
@@ -2253,14 +2120,9 @@ async def test_redis_stream_survives_redis_restart(
         await first_caches.close()
 
     container.get_wrapped_container().restart()
-    restarted_url = (
-        f"redis://{container.get_container_host_ip()}:"
-        f"{container.get_exposed_port(6379)}/0"
-    )
+    restarted_url = f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0"
     await _wait_for_redis(restarted_url)
-    second_caches = await build_caches(
-        redis_settings(restarted_url, namespace, features=("stream",))
-    )
+    second_caches = await build_caches(redis_settings(restarted_url, namespace, features=("stream",)))
     second = second_caches.require("default").require(StreamCacheCapability)
     try:
         records = await second.read_consumer("integration", "restart", "projection")
@@ -2324,19 +2186,14 @@ async def test_redis_revisions_and_fencing_survive_runtime_restart(
     await first_caches.close()
 
     container.get_wrapped_container().restart()
-    redis_url = (
-        f"redis://{container.get_container_host_ip()}:"
-        f"{container.get_exposed_port(6379)}/0"
-    )
+    redis_url = f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0"
     await _wait_for_redis(redis_url)
     settings = redis_settings(redis_url, namespace)
 
     second_caches = await build_caches(settings)
     second_instance = second_caches.require("default")
     try:
-        second_value = await second_instance.require(AtomicCacheCapability).create(
-            "restart", "value", b"two", ttl=60
-        )
+        second_value = await second_instance.require(AtomicCacheCapability).create("restart", "value", b"two", ttl=60)
         second_lease = await second_instance.require(LeaseCacheCapability).acquire(
             "restart",
             "lease",

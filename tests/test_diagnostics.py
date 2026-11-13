@@ -85,9 +85,7 @@ def test_trace_level_is_registered_and_logger_trace_emits(caplog) -> None:
         logger.trace("trace message")
 
     assert logging.getLevelName(TRACE_LEVEL) == "TRACE"
-    assert [(record.levelno, record.message) for record in caplog.records] == [
-        (TRACE_LEVEL, "trace message")
-    ]
+    assert [(record.levelno, record.message) for record in caplog.records] == [(TRACE_LEVEL, "trace message")]
 
 
 def test_trace_logging_configuration_is_opt_in() -> None:
@@ -149,11 +147,7 @@ def test_request_diagnostics_collect_without_logging_bridge(caplog) -> None:
         response = client.get("/status")
 
     assert response.json()["events"] >= 1
-    assert [
-        record
-        for record in caplog.records
-        if record.name.startswith("wybra.diagnostics")
-    ] == []
+    assert [record for record in caplog.records if record.name.startswith("wybra.diagnostics")] == []
 
 
 def test_request_diagnostics_logging_bridge_uses_dedicated_logger(caplog) -> None:
@@ -174,9 +168,7 @@ def test_request_diagnostics_logging_bridge_uses_dedicated_logger(caplog) -> Non
     with caplog.at_level(TRACE_LEVEL, logger="wybra.diagnostics"):
         emit_request_diagnostics(diagnostics)
 
-    diagnostics_records = [
-        record for record in caplog.records if record.name == "wybra.diagnostics"
-    ]
+    diagnostics_records = [record for record in caplog.records if record.name == "wybra.diagnostics"]
     assert diagnostics_records
     bridged = [
         record.wybra_diagnostics
@@ -226,10 +218,9 @@ async def test_backend_operation_diagnostics_records_error_result() -> None:
     finally:
         reset_current_diagnostics(token)
 
-    assert [
-        (event.category, event.name, event.result, event.attributes)
-        for event in diagnostics.events
-    ] == [("backend", "operation", "error", {"safe": "yes"})]
+    assert [(event.category, event.name, event.result, event.attributes) for event in diagnostics.events] == [
+        ("backend", "operation", "error", {"safe": "yes"})
+    ]
 
 
 @pytest.mark.anyio
@@ -341,16 +332,14 @@ async def test_tortoise_instrumentation_records_transaction_queries() -> None:
         await site.close()
 
     assert diagnostics.sql_query_count == 2
-    assert [
-        event.name
-        for event in diagnostics.events
-        if event.category == "sql" and "transaction" in event.name
-    ] == ["transaction.begin", "transaction.commit"]
-    assert [
-        event.name
-        for event in diagnostics.events
-        if event.category == "sql" and "savepoint" in event.name
-    ] == ["savepoint.begin", "savepoint.release"]
+    assert [event.name for event in diagnostics.events if event.category == "sql" and "transaction" in event.name] == [
+        "transaction.begin",
+        "transaction.commit",
+    ]
+    assert [event.name for event in diagnostics.events if event.category == "sql" and "savepoint" in event.name] == [
+        "savepoint.begin",
+        "savepoint.release",
+    ]
 
 
 @pytest.mark.anyio
@@ -373,11 +362,10 @@ async def test_tortoise_instrumentation_records_transaction_rollback() -> None:
         await close_database(database)
         await site.close()
 
-    assert [
-        event.name
-        for event in diagnostics.events
-        if event.category == "sql" and "transaction" in event.name
-    ] == ["transaction.begin", "transaction.rollback"]
+    assert [event.name for event in diagnostics.events if event.category == "sql" and "transaction" in event.name] == [
+        "transaction.begin",
+        "transaction.rollback",
+    ]
 
 
 @pytest.mark.anyio

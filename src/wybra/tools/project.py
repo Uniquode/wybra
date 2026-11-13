@@ -51,9 +51,7 @@ def _read_pyproject(project_root: Path) -> dict[str, Any] | None:
     except OSError:
         return None
     except tomllib.TOMLDecodeError as exc:
-        raise ProjectToolConfigurationError(
-            f"Project metadata is invalid TOML: {pyproject_path}."
-        ) from exc
+        raise ProjectToolConfigurationError(f"Project metadata is invalid TOML: {pyproject_path}.") from exc
 
     return pyproject if isinstance(pyproject, dict) else None
 
@@ -86,13 +84,8 @@ def _single_workspace_wybra_project(
 
     wybra_projects = tuple(
         member_root
-        for member_root in (
-            (project_root / member).resolve()
-            for member in members
-            if isinstance(member, str)
-        )
-        if (member_pyproject := _read_pyproject(member_root)) is not None
-        and _has_wybra_tool_options(member_pyproject)
+        for member_root in ((project_root / member).resolve() for member in members if isinstance(member, str))
+        if (member_pyproject := _read_pyproject(member_root)) is not None and _has_wybra_tool_options(member_pyproject)
     )
     if len(wybra_projects) > 1:
         project_list = ", ".join(path.as_posix() for path in wybra_projects)
@@ -106,27 +99,20 @@ def _single_workspace_wybra_project(
 
 def import_from_string(spec: str) -> Any:
     if not isinstance(spec, str):
-        raise ProjectToolConfigurationError(
-            f"Import spec must be configured as a string, got {type(spec).__name__!r}."
-        )
+        raise ProjectToolConfigurationError(f"Import spec must be configured as a string, got {type(spec).__name__!r}.")
 
     module_name, separator, attribute_name = spec.partition(":")
     if not separator or not module_name or not attribute_name:
-        raise ProjectToolConfigurationError(
-            f"Import spec {spec!r} must use 'module:attribute' format."
-        )
+        raise ProjectToolConfigurationError(f"Import spec {spec!r} must use 'module:attribute' format.")
 
     try:
         module = import_module(module_name)
     except ModuleNotFoundError as exc:
-        raise ProjectToolConfigurationError(
-            f"Configured import module {module_name!r} could not be imported."
-        ) from exc
+        raise ProjectToolConfigurationError(f"Configured import module {module_name!r} could not be imported.") from exc
 
     try:
         return getattr(module, attribute_name)
     except AttributeError as exc:
         raise ProjectToolConfigurationError(
-            f"Configured import attribute {attribute_name!r} was not found on "
-            f"{module_name!r}."
+            f"Configured import attribute {attribute_name!r} was not found on {module_name!r}."
         ) from exc

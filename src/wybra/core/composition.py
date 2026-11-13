@@ -82,16 +82,12 @@ def load_app_config(
         environ if environ is not None else os.environ,
     )
     if not resolved_config_path.is_file():
-        raise CompositionError(
-            app_config_message(resolved_config_path, "does not exist")
-        )
+        raise CompositionError(app_config_message(resolved_config_path, "does not exist"))
 
     try:
         data = tomllib.loads(resolved_config_path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as error:
-        raise CompositionError(
-            app_config_message(resolved_config_path, f"is invalid: {error}")
-        ) from error
+        raise CompositionError(app_config_message(resolved_config_path, f"is invalid: {error}")) from error
 
     app_data = _required_table(data, "app")
 
@@ -144,9 +140,7 @@ def load_modules(module_names: Iterable[str]) -> tuple[ModuleType, ...]:
         try:
             modules.append(import_module(module_name))
         except ImportError as error:
-            raise CompositionError(
-                configured_module_import_message(module_name)
-            ) from error
+            raise CompositionError(configured_module_import_message(module_name)) from error
 
     return tuple(modules)
 
@@ -158,10 +152,7 @@ def _resolve_config_path(
 ) -> Path:
     raw_env_config_path = environ.get(APP_CONFIG_ENV)
     if config_path is None and raw_env_config_path is None:
-        raise CompositionError(
-            "Application config file could not be resolved; pass --config or set "
-            f"{APP_CONFIG_ENV}."
-        )
+        raise CompositionError(f"Application config file could not be resolved; pass --config or set {APP_CONFIG_ENV}.")
     env_config_path = raw_env_config_path.strip() if raw_env_config_path else None
     if config_path is None and not env_config_path:
         raise CompositionError(f"{APP_CONFIG_ENV} must not be blank.")
@@ -228,11 +219,7 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     sections: dict[str, dict[str, Any]] = {}
     app_data = data.get("app")
     if isinstance(app_data, Mapping):
-        sections["app"] = {
-            key: value
-            for key, value in app_data.items()
-            if not isinstance(value, Mapping)
-        }
+        sections["app"] = {key: value for key, value in app_data.items() if not isinstance(value, Mapping)}
         for nested_name in (
             "assets",
             "aws",
@@ -246,19 +233,13 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                 sections[f"app.{nested_name}"] = {
                     key: value
                     for key, value in nested_value.items()
-                    if not (
-                        nested_name == "database"
-                        and key == "aws"
-                        and isinstance(value, Mapping)
-                    )
+                    if not (nested_name == "database" and key == "aws" and isinstance(value, Mapping))
                 }
                 if nested_name == "assets":
                     cors_value = nested_value.get("cors")
                     if isinstance(cors_value, Mapping):
                         sections["app.assets.cors"] = {
-                            key: value
-                            for key, value in cors_value.items()
-                            if not isinstance(value, Mapping)
+                            key: value for key, value in cors_value.items() if not isinstance(value, Mapping)
                         }
                 if nested_name == "database":
                     aws_value = nested_value.get("aws")
@@ -282,21 +263,13 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 
     auth_data = data.get("auth")
     if isinstance(auth_data, Mapping):
-        sections["auth"] = {
-            key: value
-            for key, value in auth_data.items()
-            if not isinstance(value, Mapping)
-        }
+        sections["auth"] = {key: value for key, value in auth_data.items() if not isinstance(value, Mapping)}
         for nested_name, nested_value in auth_data.items():
             if isinstance(nested_value, Mapping):
                 sections[f"auth.{nested_name}"] = dict(nested_value)
     cache_data = data.get("cache")
     if isinstance(cache_data, Mapping):
-        sections["cache"] = {
-            key: value
-            for key, value in cache_data.items()
-            if not isinstance(value, Mapping)
-        }
+        sections["cache"] = {key: value for key, value in cache_data.items() if not isinstance(value, Mapping)}
         for nested_name, nested_value in cache_data.items():
             if isinstance(nested_value, Mapping):
                 sections[f"cache.{nested_name}"] = dict(nested_value)
@@ -304,8 +277,7 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         if section_name.startswith("cache.") and isinstance(section_value, Mapping):
             if section_name in sections:
                 raise CompositionError(
-                    f"App config defines [{section_name}] through both nested and "
-                    "quoted dotted cache tables."
+                    f"App config defines [{section_name}] through both nested and quoted dotted cache tables."
                 )
             sections[section_name] = dict(section_value)
     log_data = data.get("log")
@@ -313,11 +285,7 @@ def raw_config_sections(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         sections["log"] = dict(log_data)
     secrets_data = data.get("secrets")
     if isinstance(secrets_data, Mapping):
-        sections["secrets"] = {
-            key: value
-            for key, value in secrets_data.items()
-            if not isinstance(value, Mapping)
-        }
+        sections["secrets"] = {key: value for key, value in secrets_data.items() if not isinstance(value, Mapping)}
         for nested_name, nested_value in secrets_data.items():
             if isinstance(nested_value, Mapping):
                 sections[f"secrets.{nested_name}"] = dict(nested_value)
@@ -336,9 +304,7 @@ def _required_str_tuple(data: dict[str, Any], name: str) -> tuple[str, ...]:
         raise CompositionError(f"App config {name} must be a non-empty string list.")
 
     if not all(isinstance(item, str) and item.strip() for item in value):
-        raise CompositionError(
-            f"App config {name} must contain only non-blank strings."
-        )
+        raise CompositionError(f"App config {name} must contain only non-blank strings.")
 
     return tuple(value)
 
@@ -398,29 +364,17 @@ def _optional_route_prefixes(
 ) -> dict[str, dict[str, str]]:
     prefixes: dict[str, dict[str, str]] = {}
     for configured_module_name, module_routes in data.items():
-        if (
-            not isinstance(configured_module_name, str)
-            or not configured_module_name.strip()
-        ):
-            raise CompositionError(
-                f"App config {name} must contain only non-blank module names."
-            )
+        if not isinstance(configured_module_name, str) or not configured_module_name.strip():
+            raise CompositionError(f"App config {name} must contain only non-blank module names.")
         if any(character.isspace() for character in configured_module_name):
             raise CompositionError(
-                f"App config {name} module name {configured_module_name!r} "
-                "must not contain whitespace."
+                f"App config {name} module name {configured_module_name!r} must not contain whitespace."
             )
         module_name = _normalise_route_module_key(configured_module_name)
         if module_name in prefixes:
-            raise CompositionError(
-                f"App config {name} contains duplicate route entries for "
-                f"module {module_name!r}."
-            )
+            raise CompositionError(f"App config {name} contains duplicate route entries for module {module_name!r}.")
         if not isinstance(module_routes, dict):
-            raise CompositionError(
-                f"App config {name}.{configured_module_name} must be a table "
-                "of router labels."
-            )
+            raise CompositionError(f"App config {name}.{configured_module_name} must be a table of router labels.")
 
         prefixes[module_name] = _route_label_prefixes(
             module_routes,
@@ -441,13 +395,9 @@ def _route_label_prefixes(
     prefixes: dict[str, str] = {}
     for label, prefix in data.items():
         if not isinstance(label, str) or not label.strip():
-            raise CompositionError(
-                f"App config {name} must contain only non-blank router labels."
-            )
+            raise CompositionError(f"App config {name} must contain only non-blank router labels.")
         if not isinstance(prefix, str):
-            raise CompositionError(
-                f"App config {name}.{label} must be a string prefix."
-            )
+            raise CompositionError(f"App config {name}.{label} must be a string prefix.")
 
         prefixes[label] = prefix
 
@@ -465,11 +415,7 @@ def _load_template_options(data: dict[str, Any]) -> TemplateOptions:
             template_data,
             "app.templates.cache_size",
         ),
-        root=(
-            Path(root)
-            if (root := _optional_str_or_none(template_data, "app.templates.root"))
-            else None
-        ),
+        root=(Path(root) if (root := _optional_str_or_none(template_data, "app.templates.root")) else None),
     )
 
 

@@ -94,12 +94,8 @@ ENV_RESET_SECRET: Final = "RESET_SECRET"
 ENV_SESSION_COOKIE: Final = "SESSION_COOKIE"
 ENV_SESSION_FORCE_SECURE: Final = "SESSION_FORCE_SECURE"
 ENV_SESSION_LIFETIME: Final = "SESSION_LIFETIME"
-ENV_PROVIDER_ENABLED: Final = identity_env_setting_name(
-    cast(IdentityIntegration, PROVIDER)
-)
-ENV_PASSKEY_ENABLED: Final = identity_env_setting_name(
-    cast(IdentityIntegration, PASSKEY)
-)
+ENV_PROVIDER_ENABLED: Final = identity_env_setting_name(cast(IdentityIntegration, PROVIDER))
+ENV_PASSKEY_ENABLED: Final = identity_env_setting_name(cast(IdentityIntegration, PASSKEY))
 ENV_TOTP_MODE: Final = "TOTP_MODE"
 ENV_TOTP_ALLOWED_DRIFT: Final = "TOTP_ALLOWED_DRIFT"
 ENV_TOTP_PERIOD_SECONDS: Final = "TOTP_PERIOD_SECONDS"
@@ -223,15 +219,10 @@ module_config: Final = ConfigDef(
             ),
         ),
         PASSWORD_POLICY_CONFIG_SECTION: ConfigGroup(
-            fields=tuple(
-                ConfigField(name=field_name)
-                for field_name in PASSWORD_POLICY_OPTION_MAP
-            ),
+            fields=tuple(ConfigField(name=field_name) for field_name in PASSWORD_POLICY_OPTION_MAP),
         ),
         PASSKEY_CONFIG_SECTION: ConfigGroup(
-            fields=tuple(
-                ConfigField(name=field_name) for field_name in PASSKEY_OPTION_MAP
-            ),
+            fields=tuple(ConfigField(name=field_name) for field_name in PASSKEY_OPTION_MAP),
         ),
     }
 )
@@ -252,9 +243,7 @@ class AuthSettings:
 
     def __post_init__(self) -> None:
         if self.database_connection is None and self.database_url is not None:
-            database_connection = _database_connection_from_direct_url(
-                self.database_url
-            )
+            database_connection = _database_connection_from_direct_url(self.database_url)
             object.__setattr__(
                 self,
                 "database_connection",
@@ -292,9 +281,7 @@ def load_auth_settings(
     """Compose auth settings from app config and module config."""
 
     if app_config.auth is not None and not isinstance(app_config.auth, Mapping):
-        raise ConfigurationError(
-            "Invalid auth configuration: [auth] must be a table when defined."
-        )
+        raise ConfigurationError("Invalid auth configuration: [auth] must be a table when defined.")
     app_auth_config = app_config.auth or {}
     auth_config = _merge_auth_with_loaded_precedence(
         app_auth_config,
@@ -317,8 +304,7 @@ def load_auth_settings(
         )
     if database_connection is None:
         raise ConfigurationError(
-            "Application database must be configured as [app.database], "
-            "[app].database_url, or DATABASE_URL."
+            "Application database must be configured as [app.database], [app].database_url, or DATABASE_URL."
         )
     identity_options = _identity_options_from_config(config, auth_config)
     return AuthSettings(
@@ -353,10 +339,7 @@ def validate_auth_settings(
         or is_generate_local_identity_secret(identity_options.verification_token_secret)
         or not identity_options.token_secrets_configured
     ):
-        raise ConfigurationError(
-            "Non-local deployments must configure identity reset and "
-            "verification token secrets."
-        )
+        raise ConfigurationError("Non-local deployments must configure identity reset and verification token secrets.")
     if not identity_options.session_cookie_force_secure:
         raise ConfigurationError(
             "Non-local deployments must force secure session cookies; set "
@@ -388,15 +371,11 @@ def load_runtime_auth_settings(
         )
     else:
         if database_url is None or not database_url.strip():
-            raise ConfigurationError(
-                "Database URL is required when app config is not available."
-            )
+            raise ConfigurationError("Database URL is required when app config is not available.")
         settings = AuthSettings(
             database_url=database_url,
             database_connection=_database_connection_from_direct_url(database_url),
-            deployment_environment=normalise_deployment_environment(
-                deployment_environment
-            ),
+            deployment_environment=normalise_deployment_environment(deployment_environment),
         )
 
     validate_auth_settings(settings)
@@ -455,11 +434,7 @@ def _merge_nested_auth_table_with_loaded_precedence(
     """Merge nested auth config; loaded values win."""
     merged = dict(base)
     for key, value in override.items():
-        if (
-            key == PASSWORD_POLICY_SECTION_FIELD
-            and isinstance(value, Mapping)
-            and isinstance(merged.get(key), Mapping)
-        ):
+        if key == PASSWORD_POLICY_SECTION_FIELD and isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
             merged[key] = {**cast(Mapping[str, Any], merged[key]), **value}
             continue
         merged[key] = value
@@ -476,8 +451,7 @@ def _reject_unknown_auth_options(auth_config: Mapping[str, Any]) -> None:
     allowed_fields = ", ".join(sorted(AUTH_OPTION_FIELDS))
     unknown_list = ", ".join(unknown_fields)
     raise ConfigurationError(
-        f"Unknown option(s) in [auth] configuration: {unknown_list}. "
-        f"Allowed options are: {allowed_fields}."
+        f"Unknown option(s) in [auth] configuration: {unknown_list}. Allowed options are: {allowed_fields}."
     )
 
 
@@ -487,13 +461,9 @@ def _reject_unknown_password_options(auth_config: Mapping[str, Any]) -> None:
         return
 
     if not isinstance(password_config, dict):
-        raise ConfigurationError(
-            "Auth password config must be an [auth.password] table."
-        )
+        raise ConfigurationError("Auth password config must be an [auth.password] table.")
 
-    unknown_fields = sorted(
-        str(key) for key in password_config if key not in PASSWORD_OPTION_FIELDS
-    )
+    unknown_fields = sorted(str(key) for key in password_config if key not in PASSWORD_OPTION_FIELDS)
     if unknown_fields:
         unknown_list = ", ".join(unknown_fields)
         allowed_fields = ", ".join(sorted(PASSWORD_OPTION_FIELDS))
@@ -504,13 +474,9 @@ def _reject_unknown_password_options(auth_config: Mapping[str, Any]) -> None:
 
     policy_config = password_config.get(PASSWORD_POLICY_SECTION_FIELD, {})
     if not isinstance(policy_config, dict):
-        raise ConfigurationError(
-            "Auth password policy config must be an [auth.password.policy] table."
-        )
+        raise ConfigurationError("Auth password policy config must be an [auth.password.policy] table.")
 
-    unknown_policy_fields = sorted(
-        str(key) for key in policy_config if key not in PASSWORD_POLICY_OPTION_MAP
-    )
+    unknown_policy_fields = sorted(str(key) for key in policy_config if key not in PASSWORD_POLICY_OPTION_MAP)
     if unknown_policy_fields:
         unknown_list = ", ".join(unknown_policy_fields)
         allowed_fields = ", ".join(sorted(PASSWORD_POLICY_OPTION_MAP))
@@ -526,13 +492,9 @@ def _reject_unknown_passkey_options(auth_config: Mapping[str, Any]) -> None:
         return
 
     if not isinstance(passkey_config, dict):
-        raise ConfigurationError(
-            f"Auth passkey config must be an [auth.{PASSKEY_SECTION_FIELD}] table."
-        )
+        raise ConfigurationError(f"Auth passkey config must be an [auth.{PASSKEY_SECTION_FIELD}] table.")
 
-    unknown_fields = sorted(
-        str(key) for key in passkey_config if key not in PASSKEY_OPTION_MAP
-    )
+    unknown_fields = sorted(str(key) for key in passkey_config if key not in PASSKEY_OPTION_MAP)
     if unknown_fields:
         unknown_list = ", ".join(unknown_fields)
         allowed_fields = ", ".join(sorted(PASSKEY_OPTION_MAP))
@@ -562,11 +524,7 @@ def _identity_options_from_config(
     config: ConfigService | Mapping[str, Mapping[str, Any]],
     auth_config: Mapping[str, Any],
 ) -> IdentityOptions:
-    identity_kwargs = {
-        key: value
-        for key, value in auth_config.items()
-        if key in IDENTITY_OPTION_FIELDS
-    }
+    identity_kwargs = {key: value for key, value in auth_config.items() if key in IDENTITY_OPTION_FIELDS}
     identity_kwargs.update(_passkey_options_from_config(config, auth_config))
     identity_kwargs.update(_password_policy_options_from_config(config, auth_config))
     return IdentityOptions(**identity_kwargs)
@@ -578,9 +536,7 @@ def _passkey_options_from_config(
 ) -> dict[str, Any]:
     passkey_config = auth_config.get(PASSKEY_SECTION_FIELD, {})
     if PASSKEY_SECTION_FIELD in auth_config and not isinstance(passkey_config, dict):
-        raise ConfigurationError(
-            f"Auth passkey config must be an [auth.{PASSKEY_SECTION_FIELD}] table."
-        )
+        raise ConfigurationError(f"Auth passkey config must be an [auth.{PASSKEY_SECTION_FIELD}] table.")
     if not isinstance(passkey_config, dict):
         passkey_config = {}
     if not passkey_config:
@@ -599,9 +555,7 @@ def _password_policy_options_from_config(
 ) -> dict[str, Any]:
     password_config = auth_config.get(PASSWORD_SECTION_FIELD, {})
     if PASSWORD_SECTION_FIELD in auth_config and not isinstance(password_config, dict):
-        raise ConfigurationError(
-            f"Auth password config must be an [auth.{PASSWORD_SECTION_FIELD}] table."
-        )
+        raise ConfigurationError(f"Auth password config must be an [auth.{PASSWORD_SECTION_FIELD}] table.")
     if not isinstance(password_config, dict):
         password_config = {}
 

@@ -120,9 +120,7 @@ def _capability(
 
 
 @pytest.fixture
-async def database_capability_factory() -> AsyncIterator[
-    Callable[..., Awaitable[FilesystemMediaCapability]]
-]:
+async def database_capability_factory() -> AsyncIterator[Callable[..., Awaitable[FilesystemMediaCapability]]]:
     sites: list[Site] = []
 
     async def factory(
@@ -135,9 +133,7 @@ async def database_capability_factory() -> AsyncIterator[
         return _capability(
             tmp_path,
             url_mode=url_mode,
-            catalogue=TortoiseMediaCatalogueRepository(
-                site.capability_proxy(DatabaseCapability)
-            ),
+            catalogue=TortoiseMediaCatalogueRepository(site.capability_proxy(DatabaseCapability)),
         )
 
     try:
@@ -244,10 +240,7 @@ def test_media_exceptions_inherit_from_media_error() -> None:
 def test_media_capability_resolves_safe_key_paths(tmp_path: Path) -> None:
     capability = _capability(tmp_path)
 
-    assert (
-        capability.path_for_key("profiles/avatar.png")
-        == (tmp_path / "profiles" / "avatar.png").resolve()
-    )
+    assert capability.path_for_key("profiles/avatar.png") == (tmp_path / "profiles" / "avatar.png").resolve()
     assert capability.url_for_key("profiles/avatar.png") == "/media/profiles/avatar.png"
 
 
@@ -290,9 +283,7 @@ async def test_media_capability_rejects_negative_media_size(
 ) -> None:
     capability = await database_capability_factory(tmp_path)
 
-    with pytest.raises(
-        InputValidationError, match="Media size must not be negative"
-    ) as excinfo:
+    with pytest.raises(InputValidationError, match="Media size must not be negative") as excinfo:
         await capability.register(
             category="profile",
             storage_key="profiles/avatar.png",
@@ -370,10 +361,7 @@ async def test_media_capability_registers_catalogue_item_and_resolves_by_id(
 
     assert isinstance(item, MediaItem)
     assert item.category == "profile"
-    assert (
-        await capability.path_for(item.id)
-        == (tmp_path / "profile" / "ab" / "cd" / "user.png").resolve()
-    )
+    assert await capability.path_for(item.id) == (tmp_path / "profile" / "ab" / "cd" / "user.png").resolve()
     assert await capability.url_for(item.id) == "/media/profile/ab/cd/user.png"
 
 
@@ -749,9 +737,7 @@ async def test_media_item_route_does_not_mask_storage_failures(tmp_path: Path) -
 
     media_module._register_media_item_route(site, FailingMediaCapability())
 
-    response = WybraTestClient(app, raise_server_exceptions=False).get(
-        f"/media/items/{uuid.uuid4()}"
-    )
+    response = WybraTestClient(app, raise_server_exceptions=False).get(f"/media/items/{uuid.uuid4()}")
 
     assert response.status_code == 500
 
@@ -805,8 +791,7 @@ async def test_media_setup_registers_capability_and_serves_files(
     )
     try:
         assert (
-            site.require_capability(MediaCapability).path_for_key("avatar.txt")
-            == (media_root / "avatar.txt").resolve()
+            site.require_capability(MediaCapability).path_for_key("avatar.txt") == (media_root / "avatar.txt").resolve()
         )
         assert WybraTestClient(app).get("/media/avatar.txt").text == "avatar"
     finally:

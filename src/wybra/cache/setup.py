@@ -38,15 +38,13 @@ async def _finalise_cache_setup(
             await caches.close()
         except CancelledError as close_error:
             close_error.add_note(
-                f"Cache capability registration also failed with "
-                f"{type(setup_error).__name__}: {setup_error}"
+                f"Cache capability registration also failed with {type(setup_error).__name__}: {setup_error}"
             )
             raise close_error from setup_error
         except BaseException as close_error:
             if isinstance(setup_error, CancelledError):
                 setup_error.add_note(
-                    f"Cache capability cleanup also failed with "
-                    f"{type(close_error).__name__}: {close_error}"
+                    f"Cache capability cleanup also failed with {type(close_error).__name__}: {close_error}"
                 )
                 raise setup_error from close_error
             raise BaseExceptionGroup(

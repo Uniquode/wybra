@@ -68,9 +68,7 @@ def test_merge_logging_config_adds_to_defaults_when_not_authoritative() -> None:
     assert config["disable_existing_loggers"] is False
     assert config["handlers"]["console"]["class"] == "logging.StreamHandler"
     assert config["handlers"]["file"]["filename"] == "app.log"
-    assert config["formatters"]["simple"]["format"] == (
-        "%(levelname)s %(name)s: %(message)s"
-    )
+    assert config["formatters"]["simple"]["format"] == ("%(levelname)s %(name)s: %(message)s")
     assert config["loggers"]["tortoise"]["level"] == "INFO"
     assert config["loggers"]["urllib3"]["propagate"] is False
     assert config["root"]["handlers"] == ["console", "file"]
@@ -163,9 +161,7 @@ def test_logging_config_from_app_config_reads_log_table(tmp_path) -> None:
     app_config = load_app_config(project_root=tmp_path, config_path=config_path)
     config = logging_config_from_app_config(app_config)
 
-    assert config["formatters"]["simple"]["format"] == (
-        "%(levelname)s %(name)s: %(message)s"
-    )
+    assert config["formatters"]["simple"]["format"] == ("%(levelname)s %(name)s: %(message)s")
     assert config["loggers"]["urllib3"]["level"] == "WARNING"
     assert config["loggers"]["urllib3"]["propagate"] is False
 

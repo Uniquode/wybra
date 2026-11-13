@@ -57,9 +57,7 @@ class RedisPubSubSubscription:
     async def receive(self, *, timeout: float | None = None) -> bytes:
         if timeout is not None:
             timeout = validate_positive_finite(timeout, label="subscription timeout")
-        deadline = (
-            None if timeout is None else asyncio.get_running_loop().time() + timeout
-        )
+        deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
         await self._acquire_receive_lock(deadline)
         try:
             self._require_open()
@@ -232,10 +230,7 @@ class RedisPubSubCache:
                 errors = await close_all(
                     (
                         *(subscription.close for subscription in subscriptions),
-                        *(
-                            lambda handle=handle: self._release_pending_handle(handle)
-                            for handle in pending_handles
-                        ),
+                        *(lambda handle=handle: self._release_pending_handle(handle) for handle in pending_handles),
                     )
                 )
             except asyncio.CancelledError as exc:
@@ -243,9 +238,7 @@ class RedisPubSubCache:
                 errors = []
             if cancellation is not None:
                 if errors:
-                    cancellation.add_note(
-                        f"{len(errors)} Redis pub/sub cleanup error(s) also occurred."
-                    )
+                    cancellation.add_note(f"{len(errors)} Redis pub/sub cleanup error(s) also occurred.")
                 raise cancellation
             raise_cleanup_errors("Redis pub/sub subscription cleanup failed.", errors)
 
@@ -287,9 +280,9 @@ class RedisPubSubCache:
                     await self._release_pending_handle(handle)
                 except BaseException as cleanup_error:
                     _annotate_cleanup_error(activation_error, cleanup_error)
-                    if isinstance(
-                        cleanup_error, asyncio.CancelledError
-                    ) and not isinstance(activation_error, asyncio.CancelledError):
+                    if isinstance(cleanup_error, asyncio.CancelledError) and not isinstance(
+                        activation_error, asyncio.CancelledError
+                    ):
                         raise cleanup_error from activation_error
             raise
         finally:
@@ -320,8 +313,7 @@ def _annotate_cleanup_error(
     cleanup_error: BaseException,
 ) -> None:
     operation_error.add_note(
-        "Redis pub/sub activation cleanup also failed "
-        f"({type(cleanup_error).__name__}); cache shutdown will retry."
+        f"Redis pub/sub activation cleanup also failed ({type(cleanup_error).__name__}); cache shutdown will retry."
     )
 
 
@@ -348,9 +340,7 @@ def _message_payload(value: object, channel: str) -> bytes:
     try:
         return validate_payload(payload)
     except (TypeError, ValueError) as exc:
-        raise CacheFeatureError(
-            "Redis pub/sub receive returned invalid state."
-        ) from exc
+        raise CacheFeatureError("Redis pub/sub receive returned invalid state.") from exc
 
 
 __all__ = ("RedisPubSubCache", "RedisPubSubSubscription")

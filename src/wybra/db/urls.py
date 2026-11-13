@@ -145,11 +145,7 @@ def supported_database_url_schemes() -> tuple[str, ...]:
 
 
 def available_database_url_schemes() -> tuple[str, ...]:
-    return tuple(
-        backend.scheme
-        for backend in DATABASE_BACKENDS
-        if is_database_backend_available(backend)
-    )
+    return tuple(backend.scheme for backend in DATABASE_BACKENDS if is_database_backend_available(backend))
 
 
 def database_backend_for_url(database_url: str) -> DatabaseBackend | None:
@@ -201,15 +197,9 @@ def _database_url_scheme_list() -> str:
 def _unavailable_database_backend_error(backend: DatabaseBackend) -> str:
     if backend.install_extra is None:
         required = _required_module_list(backend)
-        return (
-            f"Database URL scheme {backend.scheme}:// requires unavailable "
-            f"Python module(s): {required}."
-        )
+        return f"Database URL scheme {backend.scheme}:// requires unavailable Python module(s): {required}."
 
-    return (
-        f"Database URL scheme {backend.scheme}:// requires the "
-        f"wybra[{backend.install_extra}] optional dependency."
-    )
+    return f"Database URL scheme {backend.scheme}:// requires the wybra[{backend.install_extra}] optional dependency."
 
 
 def _required_module_list(backend: DatabaseBackend) -> str:
@@ -341,8 +331,7 @@ def _redact_query(query: str) -> str:
         return query
 
     redacted_items = [
-        (name, "***") if name.lower() in SENSITIVE_QUERY_PARAMS else (name, value)
-        for name, value in query_items
+        (name, "***") if name.lower() in SENSITIVE_QUERY_PARAMS else (name, value) for name, value in query_items
     ]
     return urlencode(redacted_items)
 

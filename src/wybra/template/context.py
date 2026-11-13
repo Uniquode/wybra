@@ -72,9 +72,7 @@ def add_to_context(
     """Register a provider for the context module that calls this function."""
     registered_provider = _normalise_provider(provider)
     provider_module_name = (
-        module_name
-        if module_name is not None
-        else _provider_module_name(provider, registered_provider)
+        module_name if module_name is not None else _provider_module_name(provider, registered_provider)
     )
     _CONTEXT_PROVIDERS.setdefault(provider_module_name, []).append(registered_provider)
     return registered_provider
@@ -153,9 +151,7 @@ def _calling_module_name(frame_depth: int = 2) -> str:
     provider_frame = frame
     for _ in range(frame_depth):
         provider_frame = provider_frame.f_back if provider_frame is not None else None
-    module_name = (
-        provider_frame.f_globals.get("__name__") if provider_frame is not None else None
-    )
+    module_name = provider_frame.f_globals.get("__name__") if provider_frame is not None else None
     if not isinstance(module_name, str) or not module_name:
         raise ContextProviderError("Context provider module could not be resolved.")
 

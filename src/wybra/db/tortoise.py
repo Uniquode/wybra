@@ -22,10 +22,7 @@ def build_tortoise_config(
 ) -> dict[str, Any]:
     if database_connections is not None:
         if database_url is not None or database_connection is not None:
-            raise ValueError(
-                "database_connections cannot be combined with a single database "
-                "connection."
-            )
+            raise ValueError("database_connections cannot be combined with a single database connection.")
         connections = {
             name: _connection_config(
                 database_url=None,
@@ -53,9 +50,7 @@ def build_tortoise_config(
                 ),
                 "default_connection": default_connection,
             }
-            for module_name, model_packages in model_packages_by_module(
-                tuple(modules)
-            ).items()
+            for module_name, model_packages in model_packages_by_module(tuple(modules)).items()
         },
     }
     if routers:
@@ -70,9 +65,7 @@ def _connection_config(
 ) -> str | dict[str, Any]:
     if database_connection is not None:
         if database_url is not None:
-            raise ValueError(
-                "database_url and database_connection are mutually exclusive."
-            )
+            raise ValueError("database_url and database_connection are mutually exclusive.")
         return database_connection.tortoise_connection_config
     if database_url is None:
         raise ValueError("database_url or database_connection is required.")

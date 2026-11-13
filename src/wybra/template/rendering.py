@@ -18,8 +18,7 @@ def template_capability_from(request: Request) -> TemplateCapability:
             structured_error(
                 "Missing template capability provider",
                 requirement=(
-                    "configure wybra.template or another TemplateCapability provider "
-                    "when template rendering is used"
+                    "configure wybra.template or another TemplateCapability provider when template rendering is used"
                 ),
             )
         ) from exc

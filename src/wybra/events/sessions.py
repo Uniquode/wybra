@@ -27,9 +27,7 @@ class SessionLifecycleEvent(Event):
     error_type: str | None = None
 
 
-def session_event(
-    call: BoundArguments, observation: EventOutcome | None
-) -> Event | None:
+def session_event(call: BoundArguments, observation: EventOutcome | None) -> Event | None:
     """Build a session lifecycle event from opaque operation metadata."""
 
     if observation is None:

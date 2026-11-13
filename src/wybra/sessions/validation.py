@@ -48,10 +48,7 @@ def validate_sessions(settings: SessionsValidationSettings) -> ValidationResult:
         checks,
         errors,
         passed=True,
-        description=(
-            "sessions settings load: "
-            f"storage_backend={session_settings.resolved_storage_backend.value}"
-        ),
+        description=(f"sessions settings load: storage_backend={session_settings.resolved_storage_backend.value}"),
     )
     record_check(
         checks,
@@ -110,10 +107,7 @@ def _record_named_cache_check(
             errors,
             passed=False,
             description=description,
-            error=(
-                "Cache-backed sessions require a configured cache capability "
-                "such as wybra.cache."
-            ),
+            error=("Cache-backed sessions require a configured cache capability such as wybra.cache."),
         )
         return
     try:
@@ -124,10 +118,7 @@ def _record_named_cache_check(
             errors,
             passed=False,
             description=description,
-            error=(
-                f"Cache {cache_name!r} for consumer 'request sessions' "
-                f"is invalid: {exc}"
-            ),
+            error=(f"Cache {cache_name!r} for consumer 'request sessions' is invalid: {exc}"),
         )
         return
     record_check(
@@ -141,9 +132,7 @@ def _record_named_cache_check(
 def _configured_modules(config: ConfigService) -> tuple[str, ...]:
     app_config = config.get_config("app") or {}
     modules = app_config.get("modules", ())
-    if isinstance(modules, list | tuple) and all(
-        isinstance(module_name, str) for module_name in modules
-    ):
+    if isinstance(modules, list | tuple) and all(isinstance(module_name, str) for module_name in modules):
         return tuple(modules)
     return ()
 

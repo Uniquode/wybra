@@ -262,10 +262,7 @@ def test_inspect_route_tree_uses_effective_names_for_mounted_routes() -> None:
 
     assert route_names["/api/status"] == "api:status"
     assert route_names["/admin/status"] == "admin:status"
-    assert not any(
-        problem.kind == RouteProblemKind.DUPLICATE_NAME
-        for problem in inspection.problems
-    )
+    assert not any(problem.kind == RouteProblemKind.DUPLICATE_NAME for problem in inspection.problems)
 
 
 def test_inspect_route_tree_detects_unmatched_origin_metadata() -> None:
@@ -290,10 +287,7 @@ def test_inspect_route_tree_detects_unmatched_origin_metadata() -> None:
 
     inspection = inspect_route_tree(app)
 
-    assert any(
-        problem.kind == RouteProblemKind.INCOHERENT_ORIGIN
-        for problem in inspection.problems
-    )
+    assert any(problem.kind == RouteProblemKind.INCOHERENT_ORIGIN for problem in inspection.problems)
 
 
 def test_renderers_use_the_same_route_tree_model() -> None:
@@ -429,9 +423,7 @@ def test_template_metadata_is_not_inferred_from_handler_source() -> None:
         return HTMLResponse(template_name)
 
     inspection = inspect_route_tree(app)
-    record = next(
-        route for route in inspection.routes if route.path == "/implicit-template"
-    )
+    record = next(route for route in inspection.routes if route.path == "/implicit-template")
 
     assert record.shape.route_type == RouteType.PAGE
     assert record.shape.template is None

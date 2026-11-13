@@ -82,9 +82,7 @@ class TestDatabaseEvents:
 
         site = await _start_events_site()
         await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
-        database = await create_database(
-            "sqlite://:memory:", modules=("wybra.sessions",)
-        )
+        database = await create_database("sqlite://:memory:", modules=("wybra.sessions",))
         try:
             with database.context:
                 await database.connection().execute_query("select 1")
@@ -92,12 +90,8 @@ class TestDatabaseEvents:
             await close_database(database)
             await site.close()
 
-        connection_event = next(
-            event for event in observed if isinstance(event, DatabaseConnectionEvent)
-        )
-        statement_event = next(
-            event for event in observed if isinstance(event, DatabaseStatementEvent)
-        )
+        connection_event = next(event for event in observed if isinstance(event, DatabaseConnectionEvent))
+        statement_event = next(event for event in observed if isinstance(event, DatabaseStatementEvent))
         assert str(connection_event.scope) == "sql.connection"
         assert connection_event.connection_name == "default"
         assert statement_event.operation == "query"
@@ -116,9 +110,7 @@ class TestDatabaseEvents:
 
         site = await _start_events_site()
         await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
-        database = await create_database(
-            "sqlite://:memory:", modules=("wybra.sessions",)
-        )
+        database = await create_database("sqlite://:memory:", modules=("wybra.sessions",))
         try:
             with database.context:
                 async with in_transaction("default") as connection:
@@ -131,12 +123,8 @@ class TestDatabaseEvents:
             await close_database(database)
             await site.close()
 
-        transactions = [
-            event for event in observed if isinstance(event, DatabaseTransactionEvent)
-        ]
-        savepoints = [
-            event for event in observed if isinstance(event, DatabaseSavepointEvent)
-        ]
+        transactions = [event for event in observed if isinstance(event, DatabaseTransactionEvent)]
+        savepoints = [event for event in observed if isinstance(event, DatabaseSavepointEvent)]
         assert [event.outcome for event in transactions] == [
             "begin",
             "commit",
@@ -156,9 +144,7 @@ class TestDatabaseEvents:
 
         site = await _start_events_site()
         await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
-        database = await create_database(
-            "sqlite://:memory:", modules=("wybra.sessions",)
-        )
+        database = await create_database("sqlite://:memory:", modules=("wybra.sessions",))
         try:
             with database.context:
                 with pytest.raises(asyncio.CancelledError):
@@ -168,9 +154,7 @@ class TestDatabaseEvents:
             await close_database(database)
             await site.close()
 
-        transactions = [
-            event for event in observed if isinstance(event, DatabaseTransactionEvent)
-        ]
+        transactions = [event for event in observed if isinstance(event, DatabaseTransactionEvent)]
         assert [event.outcome for event in transactions] == ["begin", "rollback"]
 
     @pytest.mark.anyio
@@ -182,9 +166,7 @@ class TestDatabaseEvents:
 
         site = await _start_events_site()
         await site.require_capability(EventsCapability).subscribe(EVT_SQL, handler)
-        database = await create_database(
-            "sqlite://:memory:", modules=("wybra.sessions",)
-        )
+        database = await create_database("sqlite://:memory:", modules=("wybra.sessions",))
         try:
             with database.context:
                 with pytest.raises(OperationalError):
@@ -193,7 +175,5 @@ class TestDatabaseEvents:
             await close_database(database)
             await site.close()
 
-        statement_event = next(
-            event for event in observed if isinstance(event, DatabaseStatementEvent)
-        )
+        statement_event = next(event for event in observed if isinstance(event, DatabaseStatementEvent))
         assert statement_event.result == "error"

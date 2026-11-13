@@ -57,13 +57,10 @@ def _reject_starlette_session_middleware(site: Site) -> None:
     for middleware in site.app.user_middleware:
         middleware_class = middleware.cls
         if (
-            getattr(middleware_class, "__module__", "")
-            == "starlette.middleware.sessions"
+            getattr(middleware_class, "__module__", "") == "starlette.middleware.sessions"
             and getattr(middleware_class, "__name__", "") == "SessionMiddleware"
         ):
-            raise SessionsConfigurationError(
-                "Starlette SessionMiddleware must not be installed with Wybra sessions."
-            )
+            raise SessionsConfigurationError("Starlette SessionMiddleware must not be installed with Wybra sessions.")
 
 
 __all__ = (

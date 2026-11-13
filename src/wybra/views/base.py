@@ -88,10 +88,7 @@ class View:
         if (
             not view_declaration.requires
             and not view_declaration.actions
-            and (
-                model_declaration is None
-                or (not model_declaration.requires and not model_declaration.actions)
-            )
+            and (model_declaration is None or (not model_declaration.requires and not model_declaration.actions))
         ):
             return
         await enforce_scope_access(
@@ -120,11 +117,7 @@ class View:
         )
 
     def _allowed_methods(self) -> tuple[str, ...]:
-        return tuple(
-            method.upper()
-            for method in HTTP_METHOD_HANDLERS
-            if callable(getattr(self, method, None))
-        )
+        return tuple(method.upper() for method in HTTP_METHOD_HANDLERS if callable(getattr(self, method, None)))
 
     def response_from_result(self, result: HandlerResult) -> Response:
         if isinstance(result, Response):

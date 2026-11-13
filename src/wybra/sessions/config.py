@@ -61,9 +61,7 @@ def to_optional_storage_backend(value: object) -> SessionStorageBackend | None:
     try:
         return SessionStorageBackend(value.strip().lower())
     except ValueError as exc:
-        raise ValueError(
-            f"sessions storage backend must be one of: {storage_backend_choices()}."
-        ) from exc
+        raise ValueError(f"sessions storage backend must be one of: {storage_backend_choices()}.") from exc
 
 
 def to_optional_cache_name(value: object) -> str | None:

@@ -44,18 +44,10 @@ def phone_contact_context(
 
 
 def validate_phone_contact_fields(form: Form, **field_names: str) -> None:
-    missing = {
-        role: field_name
-        for role, field_name in field_names.items()
-        if field_name not in form.fields
-    }
+    missing = {role: field_name for role, field_name in field_names.items() if field_name not in form.fields}
     if missing:
-        missing_fields = ", ".join(
-            f"{role}={field_name!r}" for role, field_name in sorted(missing.items())
-        )
-        raise PhoneContactWidgetError(
-            f"Phone contact widget references unknown form field(s): {missing_fields}."
-        )
+        missing_fields = ", ".join(f"{role}={field_name!r}" for role, field_name in sorted(missing.items()))
+        raise PhoneContactWidgetError(f"Phone contact widget references unknown form field(s): {missing_fields}.")
     expected_types = {
         "country_field": SelectField,
         "subdivision_field": SelectField,
@@ -68,8 +60,7 @@ def validate_phone_contact_fields(form: Form, **field_names: str) -> None:
         field = form.fields[field_name]
         if not isinstance(field, expected_type):
             raise PhoneContactWidgetError(
-                f"Phone contact widget field {field_name!r} must be "
-                f"{expected_type.__name__}."
+                f"Phone contact widget field {field_name!r} must be {expected_type.__name__}."
             )
 
 
@@ -90,8 +81,7 @@ def resolve_phone_contact_mapping(
         phone_field = phone_field or control.phone_field
     if country_field is None or subdivision_field is None or phone_field is None:
         raise PhoneContactWidgetError(
-            "Phone contact widget requires country, subdivision, and phone fields "
-            "or a PhoneContactControl."
+            "Phone contact widget requires country, subdivision, and phone fields or a PhoneContactControl."
         )
     return PhoneContactFieldMapping(
         country_field=country_field,

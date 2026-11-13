@@ -89,10 +89,7 @@ class DefaultPasswordPolicy:
         score = _strength_score(password, categories)
 
         lowered_password = password.casefold()
-        if any(
-            fragment in lowered_password
-            for fragment in _blocked_fragments(self, personal_fragments)
-        ):
+        if any(fragment in lowered_password for fragment in _blocked_fragments(self, personal_fragments)):
             score = min(score, COMMON_PASSWORD_SCORE_CAP)
 
         return PasswordStrength(
@@ -139,8 +136,7 @@ def _strength_score(password: str, categories: frozenset[str]) -> float:
         MAXIMUM_CHARACTER_CATEGORY_SCORE,
     )
     uniqueness_score = (
-        min(len(set(password)) / UNIQUENESS_SCORE_DIVISOR, MAXIMUM_UNIQUENESS_RATIO)
-        * UNIQUENESS_SCORE_WEIGHT
+        min(len(set(password)) / UNIQUENESS_SCORE_DIVISOR, MAXIMUM_UNIQUENESS_RATIO) * UNIQUENESS_SCORE_WEIGHT
     )
     return length_score + category_score + uniqueness_score
 

@@ -34,8 +34,7 @@ async def test_redis_fenced_mutations_reject_a_replaced_lease() -> None:
 
     with RedisContainer("redis:7-alpine") as container:
         runtime = RedisCacheRuntime(
-            f"redis://{container.get_container_host_ip()}:"
-            f"{container.get_exposed_port(6379)}/0",
+            f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0",
             namespace=f"lifecycle-test-{uuid4().hex}",
         )
         try:
@@ -55,8 +54,7 @@ async def test_redis_fenced_mutations_reject_a_replaced_lease() -> None:
 async def test_redis_queue_keeps_unclaimed_receipt_after_visibility_expiry() -> None:
     with RedisContainer("redis:7-alpine") as container:
         runtime = RedisCacheRuntime(
-            f"redis://{container.get_container_host_ip()}:"
-            f"{container.get_exposed_port(6379)}/0",
+            f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0",
             namespace=f"queue-test-{uuid4().hex}",
         )
         queue = RedisWorkQueue(runtime)
@@ -125,8 +123,7 @@ async def test_redis_queue_keeps_unclaimed_receipt_after_visibility_expiry() -> 
 async def test_redis_work_queue_recovery_invalidates_expired_receipt() -> None:
     with RedisContainer("redis:7-alpine") as container:
         runtime = RedisCacheRuntime(
-            f"redis://{container.get_container_host_ip()}:"
-            f"{container.get_exposed_port(6379)}/0",
+            f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0",
             namespace=f"queue-test-{uuid4().hex}",
         )
         queue = RedisWorkQueue(runtime)
@@ -160,8 +157,7 @@ async def test_redis_work_queue_recovery_invalidates_expired_receipt() -> None:
 async def test_redis_lifecycle_recovers_active_and_terminal_status() -> None:
     with RedisContainer("redis:7-alpine") as container:
         runtime = RedisCacheRuntime(
-            f"redis://{container.get_container_host_ip()}:"
-            f"{container.get_exposed_port(6379)}/0",
+            f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0",
             namespace=f"lifecycle-test-{uuid4().hex}",
         )
         lifecycle = CacheTaskLifecycle(
@@ -215,8 +211,7 @@ async def test_redis_lifecycle_recovers_active_and_terminal_status() -> None:
 async def test_redis_lifecycle_competing_projectors_recover_one_status() -> None:
     with RedisContainer("redis:7-alpine") as container:
         runtime = RedisCacheRuntime(
-            f"redis://{container.get_container_host_ip()}:"
-            f"{container.get_exposed_port(6379)}/0",
+            f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0",
             namespace=f"lifecycle-test-{uuid4().hex}",
         )
         policy = TaskiqLifecyclePolicy(
@@ -274,8 +269,6 @@ async def test_redis_lifecycle_competing_projectors_recover_one_status() -> None
                 second.status(UUID(message.task_id)),
             )
             assert all(status is not None for status in statuses)
-            assert {
-                status.state.value for status in statuses if status is not None
-            } == {"running"}
+            assert {status.state.value for status in statuses if status is not None} == {"running"}
         finally:
             await runtime.close()

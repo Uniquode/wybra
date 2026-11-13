@@ -45,9 +45,7 @@ def _group_help_args(args: list[str]) -> tuple[str, ...] | None:
 
 
 def _restore_option_terminator(tokens: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(
-        "--" if token == _OPTION_TERMINATOR_SENTINEL else token for token in tokens
-    )
+    return tuple("--" if token == _OPTION_TERMINATOR_SENTINEL else token for token in tokens)
 
 
 def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrArgs:
@@ -77,9 +75,7 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrArgs:
                 flag_options={"--json", "--csv"},
             )
             if parsed.positionals:
-                raise click.UsageError(
-                    "Usage: wybra-authmgr group list [--json|--csv]."
-                )
+                raise click.UsageError("Usage: wybra-authmgr group list [--json|--csv].")
             _ensure_mutually_exclusive(
                 (parsed.has_flag("--json"), "--json"),
                 (parsed.has_flag("--csv"), "--csv"),
@@ -96,9 +92,7 @@ def _group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrArgs:
                 flag_options={"--json"},
             )
             if len(parsed.positionals) != 1:
-                raise click.UsageError(
-                    "Usage: wybra-authmgr group effective-scopes <user-target>."
-                )
+                raise click.UsageError("Usage: wybra-authmgr group effective-scopes <user-target>.")
             return AuthmgrArgs(
                 command="group-effective-scopes",
                 user_target=parsed.positionals[0],
@@ -121,9 +115,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrAr
                 flag_options={"--json"},
             )
             if parsed.positionals:
-                raise click.UsageError(
-                    "Usage: wybra-authmgr group <group> show [--json]."
-                )
+                raise click.UsageError("Usage: wybra-authmgr group <group> show [--json].")
             return AuthmgrArgs(
                 command="group-show",
                 group_target=target,
@@ -154,9 +146,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrAr
                 flag_options={"--force"},
             )
             if parsed.positionals:
-                raise click.UsageError(
-                    "Usage: wybra-authmgr group <group> delete [--force]."
-                )
+                raise click.UsageError("Usage: wybra-authmgr group <group> delete [--force].")
             return AuthmgrArgs(
                 command="group-delete",
                 group_target=target,
@@ -169,9 +159,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrAr
                 flag_options=set(),
             )
             if len(parsed.positionals) != 1:
-                raise click.UsageError(
-                    f"Usage: wybra-authmgr group <group> {operation} <user>."
-                )
+                raise click.UsageError(f"Usage: wybra-authmgr group <group> {operation} <user>.")
             return AuthmgrArgs(
                 command=f"group-{operation}",
                 group_target=target,
@@ -184,9 +172,7 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrAr
                 flag_options=set(),
             )
             if len(parsed.positionals) != 1:
-                raise click.UsageError(
-                    f"Usage: wybra-authmgr group <group> {operation} <group>."
-                )
+                raise click.UsageError(f"Usage: wybra-authmgr group <group> {operation} <group>.")
             return AuthmgrArgs(
                 command=f"group-{operation}",
                 group_target=target,
@@ -197,21 +183,15 @@ def _target_group_args(ctx: click.Context, tokens: tuple[str, ...]) -> AuthmgrAr
 
 
 _GROUP_ROOT_OPERATION_HELP = {
-    "create": (
-        "Usage: wybra-authmgr group create <abbrev> "
-        "[--description <text>] [--scope <scope>]."
-    ),
+    "create": ("Usage: wybra-authmgr group create <abbrev> [--description <text>] [--scope <scope>]."),
     "list": "Usage: wybra-authmgr group list [--json|--csv].",
-    "effective-scopes": (
-        "Usage: wybra-authmgr group effective-scopes <user-target> [--json]."
-    ),
+    "effective-scopes": ("Usage: wybra-authmgr group effective-scopes <user-target> [--json]."),
 }
 
 _GROUP_TARGET_OPERATION_HELP = {
     "show": "Usage: wybra-authmgr group <group> show [--json].",
     "update": (
-        "Usage: wybra-authmgr group <group> update "
-        "[--description <text>] [--scope <scope>] [--rm-scope <scope>]."
+        "Usage: wybra-authmgr group <group> update [--description <text>] [--scope <scope>] [--rm-scope <scope>]."
     ),
     "delete": "Usage: wybra-authmgr group <group> delete [--force].",
     "add-user": "Usage: wybra-authmgr group <group> add-user <user>.",
@@ -242,16 +222,11 @@ _GROUP_COMMAND_HELP = "Manage authorisation groups."
 def _group_operation_help(tokens: tuple[str, ...]) -> str:
     help_text: str | None = None
     if len(tokens) == 1:
-        help_text = _GROUP_ROOT_OPERATION_HELP.get(
-            tokens[0]
-        ) or _GROUP_TARGET_OPERATION_HELP.get(tokens[0])
+        help_text = _GROUP_ROOT_OPERATION_HELP.get(tokens[0]) or _GROUP_TARGET_OPERATION_HELP.get(tokens[0])
     if len(tokens) == 2:
         help_text = _GROUP_TARGET_OPERATION_HELP.get(tokens[1])
     if help_text is None:
-        raise click.UsageError(
-            f"Unknown group help topic: {' '.join(tokens)}. "
-            "Try 'wybra-authmgr group --help'."
-        )
+        raise click.UsageError(f"Unknown group help topic: {' '.join(tokens)}. Try 'wybra-authmgr group --help'.")
     return help_text
 
 

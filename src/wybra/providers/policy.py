@@ -28,13 +28,8 @@ class ProviderAssertion:
     claims: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "provider_name", provider_name_value(self.provider_name)
-        )
-        if (
-            not isinstance(self.provider_subject, str)
-            or not self.provider_subject.strip()
-        ):
+        object.__setattr__(self, "provider_name", provider_name_value(self.provider_name))
+        if not isinstance(self.provider_subject, str) or not self.provider_subject.strip():
             raise ValueError("Provider subject must be a non-blank string.")
         object.__setattr__(self, "provider_subject", self.provider_subject.strip())
 

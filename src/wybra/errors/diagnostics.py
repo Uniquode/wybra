@@ -4,9 +4,7 @@ from __future__ import annotations
 def structured_error(message: str, **fields: object) -> str:
     if not fields:
         return message
-    details = ", ".join(
-        f"{key}={_format_error_value(value)}" for key, value in fields.items()
-    )
+    details = ", ".join(f"{key}={_format_error_value(value)}" for key, value in fields.items())
     return f"{message}: {details}."
 
 

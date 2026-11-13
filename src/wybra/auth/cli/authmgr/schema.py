@@ -29,8 +29,7 @@ SCHEMA_MIGRATION_MESSAGE = (
     "`uv run wybra-migrate --database-url <database-url> migrate`."
 )
 SCHEMA_INSPECTION_MESSAGE = (
-    "Auth database schema could not be inspected; verify database connectivity, "
-    "permissions, and locks."
+    "Auth database schema could not be inspected; verify database connectivity, permissions, and locks."
 )
 logger = logging.getLogger(__name__)
 
@@ -60,25 +59,17 @@ async def _verify_identity_schema(connection: BaseDBAsyncClient) -> None:
 
     table_name = _model_table_name(User)
     if not schema_status.table_exists:
-        raise ConfigurationError(
-            f"{SCHEMA_MIGRATION_MESSAGE} Missing {table_name} table."
-        )
+        raise ConfigurationError(f"{SCHEMA_MIGRATION_MESSAGE} Missing {table_name} table.")
 
     schema_messages: list[str] = []
     if schema_status.missing_tables:
         schema_messages.append(
-            f"Missing identity schema tables: "
-            f"{_missing_tables_message(schema_status.missing_tables)}"
+            f"Missing identity schema tables: {_missing_tables_message(schema_status.missing_tables)}"
         )
     if schema_status.missing_columns:
-        schema_messages.append(
-            "Missing identity schema columns: "
-            f"{', '.join(schema_status.missing_columns)}."
-        )
+        schema_messages.append(f"Missing identity schema columns: {', '.join(schema_status.missing_columns)}.")
     if schema_messages:
-        raise ConfigurationError(
-            f"{SCHEMA_MIGRATION_MESSAGE}\n" + "\n".join(schema_messages)
-        )
+        raise ConfigurationError(f"{SCHEMA_MIGRATION_MESSAGE}\n" + "\n".join(schema_messages))
 
 
 async def _identity_schema_status(
@@ -133,26 +124,18 @@ async def _database_table_columns(
         return await _sqlite_table_columns(connection)
     if dialect == "postgres":
         return await _postgres_table_columns(connection)
-    raise ConfigurationError(
-        f"{SCHEMA_INSPECTION_MESSAGE} Unsupported database dialect: {dialect}."
-    )
+    raise ConfigurationError(f"{SCHEMA_INSPECTION_MESSAGE} Unsupported database dialect: {dialect}.")
 
 
 async def _sqlite_table_columns(
     connection: BaseDBAsyncClient,
 ) -> dict[str, set[str]]:
-    tables = await connection.execute_query_dict(
-        "SELECT name FROM sqlite_master WHERE type = 'table'"
-    )
+    tables = await connection.execute_query_dict("SELECT name FROM sqlite_master WHERE type = 'table'")
     table_columns: dict[str, set[str]] = {}
     for row in tables:
         table_name = str(row["name"])
-        columns = await connection.execute_query_dict(
-            f"PRAGMA table_info({_quote_sqlite_identifier(table_name)})"
-        )
-        table_columns[table_name] = {
-            _normalise_identifier(column["name"]) for column in columns
-        }
+        columns = await connection.execute_query_dict(f"PRAGMA table_info({_quote_sqlite_identifier(table_name)})")
+        table_columns[table_name] = {_normalise_identifier(column["name"]) for column in columns}
     return table_columns
 
 
@@ -168,9 +151,7 @@ async def _postgres_table_columns(
     )
     table_columns: dict[str, set[str]] = {}
     for row in rows:
-        table_columns.setdefault(str(row["table_name"]), set()).add(
-            _normalise_identifier(row["column_name"])
-        )
+        table_columns.setdefault(str(row["table_name"]), set()).add(_normalise_identifier(row["column_name"]))
     return table_columns
 
 
@@ -178,10 +159,7 @@ def _missing_schema_columns(
     model: type[Model],
     database_columns: set[str],
 ) -> list[str]:
-    expected_columns = {
-        _normalise_identifier(column_name): column_name
-        for column_name in _model_column_names(model)
-    }
+    expected_columns = {_normalise_identifier(column_name): column_name for column_name in _model_column_names(model)}
     return [
         _qualified_column_name(model, column_name)
         for normalised_name, column_name in expected_columns.items()

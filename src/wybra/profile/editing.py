@@ -38,13 +38,9 @@ def profile_field_values(
             case "bio":
                 values[BIO_FIELD] = _bio_value(value)
             case "phone_contacts":
-                raise ProfileInputError(
-                    "Phone contacts must be saved through phone contact handling."
-                )
+                raise ProfileInputError("Phone contacts must be saved through phone contact handling.")
             case _:
-                raise ProfileInputError(
-                    f"Unknown profile field submitted: {field_name}."
-                )
+                raise ProfileInputError(f"Unknown profile field submitted: {field_name}.")
     return values
 
 
@@ -59,9 +55,7 @@ def _reject_disabled_fields(
     editable_fields = set(settings.editable_fields)
     disabled = tuple(field for field in data if field not in editable_fields)
     if disabled:
-        raise ProfileInputError(
-            "Profile field is not editable: " + ", ".join(sorted(disabled))
-        )
+        raise ProfileInputError("Profile field is not editable: " + ", ".join(sorted(disabled)))
 
 
 def _optional_text(value: object) -> str | None:
@@ -76,9 +70,7 @@ def _optional_text(value: object) -> str | None:
 def _bio_value(value: object) -> str | None:
     bio = _optional_text(value)
     if bio is not None and len(bio) > PROFILE_BIO_MAX_LENGTH:
-        raise ProfileInputError(
-            f"Bio must be {PROFILE_BIO_MAX_LENGTH} characters or fewer."
-        )
+        raise ProfileInputError(f"Bio must be {PROFILE_BIO_MAX_LENGTH} characters or fewer.")
     return bio
 
 

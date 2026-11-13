@@ -26,9 +26,7 @@ def validate_media(settings: MediaValidationSettings) -> ValidationResult:
             description="media root is configured",
             error="Media root must be configured when wybra.media is enabled.",
         )
-        return ValidationResult(
-            name="media", errors=tuple(errors), checks=tuple(checks)
-        )
+        return ValidationResult(name="media", errors=tuple(errors), checks=tuple(checks))
     record_check(
         checks,
         errors,

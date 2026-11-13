@@ -36,14 +36,10 @@ GOOGLE_OAUTH_STATE_BYTES: Final = 32
 GOOGLE_OAUTH_NONCE_BYTES: Final = 32
 GOOGLE_DEFAULT_SCOPES: Final = ("openid", "email", "profile")
 GOOGLE_DEFAULT_ISSUER: Final = "https://accounts.google.com"
-GOOGLE_DEFAULT_AUTHORISATION_ENDPOINT: Final = (
-    "https://accounts.google.com/o/oauth2/v2/auth"
-)
+GOOGLE_DEFAULT_AUTHORISATION_ENDPOINT: Final = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_DEFAULT_TOKEN_ENDPOINT: Final = "https://oauth2.googleapis.com/token"
 GOOGLE_DEFAULT_JWKS_URI: Final = "https://www.googleapis.com/oauth2/v3/certs"
-GOOGLE_DEFAULT_DISCOVERY_DOCUMENT_URL: Final = (
-    "https://accounts.google.com/.well-known/openid-configuration"
-)
+GOOGLE_DEFAULT_DISCOVERY_DOCUMENT_URL: Final = "https://accounts.google.com/.well-known/openid-configuration"
 GoogleOAuthPurpose = ProviderOAuthPurpose
 GoogleJwksClientFactory = Callable[[str], "GoogleJwksClient"]
 
@@ -168,9 +164,7 @@ class GoogleOAuthState:
 
     def __post_init__(self) -> None:
         if self.provider_name != GOOGLE_PROVIDER_NAME:
-            raise ValueError(
-                f"Google OAuth state requires provider {GOOGLE_PROVIDER_NAME!r}."
-            )
+            raise ValueError(f"Google OAuth state requires provider {GOOGLE_PROVIDER_NAME!r}.")
         if not is_provider_oauth_purpose(self.purpose):
             raise ValueError("Google OAuth state purpose must be login or link.")
         for field_name in ("state", "nonce", "return_to", "redirect_uri"):
@@ -187,19 +181,13 @@ def google_oauth_settings_from_provider(
     provider: ProviderSettings,
 ) -> GoogleOAuthSettings:
     if provider.name != GOOGLE_PROVIDER_NAME:
-        raise ConfigurationError(
-            f"Google OAuth settings require provider {GOOGLE_PROVIDER_NAME!r}."
-        )
+        raise ConfigurationError(f"Google OAuth settings require provider {GOOGLE_PROVIDER_NAME!r}.")
     if provider.client_id is None:
-        raise ConfigurationError(
-            f"Google provider must configure {PROVIDER_CLIENT_ID_FIELD!r}."
-        )
+        raise ConfigurationError(f"Google provider must configure {PROVIDER_CLIENT_ID_FIELD!r}.")
     client_secret_reference = provider.required_client_secret_reference()
     if client_secret_reference is None:
         raise ConfigurationError(
-            "Google provider must configure both "
-            f"{PROVIDER_SECRETS_FIELD!r} and "
-            f"{PROVIDER_CLIENT_SECRET_KEY_FIELD!r}."
+            f"Google provider must configure both {PROVIDER_SECRETS_FIELD!r} and {PROVIDER_CLIENT_SECRET_KEY_FIELD!r}."
         )
     return GoogleOAuthSettings(
         provider_name=provider.name,
@@ -223,8 +211,7 @@ def create_google_oauth_state(
         nonce=token_urlsafe(GOOGLE_OAUTH_NONCE_BYTES),
         return_to=return_to,
         redirect_uri=redirect_uri,
-        expires_at=(current_timestamp() if now is None else now)
-        + GOOGLE_OAUTH_STATE_EXPIRY_SECONDS,
+        expires_at=(current_timestamp() if now is None else now) + GOOGLE_OAUTH_STATE_EXPIRY_SECONDS,
         user_id=user_id,
     )
 
@@ -395,9 +382,7 @@ def _optional_payload_str(
         return None
     if isinstance(value, str):
         return value
-    raise GoogleTokenExchangeError(
-        f"Google token exchange response field {field_name!r} must be a string."
-    )
+    raise GoogleTokenExchangeError(f"Google token exchange response field {field_name!r} must be a string.")
 
 
 def _optional_payload_int(
@@ -409,9 +394,7 @@ def _optional_payload_int(
         return None
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    raise GoogleTokenExchangeError(
-        f"Google token exchange response field {field_name!r} must be an integer."
-    )
+    raise GoogleTokenExchangeError(f"Google token exchange response field {field_name!r} must be an integer.")
 
 
 def _required_payload_str(
@@ -421,9 +404,7 @@ def _required_payload_str(
     value = payload.get(field_name)
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise GoogleIDTokenValidationError(
-        f"Google ID token claim {field_name!r} must be a non-blank string."
-    )
+    raise GoogleIDTokenValidationError(f"Google ID token claim {field_name!r} must be a non-blank string.")
 
 
 def _required_payload_bool(
@@ -433,9 +414,7 @@ def _required_payload_bool(
     value = payload.get(field_name)
     if isinstance(value, bool):
         return value
-    raise GoogleIDTokenValidationError(
-        f"Google ID token claim {field_name!r} must be a boolean."
-    )
+    raise GoogleIDTokenValidationError(f"Google ID token claim {field_name!r} must be a boolean.")
 
 
 __all__ = (

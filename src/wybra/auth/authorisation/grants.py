@@ -18,9 +18,7 @@ class AuthScopeGrantsProvider:
         from wybra.auth.capabilities import AuthCapability
 
         site = get_site(request.app)
-        user = await site.require_capability(AuthCapability).optional_current_user(
-            request
-        )
+        user = await site.require_capability(AuthCapability).optional_current_user(request)
         if user is None:
             return ScopeSubject()
 

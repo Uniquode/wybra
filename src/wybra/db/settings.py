@@ -106,11 +106,7 @@ class DatabaseCredentialConfig:
         )
 
     def has_resolvable_values(self, source: SecretSource | None) -> bool:
-        return (
-            self.user is not None
-            or self.password is not None
-            or (source is not None and self.has_keys)
-        )
+        return self.user is not None or self.password is not None or (source is not None and self.has_keys)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,9 +142,7 @@ class AwsClientSettings:
         unknown_fields = sorted(set(values) - _aws_client_fields())
         if unknown_fields:
             raise ConfigurationError(
-                f"Unknown option(s) in [{section_name}] configuration: "
-                + ", ".join(unknown_fields)
-                + "."
+                f"Unknown option(s) in [{section_name}] configuration: " + ", ".join(unknown_fields) + "."
             )
         return cls(
             region=cast(str | None, values.get("region")),
@@ -290,13 +284,9 @@ class AwsClientSettings:
             ),
         )
         if self.external_id is not None and self.external_id_key is not None:
-            raise ConfigurationError(
-                "external_id and external_id_key are mutually exclusive."
-            )
+            raise ConfigurationError("external_id and external_id_key are mutually exclusive.")
         if self.external_id_key is not None and self.external_id_source is None:
-            raise ConfigurationError(
-                "external_id_source is required when external_id_key is configured."
-            )
+            raise ConfigurationError("external_id_source is required when external_id_key is configured.")
 
     @property
     def configured(self) -> bool:
@@ -385,17 +375,12 @@ class AwsClientSettings:
                 field_name="AWS external_id",
             )
         if secrets is None:
-            raise ConfigurationError(
-                "SecretsCapability is required to resolve AWS external_id."
-            )
+            raise ConfigurationError("SecretsCapability is required to resolve AWS external_id.")
         try:
-            return secrets.resolve(
-                self.external_id_source, self.external_id_key
-            ).reveal()
+            return secrets.resolve(self.external_id_source, self.external_id_key).reveal()
         except SecretsError as exc:
             raise ConfigurationError(
-                "Failed to resolve AWS external_id: "
-                f"source={self.external_id_source} key={self.external_id_key}."
+                f"Failed to resolve AWS external_id: source={self.external_id_source} key={self.external_id_key}."
             ) from exc
 
 
@@ -487,22 +472,14 @@ class AwsManagedDatabaseSettings:
         )
         if self.managed == "rds":
             if self.db_instance_identifier is None:
-                raise ConfigurationError(
-                    "db_instance_identifier is required for AWS RDS targets."
-                )
+                raise ConfigurationError("db_instance_identifier is required for AWS RDS targets.")
             if self.cluster_identifier is not None:
-                raise ConfigurationError(
-                    "cluster_identifier is not valid for AWS RDS targets."
-                )
+                raise ConfigurationError("cluster_identifier is not valid for AWS RDS targets.")
         if self.managed == "aurora":
             if self.cluster_identifier is None:
-                raise ConfigurationError(
-                    "cluster_identifier is required for AWS Aurora targets."
-                )
+                raise ConfigurationError("cluster_identifier is required for AWS Aurora targets.")
             if self.db_instance_identifier is not None:
-                raise ConfigurationError(
-                    "db_instance_identifier is not valid for AWS Aurora targets."
-                )
+                raise ConfigurationError("db_instance_identifier is not valid for AWS Aurora targets.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -535,9 +512,7 @@ class StructuredDatabaseConfig:
         unknown_fields = sorted(set(values) - _structured_database_fields())
         if unknown_fields:
             raise ConfigurationError(
-                "Unknown option(s) in [app.database] configuration: "
-                + ", ".join(unknown_fields)
-                + "."
+                "Unknown option(s) in [app.database] configuration: " + ", ".join(unknown_fields) + "."
             )
 
         backend = values.get("backend")
@@ -609,24 +584,11 @@ class StructuredDatabaseConfig:
             "psycopg",
         }:
             sa_database = "postgres"
-        if (
-            backend_info.tortoise_scheme in {"asyncpg", "psycopg"}
-            and sa_database == self.database
-        ):
-            raise ConfigurationError(
-                "sa_database must differ from the target database."
-            )
+        if backend_info.tortoise_scheme in {"asyncpg", "psycopg"} and sa_database == self.database:
+            raise ConfigurationError("sa_database must differ from the target database.")
         object.__setattr__(self, "sa_database", sa_database)
-        host = (
-            None
-            if backend_info.tortoise_scheme == "sqlite"
-            else _optional_non_blank_string(self.host, "host")
-        )
-        port = (
-            None
-            if backend_info.tortoise_scheme == "sqlite"
-            else _optional_positive_int(self.port, "port")
-        )
+        host = None if backend_info.tortoise_scheme == "sqlite" else _optional_non_blank_string(self.host, "host")
+        port = None if backend_info.tortoise_scheme == "sqlite" else _optional_positive_int(self.port, "port")
         object.__setattr__(self, "host", host)
         object.__setattr__(self, "port", port)
         object.__setattr__(
@@ -635,9 +597,7 @@ class StructuredDatabaseConfig:
             MappingProxyType(dict(_normalise_options(self.options))),
         )
         credential_source = (
-            None
-            if backend_info.tortoise_scheme == "sqlite"
-            else _optional_secret_source(self.credential_source)
+            None if backend_info.tortoise_scheme == "sqlite" else _optional_secret_source(self.credential_source)
         )
         object.__setattr__(self, "credential_source", credential_source)
         if credential_source is not None and credential_source != ENVIRONMENT_SOURCE:
@@ -711,12 +671,8 @@ class StructuredDatabaseConfig:
                 source=source,
                 user_name="database-sa-user",
                 password_name="database-sa-password",
-                user_description=(
-                    "Configured database service-account username for provisioning."
-                ),
-                password_description=(
-                    "Configured database service-account password for provisioning."
-                ),
+                user_description=("Configured database service-account username for provisioning."),
+                password_description=("Configured database service-account password for provisioning."),
             )
         )
 
@@ -762,30 +718,20 @@ class EffectiveDatabaseConfig:
                 _normalise_database_url(self.database_url, self.project_root),
             )
             if self.structured is not None:
-                raise ConfigurationError(
-                    "URL database config must not include structured settings."
-                )
+                raise ConfigurationError("URL database config must not include structured settings.")
             return
 
         if self.source == "structured":
             if self.structured is None:
-                raise ConfigurationError(
-                    "Structured database config must include [app.database]."
-                )
+                raise ConfigurationError("Structured database config must include [app.database].")
             if self.database_url is not None:
-                raise ConfigurationError(
-                    "Structured database config must not include database_url."
-                )
+                raise ConfigurationError("Structured database config must not include database_url.")
             return
 
         raise ConfigurationError(f"Unsupported database config source: {self.source}.")
 
     def requires_secret_capability_for(self, purpose: CredentialPurpose) -> bool:
-        return (
-            self.structured.requires_secret_capability_for(purpose)
-            if self.structured is not None
-            else False
-        )
+        return self.structured.requires_secret_capability_for(purpose) if self.structured is not None else False
 
     def resolve(
         self,
@@ -894,10 +840,7 @@ class ResolvedDatabaseConnection:
         if self.database_url is not None:
             return f"database URL: {self.backend.scheme}://<redacted>"
         database = self.credentials.get("database") or self.credentials.get("file_path")
-        return (
-            "structured database config: "
-            f"backend={self.backend.scheme}, database={database}"
-        )
+        return f"structured database config: backend={self.backend.scheme}, database={database}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -933,9 +876,7 @@ class ResolvedDatabaseRouting:
 
     @property
     def connections(self) -> Mapping[str, ResolvedDatabaseConnection]:
-        return MappingProxyType(
-            {instance.alias: instance.connection for instance in self.instances}
-        )
+        return MappingProxyType({instance.alias: instance.connection for instance in self.instances})
 
     def build_registry(self) -> DatabaseRouteRegistry:
         """Build the one runtime registry owned by a database lifecycle."""
@@ -981,19 +922,14 @@ def effective_database_config_from_config(
         f"{APP_CONFIG_SECTION}.{DATABASE_URL_FIELD}",
     )
 
-    if (
-        database_url is not None
-        and database_url_source == DATABASE_URL_SOURCE_ENVIRONMENT
-    ):
+    if database_url is not None and database_url_source == DATABASE_URL_SOURCE_ENVIRONMENT:
         if _structured_database_configured(structured_values):
             logger.info("Using DATABASE_URL, overriding config")
         return EffectiveDatabaseConfig.from_url(database_url, project_root=project_root)
 
     if _structured_database_configured(structured_values):
         if database_url is not None:
-            raise ConfigurationError(
-                "Configure either [app.database] or [app].database_url, not both."
-            )
+            raise ConfigurationError("Configure either [app.database] or [app].database_url, not both.")
         return EffectiveDatabaseConfig.from_structured(
             StructuredDatabaseConfig.from_values(
                 _database_connection_values(
@@ -1036,10 +972,7 @@ def resolve_database_connection_from_config(
         fallback_to_runtime_credentials=fallback_to_runtime_credentials,
     )
     resolved_secrets = secrets
-    if (
-        effective.requires_secret_capability_for(resolved_purpose)
-        and resolved_secrets is None
-    ):
+    if effective.requires_secret_capability_for(resolved_purpose) and resolved_secrets is None:
         resolved_secrets = _secrets_capability_from_config(config)
     return effective.resolve(
         environ=_config_environ(config),
@@ -1096,10 +1029,7 @@ def resolve_database_routing_from_config(
         database_aws_values=base_aws_values,
     )
     resolved_secrets = secrets
-    if (
-        base_structured.requires_secret_capability_for("runtime")
-        and resolved_secrets is None
-    ):
+    if base_structured.requires_secret_capability_for("runtime") and resolved_secrets is None:
         resolved_secrets = _secrets_capability_from_config(config)
     environ = _config_environ(config)
     instances = [
@@ -1118,18 +1048,12 @@ def resolve_database_routing_from_config(
     ]
     for instance_name, instance_values in _database_instance_sections(config).items():
         if "backend" in instance_values:
-            raise ConfigurationError(
-                f"[{DATABASE_CONFIG_SECTION}.{instance_name}].backend is not allowed."
-            )
+            raise ConfigurationError(f"[{DATABASE_CONFIG_SECTION}.{instance_name}].backend is not allowed.")
         roles = _database_route_roles(instance_values.get("role"), is_base=False)
-        rotation_fields = sorted(
-            set(instance_values)
-            & {"default_rotation", "reader_rotation", "writer_rotation"}
-        )
+        rotation_fields = sorted(set(instance_values) & {"default_rotation", "reader_rotation", "writer_rotation"})
         if rotation_fields:
             raise ConfigurationError(
-                f"[{DATABASE_CONFIG_SECTION}.{instance_name}] does not allow "
-                f"{', '.join(rotation_fields)}."
+                f"[{DATABASE_CONFIG_SECTION}.{instance_name}] does not allow {', '.join(rotation_fields)}."
             )
         merged_values = dict(base_connection_values)
         merged_values.update(
@@ -1139,18 +1063,13 @@ def resolve_database_routing_from_config(
             )
         )
         instance_aws_values = dict(base_aws_values)
-        instance_aws_values.update(
-            _section_values(config, f"{DATABASE_CONFIG_SECTION}.{instance_name}.aws")
-        )
+        instance_aws_values.update(_section_values(config, f"{DATABASE_CONFIG_SECTION}.{instance_name}.aws"))
         structured = StructuredDatabaseConfig.from_values(
             merged_values,
             shared_aws_values=shared_aws_values,
             database_aws_values=instance_aws_values,
         )
-        if (
-            structured.requires_secret_capability_for("runtime")
-            and resolved_secrets is None
-        ):
+        if structured.requires_secret_capability_for("runtime") and resolved_secrets is None:
             resolved_secrets = _secrets_capability_from_config(config)
         instances.append(
             ResolvedDatabaseRouteInstance(
@@ -1198,17 +1117,11 @@ def _database_credential_purpose(
     purpose: CredentialPurpose,
     fallback_to_runtime_credentials: bool,
 ) -> CredentialPurpose:
-    if (
-        purpose != "service_account"
-        or not fallback_to_runtime_credentials
-        or effective.structured is None
-    ):
+    if purpose != "service_account" or not fallback_to_runtime_credentials or effective.structured is None:
         return purpose
 
     service_account_credentials = effective.structured.service_account_credentials
-    if service_account_credentials.has_resolvable_values(
-        effective.structured.credential_source
-    ):
+    if service_account_credentials.has_resolvable_values(effective.structured.credential_source):
         return purpose
     return "runtime"
 
@@ -1237,13 +1150,9 @@ def resolve_database_provisioning_connection_from_config(
             "configuration. Configure structured service-account credentials."
         )
     if connection.credentials.get("user") is None:
-        raise ConfigurationError(
-            "Database provisioning requires a service-account database user."
-        )
+        raise ConfigurationError("Database provisioning requires a service-account database user.")
     if connection.credentials.get("password") is None:
-        raise ConfigurationError(
-            "Database provisioning requires a service-account database password."
-        )
+        raise ConfigurationError("Database provisioning requires a service-account database password.")
     return connection
 
 
@@ -1253,9 +1162,7 @@ def _validate_database_credential_configuration(
     runtime_credentials: DatabaseCredentialConfig,
     service_account_credentials: DatabaseCredentialConfig,
 ) -> None:
-    keys_configured = (
-        runtime_credentials.has_keys or service_account_credentials.has_keys
-    )
+    keys_configured = runtime_credentials.has_keys or service_account_credentials.has_keys
     if backend.tortoise_scheme == "sqlite":
         return
     if credential_source is None:
@@ -1364,9 +1271,7 @@ def _structured_backend_credentials(
     conflicting_options = sorted(RESERVED_OPTION_KEYS & credentials.keys())
     if conflicting_options:
         raise ConfigurationError(
-            "[app.database].options must not contain reserved database fields: "
-            + ", ".join(conflicting_options)
-            + "."
+            "[app.database].options must not contain reserved database fields: " + ", ".join(conflicting_options) + "."
         )
     if structured.backend_info.tortoise_scheme == "sqlite":
         credentials["file_path"] = _sqlite_file_path(structured.database, project_root)
@@ -1480,13 +1385,9 @@ def _default_database_credential_key(database: str, role: str, field_name: str) 
 
 
 def _validate_default_database_key_segment(database: str) -> None:
-    if any(
-        character == "/" or character.isspace() or not character.isprintable()
-        for character in database
-    ):
+    if any(character == "/" or character.isspace() or not character.isprintable() for character in database):
         raise ConfigurationError(
-            "Database name cannot be used in default credential keys; "
-            "configure explicit database credential keys."
+            "Database name cannot be used in default credential keys; configure explicit database credential keys."
         )
 
 
@@ -1507,21 +1408,16 @@ def _resolve_credential_value(
         environment = environ if environ is not None else os.environ
         value = environment_get(environment, key)
         if value is None or not value.strip():
-            raise ConfigurationError(
-                f"Environment variable {key} for {field_name} must be set."
-            )
+            raise ConfigurationError(f"Environment variable {key} for {field_name} must be set.")
         return value
     if secrets is None:
         raise ConfigurationError(
-            f"SecretsCapability is required to resolve {field_name} from "
-            f"source={source}, key={key}."
+            f"SecretsCapability is required to resolve {field_name} from source={source}, key={key}."
         )
     try:
         return secrets.resolve(source, key).reveal()
     except SecretsError as exc:
-        raise ConfigurationError(
-            f"Failed to resolve {field_name} from source={source}, key={key}."
-        ) from exc
+        raise ConfigurationError(f"Failed to resolve {field_name} from source={source}, key={key}.") from exc
 
 
 def _secrets_capability_from_config(
@@ -1529,8 +1425,7 @@ def _secrets_capability_from_config(
 ) -> SecretsCapability:
     if not isinstance(config, ConfigService):
         raise ConfigurationError(
-            "SecretsCapability is required to resolve database credentials from "
-            "non-environment secret sources."
+            "SecretsCapability is required to resolve database credentials from non-environment secret sources."
         )
     from wybra.secrets.capabilities import secrets_capability_from_config
 
@@ -1605,9 +1500,7 @@ def _database_instance_sections(
         if not instance_name or "." in instance_name:
             continue
         if not isinstance(values, Mapping):
-            raise ConfigurationError(
-                f"Config section {section_name!r} must be a table."
-            )
+            raise ConfigurationError(f"Config section {section_name!r} must be a table.")
         instances[instance_name] = dict(values)
     return instances
 
@@ -1621,15 +1514,9 @@ def _database_connection_values(
     unknown_fields = sorted(set(values) - allowed_fields)
     if unknown_fields:
         raise ConfigurationError(
-            f"Unknown option(s) in [{section_name}] configuration: "
-            + ", ".join(unknown_fields)
-            + "."
+            f"Unknown option(s) in [{section_name}] configuration: " + ", ".join(unknown_fields) + "."
         )
-    return {
-        field_name: value
-        for field_name, value in values.items()
-        if field_name in _structured_database_fields()
-    }
+    return {field_name: value for field_name, value in values.items() if field_name in _structured_database_fields()}
 
 
 def _database_route_roles(
@@ -1642,17 +1529,13 @@ def _database_route_roles(
             return frozenset({"default"})
         raise ConfigurationError("Database route instances must configure role.")
     if not isinstance(value, str):
-        raise ConfigurationError(
-            "Database route role must be a comma-separated string."
-        )
+        raise ConfigurationError("Database route role must be a comma-separated string.")
     roles = tuple(part.strip() for part in value.split(",") if part.strip())
     if not roles:
         raise ConfigurationError("Database route role must not be blank.")
     invalid_roles = sorted(set(roles) - DATABASE_ROUTE_ROLES)
     if invalid_roles:
-        raise ConfigurationError(
-            "Unknown database route role(s): " + ", ".join(invalid_roles) + "."
-        )
+        raise ConfigurationError("Unknown database route role(s): " + ", ".join(invalid_roles) + ".")
     if len(set(roles)) != len(roles):
         raise ConfigurationError("Database route roles must not be duplicated.")
     return frozenset(cast(DatabaseRouteRole, role) for role in roles)
@@ -1783,9 +1666,7 @@ def _normalise_options(value: object) -> Mapping[str, Any]:
     options: dict[str, Any] = {}
     for key, option_value in value.items():
         if not isinstance(key, str) or not key.strip():
-            raise ConfigurationError(
-                "[app.database].options keys must be non-blank strings."
-            )
+            raise ConfigurationError("[app.database].options keys must be non-blank strings.")
         options[key.strip()] = option_value
     return options
 
@@ -1810,9 +1691,7 @@ def _optional_aws_string(
         return None
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise ConfigurationError(
-        f"[{section_name}].{field_name} must be a non-blank string."
-    )
+    raise ConfigurationError(f"[{section_name}].{field_name} must be a non-blank string.")
 
 
 def _required_non_blank_string(value: object, field_name: str) -> str:
@@ -1838,26 +1717,18 @@ def _optional_positive_int(
     if value is None:
         return None
     if isinstance(value, bool):
-        raise ConfigurationError(
-            f"[{section_name}].{field_name} must be a positive integer."
-        )
+        raise ConfigurationError(f"[{section_name}].{field_name} must be a positive integer.")
     if isinstance(value, int):
         parsed = value
     elif isinstance(value, str):
         try:
             parsed = int(value)
         except ValueError as exc:
-            raise ConfigurationError(
-                f"[{section_name}].{field_name} must be a positive integer."
-            ) from exc
+            raise ConfigurationError(f"[{section_name}].{field_name} must be a positive integer.") from exc
     else:
-        raise ConfigurationError(
-            f"[{section_name}].{field_name} must be a positive integer."
-        )
+        raise ConfigurationError(f"[{section_name}].{field_name} must be a positive integer.")
     if parsed <= 0:
-        raise ConfigurationError(
-            f"[{section_name}].{field_name} must be a positive integer."
-        )
+        raise ConfigurationError(f"[{section_name}].{field_name} must be a positive integer.")
     return parsed
 
 
@@ -1869,10 +1740,7 @@ def _reject_plain_and_key(
 ) -> None:
     if plain_value is None or key_value is None:
         return
-    raise ConfigurationError(
-        f"[app.database].{plain_field} and [app.database].{key_field} "
-        "are mutually exclusive."
-    )
+    raise ConfigurationError(f"[app.database].{plain_field} and [app.database].{key_field} are mutually exclusive.")
 
 
 __all__ = (

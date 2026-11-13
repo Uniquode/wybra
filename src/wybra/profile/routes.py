@@ -77,23 +77,11 @@ async def edit_profile(
             await profile_details_form.parse(form_data)
             await profile_form.parse(form_data)
             if profile_details_form.is_valid() and profile_form.is_valid():
-                phone_contact = (
-                    profile_form.phone_contact_data()
-                    if profile_form.has_phone_contact_data()
-                    else None
-                )
-                save_profile = (
-                    profile is not None
-                    or profile_details_form.has_submitted_profile_values()
-                )
+                phone_contact = profile_form.phone_contact_data() if profile_form.has_phone_contact_data() else None
+                save_profile = profile is not None or profile_details_form.has_submitted_profile_values()
                 if save_profile:
-                    profile_result = await profile_details_form.save_with_phone_contact(
-                        phone_contact
-                    )
-                    if (
-                        profile_result.affected_count == 0
-                        and profile_details_form.errors
-                    ):
+                    profile_result = await profile_details_form.save_with_phone_contact(phone_contact)
+                    if profile_result.affected_count == 0 and profile_details_form.errors:
                         form_error = profile_details_form.errors[None][0]
                 elif phone_contact is not None:
                     await profile_capability.save_phone_contact(
@@ -139,11 +127,7 @@ async def edit_profile(
         request,
         PROFILE_EDIT_TEMPLATE,
         context,
-        status_code=(
-            400
-            if not profile_details_form.is_valid() or not profile_form.is_valid()
-            else 200
-        ),
+        status_code=(400 if not profile_details_form.is_valid() or not profile_form.is_valid() else 200),
     )
 
 

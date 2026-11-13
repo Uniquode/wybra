@@ -94,8 +94,7 @@ class CacheTaskiqTasksCapability:
         if existing is not None:
             identity = definition.identity
             raise TaskRegistrationError(
-                f"Task {identity.name!r} version {identity.version} has more than "
-                "one definition in this runtime."
+                f"Task {identity.name!r} version {identity.version} has more than one definition in this runtime."
             )
         retry = _effective_retry(definition.retry, self.retry_policy)
         labels: dict[str, str | float] = {
@@ -110,9 +109,7 @@ class CacheTaskiqTasksCapability:
         if retry.maximum_delay_seconds is not None:
             labels[TASK_RETRY_MAXIMUM_DELAY_LABEL] = retry.maximum_delay_seconds
         if definition.visibility_timeout_seconds is not None:
-            labels[TASK_VISIBILITY_TIMEOUT_LABEL] = (
-                definition.visibility_timeout_seconds
-            )
+            labels[TASK_VISIBILITY_TIMEOUT_LABEL] = definition.visibility_timeout_seconds
 
         async def execute(**arguments: object) -> object:
             return await definition.execute(
@@ -146,8 +143,7 @@ class CacheTaskiqTasksCapability:
         except KeyError as exc:
             identity = definition.identity
             raise TaskRegistrationError(
-                f"Task {identity.name!r} version {identity.version} is not declared "
-                "by this site's configured modules."
+                f"Task {identity.name!r} version {identity.version} is not declared by this site's configured modules."
             ) from exc
         if registered_definition is not definition:
             identity = definition.identity
@@ -167,10 +163,7 @@ class CacheTaskiqTasksCapability:
         with self.broker.track_publication(str(task_id)) as publication:
             try:
                 submitted = await (
-                    task.kicker()
-                    .with_labels(**labels)
-                    .with_task_id(str(task_id))
-                    .kiq(**validated.arguments)
+                    task.kicker().with_labels(**labels).with_task_id(str(task_id)).kiq(**validated.arguments)
                 )
             except SendTaskError as error:
                 if isinstance(error.__cause__, CacheWorkQueueRejectedError):
@@ -187,8 +180,7 @@ class CacheTaskiqTasksCapability:
                         acceptance_unknown=False,
                     ) from None
                 raise TaskSubmissionError(
-                    "The task submission outcome is unknown; query its task ID before "
-                    "submitting again.",
+                    "The task submission outcome is unknown; query its task ID before submitting again.",
                     task_id=task_id,
                     acceptance_unknown=True,
                 ) from None
@@ -201,8 +193,7 @@ class CacheTaskiqTasksCapability:
                         acceptance_unknown=False,
                     ) from None
                 raise TaskSubmissionError(
-                    "The task submission outcome is unknown; query its task ID before "
-                    "submitting again.",
+                    "The task submission outcome is unknown; query its task ID before submitting again.",
                     task_id=task_id,
                     acceptance_unknown=True,
                 ) from None
@@ -218,8 +209,7 @@ class CacheTaskiqTasksCapability:
             await self.lifecycle_middleware.submission_aborted(task_id)
         except CacheFeatureError, TaskLifecycleError:
             _LOGGER.warning(
-                "Task lifecycle could not immediately reconcile a pre-publication "
-                "failure for task %s.",
+                "Task lifecycle could not immediately reconcile a pre-publication failure for task %s.",
                 task_id,
             )
 
@@ -246,8 +236,7 @@ class CacheTaskiqTasksCapability:
             )
         if kwargs.get("executor") is not None:
             raise ValueError(
-                "CacheTaskiqReceiver does not support a Taskiq executor; "
-                "Wybra tasks must be async callables."
+                "CacheTaskiqReceiver does not support a Taskiq executor; Wybra tasks must be async callables."
             )
         kwargs.pop("executor", None)
         kwargs["validate_params"] = False

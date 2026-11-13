@@ -48,9 +48,7 @@ EXPIRED_SESSION_QUEUE_TTL_SECONDS = 1.0
 class MessagesStorage(Protocol):
     async def enqueue(self, request: Request, alert: AlertRecord) -> None: ...
 
-    async def peek(
-        self, request: Request, *, now: float
-    ) -> tuple[AlertRecord, ...]: ...
+    async def peek(self, request: Request, *, now: float) -> tuple[AlertRecord, ...]: ...
 
     async def acknowledge(self, request: Request, *, now: float) -> None: ...
 
@@ -298,12 +296,8 @@ class NamedCacheQueueBackend:
                 if swapped is not None:
                     return
         except (CacheFeatureError, TypeError, ValueError) as exc:
-            raise MessageStorageError(
-                "Named messages cache rejected a queue update."
-            ) from exc
-        raise MessageStorageError(
-            "Atomic messages queue update exceeded its contention limit."
-        )
+            raise MessageStorageError("Named messages cache rejected a queue update.") from exc
+        raise MessageStorageError("Atomic messages queue update exceeded its contention limit.")
 
     async def peek(self, queue_key: str) -> tuple[AlertPayload, ...]:
         current = await self.atomic.get(self.owner, queue_key)
@@ -322,9 +316,7 @@ class NamedCacheQueueBackend:
             await self._delete(queue_key, return_payloads=False)
             return
         if ttl_seconds is None:
-            raise MessageStorageError(
-                "Snapshot acknowledgement requires the messages queue TTL."
-            )
+            raise MessageStorageError("Snapshot acknowledgement requires the messages queue TTL.")
         await self._acknowledge_observed(
             queue_key,
             observed=observed,
@@ -338,9 +330,7 @@ class NamedCacheQueueBackend:
         try:
             await self.atomic.get(self.owner, "__validation__")
         except Exception as exc:
-            raise MessageStorageError(
-                "Named messages cache atomic feature is unavailable."
-            ) from exc
+            raise MessageStorageError("Named messages cache atomic feature is unavailable.") from exc
 
     async def close(self) -> None:
         return None
@@ -362,9 +352,7 @@ class NamedCacheQueueBackend:
                 current.revision,
             ):
                 return payloads if return_payloads else ()
-        raise MessageStorageError(
-            "Atomic messages queue deletion exceeded its contention limit."
-        )
+        raise MessageStorageError("Atomic messages queue deletion exceeded its contention limit.")
 
     async def _acknowledge_observed(
         self,
@@ -398,9 +386,7 @@ class NamedCacheQueueBackend:
             )
             if swapped is not None:
                 return
-        raise MessageStorageError(
-            "Atomic messages queue acknowledgement exceeded its contention limit."
-        )
+        raise MessageStorageError("Atomic messages queue acknowledgement exceeded its contention limit.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,8 +406,7 @@ class DatabaseMessagesStorage:
                 severity=alert.severity,
                 message=alert.message,
                 created_at=alert.created_at,
-                expires_at=alert.created_at
-                + self.settings.resolved_message_ttl_seconds,
+                expires_at=alert.created_at + self.settings.resolved_message_ttl_seconds,
                 using_db=connection,
             )
             await self._trim_queue(connection, queue_key)
@@ -493,11 +478,7 @@ class DatabaseMessagesStorage:
         await self.database.require()
 
     async def _delete_expired(self, connection: Any, now: float) -> None:
-        await (
-            MessageAlert.filter(Q(expires_at__isnull=False), expires_at__lte=now)
-            .using_db(connection)
-            .delete()
-        )
+        await MessageAlert.filter(Q(expires_at__isnull=False), expires_at__lte=now).using_db(connection).delete()
 
     async def _delete_queue(self, connection: Any, queue_key: str) -> None:
         await MessageAlert.filter(queue_key=queue_key).using_db(connection).delete()
@@ -511,30 +492,20 @@ class DatabaseMessagesStorage:
             .values_list("id", flat=True)
         )
         if keep_ids:
-            await (
-                MessageAlert.filter(queue_key=queue_key)
-                .exclude(id__in=keep_ids)
-                .using_db(connection)
-                .delete()
-            )
+            await MessageAlert.filter(queue_key=queue_key).exclude(id__in=keep_ids).using_db(connection).delete()
 
 
 def storage_from_settings(site: Site, settings: MessagesSettings) -> MessagesStorage:
     if settings.resolved_storage_backend is not MessageStorageBackend.CACHE:
         if settings.cache_name is not None:
-            logger.warning(
-                "wybra.messages.cache_name is ignored unless storage_backend is "
-                "'cache'."
-            )
+            logger.warning("wybra.messages.cache_name is ignored unless storage_backend is 'cache'.")
     if settings.resolved_storage_backend is MessageStorageBackend.SESSION:
         return SessionMessagesStorage(settings)
     if settings.resolved_storage_backend is MessageStorageBackend.CACHE:
         try:
             caches = site.require_capability(CachesCapability)
         except SiteCapabilityError as exc:
-            raise MessagesConfigurationError(
-                "Cache-backed messages require the wybra.cache module."
-            ) from exc
+            raise MessagesConfigurationError("Cache-backed messages require the wybra.cache module.") from exc
         try:
             cache = caches.require(
                 settings.resolved_cache_name,
@@ -571,9 +542,7 @@ def request_session(request: Request) -> MutableMapping[str, Any]:
             "a compatible request.session mapping."
         )
     if not isinstance(session, MutableMapping):
-        raise MessageQueueUnavailableError(
-            "Messages storage requires request.session to be a mutable mapping."
-        )
+        raise MessageQueueUnavailableError("Messages storage requires request.session to be a mutable mapping.")
     return session
 
 
@@ -646,11 +615,7 @@ def _valid_payloads(
             continue
         payload = dict(raw_payload)
         expires_at = payload.get("expires_at")
-        if (
-            isinstance(expires_at, (int, float))
-            and now is not None
-            and expires_at <= now
-        ):
+        if isinstance(expires_at, (int, float)) and now is not None and expires_at <= now:
             continue
         try:
             AlertRecord.from_payload(payload, max_message_length=max_message_length)
@@ -665,10 +630,7 @@ def _records_from_payloads(
     *,
     max_message_length: int,
 ) -> tuple[AlertRecord, ...]:
-    return tuple(
-        AlertRecord.from_payload(payload, max_message_length=max_message_length)
-        for payload in payloads
-    )
+    return tuple(AlertRecord.from_payload(payload, max_message_length=max_message_length) for payload in payloads)
 
 
 def _payloads_from_json(value: object) -> list[AlertPayload]:
@@ -694,19 +656,9 @@ def _remaining_after_acknowledgement(
     current: Sequence[Mapping[str, object]],
     observed: Sequence[Mapping[str, object]],
 ) -> list[AlertPayload]:
-    observed_ids = {
-        entry_id
-        for payload in observed
-        if isinstance(entry_id := payload.get(QUEUE_ENTRY_ID_KEY), str)
-    }
-    remaining = [
-        dict(payload)
-        for payload in current
-        if payload.get(QUEUE_ENTRY_ID_KEY) not in observed_ids
-    ]
-    observed_without_ids = [
-        dict(payload) for payload in observed if QUEUE_ENTRY_ID_KEY not in payload
-    ]
+    observed_ids = {entry_id for payload in observed if isinstance(entry_id := payload.get(QUEUE_ENTRY_ID_KEY), str)}
+    remaining = [dict(payload) for payload in current if payload.get(QUEUE_ENTRY_ID_KEY) not in observed_ids]
+    observed_without_ids = [dict(payload) for payload in observed if QUEUE_ENTRY_ID_KEY not in payload]
     if not observed_without_ids:
         return remaining
     overlap = _acknowledged_prefix_length(remaining, observed_without_ids)
@@ -732,9 +684,7 @@ def _queue_payload(payloads: Sequence[Mapping[str, object]]) -> bytes:
             separators=(",", ":"),
         ).encode("utf-8")
     except (TypeError, ValueError) as exc:
-        raise MessageStorageError(
-            "Queued alert payloads must be JSON serialisable."
-        ) from exc
+        raise MessageStorageError("Queued alert payloads must be JSON serialisable.") from exc
 
 
 __all__ = (

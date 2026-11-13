@@ -236,10 +236,7 @@ def validate_resource(value: str, *, label: str = "resource") -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label.capitalize()} must be a non-blank string.")
     if len(value) > MAX_CACHE_RESOURCE_LENGTH:
-        raise ValueError(
-            f"{label.capitalize()} cannot exceed "
-            f"{MAX_CACHE_RESOURCE_LENGTH} characters."
-        )
+        raise ValueError(f"{label.capitalize()} cannot exceed {MAX_CACHE_RESOURCE_LENGTH} characters.")
     return value
 
 
@@ -247,10 +244,7 @@ def validate_payload(value: bytes) -> bytes:
     if not isinstance(value, bytes):
         raise TypeError("Cache feature payloads must be bytes.")
     if len(value) > MAX_CACHE_FEATURE_PAYLOAD_BYTES:
-        raise ValueError(
-            f"Cache feature payloads cannot exceed "
-            f"{MAX_CACHE_FEATURE_PAYLOAD_BYTES} bytes."
-        )
+        raise ValueError(f"Cache feature payloads cannot exceed {MAX_CACHE_FEATURE_PAYLOAD_BYTES} bytes.")
     return value
 
 
@@ -280,9 +274,7 @@ def validate_cache_ttl(value: object) -> float:
     try:
         ttl = float(value)
     except OverflowError as exc:
-        raise ValueError(
-            "Cache TTL must be a finite duration of at least one second."
-        ) from exc
+        raise ValueError("Cache TTL must be a finite duration of at least one second.") from exc
     if not math.isfinite(ttl) or ttl < MINIMUM_CACHE_TTL_SECONDS:
         raise ValueError("Cache TTL must be a finite duration of at least one second.")
     return ttl

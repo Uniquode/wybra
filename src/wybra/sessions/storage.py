@@ -105,11 +105,7 @@ class MemorySessionStorage:
     async def cleanup(self, *, now: float) -> None:
         cleanup_records: list[dict[str, Any]] = []
         async with self._lock:
-            expired_ids = [
-                session_id
-                for session_id, record in self._records.items()
-                if record.expired(now)
-            ]
+            expired_ids = [session_id for session_id, record in self._records.items() if record.expired(now)]
             for session_id in expired_ids:
                 record = self._records.pop(session_id, None)
                 if record is not None:
@@ -139,9 +135,7 @@ class FileSessionStorage:
         except FileNotFoundError:
             return None
         except OSError as exc:
-            raise SessionStorageError(
-                f"Session file could not be read: {path}"
-            ) from exc
+            raise SessionStorageError(f"Session file could not be read: {path}") from exc
         try:
             record = _record_from_json(raw_payload)
         except SessionStorageError:
@@ -184,13 +178,9 @@ class FileSessionStorage:
         try:
             await self.directory.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            raise SessionStorageError(
-                f"Session file directory is not available: {self.directory}"
-            ) from exc
+            raise SessionStorageError(f"Session file directory is not available: {self.directory}") from exc
         if not await self.directory.is_dir():
-            raise SessionStorageError(
-                f"Session file directory is not available: {self.directory}"
-            )
+            raise SessionStorageError(f"Session file directory is not available: {self.directory}")
 
     async def cleanup(self, *, now: float) -> None:
         if not await self.directory.is_dir():
@@ -312,9 +302,7 @@ class NamedCacheSessionStorage:
         payload = _record_json(record, max_bytes=self.payload_max_bytes).encode("utf-8")
         ttl = record.expires_at - record.updated_at
         if ttl <= 0:
-            raise SessionStorageError(
-                "Session record expiry must be later than its update time."
-            )
+            raise SessionStorageError("Session record expiry must be later than its update time.")
         await self.cache.set(
             self.owner,
             self._key(session_id),
@@ -428,11 +416,7 @@ class DatabaseSessionStorage:
             database,
             database.database(self.connection_name).for_write(),
         ) as connection:
-            rows = tuple(
-                await SessionRecordModel.filter(expires_at__lte=now)
-                .using_db(connection)
-                .all()
-            )
+            rows = tuple(await SessionRecordModel.filter(expires_at__lte=now).using_db(connection).all())
             for row in rows:
                 cleanup_data = _session_data_from_json(row.data)
                 if cleanup_data is not None:
@@ -453,10 +437,7 @@ def storage_from_settings(
 ) -> SessionStorage:
     if settings.resolved_storage_backend is not SessionStorageBackend.CACHE:
         if settings.cache_name is not None:
-            logger.warning(
-                "wybra.sessions.cache_name is ignored unless storage_backend is "
-                "'cache'."
-            )
+            logger.warning("wybra.sessions.cache_name is ignored unless storage_backend is 'cache'.")
     if settings.resolved_storage_backend is SessionStorageBackend.MEMORY:
         return MemorySessionStorage(
             payload_max_bytes=settings.resolved_payload_max_bytes,
@@ -478,9 +459,7 @@ def storage_from_settings(
         try:
             caches = site.require_capability(CachesCapability)
         except SiteCapabilityError as exc:
-            raise SessionsConfigurationError(
-                "Cache-backed sessions require the wybra.cache module."
-            ) from exc
+            raise SessionsConfigurationError("Cache-backed sessions require the wybra.cache module.") from exc
         try:
             cache = caches.require(
                 settings.resolved_cache_name,
@@ -684,9 +663,7 @@ def _validate_data(value: Mapping[str, Any]) -> None:
 def _check_size(value: str, max_bytes: int) -> None:
     size = len(value.encode("utf-8"))
     if size > max_bytes:
-        raise SessionStorageError(
-            f"Session payload exceeds configured limit: {size} > {max_bytes} bytes."
-        )
+        raise SessionStorageError(f"Session payload exceeds configured limit: {size} > {max_bytes} bytes.")
 
 
 __all__ = (

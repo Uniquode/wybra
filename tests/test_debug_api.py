@@ -48,9 +48,7 @@ def test_debug_websocket_lists_scopes_and_returns_filtered_snapshot() -> None:
     with WybraTestClient(app) as client:
         client.get("/work")
         with client.websocket_connect("/__debug/ws") as websocket:
-            websocket.send_json(
-                {"jsonrpc": "2.0", "id": 1, "method": "diagnostics.scopes"}
-            )
+            websocket.send_json({"jsonrpc": "2.0", "id": 1, "method": "diagnostics.scopes"})
             scopes = websocket.receive_json()
             websocket.send_json(
                 {
@@ -109,9 +107,7 @@ def test_debug_websocket_returns_parse_error_and_remains_available() -> None:
         with client.websocket_connect("/__debug/ws") as websocket:
             websocket.send_text("{not valid JSON")
             error = websocket.receive_json()
-            websocket.send_json(
-                {"jsonrpc": "2.0", "id": 1, "method": "diagnostics.scopes"}
-            )
+            websocket.send_json({"jsonrpc": "2.0", "id": 1, "method": "diagnostics.scopes"})
             result = websocket.receive_json()
 
     assert error == {
@@ -168,9 +164,7 @@ def test_debug_websocket_sends_a_notification_for_its_subscription() -> None:
 
 
 def test_debug_websocket_marks_a_notification_when_subscription_events_drop() -> None:
-    app = FastAPI(
-        lifespan=start_site(config_source=_debug_config(subscription_queue_limit=1))
-    )
+    app = FastAPI(lifespan=start_site(config_source=_debug_config(subscription_queue_limit=1)))
 
     @app.get("/burst")
     async def burst(request: Request) -> dict[str, str]:
@@ -202,9 +196,7 @@ def test_debug_websocket_marks_a_notification_when_subscription_events_drop() ->
 def test_debug_websocket_is_not_registered_without_explicit_activation() -> None:
     app = FastAPI(
         lifespan=start_site(
-            config_source=MappingConfigSource(
-                {"app": {"modules": (), "deployment_environment": "local"}}
-            )
+            config_source=MappingConfigSource({"app": {"modules": (), "deployment_environment": "local"}})
         )
     )
 
@@ -215,9 +207,7 @@ def test_debug_websocket_is_not_registered_without_explicit_activation() -> None
 
 
 def test_debug_websocket_rejects_a_host_outside_the_allow_list() -> None:
-    app = FastAPI(
-        lifespan=start_site(config_source=_debug_config(allowed_hosts=("localhost",)))
-    )
+    app = FastAPI(lifespan=start_site(config_source=_debug_config(allowed_hosts=("localhost",))))
 
     with WybraTestClient(app) as client:
         with pytest.raises(WebSocketDisconnect):
@@ -260,9 +250,7 @@ async def test_peer_hostname_resolution_uses_the_event_loop_resolver(
 
 
 def test_debug_websocket_rejects_a_spoofed_host_from_a_remote_peer() -> None:
-    app = FastAPI(
-        lifespan=start_site(config_source=_debug_config(allowed_hosts=("localhost",)))
-    )
+    app = FastAPI(lifespan=start_site(config_source=_debug_config(allowed_hosts=("localhost",))))
 
     with WybraTestClient(app, client=("203.0.113.10", 50000)) as client:
         with pytest.raises(WebSocketDisconnect):
@@ -274,11 +262,7 @@ def test_debug_websocket_rejects_a_spoofed_host_from_a_remote_peer() -> None:
 
 
 def test_debug_websocket_uses_the_trusted_proxy_normalised_peer() -> None:
-    app = FastAPI(
-        lifespan=start_site(
-            config_source=_debug_config(allowed_hosts=("203.0.113.10",))
-        )
-    )
+    app = FastAPI(lifespan=start_site(config_source=_debug_config(allowed_hosts=("203.0.113.10",))))
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["127.0.0.1"])
 
     with WybraTestClient(app, client=("127.0.0.1", 50000)) as client:
@@ -286,9 +270,7 @@ def test_debug_websocket_uses_the_trusted_proxy_normalised_peer() -> None:
             "/__debug/ws",
             headers={"x-forwarded-for": "203.0.113.10"},
         ) as websocket:
-            websocket.send_json(
-                {"jsonrpc": "2.0", "id": 1, "method": "diagnostics.scopes"}
-            )
+            websocket.send_json({"jsonrpc": "2.0", "id": 1, "method": "diagnostics.scopes"})
             response = websocket.receive_json()
 
     assert response["id"] == 1

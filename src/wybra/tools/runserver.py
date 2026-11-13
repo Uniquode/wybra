@@ -154,9 +154,7 @@ def runserver_command(
     debug_requested: bool | None,
     uvicorn_args: tuple[str, ...],
 ) -> None:
-    selected_project_root = (
-        project_root.resolve() if project_root is not None else runtime_project_root()
-    )
+    selected_project_root = project_root.resolve() if project_root is not None else runtime_project_root()
     try:
         startup = resolve_configured_app_startup(
             project_root=selected_project_root,
@@ -178,11 +176,7 @@ def runserver_command(
     reload_env_value = runserver_config.get("reload_env_value")
     if not isinstance(reload_env_value, str):
         reload_env_value = None
-    reload_enabled = (
-        env_requests_reload(reload_env_value)
-        if reload_requested is None
-        else reload_requested
-    )
+    reload_enabled = env_requests_reload(reload_env_value) if reload_requested is None else reload_requested
     reject_extra_app_target(uvicorn_args, app_target=startup.app_target)
     os.environ.update(
         runserver_environment_overrides(

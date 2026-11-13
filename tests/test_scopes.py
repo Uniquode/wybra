@@ -138,9 +138,7 @@ def test_endpoint_scope_declaration_is_immutable_and_preserves_callable() -> Non
 
     assert decorated is export_report
     assert signature(decorated) == original_signature
-    assert get_scope_declaration(decorated) == ScopeDeclaration(
-        requires=("reports.export",)
-    )
+    assert get_scope_declaration(decorated) == ScopeDeclaration(requires=("reports.export",))
     with pytest.raises(FrozenInstanceError):
         get_scope_declaration(decorated).requires = ()  # type: ignore[misc]
 
@@ -167,12 +165,8 @@ def test_target_sensitive_positionals_and_explicit_channels() -> None:
         ScopeAction.DELETE,
         ScopeAction.MANAGE,
     )
-    assert get_scope_declaration(ProtectedModel) == ScopeDeclaration(
-        actions=(ScopeAction.UPDATE, ScopeAction.DELETE)
-    )
-    assert get_scope_declaration(export_report) == ScopeDeclaration(
-        requires=("reports.export",)
-    )
+    assert get_scope_declaration(ProtectedModel) == ScopeDeclaration(actions=(ScopeAction.UPDATE, ScopeAction.DELETE))
+    assert get_scope_declaration(export_report) == ScopeDeclaration(requires=("reports.export",))
     assert get_scope_declaration(ProtectedModelView) == ScopeDeclaration(
         requires=("backoffice.access",),
         actions=(ScopeAction.UPDATE,),
@@ -187,11 +181,7 @@ def test_target_sensitive_positionals_and_explicit_channels() -> None:
         (("update",), (ScopeAction.UPDATE,)),
         (
             ("-delete",),
-            tuple(
-                action
-                for action in STANDARD_SCOPE_ACTIONS
-                if action is not ScopeAction.DELETE
-            ),
+            tuple(action for action in STANDARD_SCOPE_ACTIONS if action is not ScopeAction.DELETE),
         ),
     ],
 )
@@ -214,9 +204,7 @@ def test_empty_decorator_is_a_no_op_and_allows_meta_scopes() -> None:
             abstract = True
             scopes = ("view",)
 
-    assert get_scope_declaration(ProtectedModel) == ScopeDeclaration(
-        actions=(ScopeAction.VIEW,)
-    )
+    assert get_scope_declaration(ProtectedModel) == ScopeDeclaration(actions=(ScopeAction.VIEW,))
 
 
 @pytest.mark.parametrize("metadata", [("view",), (), None])
@@ -571,9 +559,7 @@ async def test_single_and_bulk_delete_deny_before_body_access() -> None:
         model = ProtectedModel
         bulk_actions = {"delete": BulkDeleteAction()}
 
-    grants = _ScopeGrants(
-        ScopeSubject(actor=SimpleNamespace(), granted_scopes=(), groups=())
-    )
+    grants = _ScopeGrants(ScopeSubject(actor=SimpleNamespace(), granted_scopes=(), groups=()))
     base_request = _policy_request(
         grants=grants,
         content_types=_content_types(ProtectedModel),
@@ -625,9 +611,7 @@ async def test_unknown_bulk_action_is_rejected_before_scope_or_body_access() -> 
 
             return Response(status_code=422)
 
-    grants = _ScopeGrants(
-        ScopeSubject(actor=SimpleNamespace(), granted_scopes=(), groups=())
-    )
+    grants = _ScopeGrants(ScopeSubject(actor=SimpleNamespace(), granted_scopes=(), groups=()))
     base_request = _policy_request(
         grants=grants,
         content_types=_content_types(ProtectedModel),
@@ -911,9 +895,7 @@ async def test_generic_context_hides_controls_from_one_cached_visibility_map() -
 
 
 @pytest.mark.anyio
-async def test_generic_context_intersects_scope_visibility_with_content_actions() -> (
-    None
-):
+async def test_generic_context_intersects_scope_visibility_with_content_actions() -> None:
     class ReadOnlyModel(Model):
         class Meta:
             abstract = True
@@ -949,18 +931,14 @@ async def test_generic_context_intersects_scope_visibility_with_content_actions(
     assert isinstance(visibility, ScopeVisibility)
     for action in ScopeAction:
         template = Environment(enable_async=True, autoescape=True).from_string(
-            "{% if scope_visibility."
-            f"{action.value}"
-            " %}visible{% else %}hidden{% endif %}"
+            f"{{% if scope_visibility.{action.value} %}}visible{{% else %}}hidden{{% endif %}}"
         )
         rendered = await template.render_async(scope_visibility=visibility)
         assert rendered == ("visible" if visibility[action.value] else "hidden")
 
 
 @pytest.mark.anyio
-async def test_generic_dispatch_rejects_unavailable_content_action_before_handler() -> (
-    None
-):
+async def test_generic_dispatch_rejects_unavailable_content_action_before_handler() -> None:
     class ReadOnlyModel(Model):
         class Meta:
             abstract = True
@@ -1030,10 +1008,7 @@ def test_generic_route_operations_map_to_canonical_actions(
             "update": UpdateBulkAction(),
         }
 
-    assert (
-        ProtectedView().scope_action(_policy_method_request(method), **kwargs)
-        is expected
-    )
+    assert ProtectedView().scope_action(_policy_method_request(method), **kwargs) is expected
 
 
 def _policy_method_request(method: str) -> Request:

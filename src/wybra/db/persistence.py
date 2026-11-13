@@ -100,9 +100,7 @@ async def create_database(
     if routing is not None:
         for connection in routing.connections.values():
             if not is_database_backend_available(connection.backend):
-                raise ConfigurationError(
-                    database_url_support_error(f"{connection.backend.scheme}://")
-                )
+                raise ConfigurationError(database_url_support_error(f"{connection.backend.scheme}://"))
         route_registry = routing.build_registry()
         config = build_tortoise_config(
             database_connections=routing.connections,
@@ -129,9 +127,7 @@ async def create_database(
         )
     else:
         if not is_database_backend_available(database_connection.backend):
-            raise ConfigurationError(
-                database_url_support_error(f"{database_connection.backend.scheme}://")
-            )
+            raise ConfigurationError(database_url_support_error(f"{database_connection.backend.scheme}://"))
         config = build_tortoise_config(
             database_connection=database_connection,
             modules=modules,
@@ -171,11 +167,7 @@ def _validate_version_field_declarations(context: TortoiseContext) -> None:
     apps = context.apps
     if apps is None:
         return
-    models = tuple(
-        model
-        for registered_models in apps.values()
-        for model in registered_models.values()
-    )
+    models = tuple(model for registered_models in apps.values() for model in registered_models.values())
     try:
         validate_version_fields(models)
     except VersionFieldError as exc:

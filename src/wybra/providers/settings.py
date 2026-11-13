@@ -53,9 +53,7 @@ APPLE_PROVIDER_OPTION_FIELDS: Final = frozenset(
         PROVIDER_TEAM_ID_FIELD,
     }
 )
-PROVIDER_OPTION_FIELDS: Final = (
-    BASE_PROVIDER_OPTION_FIELDS | APPLE_PROVIDER_OPTION_FIELDS
-)
+PROVIDER_OPTION_FIELDS: Final = BASE_PROVIDER_OPTION_FIELDS | APPLE_PROVIDER_OPTION_FIELDS
 PROVIDER_CLIENT_SECRET_KEY_PATH_SUFFIX: Final = "client-secret"
 PROVIDER_PRIVATE_KEY_SECRET_KEY_PATH_SUFFIX: Final = "private-key"
 PROVIDER_DEVELOPMENT_SEGMENT: Final = "dev"
@@ -261,11 +259,7 @@ class ProvidersSettings(BaseSettings):
 
     @classmethod
     def load_settings(cls, config) -> ProvidersSettings:  # type: ignore[override]
-        return cls(
-            providers=provider_settings_from_config(
-                cls.section_values(config, PROVIDERS_CONFIG_SECTION)
-            )
-        )
+        return cls(providers=provider_settings_from_config(cls.section_values(config, PROVIDERS_CONFIG_SECTION)))
 
     def provider(self, provider_name: str) -> ProviderSettings:
         name = provider_name_value(provider_name)
@@ -279,20 +273,14 @@ class ProvidersSettings(BaseSettings):
         return tuple(provider for provider in self.providers if provider.enabled)
 
     def credential_references(self) -> tuple[CredentialReference, ...]:
-        return tuple(
-            reference
-            for provider in self.providers
-            for reference in provider.credential_references()
-        )
+        return tuple(reference for provider in self.providers for reference in provider.credential_references())
 
 
 def provider_settings_from_config(
     providers_config: Mapping[str, Any],
 ) -> tuple[ProviderSettings, ...]:
     if not isinstance(providers_config, Mapping):
-        raise ConfigurationError(
-            f"Providers config must be a [{PROVIDERS_CONFIG_SECTION}] table."
-        )
+        raise ConfigurationError(f"Providers config must be a [{PROVIDERS_CONFIG_SECTION}] table.")
 
     providers: list[ProviderSettings] = []
     for provider_name, provider_config in providers_config.items():
@@ -333,15 +321,9 @@ def provider_settings_from_config(
                     PROVIDER_EMAIL_MATCH_LINKING_ENABLED_FIELD,
                     False,
                 ),
-                required_claims=_tuple_config_value(
-                    provider_config.get(PROVIDER_REQUIRED_CLAIMS_FIELD, ())
-                ),
-                allowed_emails=_tuple_config_value(
-                    provider_config.get(PROVIDER_ALLOWED_EMAILS_FIELD, ())
-                ),
-                allowed_domains=_tuple_config_value(
-                    provider_config.get(PROVIDER_ALLOWED_DOMAINS_FIELD, ())
-                ),
+                required_claims=_tuple_config_value(provider_config.get(PROVIDER_REQUIRED_CLAIMS_FIELD, ())),
+                allowed_emails=_tuple_config_value(provider_config.get(PROVIDER_ALLOWED_EMAILS_FIELD, ())),
+                allowed_domains=_tuple_config_value(provider_config.get(PROVIDER_ALLOWED_DOMAINS_FIELD, ())),
             )
         )
     return tuple(providers)
@@ -413,9 +395,7 @@ def _optional_provider_string(value: object, *, field_name: str) -> str | None:
         stripped = value.strip()
         if stripped:
             return stripped
-        raise ConfigurationError(
-            f"Provider {field_name} must not be blank or whitespace-only."
-        )
+        raise ConfigurationError(f"Provider {field_name} must not be blank or whitespace-only.")
     raise ConfigurationError(f"Provider {field_name} must be a string.")
 
 
@@ -505,9 +485,7 @@ def _tuple_config_value(value: object) -> tuple[str, ...]:
         items: list[str] = []
         for item in value:
             if not isinstance(item, str):
-                raise ConfigurationError(
-                    "Provider list values must contain only strings."
-                )
+                raise ConfigurationError("Provider list values must contain only strings.")
             items.append(item)
         return tuple(items)
     raise ConfigurationError("Provider list values must be strings or string lists.")
@@ -523,9 +501,7 @@ def _normalise_string_tuple(
         if isinstance(item, str) and item.strip():
             values.append(item.strip())
             continue
-        raise ConfigurationError(
-            f"Provider {field_name} must contain only non-blank strings."
-        )
+        raise ConfigurationError(f"Provider {field_name} must contain only non-blank strings.")
     return tuple(values)
 
 

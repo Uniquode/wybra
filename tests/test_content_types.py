@@ -19,9 +19,7 @@ from wybra.testing import (
 
 
 @pytest.mark.anyio
-async def test_registry_discovers_finalised_models_and_resolves_both_directions() -> (
-    None
-):
+async def test_registry_discovers_finalised_models_and_resolves_both_directions() -> None:
     async with migrated_test_database(modules=("tests_support.content_types",)):
         registry = ContentTypeRegistry.from_models((Article, Person))
 
@@ -40,9 +38,7 @@ async def test_registry_discovers_finalised_models_and_resolves_both_directions(
 
 @pytest.mark.anyio
 async def test_database_capability_exposes_configured_finalised_models() -> None:
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         models = database.capability().models()
 
     assert {Article, Person} <= set(models)
@@ -64,17 +60,13 @@ async def test_site_lifecycle_finalises_content_types_capability() -> None:
         content_types = site.require_capability(ContentTypesCapability)
 
         assert content_types.for_model(Article).verbose_name_plural == "Articles"
-        assert content_types.for_model(Person).actions == frozenset(
-            {"list", "view", "create", "update"}
-        )
+        assert content_types.for_model(Person).actions == frozenset({"list", "view", "create", "update"})
 
 
 @pytest.mark.anyio
 async def test_identifier_is_stable_when_model_class_name_changes() -> None:
     async with migrated_test_database(modules=("tests_support.content_types",)):
-        original_identifier = (
-            ContentTypeRegistry.from_models((Article,)).for_model(Article).identifier
-        )
+        original_identifier = ContentTypeRegistry.from_models((Article,)).for_model(Article).identifier
 
         class RenamedArticle(Article):
             class Meta:
@@ -82,9 +74,7 @@ async def test_identifier_is_stable_when_model_class_name_changes() -> None:
                 app = Article._meta.app
                 table = Article._meta.db_table
 
-        renamed_content_type = ContentTypeRegistry.from_models(
-            (RenamedArticle,)
-        ).for_model(RenamedArticle)
+        renamed_content_type = ContentTypeRegistry.from_models((RenamedArticle,)).for_model(RenamedArticle)
         renamed_identifier = renamed_content_type.identifier
 
     assert renamed_identifier == original_identifier
@@ -154,9 +144,7 @@ async def test_registry_rejects_invalid_metadata() -> None:
                 app = Article._meta.app
                 table = "dotted.table"
 
-        with pytest.raises(
-            ContentTypeError, match="schema and table names must not contain dots"
-        ):
+        with pytest.raises(ContentTypeError, match="schema and table names must not contain dots"):
             ContentTypeRegistry.from_models((DottedTable,))
 
         class DuplicateArticle(Article):

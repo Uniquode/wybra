@@ -105,9 +105,7 @@ async def run_worker(app: Any, shutdown_requested: asyncio.Event) -> None:
 def _receiver_for_site(site: Site) -> _TaskiqReceiver:
     capability = site.optional_capability(TasksCapability)
     if not isinstance(capability, _TaskWorkerCapability):
-        raise ProjectToolConfigurationError(
-            "wybra-task-worker requires enabled tasks with backend = 'taskiq'."
-        )
+        raise ProjectToolConfigurationError("wybra-task-worker requires enabled tasks with backend = 'taskiq'.")
     return capability.receiver()
 
 
@@ -149,9 +147,7 @@ def _shutdown_signals(shutdown_requested: asyncio.Event) -> Iterator[None]:
             except NotImplementedError, RuntimeError:
                 previous = signal.signal(
                     signum,
-                    lambda _signum, _frame: loop.call_soon_threadsafe(
-                        shutdown_requested.set
-                    ),
+                    lambda _signum, _frame: loop.call_soon_threadsafe(shutdown_requested.set),
                 )
                 fallback_handlers.append((signum, previous))
         yield

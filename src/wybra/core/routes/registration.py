@@ -81,9 +81,7 @@ def load_module_routes(
             prefix = _prefix_for_published_router(
                 module_name=module_name,
                 label=label,
-                prefix=""
-                if route_prefixes is None
-                else route_prefixes[module_name][label],
+                prefix="" if route_prefixes is None else route_prefixes[module_name][label],
             )
             configured_routers.append(
                 ConfiguredModuleRouter(
@@ -193,9 +191,7 @@ def _published_router_labels(
     if module_prefixes is None:
         return ()
 
-    unknown_labels = tuple(
-        label for label in module_prefixes if label not in module_routers
-    )
+    unknown_labels = tuple(label for label in module_prefixes if label not in module_routers)
     if unknown_labels:
         raise RouteCompositionError(
             f"Route config for configured module {module_name!r} references "
@@ -211,9 +207,7 @@ def _format_label_list(labels: tuple[str, ...]) -> str:
 
 def _normalise_include_prefix(module_name: str, label: str, prefix: str) -> str:
     if not isinstance(prefix, str):
-        raise RouteCompositionError(
-            f"Route prefix for {module_name!r} router {label!r} must be a string."
-        )
+        raise RouteCompositionError(f"Route prefix for {module_name!r} router {label!r} must be a string.")
     if prefix == "":
         return ""
 
@@ -221,9 +215,7 @@ def _normalise_include_prefix(module_name: str, label: str, prefix: str) -> str:
     if not normalised_prefix:
         return ""
     if not normalised_prefix.startswith("/"):
-        raise RouteCompositionError(
-            f"Route prefix for {module_name!r} router {label!r} must start with '/'."
-        )
+        raise RouteCompositionError(f"Route prefix for {module_name!r} router {label!r} must start with '/'.")
 
     return normalised_prefix
 
@@ -250,20 +242,16 @@ def _validate_configured_routers(
                 continue
             if not isinstance(route_path, str):
                 raise RouteCompositionError(
-                    f"Route {owner.label} has invalid path {route_path!r}; "
-                    "paths must be strings."
+                    f"Route {owner.label} has invalid path {route_path!r}; paths must be strings."
                 )
             if route_path != "" and not route_path.startswith("/"):
                 raise RouteCompositionError(
-                    f"Route {owner.label} has invalid path {route_path!r}; "
-                    "paths must be empty or start with '/'."
+                    f"Route {owner.label} has invalid path {route_path!r}; paths must be empty or start with '/'."
                 )
 
             full_path = f"{configured_router.prefix}{route_path}"
             if not full_path:
-                raise RouteCompositionError(
-                    f"Route {owner.label} resolves to an empty path."
-                )
+                raise RouteCompositionError(f"Route {owner.label} resolves to an empty path.")
             _normalised_methods(route_methods, owner, full_path)
 
 
@@ -322,9 +310,7 @@ def _first_winning_routes(
         full_path = f"{configured_router.prefix}{route_path}"
         methods = _normalised_methods(route_methods, owner, full_path)
         winning_owners = {
-            method: method_paths[(method, full_path)]
-            for method in methods
-            if (method, full_path) in method_paths
+            method: method_paths[(method, full_path)] for method in methods if (method, full_path) in method_paths
         }
         if winning_owners:
             if len(winning_owners) != len(methods):
@@ -364,31 +350,17 @@ def _include_selected_routes(
                 "dependencies": getattr(route, "dependencies", None),
                 "summary": getattr(route, "summary", None),
                 "description": getattr(route, "description", None),
-                "response_description": getattr(
-                    route, "response_description", "Successful Response"
-                ),
+                "response_description": getattr(route, "response_description", "Successful Response"),
                 "responses": getattr(route, "responses", None),
                 "deprecated": getattr(route, "deprecated", None),
                 "methods": route.methods,
                 "operation_id": getattr(route, "operation_id", None),
-                "response_model_include": getattr(
-                    route, "response_model_include", None
-                ),
-                "response_model_exclude": getattr(
-                    route, "response_model_exclude", None
-                ),
-                "response_model_by_alias": getattr(
-                    route, "response_model_by_alias", True
-                ),
-                "response_model_exclude_unset": getattr(
-                    route, "response_model_exclude_unset", False
-                ),
-                "response_model_exclude_defaults": getattr(
-                    route, "response_model_exclude_defaults", False
-                ),
-                "response_model_exclude_none": getattr(
-                    route, "response_model_exclude_none", False
-                ),
+                "response_model_include": getattr(route, "response_model_include", None),
+                "response_model_exclude": getattr(route, "response_model_exclude", None),
+                "response_model_by_alias": getattr(route, "response_model_by_alias", True),
+                "response_model_exclude_unset": getattr(route, "response_model_exclude_unset", False),
+                "response_model_exclude_defaults": getattr(route, "response_model_exclude_defaults", False),
+                "response_model_exclude_none": getattr(route, "response_model_exclude_none", False),
                 "include_in_schema": route.include_in_schema,
                 "name": route.name,
                 "route_class_override": type(route),
@@ -399,13 +371,9 @@ def _include_selected_routes(
             response_class = getattr(route, "response_class", None)
             if response_class is not None:
                 route_options["response_class"] = response_class
-            generate_unique_id_function = getattr(
-                route, "generate_unique_id_function", None
-            )
+            generate_unique_id_function = getattr(route, "generate_unique_id_function", None)
             if generate_unique_id_function is not None:
-                route_options["generate_unique_id_function"] = (
-                    generate_unique_id_function
-                )
+                route_options["generate_unique_id_function"] = generate_unique_id_function
             selected_router.add_api_route(route.path, route.endpoint, **route_options)
             _record_selected_route_origin(
                 app,
@@ -477,8 +445,7 @@ def _normalised_methods(
     for method in methods:
         if not isinstance(method, str):
             raise RouteCompositionError(
-                f"Route {owner.label} at {path} has invalid HTTP method "
-                f"{method!r}; methods must be strings."
+                f"Route {owner.label} at {path} has invalid HTTP method {method!r}; methods must be strings."
             )
 
         stripped_method = method.strip()
@@ -486,9 +453,7 @@ def _normalised_methods(
             normalised_methods.append(stripped_method.upper())
 
     if not normalised_methods:
-        raise RouteCompositionError(
-            f"Route {owner.label} at {path} must declare at least one HTTP method."
-        )
+        raise RouteCompositionError(f"Route {owner.label} at {path} must declare at least one HTTP method.")
 
     return tuple(normalised_methods)
 
@@ -497,13 +462,7 @@ def _route_origin_methods(route: object) -> tuple[str, ...]:
     methods = getattr(route, "methods", None)
     if methods is None:
         return ()
-    return tuple(
-        sorted(
-            method.strip().upper()
-            for method in methods
-            if isinstance(method, str) and method.strip()
-        )
-    )
+    return tuple(sorted(method.strip().upper() for method in methods if isinstance(method, str) and method.strip()))
 
 
 __all__ = [

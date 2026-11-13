@@ -12,9 +12,7 @@ ALLOWED_DEPLOYMENT_ENVIRONMENTS: Final[tuple[DeploymentEnvironment, ...]] = cast
     get_args(DeploymentEnvironment),
 )
 DEPLOYMENT_ENVIRONMENT_ERROR: Final = (
-    "Deployment environment must be one of: "
-    + ", ".join(ALLOWED_DEPLOYMENT_ENVIRONMENTS)
-    + "."
+    "Deployment environment must be one of: " + ", ".join(ALLOWED_DEPLOYMENT_ENVIRONMENTS) + "."
 )
 
 

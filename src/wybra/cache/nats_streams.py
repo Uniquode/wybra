@@ -86,12 +86,8 @@ class NatsStreamCache:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning(
-                    "NATS JetStream stream append failed (%s).", type(exc).__name__
-                )
-                raise CacheFeatureError(
-                    "NATS JetStream stream append failed."
-                ) from None
+                logger.warning("NATS JetStream stream append failed (%s).", type(exc).__name__)
+                raise CacheFeatureError("NATS JetStream stream append failed.") from None
             return _position(getattr(acknowledgement, "seq", None), label="append")
         return StreamPosition(
             await self.coordination.append_stream(
@@ -122,9 +118,7 @@ class NatsStreamCache:
         if last == 0:
             return ()
         if after_value is not None and first > 0 and after_value < first - 1:
-            raise CachePositionExpiredError(
-                f"Stream position {after_value} is no longer retained."
-            )
+            raise CachePositionExpiredError(f"Stream position {after_value} is no longer retained.")
         start = first if after_value is None else max(first, after_value + 1)
         if start > last:
             return ()
@@ -132,40 +126,26 @@ class NatsStreamCache:
         records: list[StreamRecord] = []
         for sequence in range(start, min(last, start + limit - 1) + 1):
             try:
-                message = await jetstream.get_msg(
-                    address.name, seq=sequence, direct=True
-                )
+                message = await jetstream.get_msg(address.name, seq=sequence, direct=True)
             except asyncio.CancelledError:
                 raise
             except self.runtime.not_found_error() as exc:
                 current_info = await self._stream_info(address.name)
-                current_state = (
-                    None
-                    if current_info is None
-                    else getattr(current_info, "state", None)
-                )
+                current_state = None if current_info is None else getattr(current_info, "state", None)
                 current_first = _stream_sequence(
                     getattr(current_state, "first_seq", None),
                     label="first",
                 )
                 if sequence < current_first:
-                    raise CachePositionExpiredError(
-                        f"Stream position {sequence - 1} is no longer retained."
-                    ) from exc
-                raise CacheFeatureError(
-                    "NATS JetStream stream replay is invalid."
-                ) from exc
+                    raise CachePositionExpiredError(f"Stream position {sequence - 1} is no longer retained.") from exc
+                raise CacheFeatureError("NATS JetStream stream replay is invalid.") from exc
             except Exception as exc:
-                logger.warning(
-                    "NATS JetStream stream read failed (%s).", type(exc).__name__
-                )
+                logger.warning("NATS JetStream stream read failed (%s).", type(exc).__name__)
                 raise CacheFeatureError("NATS JetStream stream read failed.") from None
             payload = getattr(message, "data", None)
             if not isinstance(payload, bytes):
                 raise CacheFeatureError("NATS JetStream stream replay is invalid.")
-            records.append(
-                StreamRecord(address.stream_name, StreamPosition(sequence), payload)
-            )
+            records.append(StreamRecord(address.stream_name, StreamPosition(sequence), payload))
         return tuple(records)
 
     async def read_consumer(
@@ -199,38 +179,22 @@ class NatsStreamCache:
         assert position_value is not None
         info = await self._stream_info(address.name)
         if info is None:
-            raise CacheConflictError(
-                f"Stream position {position_value} does not exist in {stream!r}."
-            )
+            raise CacheConflictError(f"Stream position {position_value} does not exist in {stream!r}.")
         state = getattr(info, "state", None)
         last = _stream_sequence(getattr(state, "last_seq", None), label="last")
         if position_value > last:
-            raise CacheConflictError(
-                f"Stream position {position_value} does not exist in {stream!r}."
-            )
+            raise CacheConflictError(f"Stream position {position_value} does not exist in {stream!r}.")
         async with self._consumer_lock(owner, address):
             for _attempt in range(_MAX_CHECKPOINT_ATTEMPTS):
-                checkpoint = await self._checkpoint(
-                    address, consumer, include_tombstone=True
-                )
+                checkpoint = await self._checkpoint(address, consumer, include_tombstone=True)
                 assert checkpoint is not None
                 if checkpoint.position is not None and position < checkpoint.position:
-                    raise CacheConflictError(
-                        f"Stream consumer {consumer!r} cannot move backwards."
-                    )
+                    raise CacheConflictError(f"Stream consumer {consumer!r} cannot move backwards.")
                 if checkpoint.position == position:
                     return
-                if (
-                    checkpoint.position is None
-                    and await self._consumer_count(address) >= self.max_consumers
-                ):
-                    raise CacheFeatureError(
-                        "The NATS JetStream stream has reached its configured "
-                        "consumer capacity."
-                    )
-                if await self._write_checkpoint(
-                    address, consumer, position, checkpoint.sequence
-                ):
+                if checkpoint.position is None and await self._consumer_count(address) >= self.max_consumers:
+                    raise CacheFeatureError("The NATS JetStream stream has reached its configured consumer capacity.")
+                if await self._write_checkpoint(address, consumer, position, checkpoint.sequence):
                     return
         raise CacheConflictError("NATS JetStream stream acknowledgement conflicted.")
 
@@ -244,15 +208,11 @@ class NatsStreamCache:
         consumer = validate_resource(consumer, label="stream consumer")
         async with self._consumer_lock(owner, address):
             for _attempt in range(_MAX_CHECKPOINT_ATTEMPTS):
-                checkpoint = await self._checkpoint(
-                    address, consumer, include_tombstone=True
-                )
+                checkpoint = await self._checkpoint(address, consumer, include_tombstone=True)
                 assert checkpoint is not None
                 if checkpoint.position is None:
                     return False
-                if await self._write_checkpoint(
-                    address, consumer, None, checkpoint.sequence
-                ):
+                if await self._write_checkpoint(address, consumer, None, checkpoint.sequence):
                     return True
         raise CacheConflictError("NATS JetStream stream consumer release conflicted.")
 
@@ -265,9 +225,7 @@ class NatsStreamCache:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream stream lookup failed (%s).", type(exc).__name__
-            )
+            logger.warning("NATS JetStream stream lookup failed (%s).", type(exc).__name__)
             raise CacheFeatureError("NATS JetStream stream operation failed.") from None
 
     async def _checkpoint(
@@ -291,28 +249,18 @@ class NatsStreamCache:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream stream checkpoint read failed (%s).", type(exc).__name__
-            )
-            raise CacheFeatureError(
-                "NATS JetStream stream checkpoint is invalid."
-            ) from None
+            logger.warning("NATS JetStream stream checkpoint read failed (%s).", type(exc).__name__)
+            raise CacheFeatureError("NATS JetStream stream checkpoint is invalid.") from None
         sequence = getattr(message, "seq", None)
         payload = getattr(message, "data", None)
-        if (
-            not isinstance(sequence, int)
-            or sequence <= 0
-            or not isinstance(payload, bytes)
-        ):
+        if not isinstance(sequence, int) or sequence <= 0 or not isinstance(payload, bytes):
             raise CacheFeatureError("NATS JetStream stream checkpoint is invalid.")
         if payload == _CHECKPOINT_TOMBSTONE:
             return _Checkpoint(sequence, None) if include_tombstone else None
         try:
             position = StreamPosition(int(payload.decode("ascii")))
         except (UnicodeDecodeError, ValueError) as exc:
-            raise CacheFeatureError(
-                "NATS JetStream stream checkpoint is invalid."
-            ) from exc
+            raise CacheFeatureError("NATS JetStream stream checkpoint is invalid.") from exc
         return _Checkpoint(sequence, position)
 
     async def _write_checkpoint(
@@ -323,14 +271,10 @@ class NatsStreamCache:
         expected: int,
     ) -> bool:
         subject = _checkpoint_subject(self.runtime, address, consumer)
-        payload = (
-            _CHECKPOINT_TOMBSTONE if position is None else str(position.value).encode()
-        )
+        payload = _CHECKPOINT_TOMBSTONE if position is None else str(position.value).encode()
         headers = {"Nats-Expected-Last-Subject-Sequence": str(expected)}
         if position is None:
-            headers["Nats-TTL"] = nats_feature_ttl_header(
-                _FORGOTTEN_CHECKPOINT_TTL_SECONDS
-            )
+            headers["Nats-TTL"] = nats_feature_ttl_header(_FORGOTTEN_CHECKPOINT_TTL_SECONDS)
         jetstream = await self.runtime.coordination_jetstream()
         try:
             await jetstream.publish(
@@ -348,9 +292,7 @@ class NatsStreamCache:
                 "NATS JetStream stream checkpoint write failed (%s).",
                 type(exc).__name__,
             )
-            raise CacheFeatureError(
-                "NATS JetStream stream checkpoint is invalid."
-            ) from None
+            raise CacheFeatureError("NATS JetStream stream checkpoint is invalid.") from None
         return True
 
     async def _consumer_count(self, address: _StreamAddress) -> int:
@@ -386,9 +328,7 @@ class NatsStreamCache:
                 break
             await asyncio.sleep(_CONSUMER_LOCK_RETRY_SECONDS)
         if lease is None:
-            raise CacheConflictError(
-                "NATS JetStream stream consumer operation is busy."
-            )
+            raise CacheConflictError("NATS JetStream stream consumer operation is busy.")
         try:
             yield
         finally:
@@ -425,15 +365,11 @@ def _checkpoint_subject_prefix(
 
 def _position(value: object, *, label: str) -> StreamPosition:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise CacheFeatureError(
-            f"NATS JetStream stream {label} returned invalid state."
-        )
+        raise CacheFeatureError(f"NATS JetStream stream {label} returned invalid state.")
     try:
         return StreamPosition(value)
     except ValueError as exc:
-        raise CacheFeatureError(
-            f"NATS JetStream stream {label} returned invalid state."
-        ) from exc
+        raise CacheFeatureError(f"NATS JetStream stream {label} returned invalid state.") from exc
 
 
 def _position_value(position: StreamPosition | None) -> int | None:

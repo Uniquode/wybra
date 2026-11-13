@@ -117,11 +117,7 @@ def configure_runtime_logging(
     *,
     config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    logging_config = (
-        _plain_dict(config)
-        if config is not None
-        else logging_config_from_app_config(app_config)
-    )
+    logging_config = _plain_dict(config) if config is not None else logging_config_from_app_config(app_config)
     configure_logging(logging_config)
     return logging_config
 

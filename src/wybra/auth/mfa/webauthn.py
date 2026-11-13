@@ -117,14 +117,10 @@ def passkey_registration_options(
         attestation=_attestation(options),
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=_resident_key(options),
-            require_resident_key=(
-                options.passkey_discoverable_credentials == "required"
-            ),
+            require_resident_key=(options.passkey_discoverable_credentials == "required"),
             user_verification=_user_verification(options),
         ),
-        exclude_credentials=[
-            _credential_descriptor(credential) for credential in exclude_credentials
-        ],
+        exclude_credentials=[_credential_descriptor(credential) for credential in exclude_credentials],
     )
     return WebAuthnOptionsResult(
         challenge=generated_options.challenge,
@@ -169,9 +165,7 @@ def passkey_authentication_options(
     generated_options = generate_authentication_options(
         rp_id=options.passkey_rp_id,
         timeout=passkey_timeout_milliseconds(options),
-        allow_credentials=[
-            _credential_descriptor(credential) for credential in allow_credentials
-        ],
+        allow_credentials=[_credential_descriptor(credential) for credential in allow_credentials],
         user_verification=_user_verification(options),
     )
     return WebAuthnOptionsResult(
@@ -199,9 +193,7 @@ def verify_passkey_authentication(
         )
     except InvalidAuthenticationResponse as exc:
         reason = (
-            WEBAUTHN_COUNTER_REGRESSION_REASON
-            if "sign count" in str(exc).lower()
-            else WEBAUTHN_INVALID_RESPONSE_REASON
+            WEBAUTHN_COUNTER_REGRESSION_REASON if "sign count" in str(exc).lower() else WEBAUTHN_INVALID_RESPONSE_REASON
         )
         raise WebAuthnCeremonyError(reason) from exc
     except WebAuthnException as exc:

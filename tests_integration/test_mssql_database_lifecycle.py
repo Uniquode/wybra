@@ -62,9 +62,7 @@ async def test_mssql_tasks_list_safe_maintenance_metadata(
     assert exit_code == 0
     assert "repair-privs: Reapply runtime user database role grants" in captured.out
     assert "migrations: Report Tortoise migration recorder state" in captured.out
-    assert (
-        "prerequisites: Report SQL Server external setup prerequisites" in captured.out
-    )
+    assert "prerequisites: Report SQL Server external setup prerequisites" in captured.out
     assert_database_secrets_absent(captured.out + captured.err, mssql_database_config)
 
 

@@ -19,9 +19,7 @@ async def close_all(closers: Iterable[CacheCloser]) -> list[Exception]:
             errors.append(exc)
     if cancellation is not None:
         if errors:
-            cancellation.add_note(
-                f"{len(errors)} cache cleanup error(s) also occurred."
-            )
+            cancellation.add_note(f"{len(errors)} cache cleanup error(s) also occurred.")
         raise cancellation
     return errors
 

@@ -41,8 +41,7 @@ class TaskLifecycleObservationEvent(Event):
             progress = safe_json_metadata(self.progress)
         except (TypeError, ValueError) as exc:
             raise TaskProgressError(
-                "Task observation progress must be JSON-compatible and within "
-                "safe limits."
+                "Task observation progress must be JSON-compatible and within safe limits."
             ) from exc
         object.__setattr__(self, "progress", progress)
 

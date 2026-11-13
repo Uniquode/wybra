@@ -157,10 +157,7 @@ def route(
     resolved_route_type = RouteType(route_type)
     resolved_methods = ()
     if methods is not None:
-        resolved_methods = tuple(
-            method.strip().upper() if isinstance(method, str) else ""
-            for method in methods
-        )
+        resolved_methods = tuple(method.strip().upper() if isinstance(method, str) else "" for method in methods)
         if any(not method for method in resolved_methods):
             raise InputValidationError("Route methods must be non-blank strings.")
     if template is not None and (not isinstance(template, str) or not template.strip()):
@@ -207,9 +204,7 @@ def inspect_route_tree(app: Any) -> RouteInspection:
         )
     )
     route_ids = {route.id for route in ordered_routes}
-    problems = _detect_problems(
-        ordered_routes, origin_map=origin_map, route_ids=route_ids
-    )
+    problems = _detect_problems(ordered_routes, origin_map=origin_map, route_ids=route_ids)
     return RouteInspection(
         tree=_build_route_tree(ordered_routes),
         routes=ordered_routes,
@@ -313,9 +308,7 @@ def _route_record(
     origin = origin_map.get(id(route))
     warnings: list[str] = []
     if kind == RouteKind.UNKNOWN:
-        warnings.append(
-            f"Route {path} has unsupported route type {type(route).__name__}."
-        )
+        warnings.append(f"Route {path} has unsupported route type {type(route).__name__}.")
 
     return RouteRecord(
         id=counter.next(),
@@ -434,10 +427,7 @@ def _path_parameters(route: BaseRoute) -> tuple[str, ...]:
 def _dependency_identifiers(route: BaseRoute) -> tuple[str, ...]:
     dependant = getattr(route, "dependant", None)
     dependencies = getattr(dependant, "dependencies", ()) or ()
-    identifiers = [
-        _endpoint_identifier(getattr(dependency, "call", None))
-        for dependency in dependencies
-    ]
+    identifiers = [_endpoint_identifier(getattr(dependency, "call", None)) for dependency in dependencies]
     return tuple(identifier for identifier in identifiers if identifier is not None)
 
 
@@ -469,11 +459,7 @@ def _response_class_name(response_class: object) -> str | None:
 
 
 def _normalised_methods(methods: Iterable[object]) -> tuple[str, ...]:
-    normalised = {
-        method.strip().upper()
-        for method in methods
-        if isinstance(method, str) and method.strip()
-    }
+    normalised = {method.strip().upper() for method in methods if isinstance(method, str) and method.strip()}
     if "GET" in normalised and "HEAD" in normalised:
         normalised.remove("HEAD")
     return tuple(sorted(normalised))
@@ -524,9 +510,7 @@ def _detect_problems(
     problems.extend(_duplicate_name_problems(routes))
     problems.extend(_duplicate_method_path_problems(routes))
     problems.extend(_malformed_route_problems(routes))
-    problems.extend(
-        _origin_problems(routes, origin_map=origin_map, route_ids=route_ids)
-    )
+    problems.extend(_origin_problems(routes, origin_map=origin_map, route_ids=route_ids))
     return tuple(problems)
 
 
@@ -611,9 +595,7 @@ def _origin_problems(
         RouteProblem(
             kind=RouteProblemKind.INCOHERENT_ORIGIN,
             message=f"{missing} recorded route origins did not match installed routes.",
-            route_ids=tuple(
-                route_id for route_id in origin_route_ids if route_id in route_ids
-            ),
+            route_ids=tuple(route_id for route_id in origin_route_ids if route_id in route_ids),
         ),
     )
 
@@ -678,10 +660,7 @@ class _MutableRouteTreeNode:
         return self.children[label]
 
     def freeze(self) -> RouteTreeNode:
-        children = tuple(
-            child.freeze()
-            for child in sorted(self.children.values(), key=lambda item: item.label)
-        )
+        children = tuple(child.freeze() for child in sorted(self.children.values(), key=lambda item: item.label))
         return RouteTreeNode(
             id=self.id,
             label=self.label,

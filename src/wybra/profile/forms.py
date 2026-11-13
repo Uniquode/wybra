@@ -74,17 +74,11 @@ class _WebsiteLinksField(TextField):
 
 
 class ProfileDetailsForm(ModelForm):
-    preferred_name = _OptionalTextField(
-        label="Preferred name", required=False, max_length=120
-    )
-    display_name = _OptionalTextField(
-        label="Display name", required=False, max_length=200
-    )
+    preferred_name = _OptionalTextField(label="Preferred name", required=False, max_length=120)
+    display_name = _OptionalTextField(label="Display name", required=False, max_length=200)
     pronouns = _PronounsField(label="Pronouns", required=False)
     website_links = _WebsiteLinksField(label="Website", required=False)
-    bio = _OptionalTextAreaField(
-        label="Bio", required=False, max_length=PROFILE_BIO_MAX_LENGTH
-    )
+    bio = _OptionalTextAreaField(label="Bio", required=False, max_length=PROFILE_BIO_MAX_LENGTH)
 
     class Meta:
         model = UserProfile
@@ -111,11 +105,7 @@ class ProfileDetailsForm(ModelForm):
             instance=instance,
             connection=connection,
             defaults={"version": 0} if instance is None else None,
-            options={
-                "pronouns": {
-                    option.value: option.label for option in settings.pronoun_options
-                }
-            },
+            options={"pronouns": {option.value: option.label for option in settings.pronoun_options}},
         )
         self._apply_editability()
 
@@ -138,11 +128,7 @@ class ProfileDetailsForm(ModelForm):
         return UserProfile(user_id=self.user_id)
 
     def has_submitted_profile_values(self) -> bool:
-        return any(
-            self.result.fields[name].value is not None
-            for name in self.fields
-            if name != "version"
-        )
+        return any(self.result.fields[name].value is not None for name in self.fields if name != "version")
 
     async def save_with_phone_contact(
         self,
@@ -212,9 +198,7 @@ class ProfileEditForm(Form):
             values=form_values,
             options={
                 "phone_country_code": self.phone_contact.country_options(),
-                "phone_subdivision_code": self.phone_contact.subdivision_options(
-                    country
-                ),
+                "phone_subdivision_code": self.phone_contact.subdivision_options(country),
             },
         )
         if PHONE_CONTACTS_FIELD not in settings.editable_fields:
@@ -253,9 +237,7 @@ class ProfileEditForm(Form):
         return {
             "number": normalise_form_text(self.values.get("phone_number")) or "",
             "country_code": normalise_form_text(self.values.get("phone_country_code")),
-            "subdivision_code": normalise_form_text(
-                self.values.get("phone_subdivision_code")
-            ),
+            "subdivision_code": normalise_form_text(self.values.get("phone_subdivision_code")),
         }
 
     def normalised_phone_contact(self):

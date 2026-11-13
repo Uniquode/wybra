@@ -24,6 +24,8 @@ from wybra.providers.settings import (
 from wybra.secrets.config import SecretsSettings
 from wybra.services.crypto import SECRET_KEY_CURRENT, SECRET_KEY_PREVIOUS
 from wybra.services.secrets import KEYCHAIN_SOURCE
+from wybra.streams.config import module_config as streams_module_config
+from wybra.streams.settings import StreamsSettings
 
 SECRET_KEY_TYPE_SECRET: Final = "secret"
 SECRET_KEY_TYPE_SECRET_PREVIOUS: Final = "secret-prev"
@@ -103,9 +105,7 @@ BUILTIN_PROVIDER_SECRET_KEYS: Final[tuple[CredentialReference, ...]] = (
     ),
 )
 BUILTIN_SECRET_KEYS: Final[tuple[CredentialReference, ...]] = (
-    BUILTIN_CRYPTO_SECRET_KEYS
-    + BUILTIN_FORMS_SECRET_KEYS
-    + BUILTIN_PROVIDER_SECRET_KEYS
+    BUILTIN_CRYPTO_SECRET_KEYS + BUILTIN_FORMS_SECRET_KEYS + BUILTIN_PROVIDER_SECRET_KEYS
 )
 
 
@@ -144,6 +144,7 @@ def configured_credential_references(
     keys.extend(_configured_provider_keys(raw_config))
     keys.extend(_configured_database_keys(raw_config, project_root=project_root))
     keys.extend(_configured_cache_keys(raw_config))
+    keys.extend(_configured_streams_keys(raw_config))
     return _deduplicate_keys(keys)
 
 
@@ -181,16 +182,10 @@ def _configured_provider_keys(
     if providers_config is None:
         return ()
     if not isinstance(providers_config, Mapping):
-        raise ConfigurationError(
-            f"Providers config must be a [{PROVIDERS_CONFIG_SECTION}] table."
-        )
+        raise ConfigurationError(f"Providers config must be a [{PROVIDERS_CONFIG_SECTION}] table.")
 
     providers = provider_settings_from_config(providers_config)
-    return tuple(
-        reference
-        for provider in providers
-        for reference in provider.credential_references()
-    )
+    return tuple(reference for provider in providers for reference in provider.credential_references())
 
 
 def _configured_forms_keys(
@@ -236,6 +231,18 @@ def _configured_cache_keys(
     return settings.credential_references()
 
 
+def _configured_streams_keys(
+    raw_config: Mapping[str, Mapping[str, Any]],
+) -> Iterable[CredentialReference]:
+    config = ConfigService(
+        [MappingConfigSource(raw_config)],
+        config_defs=(streams_module_config,),
+        discover_module_config=False,
+    )
+    settings = StreamsSettings.load_settings(config)
+    return settings.credential_references()
+
+
 def builtin_keychain_secret_key(name: str, *, development: bool = False) -> str:
     """Return the built-in keychain key for a named Wybra secret type."""
     key_type = normalise_secret_key_type(name)
@@ -254,13 +261,9 @@ def builtin_keychain_secret_key(name: str, *, development: bool = False) -> str:
             development=development,
         )
     if key_type == SECRET_KEY_TYPE_GOOGLE:
-        return provider_client_secret_key(
-            SECRET_KEY_TYPE_GOOGLE, development=development
-        )
+        return provider_client_secret_key(SECRET_KEY_TYPE_GOOGLE, development=development)
     if key_type == SECRET_KEY_TYPE_GITHUB:
-        return provider_client_secret_key(
-            SECRET_KEY_TYPE_GITHUB, development=development
-        )
+        return provider_client_secret_key(SECRET_KEY_TYPE_GITHUB, development=development)
     if key_type == SECRET_KEY_TYPE_APPLE:
         return provider_private_key_secret_key(
             SECRET_KEY_TYPE_APPLE,
@@ -295,8 +298,7 @@ def _deduplicate_keys(
         # Credential names are a stable operator interface; duplicate names
         # are a programming/configuration error and must fail fast.
         raise ConfigurationError(
-            f"Duplicate credential reference name '{key.name}' "
-            f"(owners: {existing.owner!r} and {key.owner!r})."
+            f"Duplicate credential reference name '{key.name}' (owners: {existing.owner!r} and {key.owner!r})."
         )
     return tuple(deduplicated.values())
 

@@ -106,9 +106,7 @@ def to_editable_profile_fields(value: object) -> tuple[str, ...]:
         return _validate_editable_profile_fields(fields)
     if isinstance(value, list | tuple):
         return _validate_editable_profile_fields(tuple(value))
-    raise ValueError(
-        "editable_fields must be a list, tuple, or comma-separated string."
-    )
+    raise ValueError("editable_fields must be a list, tuple, or comma-separated string.")
 
 
 def _validate_editable_profile_fields(fields: tuple[object, ...]) -> tuple[str, ...]:
@@ -130,9 +128,7 @@ def to_pronoun_options(value: object) -> tuple[ProfilePronounOption, ...]:
     elif isinstance(value, list | tuple):
         values = tuple(value)
     else:
-        raise ValueError(
-            "pronoun_options must be a list, tuple, or comma-separated string."
-        )
+        raise ValueError("pronoun_options must be a list, tuple, or comma-separated string.")
     return tuple(_pronoun_option(option) for option in values)
 
 

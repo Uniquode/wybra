@@ -19,10 +19,7 @@ def normalise_return_to(value: str | None, default: str = "/account") -> str:
     if (
         decoded_candidate.startswith("//")
         or "\\" in decoded_candidate
-        or any(
-            ord(character) < 32 or ord(character) == 127
-            for character in decoded_candidate
-        )
+        or any(ord(character) < 32 or ord(character) == 127 for character in decoded_candidate)
     ):
         return default
 

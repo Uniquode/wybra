@@ -49,9 +49,7 @@ class SQLiteProvisioner:
             _ensure_sqlite_file_target(target)
             return _sqlite_initialise_skipped_result(self.family, target)
         except OSError as exc:
-            raise DatabaseProvisioningOperationError(
-                f"Failed to initialise SQLite database file: {target}"
-            ) from exc
+            raise DatabaseProvisioningOperationError(f"Failed to initialise SQLite database file: {target}") from exc
         return (
             ProvisioningPhaseResult(
                 family=self.family,
@@ -95,10 +93,7 @@ class SQLiteProvisioner:
                 family=self.family,
                 phase="destroy",
                 status="removed",
-                message=(
-                    "Removed SQLite database file target: "
-                    f"{target} ({len(removed_paths)} file(s))"
-                ),
+                message=(f"Removed SQLite database file target: {target} ({len(removed_paths)} file(s))"),
             ),
         )
 
@@ -115,9 +110,7 @@ class SQLiteProvisioner:
         request: DatabaseMaintenanceRequest,
     ) -> tuple[ProvisioningPhaseResult, ...]:
         _ensure_family(context, self.family)
-        raise DatabaseProvisioningConfigurationError(
-            f"Unknown sqlite maintenance task: {request.task}."
-        )
+        raise DatabaseProvisioningConfigurationError(f"Unknown sqlite maintenance task: {request.task}.")
 
     async def clear_test_data(
         self,
@@ -169,9 +162,7 @@ def _sqlite_file_target(context: ProvisioningContext) -> Path | None:
 
     sqlite_url = parse_sqlite_database_url(database_url)
     if sqlite_url is None:
-        raise DatabaseProvisioningConfigurationError(
-            "SQLite database URL must identify a file path or :memory:."
-        )
+        raise DatabaseProvisioningConfigurationError("SQLite database URL must identify a file path or :memory:.")
     return _normalise_sqlite_file_path(
         sqlite_url.path,
         project_root=context.project_root,
@@ -186,14 +177,10 @@ def _normalise_sqlite_file_path(
     path_is_absolute: bool | None = None,
 ) -> Path | None:
     if not isinstance(value, str | Path):
-        raise DatabaseProvisioningConfigurationError(
-            "SQLite database file path must be a string or path."
-        )
+        raise DatabaseProvisioningConfigurationError("SQLite database file path must be a string or path.")
     if isinstance(value, str):
         if not value.strip():
-            raise DatabaseProvisioningConfigurationError(
-                "SQLite database file path must not be blank."
-            )
+            raise DatabaseProvisioningConfigurationError("SQLite database file path must not be blank.")
         if value.strip() == ":memory:":
             return None
         path = Path(value.strip())
@@ -201,24 +188,18 @@ def _normalise_sqlite_file_path(
         path = value
 
     if path_is_absolute and not path.is_absolute():
-        raise DatabaseProvisioningConfigurationError(
-            "SQLite database file path is not usable on this host."
-        )
+        raise DatabaseProvisioningConfigurationError("SQLite database file path is not usable on this host.")
     if not path.is_absolute():
         path = project_root / path
     target = path.resolve()
     if not target.name:
-        raise DatabaseProvisioningConfigurationError(
-            "SQLite database file path must identify a file."
-        )
+        raise DatabaseProvisioningConfigurationError("SQLite database file path must identify a file.")
     return target
 
 
 def _ensure_sqlite_file_target(target: Path) -> None:
     if target.is_dir():
-        raise DatabaseProvisioningConfigurationError(
-            f"SQLite database target is a directory: {target}"
-        )
+        raise DatabaseProvisioningConfigurationError(f"SQLite database target is a directory: {target}")
 
 
 def _ensure_sqlite_destroy_confirmed(
@@ -239,9 +220,7 @@ def _remove_sqlite_file_targets(target: Path) -> tuple[Path, ...]:
         if not candidate.exists():
             continue
         if candidate.is_dir():
-            raise DatabaseProvisioningConfigurationError(
-                f"SQLite destroy target is a directory: {candidate}"
-            )
+            raise DatabaseProvisioningConfigurationError(f"SQLite destroy target is a directory: {candidate}")
         try:
             candidate.unlink()
         except OSError as exc:
@@ -253,10 +232,7 @@ def _remove_sqlite_file_targets(target: Path) -> tuple[Path, ...]:
 
 
 def _sqlite_sidecar_targets(target: Path) -> tuple[Path, ...]:
-    return tuple(
-        target.with_name(f"{target.name}{suffix}")
-        for suffix in _SQLITE_SIDECAR_SUFFIXES
-    )
+    return tuple(target.with_name(f"{target.name}{suffix}") for suffix in _SQLITE_SIDECAR_SUFFIXES)
 
 
 __all__ = ("SQLiteProvisioner",)

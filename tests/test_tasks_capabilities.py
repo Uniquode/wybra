@@ -174,9 +174,7 @@ def test_task_settings_reject_unimplemented_durable_backend() -> None:
 
 
 def test_task_settings_accept_taskiq_backend_and_named_cache() -> None:
-    settings = TasksSettings.load_settings(
-        {"tasks": {"backend": "taskiq", "cache_name": "task_work"}}
-    )
+    settings = TasksSettings.load_settings({"tasks": {"backend": "taskiq", "cache_name": "task_work"}})
 
     assert settings.backend == "taskiq"
     assert settings.cache_name == "task_work"
@@ -187,9 +185,7 @@ def test_task_settings_accept_taskiq_backend_and_named_cache() -> None:
     ("", " ", " task_work ", "invalid-name", "Default"),
 )
 def test_task_settings_immediate_backend_ignores_cache_name(cache_name: str) -> None:
-    loaded = TasksSettings.load_settings(
-        {"tasks": {"backend": "immediate", "cache_name": cache_name}}
-    )
+    loaded = TasksSettings.load_settings({"tasks": {"backend": "immediate", "cache_name": cache_name}})
     constructed = TasksSettings(backend="immediate", cache_name=cache_name)
 
     assert loaded.cache_name == cache_name
@@ -198,9 +194,7 @@ def test_task_settings_immediate_backend_ignores_cache_name(cache_name: str) -> 
 
 def test_task_settings_immediate_cache_name_must_remain_a_string() -> None:
     with pytest.raises(ConfigSourceError, match="tasks.cache_name"):
-        TasksSettings.load_settings(
-            {"tasks": {"backend": "immediate", "cache_name": 42}}
-        )
+        TasksSettings.load_settings({"tasks": {"backend": "immediate", "cache_name": 42}})
     with pytest.raises(ConfigurationError, match="cache_name must be a string"):
         TasksSettings(backend="immediate", cache_name=42)  # type: ignore[arg-type]
 
@@ -214,9 +208,7 @@ def test_task_settings_reject_invalid_taskiq_cache_name(cache_name: str) -> None
         (ConfigSourceError, ConfigurationError),
         match="cache_name|invalid cache name",
     ):
-        TasksSettings.load_settings(
-            {"tasks": {"backend": "taskiq", "cache_name": cache_name}}
-        )
+        TasksSettings.load_settings({"tasks": {"backend": "taskiq", "cache_name": cache_name}})
 
 
 def test_taskiq_cache_name_diagnostic_is_bounded_and_secret_safe() -> None:
@@ -224,9 +216,7 @@ def test_taskiq_cache_name_diagnostic_is_bounded_and_secret_safe() -> None:
     cache_name = f"{marker}-" + ("x" * 10_000)
 
     with pytest.raises(ConfigurationError) as raised:
-        TasksSettings.load_settings(
-            {"tasks": {"backend": "taskiq", "cache_name": cache_name}}
-        )
+        TasksSettings.load_settings({"tasks": {"backend": "taskiq", "cache_name": cache_name}})
 
     for node in _exception_nodes(raised.value):
         diagnostic = str(node)
@@ -419,9 +409,7 @@ async def test_taskiq_result_backend_preserves_taskiq_result_metadata() -> None:
     await backend.set_result("task-123", result)
 
     assert await backend.get_result("task-123", with_logs=True) == result
-    assert await backend.get_result("task-123") == result.model_copy(
-        update={"log": None}
-    )
+    assert await backend.get_result("task-123") == result.model_copy(update={"log": None})
 
 
 @pytest.mark.anyio
@@ -847,14 +835,8 @@ async def test_taskiq_backend_discovers_only_configured_module_tasks(
             CacheTaskiqTasksCapability,
             site.require_capability(TasksCapability),
         )
-        assert (
-            capability.broker.find_task("wybra.task_discovery_app.operation.__v1")
-            is not None
-        )
-        assert (
-            capability.broker.find_task("wybra.unrelated_task_app.operation.__v1")
-            is None
-        )
+        assert capability.broker.find_task("wybra.task_discovery_app.operation.__v1") is not None
+        assert capability.broker.find_task("wybra.unrelated_task_app.operation.__v1") is None
     finally:
         await site.close()
 
@@ -868,9 +850,7 @@ async def test_taskiq_backend_discovers_tasks_imported_during_post_setup(
     package = tmp_path / package_name
     package.mkdir()
     (package / "__init__.py").write_text(
-        "import importlib\n\n"
-        "async def post_setup_site(site):\n"
-        f'    importlib.import_module("{package_name}.tasks")\n',
+        f'import importlib\n\nasync def post_setup_site(site):\n    importlib.import_module("{package_name}.tasks")\n',
         encoding="utf-8",
     )
     (package / "tasks.py").write_text(
@@ -902,10 +882,7 @@ async def test_taskiq_backend_discovers_tasks_imported_during_post_setup(
             CacheTaskiqTasksCapability,
             site.require_capability(TasksCapability),
         )
-        assert (
-            capability.broker.find_task("wybra.late_task_discovery.operation.__v1")
-            is not None
-        )
+        assert capability.broker.find_task("wybra.late_task_discovery.operation.__v1") is not None
         operation = importlib.import_module(f"{package_name}.tasks").operation
         handle = await capability.submit(operation, operation.payload())
         listener = capability.broker.listen()
@@ -1058,9 +1035,7 @@ async def test_taskiq_backend_reports_missing_optional_dependency_at_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def missing_taskiq() -> object:
-        raise ConfigurationError(
-            "Taskiq tasks require the wybra[tasks] optional dependency."
-        )
+        raise ConfigurationError("Taskiq tasks require the wybra[tasks] optional dependency.")
 
     monkeypatch.setattr("wybra.tasks.setup.load_taskiq", missing_taskiq)
     with pytest.raises(SiteCapabilityError, match=r"wybra\[tasks\]"):
@@ -1513,12 +1488,8 @@ def test_status_projection_expires_terminal_status_and_history() -> None:
         occurred_at=1.0,
     )
     projection.apply(submitted)
-    projection.apply(
-        replace(submitted, kind=TaskLifecycleKind.STARTED, occurred_at=2.0)
-    )
-    projection.apply(
-        replace(submitted, kind=TaskLifecycleKind.SUCCEEDED, occurred_at=3.0)
-    )
+    projection.apply(replace(submitted, kind=TaskLifecycleKind.STARTED, occurred_at=2.0))
+    projection.apply(replace(submitted, kind=TaskLifecycleKind.SUCCEEDED, occurred_at=3.0))
 
     now[0] = 9.0
 
@@ -1951,9 +1922,7 @@ async def test_lifecycle_event_publication_failure_does_not_change_execution(
     monkeypatch.setattr(
         task_capabilities_module.logger,
         "warning",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("warning handler unavailable")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("warning handler unavailable")),
     )
 
     handle = await capability.submit(operation, operation.payload())
@@ -1986,9 +1955,7 @@ async def test_lifecycle_logging_failure_does_not_change_execution(
     monkeypatch.setattr(
         task_capabilities_module.logger,
         "info",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("logging handler unavailable")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("logging handler unavailable")),
     )
     capability = ImmediateTasksCapability(TasksSettings(max_attempts=2))
 
@@ -2067,9 +2034,7 @@ async def test_immediate_submission_uses_effective_worker_identity(
 
     assert observed_worker_id == expected_worker_id
     assert all(
-        event.worker_id == expected_worker_id
-        for event in lifecycle
-        if event.kind is not TaskLifecycleKind.SUBMITTED
+        event.worker_id == expected_worker_id for event in lifecycle if event.kind is not TaskLifecycleKind.SUBMITTED
     )
 
 
@@ -2136,9 +2101,7 @@ async def test_task_lifecycle_logs_use_secret_safe_structured_fields(
     with caplog.at_level(logging.INFO, logger="wybra.tasks.capabilities"):
         await capability.submit(fail, fail.payload(password="sensitive-value"))
 
-    records = [
-        record.wybra_task for record in caplog.records if hasattr(record, "wybra_task")
-    ]
+    records = [record.wybra_task for record in caplog.records if hasattr(record, "wybra_task")]
     assert [record["kind"] for record in records] == [
         "submitted",
         "started",

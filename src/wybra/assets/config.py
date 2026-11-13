@@ -77,9 +77,7 @@ def parse_asset_export_mode(
         try:
             return AssetExportMode(value)
         except ValueError as exc:
-            raise ValueError(
-                f"{name} must be one of: {asset_export_mode_choices()}."
-            ) from exc
+            raise ValueError(f"{name} must be one of: {asset_export_mode_choices()}.") from exc
     raise ValueError(f"{name} must be a string.")
 
 

@@ -62,11 +62,7 @@ async def _serve_connection(
     request_task = asyncio.create_task(_receive_request(websocket))
     try:
         while True:
-            notification_task = (
-                asyncio.create_task(subscription.receive())
-                if subscription is not None
-                else None
-            )
+            notification_task = asyncio.create_task(subscription.receive()) if subscription is not None else None
             tasks = {request_task}
             if notification_task is not None:
                 tasks.add(notification_task)
@@ -138,8 +134,7 @@ async def _handle_request(
     try:
         if method == "diagnostics.scopes":
             result = [
-                {"name": str(scope), "description": description}
-                for scope, description in available_event_scopes()
+                {"name": str(scope), "description": description} for scope, description in available_event_scopes()
             ]
         elif method == "rpc.discover":
             result = _openrpc_document()
@@ -149,9 +144,7 @@ async def _handle_request(
         elif method == "diagnostics.subscribe":
             scopes = _scopes(params)
             if EVT_CONTENT_TYPES in scopes:
-                raise ValueError(
-                    "content_types is a snapshot-only diagnostic resource."
-                )
+                raise ValueError("content_types is a snapshot-only diagnostic resource.")
             replacement = await capability.subscribe(scopes)
             if subscription is not None:
                 capability.unsubscribe(subscription)
@@ -210,19 +203,14 @@ def _snapshot_result(
         return [
             {
                 "identifier": content_type.identifier,
-                "model": (
-                    f"{content_type.model.__module__}.{content_type.model.__name__}"
-                ),
+                "model": (f"{content_type.model.__module__}.{content_type.model.__name__}"),
                 "verbose_name": content_type.verbose_name,
                 "verbose_name_plural": content_type.verbose_name_plural,
                 "actions": sorted(content_type.actions),
             }
             for content_type in content_types.all()
         ]
-    return [
-        snapshot.as_dict()
-        for snapshot in capability.snapshots(scope, include_empty=True)
-    ]
+    return [snapshot.as_dict() for snapshot in capability.snapshots(scope, include_empty=True)]
 
 
 def _openrpc_document() -> dict[str, object]:

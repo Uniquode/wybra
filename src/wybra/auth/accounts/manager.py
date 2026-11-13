@@ -233,9 +233,7 @@ class UserManager:
 
         user_create_update = user_create.model_copy(update={"email": normalised_email})
         user_dict = (
-            user_create_update.create_update_dict()
-            if safe
-            else user_create_update.create_update_dict_superuser()
+            user_create_update.create_update_dict() if safe else user_create_update.create_update_dict_superuser()
         )
         password = user_dict.pop("password")
         user_dict["hashed_password"] = self.password_helper.hash(str(password))
@@ -258,11 +256,7 @@ class UserManager:
         safe: bool = False,
         request: Request | None = None,
     ) -> LocalUserRecord:
-        update_dict = (
-            user_update.create_update_dict()
-            if safe
-            else user_update.create_update_dict_superuser()
-        )
+        update_dict = user_update.create_update_dict() if safe else user_update.create_update_dict_superuser()
         updated_user = await self._update(user, update_dict)
         await self.on_after_update(updated_user, update_dict, request)
         return updated_user
@@ -395,9 +389,7 @@ class UserManager:
                     validated_update_dict["is_verified"] = False
             elif field == "password" and value is not None:
                 await self.validate_password(str(value), user)
-                validated_update_dict["hashed_password"] = self.password_helper.hash(
-                    str(value)
-                )
+                validated_update_dict["hashed_password"] = self.password_helper.hash(str(value))
             else:
                 validated_update_dict[field] = value
 

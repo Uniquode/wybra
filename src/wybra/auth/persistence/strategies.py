@@ -131,11 +131,7 @@ class TortoiseUserStore:
                 await self._set_primary_email(
                     user,
                     primary_email,
-                    is_verified=(
-                        user.is_verified
-                        if primary_email_verified is None
-                        else primary_email_verified
-                    ),
+                    is_verified=(user.is_verified if primary_email_verified is None else primary_email_verified),
                 )
         except IntegrityError as exc:
             if _is_identity_unique_violation(exc):
@@ -150,11 +146,7 @@ class TortoiseUserStore:
         *,
         is_verified: bool,
     ) -> None:
-        await (
-            self.user_table.filter(id=user.id)
-            .using_db(self.connection)
-            .select_for_update()
-        )
+        await self.user_table.filter(id=user.id).using_db(self.connection).select_for_update()
         primary_emails = (
             await IdentityUserEmail.filter(user_id=user.id, is_primary=True)
             .using_db(self.connection)
@@ -256,16 +248,11 @@ class TortoiseAuthorisationStore:
 
     async def list_groups(self) -> tuple[GroupRecord, ...]:
         groups = await Group.all().using_db(self.connection).order_by("abbrev")
-        return tuple(
-            GroupRecord(id=str(group.id), abbrev=group.abbrev, title=group.description)
-            for group in groups
-        )
+        return tuple(GroupRecord(id=str(group.id), abbrev=group.abbrev, title=group.description) for group in groups)
 
     async def list_scopes(self) -> tuple[ScopeRecord, ...]:
         scopes = await Scope.all().using_db(self.connection).order_by("scope")
-        return tuple(
-            ScopeRecord(scope=scope.scope, title=scope.description) for scope in scopes
-        )
+        return tuple(ScopeRecord(scope=scope.scope, title=scope.description) for scope in scopes)
 
     async def effective_scope_sets_for_user(
         self,
@@ -370,15 +357,9 @@ async def auth_persistence_scope(
 ) -> AsyncIterator[AuthPersistenceScope]:
     """Yield an auth persistence scope for standalone Tortoise tools."""
 
-    resolved_secret_service = (
-        secret_service_resolver()
-        if secret_service_resolver is not None
-        else secret_service
-    )
+    resolved_secret_service = secret_service_resolver() if secret_service_resolver is not None else secret_service
     with database.context:
-        async with database.transaction_for(
-            database.routes.connection().for_write()
-        ) as connection:
+        async with database.transaction_for(database.routes.connection().for_write()) as connection:
             yield TortoiseAuthPersistenceScope(
                 connection,
                 resolved_secret_service,
@@ -414,9 +395,7 @@ def create_user_store(connection: BaseDBAsyncClient) -> UserStore:
 
 def _is_identity_unique_violation(exc: IntegrityError) -> bool:
     message = str(exc).lower()
-    return "unique" in message and any(
-        marker in message for marker in _IDENTITY_UNIQUE_MARKERS
-    )
+    return "unique" in message and any(marker in message for marker in _IDENTITY_UNIQUE_MARKERS)
 
 
 def _timestamp_now() -> float:

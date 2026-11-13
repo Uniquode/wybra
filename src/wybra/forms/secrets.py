@@ -17,11 +17,7 @@ def forms_keychain_secret_references(
         discover_module_config=False,
     )
     settings = FormsSettings.load_settings(config)
-    return tuple(
-        reference.key
-        for reference in settings.credential_references()
-        if reference.source == KEYCHAIN_SOURCE
-    )
+    return tuple(reference.key for reference in settings.credential_references() if reference.source == KEYCHAIN_SOURCE)
 
 
 __all__ = ("forms_keychain_secret_references",)

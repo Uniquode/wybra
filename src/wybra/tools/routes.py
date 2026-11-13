@@ -147,11 +147,7 @@ async def _run_routes_command(
     configure_cli_logging()
 
     try:
-        app = (
-            load_configured_asgi_app(config_source)
-            if config_source is not None
-            else load_configured_asgi_app()
-        )
+        app = load_configured_asgi_app(config_source) if config_source is not None else load_configured_asgi_app()
     except (
         CompositionError,
         LoggingConfigurationError,
@@ -161,10 +157,7 @@ async def _run_routes_command(
         return 1
 
     if not hasattr(app, "routes"):
-        logger.error(
-            "configuration: failed: configured ASGI app target does not expose "
-            "a route tree."
-        )
+        logger.error("configuration: failed: configured ASGI app target does not expose a route tree.")
         return 1
 
     routes = app.routes

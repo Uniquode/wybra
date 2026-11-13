@@ -107,7 +107,4 @@ def validate_cross_origin_opener_policy(
         return
     if policy not in _ALLOWED_COOP_POLICIES:
         allowed = ", ".join(sorted(_ALLOWED_COOP_POLICIES))
-        raise ValueError(
-            "Cross-Origin-Opener-Policy must be one of "
-            f"{allowed}, or None; got {policy!r}."
-        )
+        raise ValueError(f"Cross-Origin-Opener-Policy must be one of {allowed}, or None; got {policy!r}.")

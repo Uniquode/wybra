@@ -880,9 +880,7 @@ async def test_named_atomic_cache_queue_retries_revision_conflicts(
         assert await backend.pop("alerts") == (existing,)
     else:
         await backend.append("alerts", appended, queue_depth=2, ttl_seconds=60)
-        expected = (
-            (appended,) if conflict_operation == "create" else (existing, appended)
-        )
+        expected = (appended,) if conflict_operation == "create" else (existing, appended)
         assert await backend.peek("alerts") == expected
 
 
@@ -1069,9 +1067,7 @@ async def test_database_storage_cleanup_removes_expired_alerts() -> None:
             settings,
             site.capability_proxy(DatabaseCapability),
         )
-        async with tortoise_transaction(
-            db_capability, db_capability.database().for_write()
-        ) as connection:
+        async with tortoise_transaction(db_capability, db_capability.database().for_write()) as connection:
             await MessageAlert.create(
                 queue_key="queue",
                 severity=SUCCESS_ALERT,
@@ -1093,10 +1089,7 @@ def test_database_storage_exposes_model_and_migration_surface() -> None:
 
     assert discover_model_package("wybra.messages") == "wybra.messages.models"
     assert migration_locations
-    assert any(
-        path.name == "migrations" and path.joinpath("0001_initial.py").is_file()
-        for path in migration_locations
-    )
+    assert any(path.name == "migrations" and path.joinpath("0001_initial.py").is_file() for path in migration_locations)
 
 
 @pytest.mark.anyio
@@ -1128,9 +1121,7 @@ async def test_messages_context_peeks_until_alerts_are_rendered() -> None:
 @pytest.mark.anyio
 async def test_default_alert_component_escapes_message_text() -> None:
     renderer = DefaultTemplateCapability(
-        template_sources=(
-            PackageResourceSource(package="wybra.messages", directory="templates"),
-        ),
+        template_sources=(PackageResourceSource(package="wybra.messages", directory="templates"),),
         include_request_context=False,
         cache_size=0,
     )
@@ -1161,9 +1152,7 @@ async def test_default_alert_component_escapes_message_text() -> None:
 async def _message_alert_count(
     db_capability: DatabaseCapability,
 ) -> int:
-    async with tortoise_transaction(
-        db_capability, db_capability.database().for_write()
-    ) as connection:
+    async with tortoise_transaction(db_capability, db_capability.database().for_write()) as connection:
         return await MessageAlert.all(using_db=connection).count()
 
 
@@ -1205,9 +1194,7 @@ async def test_widget_layout_renders_alert_component_when_context_exists() -> No
 @pytest.mark.anyio
 async def test_widget_layout_omits_alert_component_without_context() -> None:
     renderer = DefaultTemplateCapability(
-        template_sources=(
-            PackageResourceSource(package="wybra.widgets", directory="templates"),
-        ),
+        template_sources=(PackageResourceSource(package="wybra.widgets", directory="templates"),),
         include_request_context=False,
         cache_size=0,
     )

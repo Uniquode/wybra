@@ -23,8 +23,7 @@ class TaskRegistry:
         existing = self._definitions.get(identity)
         if existing is not None and existing is not definition:
             raise TaskRegistrationError(
-                f"Task {identity.name!r} version {identity.version} is declared more "
-                "than once by configured modules."
+                f"Task {identity.name!r} version {identity.version} is declared more than once by configured modules."
             )
         self._definitions[identity] = definition
 

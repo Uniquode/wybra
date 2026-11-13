@@ -400,9 +400,7 @@ async def test_terminal_delivery_remains_obsolete_after_projection_retention() -
 
 
 @pytest.mark.anyio
-async def test_lifecycle_requires_precomposed_memory_features_for_fenced_writes() -> (
-    None
-):
+async def test_lifecycle_requires_precomposed_memory_features_for_fenced_writes() -> None:
     lifecycle = CacheTaskLifecycle(
         InMemoryStreamCache(),
         InMemoryAtomicCache(),
@@ -425,9 +423,7 @@ async def test_lifecycle_requires_precomposed_memory_features_for_fenced_writes(
     with pytest.raises(CacheFeatureError, match="does not support lease-fenced"):
         await lifecycle.record(event)
 
-    assert (
-        await lifecycle.atomic.get("task-lifecycle", f"status:{event.task_id}") is None
-    )
+    assert await lifecycle.atomic.get("task-lifecycle", f"status:{event.task_id}") is None
 
 
 @pytest.mark.anyio
@@ -1124,9 +1120,7 @@ async def test_retry_rejection_cannot_terminalise_a_replacement_delivery() -> No
     ],
 )
 async def test_taskiq_retry_round_trips_lifecycle_metadata(
-    retry_middleware: type[
-        CacheTaskiqSimpleRetryMiddleware | CacheTaskiqSmartRetryMiddleware
-    ],
+    retry_middleware: type[CacheTaskiqSimpleRetryMiddleware | CacheTaskiqSmartRetryMiddleware],
     no_result_on_retry: bool,
 ) -> None:
     lifecycle = _lifecycle()
@@ -1178,9 +1172,7 @@ async def test_taskiq_retry_round_trips_lifecycle_metadata(
     ],
 )
 async def test_taskiq_retry_policy_records_terminal_failure_when_not_retrying(
-    retry_middleware: type[
-        CacheTaskiqSimpleRetryMiddleware | CacheTaskiqSmartRetryMiddleware
-    ],
+    retry_middleware: type[CacheTaskiqSimpleRetryMiddleware | CacheTaskiqSmartRetryMiddleware],
     default_retry_count: int,
     types_of_exceptions: tuple[type[BaseException], ...] | None,
 ) -> None:
@@ -1731,9 +1723,7 @@ async def test_replay_skips_invalid_record_and_advances_its_position() -> None:
     status = await lifecycle.status(invalid.task_id)
     assert status is not None
     assert status.state is TaskState.SUBMITTED
-    assert [event.kind for event in await lifecycle.lifecycle(invalid.task_id)] == [
-        TaskLifecycleKind.SUBMITTED
-    ]
+    assert [event.kind for event in await lifecycle.lifecycle(invalid.task_id)] == [TaskLifecycleKind.SUBMITTED]
 
 
 @pytest.mark.anyio
@@ -1850,9 +1840,7 @@ async def test_expired_projection_lease_rejects_stale_status_write() -> None:
 
 
 @pytest.mark.anyio
-async def test_replay_preserves_live_terminal_status_despite_producer_clock_skew() -> (
-    None
-):
+async def test_replay_preserves_live_terminal_status_despite_producer_clock_skew() -> None:
     lifecycle = _lifecycle()
     task_id = uuid4()
     occurred_at = time.time() - 120
@@ -2418,9 +2406,7 @@ async def test_record_rejects_status_write_after_lease_expires_during_create() -
     status = await lifecycle.status(event.task_id)
     assert status is not None
     assert status.state is TaskState.SUBMITTED
-    assert [record.kind for record in await lifecycle.lifecycle(event.task_id)] == [
-        TaskLifecycleKind.SUBMITTED
-    ]
+    assert [record.kind for record in await lifecycle.lifecycle(event.task_id)] == [TaskLifecycleKind.SUBMITTED]
 
 
 @pytest.mark.anyio
@@ -2438,9 +2424,7 @@ async def test_taskiq_lifecycle_rejects_retry_middleware_after_lifecycle() -> No
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "retry_middleware", (SimpleRetryMiddleware, SmartRetryMiddleware)
-)
+@pytest.mark.parametrize("retry_middleware", (SimpleRetryMiddleware, SmartRetryMiddleware))
 async def test_taskiq_lifecycle_requires_a_retry_handoff_observer(
     retry_middleware: type[SimpleRetryMiddleware] | type[SmartRetryMiddleware],
 ) -> None:
@@ -2842,11 +2826,7 @@ async def test_empty_progress_metadata_survives_lifecycle_replay() -> None:
     for progress in ({"completed": 1}, {}):
         await lifecycle.record(
             TaskLifecycleEvent.new(
-                kind=(
-                    TaskLifecycleKind.STARTED
-                    if progress == {"completed": 1}
-                    else TaskLifecycleKind.PROGRESS
-                ),
+                kind=(TaskLifecycleKind.STARTED if progress == {"completed": 1} else TaskLifecycleKind.PROGRESS),
                 task_id=submitted.task_id,
                 task_name=submitted.task_name,
                 schema_version=submitted.schema_version,

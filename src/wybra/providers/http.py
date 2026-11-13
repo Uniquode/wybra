@@ -46,9 +46,7 @@ def https_request(
     try:
         connection.request(
             method,
-            urlunsplit(
-                ("", "", parsed_endpoint.path or "/", parsed_endpoint.query, "")
-            ),
+            urlunsplit(("", "", parsed_endpoint.path or "/", parsed_endpoint.query, "")),
             body=body,
             headers=dict(headers),
         )

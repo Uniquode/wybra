@@ -57,9 +57,7 @@ class InMemoryScheduleCache:
             label="maximum schedule records",
         )
         if self.max_records > MAX_CACHE_FEATURE_LIMIT:
-            raise ValueError(
-                f"Maximum schedule records cannot exceed {MAX_CACHE_FEATURE_LIMIT}."
-            )
+            raise ValueError(f"Maximum schedule records cannot exceed {MAX_CACHE_FEATURE_LIMIT}.")
 
     @property
     def maximum_records(self) -> int:
@@ -85,10 +83,7 @@ class InMemoryScheduleCache:
             if schedule_key in self._records:
                 return None
             if len(self._records) >= self.max_records:
-                raise CacheFeatureError(
-                    "The in-memory schedule store has reached its configured "
-                    "record capacity."
-                )
+                raise CacheFeatureError("The in-memory schedule store has reached its configured record capacity.")
             record = ScheduleRecord(
                 identity=identity,
                 revision=self._revision(),
@@ -118,11 +113,7 @@ class InMemoryScheduleCache:
         async with self._lock:
             self._recover_claims()
             current = self._records.get(schedule_key)
-            if (
-                current is None
-                or current.revision != expected
-                or schedule_key in self._claims
-            ):
+            if current is None or current.revision != expected or schedule_key in self._claims:
                 return None
             record = ScheduleRecord(
                 identity=identity,
@@ -161,11 +152,7 @@ class InMemoryScheduleCache:
                 if schedule_key[0] == owner
                 and record.next_due_at <= before
                 and schedule_key not in self._claims
-                and (
-                    after is None
-                    or (record.next_due_at, record.identity)
-                    > (after.next_due_at, after.identity)
-                )
+                and (after is None or (record.next_due_at, record.identity) > (after.next_due_at, after.identity))
             ]
             records.sort(key=lambda record: (record.next_due_at, record.identity))
             return tuple(records[:limit])
@@ -184,11 +171,7 @@ class InMemoryScheduleCache:
         async with self._lock:
             self._recover_claims()
             record = self._records.get(schedule_key)
-            if (
-                record is None
-                or record.next_due_at > self.clock()
-                or schedule_key in self._claims
-            ):
+            if record is None or record.next_due_at > self.clock() or schedule_key in self._claims:
                 return None
             self._next_fencing_token += 1
             state = _ClaimState(
@@ -273,9 +256,7 @@ class InMemoryScheduleCache:
         schedule_key = _schedule_key(claim.owner, claim.record.identity)
         state = self._claims.get(schedule_key)
         if state is None or state.token != claim.token:
-            raise CacheConflictError(
-                f"Schedule claim for {claim.record.identity!r} is stale."
-            )
+            raise CacheConflictError(f"Schedule claim for {claim.record.identity!r} is stale.")
         record = self._records.get(schedule_key)
         if (
             record is None
@@ -284,18 +265,12 @@ class InMemoryScheduleCache:
             or state.revision != claim.record.revision
             or record.revision != claim.record.revision
         ):
-            raise CacheConflictError(
-                f"Schedule claim for {claim.record.identity!r} is stale."
-            )
+            raise CacheConflictError(f"Schedule claim for {claim.record.identity!r} is stale.")
         return schedule_key, record
 
     def _recover_claims(self) -> None:
         now = self.clock()
-        expired = [
-            schedule_key
-            for schedule_key, state in self._claims.items()
-            if state.expires_at <= now
-        ]
+        expired = [schedule_key for schedule_key, state in self._claims.items() if state.expires_at <= now]
         for schedule_key in expired:
             self._claims.pop(schedule_key, None)
 
@@ -340,8 +315,7 @@ def _next_due_at(record: ScheduleRecord, now: float) -> float:
             next_due_at = math.nextafter(now, math.inf)
     if not math.isfinite(next_due_at):
         raise CacheFeatureError(
-            f"Recurring schedule {record.identity!r} cannot advance beyond the "
-            "current clock value."
+            f"Recurring schedule {record.identity!r} cannot advance beyond the current clock value."
         )
     return next_due_at
 

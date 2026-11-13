@@ -72,9 +72,7 @@ def register_view(
     path = getattr(view_class, ROUTE_PATH_ATTRIBUTE, None)
     route_type = getattr(view_class, ROUTE_TYPE_ATTRIBUTE, None)
     if not isinstance(path, str) or not isinstance(route_type, str):
-        raise ViewRegistrationError(
-            "View classes must be decorated with route(...) before registration."
-        )
+        raise ViewRegistrationError("View classes must be decorated with route(...) before registration.")
 
     for view_route in _view_routes(view_class, path):
         endpoint = _endpoint_for(view_class, view_route, route_type)
@@ -98,14 +96,10 @@ def _view_methods(view_class: type[View]) -> tuple[str, ...]:
     unsupported = tuple(method for method in methods if method not in supported)
     if unsupported:
         raise ViewRegistrationError(
-            f"View {view_class.__name__} declares unsupported method(s): "
-            + ", ".join(unsupported)
-            + "."
+            f"View {view_class.__name__} declares unsupported method(s): " + ", ".join(unsupported) + "."
         )
     if not methods:
-        raise ViewRegistrationError(
-            f"View {view_class.__name__} does not define an HTTP method."
-        )
+        raise ViewRegistrationError(f"View {view_class.__name__} does not define an HTTP method.")
     return methods
 
 
@@ -114,12 +108,8 @@ def _view_routes(view_class: type[View], path: str) -> tuple[ViewRoute, ...]:
     route_definitions = getattr(view_class, "route_definitions", None)
     if callable(route_definitions):
         routes = route_definitions(path)
-        if not isinstance(routes, Sequence) or not all(
-            isinstance(view_route, ViewRoute) for view_route in routes
-        ):
-            raise ViewRegistrationError(
-                f"View {view_class.__name__} returned invalid route definitions."
-            )
+        if not isinstance(routes, Sequence) or not all(isinstance(view_route, ViewRoute) for view_route in routes):
+            raise ViewRegistrationError(f"View {view_class.__name__} returned invalid route definitions.")
         return tuple(routes)
     return (ViewRoute(path, _view_methods(view_class)),)
 
@@ -151,9 +141,7 @@ def _endpoint_for(
         return bind_scope_target(endpoint, view_class)
 
     if view_route.path_parameter != "id":
-        raise ViewRegistrationError(
-            "Generic view route path parameters must currently be named 'id'."
-        )
+        raise ViewRegistrationError("Generic view route path parameters must currently be named 'id'.")
 
     async def endpoint(request: Request, id: str) -> Response:
         kwargs = {"id": id, **dispatch_kwargs}

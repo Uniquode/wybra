@@ -209,9 +209,7 @@ class ImmediateTasksCapability:
                             error_type=type(exc).__name__,
                         )
                     )
-                    await self._sleep(
-                        _retry_delay(retry, attempt, random_value=self._random())
-                    )
+                    await self._sleep(_retry_delay(retry, attempt, random_value=self._random()))
                     continue
                 await self._record_terminal_failure(
                     submitted,
@@ -273,11 +271,7 @@ class ImmediateTasksCapability:
                         "schema_version": event.schema_version,
                         "queue": event.queue,
                         "correlation_id": str(event.correlation_id),
-                        "causation_id": (
-                            str(event.causation_id)
-                            if event.causation_id is not None
-                            else None
-                        ),
+                        "causation_id": (str(event.causation_id) if event.causation_id is not None else None),
                         "attempt": event.attempt,
                         "worker_id": event.worker_id,
                         "error_type": event.error_type,
@@ -403,9 +397,7 @@ def _retry_delay(
     maximum_delay = policy.maximum_delay_seconds
     if exponent > 0 and delay > 0 and policy.backoff_multiplier > 1:
         if maximum_delay is not None:
-            cap_exponent = (log(maximum_delay) - log(delay)) / log(
-                policy.backoff_multiplier
-            )
+            cap_exponent = (log(maximum_delay) - log(delay)) / log(policy.backoff_multiplier)
             if exponent >= cap_exponent:
                 delay = maximum_delay
             else:
@@ -436,9 +428,7 @@ def _reject_direct_submission_options(
     options: TaskSubmissionOptions | None,
 ) -> None:
     if options is not None:
-        raise ValueError(
-            "Task submission options cannot be used with direct execution."
-        )
+        raise ValueError("Task submission options cannot be used with direct execution.")
 
 
 def _external_cancellation_requested() -> bool:

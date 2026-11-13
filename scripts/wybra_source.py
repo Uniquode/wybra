@@ -7,9 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-GIT_SOURCE = (
-    'wybra = { git = "https://github.com/Uniquode/wybra.git", branch = "main" }'
-)
+GIT_SOURCE = 'wybra = { git = "https://github.com/Uniquode/wybra.git", branch = "main" }'
 PATH_SOURCE = 'wybra = { path = "../wybra", editable = true }'
 WYBRA_PACKAGE = "wybra"
 _SOURCE_LINES = {GIT_SOURCE, PATH_SOURCE}
@@ -122,9 +120,7 @@ def _source_state(lines: list[str]) -> str:
         return "git"
     if active_sources == [PATH_SOURCE]:
         return "path"
-    raise SystemExit(
-        "[tool.uv.sources] must contain exactly one active Wybra source line."
-    )
+    raise SystemExit("[tool.uv.sources] must contain exactly one active Wybra source line.")
 
 
 def _source_lines(mode: str) -> list[str]:
@@ -136,9 +132,7 @@ def _source_lines(mode: str) -> list[str]:
 
 
 def _wybra_source_line_indices(lines: list[str], source_range: range) -> list[int]:
-    return [
-        index for index in source_range if lines[index].strip() in _SOURCE_LINE_VARIANTS
-    ]
+    return [index for index in source_range if lines[index].strip() in _SOURCE_LINE_VARIANTS]
 
 
 if __name__ == "__main__":

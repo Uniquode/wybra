@@ -46,10 +46,7 @@ class HelpSuffixGroup(click.Group):
 
 def _accepts_raw_help_path(command: click.Command) -> bool:
     context_settings = command.context_settings or {}
-    return bool(
-        context_settings.get("allow_extra_args")
-        and context_settings.get("ignore_unknown_options")
-    )
+    return bool(context_settings.get("allow_extra_args") and context_settings.get("ignore_unknown_options"))
 
 
 def _password_source_option(default: PasswordSource | None):
@@ -128,14 +125,10 @@ def _optional_boolean(
 
 
 def _ensure_mutually_exclusive(*options: tuple[object, str]) -> None:
-    selected = [
-        option_name for value, option_name in options if _option_was_provided(value)
-    ]
+    selected = [option_name for value, option_name in options if _option_was_provided(value)]
     if len(selected) > 1:
         first, second = selected[:2]
-        raise click.UsageError(
-            f"Option '{second}' is not allowed with option '{first}'."
-        )
+        raise click.UsageError(f"Option '{second}' is not allowed with option '{first}'.")
 
 
 def _option_was_provided(value: object) -> bool:

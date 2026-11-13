@@ -166,8 +166,7 @@ def _secret_envelope_service(
             extra={
                 "crypto_source": secrets_settings.crypto.source,
                 "current_key": secrets_settings.crypto.current_key,
-                "previous_keys_configured": secrets_settings.crypto.previous_keys
-                is not None,
+                "previous_keys_configured": secrets_settings.crypto.previous_keys is not None,
             },
         )
         return SecretEnvelopeService.from_secrets(
@@ -177,8 +176,7 @@ def _secret_envelope_service(
             previous_keys=secrets_settings.crypto.previous_keys,
         )
     logger.info(
-        "Initialising SecretEnvelopeService from environment variables because "
-        "no crypto secrets source is configured"
+        "Initialising SecretEnvelopeService from environment variables because no crypto secrets source is configured"
     )
     return SecretEnvelopeService.from_env(_resolved_environ(site))
 

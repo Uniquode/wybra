@@ -181,9 +181,7 @@ def _site_config_source(
     if provider_route_prefixes is not None:
         route_prefixes["wybra.providers"] = provider_route_prefixes
     elif provider_route_prefix is not None:
-        route_prefixes["wybra.providers"] = {
-            GOOGLE_PROVIDER_NAME: provider_route_prefix
-        }
+        route_prefixes["wybra.providers"] = {GOOGLE_PROVIDER_NAME: provider_route_prefix}
 
     config: dict[str, object] = {
         "app": {
@@ -220,9 +218,7 @@ async def _create_active_totp_credential(
     site.app.state.secret_envelope_service = secret_service
     secret = generate_totp_secret()
     recovery_codes = generate_recovery_codes()
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         store = TortoiseTOTPCredentialStore(
             db_session,
             secret_service,
@@ -247,9 +243,7 @@ async def _ensure_identity_user(
     *,
     email: str = "security@example.test",
 ) -> None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         await User.get_or_create(
             id=user_id,
             defaults={
@@ -263,9 +257,7 @@ async def _ensure_identity_user(
 
 
 async def _active_totp_credential_id(site, user_id: uuid.UUID) -> str | None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         store = TortoiseTOTPCredentialStore(
             db_session,
             site.app.state.secret_envelope_service,
@@ -281,9 +273,7 @@ async def _create_passkey_credential(
     label: str = "Test passkey",
 ) -> str:
     stored_credential_id = credential_id or credential_id_to_text(b"test-passkey")
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         store = TortoiseWebAuthnCredentialStore(db_session)
         return await store.store_webauthn_credential(
             str(user_id),
@@ -301,17 +291,13 @@ async def _create_passkey_credential(
 
 
 async def _active_passkey_count(site, user_id: uuid.UUID) -> int:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         store = TortoiseWebAuthnCredentialStore(db_session)
         return await store.count_active_webauthn_credentials(str(user_id))
 
 
 async def _authentication_challenge_exists(site, challenge_id: str) -> bool:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         store = TortoiseChallengeStore(db_session)
         return await store.get_challenge(challenge_id) is not None
 
@@ -385,9 +371,7 @@ async def _create_local_user(
     password: str = STRONG_TEST_PASSWORD,
     is_verified: bool,
 ) -> uuid.UUID:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         manager = create_user_manager(
             db_session,
             site.app.state.auth_settings.identity_options,
@@ -406,9 +390,7 @@ async def _set_password_login_enabled(
     user_id: uuid.UUID,
     enabled: bool,
 ) -> None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         user = await User.get_or_none(id=user_id, using_db=db_session)
         assert user is not None
         user.password_login_enabled = enabled
@@ -416,9 +398,7 @@ async def _set_password_login_enabled(
 
 
 async def _password_login_enabled(site, user_id: uuid.UUID) -> bool:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as db_session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
         user = await User.get_or_none(id=user_id, using_db=db_session)
         assert user is not None
         return user.password_login_enabled
@@ -539,8 +519,7 @@ async def _start_google_provider_site(
             ),
             account_prefix=account_prefix,
             auth_config=auth_config,
-            provider_route_prefix=provider_route_prefix
-            or f"{account_prefix}/providers/{GOOGLE_PROVIDER_NAME}",
+            provider_route_prefix=provider_route_prefix or f"{account_prefix}/providers/{GOOGLE_PROVIDER_NAME}",
             providers_config=providers_config or _google_provider_config(),
         ),
     )
@@ -570,8 +549,7 @@ async def _start_github_provider_site(
             account_prefix=account_prefix,
             auth_config=auth_config,
             provider_route_prefixes={
-                GITHUB_PROVIDER_NAME: provider_route_prefix
-                or f"{account_prefix}/providers/{GITHUB_PROVIDER_NAME}",
+                GITHUB_PROVIDER_NAME: provider_route_prefix or f"{account_prefix}/providers/{GITHUB_PROVIDER_NAME}",
             },
             providers_config=providers_config or _github_provider_config(),
         ),
@@ -602,8 +580,7 @@ async def _start_apple_provider_site(
             account_prefix=account_prefix,
             auth_config=auth_config,
             provider_route_prefixes={
-                APPLE_PROVIDER_NAME: provider_route_prefix
-                or f"{account_prefix}/providers/{APPLE_PROVIDER_NAME}",
+                APPLE_PROVIDER_NAME: provider_route_prefix or f"{account_prefix}/providers/{APPLE_PROVIDER_NAME}",
             },
             providers_config=providers_config or _apple_provider_config(),
         ),
@@ -654,9 +631,7 @@ async def _create_google_provider_link(
     provider_subject: str = "google-subject",
     account_email: str = "user@example.com",
 ) -> str:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
@@ -681,9 +656,7 @@ async def _create_github_provider_link(
     provider_subject: str = "github-subject",
     account_email: str = "user@example.com",
 ) -> str:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
@@ -708,9 +681,7 @@ async def _create_apple_provider_link(
     provider_subject: str = "apple-subject",
     account_email: str = "user@example.com",
 ) -> str:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         store = TortoiseProviderCredentialStore(
             session,
             SecretEnvelopeService.for_testing(),
@@ -733,9 +704,7 @@ async def _google_provider_linked_user_id(
     *,
     provider_subject: str,
 ) -> uuid.UUID | None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         provider = await IdentityProvider.get_or_none(
             provider_name=GOOGLE_PROVIDER_NAME,
             provider_subject=provider_subject,
@@ -755,9 +724,7 @@ async def _github_provider_linked_user_id(
     *,
     provider_subject: str,
 ) -> uuid.UUID | None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         provider = await IdentityProvider.get_or_none(
             provider_name=GITHUB_PROVIDER_NAME,
             provider_subject=provider_subject,
@@ -777,9 +744,7 @@ async def _apple_provider_linked_user_id(
     *,
     provider_subject: str,
 ) -> uuid.UUID | None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         provider = await IdentityProvider.get_or_none(
             provider_name=APPLE_PROVIDER_NAME,
             provider_subject=provider_subject,
@@ -907,9 +872,7 @@ async def _google_provider_id(
     *,
     provider_subject: str,
 ) -> uuid.UUID | None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         provider = await IdentityProvider.get_or_none(
             provider_name=GOOGLE_PROVIDER_NAME,
             provider_subject=provider_subject,
@@ -923,9 +886,7 @@ async def _google_provider_subjects_for_user(
     *,
     user_id: uuid.UUID,
 ) -> tuple[str, ...]:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         provider_ids = (
             await ExternalIdentityLink.filter(
                 user_id=user_id,
@@ -945,9 +906,7 @@ async def _google_provider_subjects_for_user(
 
 
 async def _google_user_by_email(site, email: str) -> User | None:
-    async with database_write_transaction(
-        site.require_capability(DatabaseCapability)
-    ) as session:
+    async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
         return await User.get_or_none(email=email, using_db=session)
 
 
@@ -1137,9 +1096,7 @@ class TestAuthenticationPages:
         user_id = uuid.uuid4()
         await _ensure_identity_user(site, user_id)
 
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as session:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
             challenge = await IdentityAuthenticationChallenge.create(
                 id=uuid.uuid4().hex,
                 user_id=user_id,
@@ -1254,9 +1211,7 @@ class TestAuthenticationPages:
         assert parsed_location.netloc == "accounts.google.com"
         assert parsed_location.path == "/o/oauth2/v2/auth"
         assert redirect_query["client_id"] == ["google-client-id"]
-        assert redirect_query["redirect_uri"] == [
-            "http://testserver/account/providers/google/callback"
-        ]
+        assert redirect_query["redirect_uri"] == ["http://testserver/account/providers/google/callback"]
         assert redirect_query["response_type"] == ["code"]
         assert redirect_query["scope"] == ["openid email profile"]
         assert redirect_query["state"] == [cookie_state.state]
@@ -1264,9 +1219,7 @@ class TestAuthenticationPages:
         assert cookie_state.provider_name == GOOGLE_PROVIDER_NAME
         assert cookie_state.purpose == "login"
         assert cookie_state.return_to == "/dashboard"
-        assert cookie_state.redirect_uri == (
-            "http://testserver/account/providers/google/callback"
-        )
+        assert cookie_state.redirect_uri == ("http://testserver/account/providers/google/callback")
         assert cookie_state.user_id is None
         assert GOOGLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
         assert "HttpOnly" in response.headers["set-cookie"]
@@ -1291,13 +1244,9 @@ class TestAuthenticationPages:
 
         redirect_query = parse_qs(urlsplit(response.headers["location"]).query)
         cookie_state = _google_oauth_cookie_state(site, response)
-        assert redirect_query["redirect_uri"] == [
-            "http://testserver/identity/oauth/google/callback"
-        ]
+        assert redirect_query["redirect_uri"] == ["http://testserver/identity/oauth/google/callback"]
         assert cookie_state.return_to == "/identity"
-        assert cookie_state.redirect_uri == (
-            "http://testserver/identity/oauth/google/callback"
-        )
+        assert cookie_state.redirect_uri == ("http://testserver/identity/oauth/google/callback")
         assert "/account/providers" not in redirect_query["redirect_uri"][0]
 
     @pytest.mark.anyio
@@ -1367,9 +1316,7 @@ class TestAuthenticationPages:
         tmp_path: Path,
         provider_name: str,
     ) -> None:
-        site = await _start_provider_site(
-            tmp_path=tmp_path, provider_name=provider_name
-        )
+        site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
 
         response = WybraTestClient(site.app).get(
             f"/account/providers/{provider_name}/login",
@@ -1489,9 +1436,7 @@ class TestAuthenticationPages:
         assert token_request.client_id == "google-client-id"
         assert token_request.client_secret == "client-secret"
         assert token_request.code == "code"
-        assert token_request.redirect_uri == (
-            "http://testserver/account/providers/google/callback"
-        )
+        assert token_request.redirect_uri == ("http://testserver/account/providers/google/callback")
         assert len(id_token_validator.requests) == 1
         validation_request = id_token_validator.requests[0]
         assert validation_request.id_token == "id-token"
@@ -1855,9 +1800,7 @@ class TestAuthenticationPages:
             tmp_path,
             providers_config=_google_provider_config(account_creation_enabled=True),
         )
-        site.app.state.secret_envelope_service = SecretEnvelopeService.from_key_bundle(
-            None
-        )
+        site.app.state.secret_envelope_service = SecretEnvelopeService.from_key_bundle(None)
         await _create_auth_schema(site)
         setattr(
             site.app.state,
@@ -2201,9 +2144,7 @@ class TestAuthenticationPages:
         )
 
         assert response.status_code == 409
-        assert response.json()["detail"] == (
-            "Google account is already linked to another user."
-        )
+        assert response.json()["detail"] == ("Google account is already linked to another user.")
 
     @pytest.mark.anyio
     async def test_google_callback_rejects_token_exchange_failure(
@@ -2213,9 +2154,7 @@ class TestAuthenticationPages:
     ) -> None:
         monkeypatch.setenv("GOOGLE_SECRET", "client-secret")
         site = await _start_google_provider_site(tmp_path)
-        token_client = FakeGoogleTokenClient(
-            error=GoogleTokenExchangeError("Google token exchange failed.")
-        )
+        token_client = FakeGoogleTokenClient(error=GoogleTokenExchangeError("Google token exchange failed."))
         setattr(
             site.app.state,
             GOOGLE_OAUTH_TOKEN_CLIENT_STATE_ATTRIBUTE,
@@ -2365,9 +2304,7 @@ class TestAuthenticationPages:
         assert parsed_location.netloc == "github.com"
         assert parsed_location.path == "/login/oauth/authorize"
         assert redirect_query["client_id"] == ["github-client-id"]
-        assert redirect_query["redirect_uri"] == [
-            "http://testserver/account/providers/github/callback"
-        ]
+        assert redirect_query["redirect_uri"] == ["http://testserver/account/providers/github/callback"]
         assert redirect_query["scope"] == ["read:user user:email"]
         assert redirect_query["state"] == [cookie_state.state]
         assert redirect_query["code_challenge"] == [cookie_state.code_challenge]
@@ -2376,9 +2313,7 @@ class TestAuthenticationPages:
         assert cookie_state.provider_name == GITHUB_PROVIDER_NAME
         assert cookie_state.purpose == "login"
         assert cookie_state.return_to == "/dashboard"
-        assert cookie_state.redirect_uri == (
-            "http://testserver/account/providers/github/callback"
-        )
+        assert cookie_state.redirect_uri == ("http://testserver/account/providers/github/callback")
         assert cookie_state.user_id is None
         assert GITHUB_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
         assert "HttpOnly" in response.headers["set-cookie"]
@@ -2413,16 +2348,11 @@ class TestAuthenticationPages:
         assert response.json()["detail"] == "GitHub account is not linked."
         assert len(token_client.requests) == 1
         token_request = token_client.requests[0]
-        assert (
-            token_request.token_endpoint
-            == "https://github.com/login/oauth/access_token"
-        )
+        assert token_request.token_endpoint == "https://github.com/login/oauth/access_token"
         assert token_request.client_id == "github-client-id"
         assert token_request.client_secret == "client-secret"
         assert token_request.code == "code"
-        assert token_request.redirect_uri == (
-            "http://testserver/account/providers/github/callback"
-        )
+        assert token_request.redirect_uri == ("http://testserver/account/providers/github/callback")
         assert token_request.code_verifier == cookie_state.code_verifier
         assert len(api_client.requests) == 1
         identity_request = api_client.requests[0]
@@ -2648,9 +2578,7 @@ class TestAuthenticationPages:
         assert parsed_location.netloc == "appleid.apple.com"
         assert parsed_location.path == "/auth/authorize"
         assert redirect_query["client_id"] == ["com.example.app.web"]
-        assert redirect_query["redirect_uri"] == [
-            "http://testserver/account/providers/apple/callback"
-        ]
+        assert redirect_query["redirect_uri"] == ["http://testserver/account/providers/apple/callback"]
         assert redirect_query["response_type"] == ["code"]
         assert redirect_query["response_mode"] == ["form_post"]
         assert redirect_query["scope"] == ["name email"]
@@ -2659,9 +2587,7 @@ class TestAuthenticationPages:
         assert cookie_state.provider_name == APPLE_PROVIDER_NAME
         assert cookie_state.purpose == "login"
         assert cookie_state.return_to == "/dashboard"
-        assert cookie_state.redirect_uri == (
-            "http://testserver/account/providers/apple/callback"
-        )
+        assert cookie_state.redirect_uri == ("http://testserver/account/providers/apple/callback")
         assert cookie_state.user_id is None
         assert APPLE_OAUTH_STATE_COOKIE in response.headers["set-cookie"]
         assert "HttpOnly" in response.headers["set-cookie"]
@@ -2720,9 +2646,7 @@ class TestAuthenticationPages:
         assert token_request.client_id == "com.example.app.web"
         assert token_request.client_secret.count(".") == 2
         assert token_request.code == "code"
-        assert token_request.redirect_uri == (
-            "http://testserver/account/providers/apple/callback"
-        )
+        assert token_request.redirect_uri == ("http://testserver/account/providers/apple/callback")
         assert len(id_token_validator.requests) == 1
         validation_request = id_token_validator.requests[0]
         assert validation_request.id_token == "id-token"
@@ -2785,10 +2709,7 @@ class TestAuthenticationPages:
 
         assert response.status_code == 404
         assert response.json()["detail"] == "Apple login is not available."
-        assert (
-            "Apple private key resolution failed: source=environment "
-            "key=APPLE_PRIVATE_KEY"
-        ) in captured.err
+        assert ("Apple private key resolution failed: source=environment key=APPLE_PRIVATE_KEY") in captured.err
 
     @pytest.mark.anyio
     async def test_apple_callback_logs_client_secret_generation_failure(
@@ -2995,18 +2916,13 @@ class TestAuthenticationPages:
         provider_label: str,
     ) -> None:
         _set_available_provider_secret(monkeypatch, provider_name)
-        site = await _start_provider_site(
-            tmp_path=tmp_path, provider_name=provider_name
-        )
+        site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
 
         response = WybraTestClient(site.app).get("/account/login?return_to=/dashboard")
 
         assert response.status_code == 200
         assert f"Sign in with {provider_label}" in response.text
-        assert (
-            f"/account/providers/{provider_name}/login?return_to=%2Fdashboard"
-            in response.text
-        )
+        assert f"/account/providers/{provider_name}/login?return_to=%2Fdashboard" in response.text
 
     @pytest.mark.anyio
     async def test_login_page_hides_google_sign_in_when_provider_disabled(
@@ -3064,9 +2980,7 @@ class TestAuthenticationPages:
         provider_label: str,
     ) -> None:
         _set_available_provider_secret(monkeypatch, provider_name)
-        site = await _start_provider_site(
-            tmp_path=tmp_path, provider_name=provider_name
-        )
+        site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
         await _create_auth_schema(site)
         user_id = await _create_local_user(
             site,
@@ -3080,10 +2994,7 @@ class TestAuthenticationPages:
         assert response.status_code == 200
         assert "Provider sign-in" in response.text
         assert f"Link {provider_label}" in response.text
-        assert (
-            f"/account/providers/{provider_name}/link?return_to=%2Faccount%2Fsecurity"
-            in response.text
-        )
+        assert f"/account/providers/{provider_name}/link?return_to=%2Faccount%2Fsecurity" in response.text
 
     @pytest.mark.anyio
     async def test_security_page_shows_google_unlink_and_password_disable_controls(
@@ -3110,10 +3021,7 @@ class TestAuthenticationPages:
         response = _security_page_client(site).get("/account/security")
 
         assert response.status_code == 200
-        assert (
-            f"{google_label} sign-in is linked as google-user@example.test"
-            in response.text
-        )
+        assert f"{google_label} sign-in is linked as google-user@example.test" in response.text
         assert f'value="{provider_id}"' in response.text
         assert f"Link another {google_label} account" in response.text
         assert f"Unlink {google_label}" in response.text
@@ -3144,10 +3052,7 @@ class TestAuthenticationPages:
         response = _security_page_client(site).get("/account/security")
 
         assert response.status_code == 200
-        assert (
-            f"{github_label} sign-in is linked as github-user@example.test"
-            in response.text
-        )
+        assert f"{github_label} sign-in is linked as github-user@example.test" in response.text
         assert f'value="{provider_id}"' in response.text
         assert f"Link another {github_label} account" in response.text
         assert f"Unlink {github_label}" in response.text
@@ -3178,10 +3083,7 @@ class TestAuthenticationPages:
         response = _security_page_client(site).get("/account/security")
 
         assert response.status_code == 200
-        assert (
-            f"{apple_label} sign-in is linked as apple-user@example.test"
-            in response.text
-        )
+        assert f"{apple_label} sign-in is linked as apple-user@example.test" in response.text
         assert f'value="{provider_id}"' in response.text
         assert f"Link another {apple_label} account" in response.text
         assert f"Unlink {apple_label}" in response.text
@@ -3238,9 +3140,7 @@ class TestAuthenticationPages:
         provider_label: str,
     ) -> None:
         _set_available_provider_secret(monkeypatch, provider_name)
-        site = await _start_provider_site(
-            tmp_path=tmp_path, provider_name=provider_name
-        )
+        site = await _start_provider_site(tmp_path=tmp_path, provider_name=provider_name)
         await _create_auth_schema(site)
         user_id = await _create_local_user(
             site,
@@ -3271,10 +3171,7 @@ class TestAuthenticationPages:
         )
 
         assert response.status_code == 400
-        assert (
-            f"Add another sign-in method before unlinking {provider_label}."
-            in response.text
-        )
+        assert f"Add another sign-in method before unlinking {provider_label}." in response.text
         assert await _provider_linked_user_id(provider_name, site) == user_id
 
     @pytest.mark.anyio
@@ -3324,9 +3221,7 @@ class TestAuthenticationPages:
 
         assert response.status_code == 303
         assert response.headers["location"] == "/account/security"
-        assert await _google_provider_subjects_for_user(site, user_id=user_id) == (
-            "google-second-subject",
-        )
+        assert await _google_provider_subjects_for_user(site, user_id=user_id) == ("google-second-subject",)
 
     @pytest.mark.anyio
     async def test_security_page_disables_password_login_when_google_is_linked(
@@ -3381,9 +3276,7 @@ class TestAuthenticationPages:
         )
 
         assert response.status_code == 400
-        assert "Add another sign-in method before disabling password sign-in." in (
-            response.text
-        )
+        assert "Add another sign-in method before disabling password sign-in." in (response.text)
         assert await _password_login_enabled(site, user_id) is True
 
     @pytest.mark.anyio
@@ -3412,9 +3305,7 @@ class TestAuthenticationPages:
         )
 
         assert response.status_code == 400
-        assert "Add another sign-in method before disabling password sign-in." in (
-            response.text
-        )
+        assert "Add another sign-in method before disabling password sign-in." in (response.text)
         assert await _password_login_enabled(site, user_id) is True
 
     @pytest.mark.anyio
@@ -3424,9 +3315,7 @@ class TestAuthenticationPages:
     ) -> None:
         site = await _start_security_site(tmp_path, auth_config=PASSKEY_AUTH_CONFIG)
 
-        response = _security_page_client(site).get(
-            "/account/login?return_to=/dashboard"
-        )
+        response = _security_page_client(site).get("/account/login?return_to=/dashboard")
 
         assert response.status_code == 200
         assert "Sign in with passkey" in response.text
@@ -3566,9 +3455,7 @@ class TestAuthenticationPages:
             "status": "registered",
             "redirect_to": "/account/security",
         }
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as session:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as session:
             store = TortoiseWebAuthnCredentialStore(session)
             credential = await store.get_webauthn_credential(credential_id)
             assert credential is not None
@@ -3961,9 +3848,7 @@ class TestAuthenticationPages:
         )
 
         assert response.status_code == 400
-        assert (
-            "Add another sign-in method before removing this passkey." in response.text
-        )
+        assert "Add another sign-in method before removing this passkey." in response.text
         assert await _active_passkey_count(site, user_id) == 1
 
     @pytest.mark.anyio
@@ -4084,9 +3969,7 @@ class TestAuthenticationPages:
         assert await _active_totp_credential_id(site, user_id) is None
 
     @pytest.mark.anyio
-    async def test_security_page_requires_authenticated_user(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_security_page_requires_authenticated_user(self, tmp_path: Path) -> None:
         app = FastAPI()
         site = await start(
             app,
@@ -4096,9 +3979,7 @@ class TestAuthenticationPages:
             ),
         )
 
-        response = WybraTestClient(site.app, raise_server_exceptions=False).get(
-            "/account/security"
-        )
+        response = WybraTestClient(site.app, raise_server_exceptions=False).get("/account/security")
 
         assert response.status_code == 401
 
@@ -4174,9 +4055,7 @@ class TestAuthenticationPages:
         assert cookie_name not in response.cookies
 
     @pytest.mark.anyio
-    async def test_security_page_renders_for_authenticated_user(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_security_page_renders_for_authenticated_user(self, tmp_path: Path) -> None:
         app = FastAPI()
         site = await start(
             app,
@@ -4282,9 +4161,7 @@ class TestAuthenticationPages:
         assert response.status_code == 200
         assert "Show setup QRCode" in response.text
         assert "<svg" in response.text
-        assert (
-            "otpauth://totp/" not in response.text.split("<summary>Show setup URI")[0]
-        )
+        assert "otpauth://totp/" not in response.text.split("<summary>Show setup URI")[0]
         assert "Show setup URI" in response.text
 
     @pytest.mark.anyio
@@ -4479,9 +4356,7 @@ class TestAuthenticationPages:
             return user
 
         async def authenticate_user(_request, email: str, password: str):
-            return (
-                user if email == user.email and password == "correct-password" else None
-            )
+            return user if email == user.email and password == "correct-password" else None
 
         monkeypatch.setattr(
             totp_management_pages,
@@ -4777,9 +4652,7 @@ class TestAuthenticationPages:
 
         assert response.status_code == 400
         assert "Confirm this action" in response.text
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as db_session:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
             recovery_store = TortoiseRecoveryCodeStore(
                 db_session,
                 site.app.state.secret_envelope_service,
@@ -4834,9 +4707,7 @@ class TestAuthenticationPages:
         assert response.status_code == 200
         assert "Store these recovery codes" in response.text
         _assert_recovery_codes_download(response.text)
-        async with database_write_transaction(
-            site.require_capability(DatabaseCapability)
-        ) as db_session:
+        async with database_write_transaction(site.require_capability(DatabaseCapability)) as db_session:
             recovery_store = TortoiseRecoveryCodeStore(
                 db_session,
                 site.app.state.secret_envelope_service,
@@ -4918,9 +4789,7 @@ class TestAuthenticationPages:
             return user
 
         async def authenticate_user(_request, email: str, password: str):
-            return (
-                user if email == user.email and password == "correct-password" else None
-            )
+            return user if email == user.email and password == "correct-password" else None
 
         monkeypatch.setattr(
             totp_management_pages,

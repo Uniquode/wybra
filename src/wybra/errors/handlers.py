@@ -27,9 +27,7 @@ ERROR_OPTIONS_STATE_ATTRIBUTE = "wybra_errors_options"
 
 
 class _ErrorHandlingCapability(Protocol):
-    async def response_for_exception(
-        self, request: Request, exc: Exception
-    ) -> Response: ...
+    async def response_for_exception(self, request: Request, exc: Exception) -> Response: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +56,7 @@ class ErrorHandlerOptions:
 class DefaultErrorHandlingCapability:
     """Default exception-to-response translator."""
 
-    async def response_for_exception(
-        self, request: Request, exc: Exception
-    ) -> Response:
+    async def response_for_exception(self, request: Request, exc: Exception) -> Response:
         if isinstance(exc, EmptyBodyResponseException):
             return Response(status_code=exc.status_code)
         if isinstance(exc, StarletteHTTPException):
@@ -138,9 +134,7 @@ async def _handle_unexpected_exception(request: Request, exc: Exception) -> Resp
     return await _response_for_unexpected_exception(request, exc)
 
 
-async def _response_for_unexpected_exception(
-    request: Request, exc: Exception
-) -> Response:
+async def _response_for_unexpected_exception(request: Request, exc: Exception) -> Response:
     logger.exception("Unhandled application error", exc_info=exc)
     presentation = _build_error_presentation(500)
     return await _build_error_response(request, presentation)
@@ -289,9 +283,7 @@ def _fallback_error_response(
     return _plain_text_error_response(presentation, headers=headers)
 
 
-def _build_error_presentation(
-    status_code: int, *, detail: str | None = None
-) -> ErrorPresentation:
+def _build_error_presentation(status_code: int, *, detail: str | None = None) -> ErrorPresentation:
     heading = _reason_phrase(status_code)
     fallback_detail = _default_detail(status_code, heading)
     return ErrorPresentation(
@@ -384,11 +376,7 @@ def _error_capability(request: Request) -> _ErrorHandlingCapability:
 def _safe_headers(headers: Mapping[str, str] | None) -> dict[str, str] | None:
     if not headers:
         return None
-    return {
-        name: value
-        for name, value in headers.items()
-        if name.lower() in _SAFE_ERROR_HEADERS
-    }
+    return {name: value for name, value in headers.items() if name.lower() in _SAFE_ERROR_HEADERS}
 
 
 def _api_error_code(presentation: ErrorPresentation) -> str:
@@ -427,9 +415,7 @@ def _summarise_validation_errors(
     if not field_errors:
         return None
 
-    return {
-        field_name: tuple(messages) for field_name, messages in field_errors.items()
-    }
+    return {field_name: tuple(messages) for field_name, messages in field_errors.items()}
 
 
 def _reason_phrase(status_code: int) -> str:
@@ -440,9 +426,7 @@ def _reason_phrase(status_code: int) -> str:
 
 
 def _default_detail(status_code: int, heading: str) -> str:
-    return _DEFAULT_DETAILS.get(
-        status_code, f"The request could not be completed ({status_code} {heading})."
-    )
+    return _DEFAULT_DETAILS.get(status_code, f"The request could not be completed ({status_code} {heading}).")
 
 
 _DEFAULT_DETAILS: dict[int, str] = {

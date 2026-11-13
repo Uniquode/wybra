@@ -42,9 +42,7 @@ class DiagnosticSnapshot:
         )
 
     def for_scope(self, scope: EventScope) -> DiagnosticSnapshot:
-        events = tuple(
-            event for event in self.events if _event_matches_scope(event, scope)
-        )
+        events = tuple(event for event in self.events if _event_matches_scope(event, scope))
         return DiagnosticSnapshot(
             identifier=self.identifier,
             summary=dict(self.summary),
@@ -133,9 +131,7 @@ class DiagnosticsCapability:
         ] = {}
         self._subscription_queue_limit = subscription_queue_limit
         self._snapshot_event_limit = snapshot_event_limit
-        self._allowed_scopes = (
-            tuple(allowed_scopes) if allowed_scopes is not None else None
-        )
+        self._allowed_scopes = tuple(allowed_scopes) if allowed_scopes is not None else None
         self.level = level
 
     def snapshots(
@@ -161,12 +157,9 @@ class DiagnosticsCapability:
 
         selected_scopes = tuple(scopes)
         if not selected_scopes:
-            raise ValueError(
-                "Diagnostics subscriptions must select at least one scope."
-            )
+            raise ValueError("Diagnostics subscriptions must select at least one scope.")
         if self._allowed_scopes is not None and any(
-            not _scope_is_permitted(scope, self._allowed_scopes)
-            for scope in selected_scopes
+            not _scope_is_permitted(scope, self._allowed_scopes) for scope in selected_scopes
         ):
             raise ValueError("Diagnostics subscription expands the collector filter.")
         subscription = DiagnosticsSubscription(
@@ -205,10 +198,7 @@ class DiagnosticsCapability:
         if self._allowed_scopes is None:
             return bool(diagnostics.events)
         return any(
-            any(
-                _event_matches_scope(event.as_dict(), scope)
-                for scope in self._allowed_scopes
-            )
+            any(_event_matches_scope(event.as_dict(), scope) for scope in self._allowed_scopes)
             for event in diagnostics.events
         )
 
@@ -251,9 +241,7 @@ def _event_matches_scope(event: dict[str, object], scope: EventScope) -> bool:
     name = event.get("name")
     if not isinstance(category, str):
         return False
-    event_scope = EventScope(
-        (category, *name.split(".")) if isinstance(name, str) and name else (category,)
-    )
+    event_scope = EventScope((category, *name.split(".")) if isinstance(name, str) and name else (category,))
     return event_scope.matches(scope)
 
 
@@ -261,11 +249,7 @@ def _snapshot_for_scopes(
     snapshot: DiagnosticSnapshot,
     scopes: Iterable[EventScope],
 ) -> DiagnosticSnapshot:
-    selected = tuple(
-        event
-        for event in snapshot.events
-        if any(_event_matches_scope(event, scope) for scope in scopes)
-    )
+    selected = tuple(event for event in snapshot.events if any(_event_matches_scope(event, scope) for scope in scopes))
     return DiagnosticSnapshot(
         identifier=snapshot.identifier,
         summary=dict(snapshot.summary),

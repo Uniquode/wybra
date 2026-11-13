@@ -329,10 +329,7 @@ def csrf_request(
             "type": "http",
             "method": method,
             "path": "/",
-            "headers": [
-                (name.lower().encode("ascii"), value.encode("latin-1"))
-                for name, value in headers.items()
-            ],
+            "headers": [(name.lower().encode("ascii"), value.encode("latin-1")) for name, value in headers.items()],
         },
         receive,
     )
@@ -379,9 +376,7 @@ class PhoneContactForm(Form):
 
 def _forms_templates() -> DefaultTemplateCapability:
     return DefaultTemplateCapability(
-        template_sources=(
-            PackageResourceSource(package="wybra.forms", directory="templates"),
-        ),
+        template_sources=(PackageResourceSource(package="wybra.forms", directory="templates"),),
     )
 
 
@@ -557,17 +552,12 @@ class TestForms:
         constraint = version_field_check_constraint(FormVersionedRecord, "version")
 
         assert constraint.check == "version >= 0"
-        assert (
-            constraint.name
-            == "test_form_versioned_record_version_non_negative_002fc68d"
-        )
+        assert constraint.name == "test_form_versioned_record_version_non_negative_002fc68d"
 
     async def test_version_field_database_constraint_rejects_raw_negative_values(
         self,
     ) -> None:
-        async with migrated_test_database(
-            modules=("tests_support.form_binding",)
-        ) as database:
+        async with migrated_test_database(modules=("tests_support.form_binding",)) as database:
             record = await FormVersionedRecord.create(id=1, data="before")
 
             with pytest.raises(IntegrityError):
@@ -607,9 +597,7 @@ class TestForms:
         )
         try:
             await site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
-            async with migrated_test_database(
-                modules=("tests_support.form_binding",)
-            ) as database:
+            async with migrated_test_database(modules=("tests_support.form_binding",)) as database:
                 record = await FormVersionedRecord.create(id=1, data="before")
                 current = await FormVersionedRecord.get(id=record.id)
                 stale_delete = await FormVersionedRecord.get(id=record.id)
@@ -646,23 +634,15 @@ class TestForms:
                 assert current_result.updated
                 assert current.version == 1
                 assert stale_result.affected_count == 0
-                assert stale_form.result.errors[None] == (
-                    "This record was changed by another user.",
-                )
+                assert stale_form.result.errors[None] == ("This record was changed by another user.",)
                 assert stale_delete_result.affected_count == 0
-                assert stale_delete_form.result.errors[None] == (
-                    "This record was changed by another user.",
-                )
+                assert stale_delete_form.result.errors[None] == ("This record was changed by another user.",)
                 assert persisted.data == "current"
                 assert persisted.version == 1
         finally:
             await site.close()
 
-        persistence_events = [
-            event
-            for event in observed
-            if isinstance(event, FormPersistenceCompletedEvent)
-        ]
+        persistence_events = [event for event in observed if isinstance(event, FormPersistenceCompletedEvent)]
         assert [event.operation for event in persistence_events] == [
             "save",
             "save",
@@ -680,9 +660,7 @@ class TestForms:
                 model = FormVersionedRecord
                 fields = ("enabled", "version")
 
-        async with migrated_test_database(
-            modules=("tests_support.form_binding",)
-        ) as database:
+        async with migrated_test_database(modules=("tests_support.form_binding",)) as database:
             record = await FormVersionedRecord.create(id=1, data="before")
             form = EnabledForm(
                 instance=record,
@@ -699,9 +677,7 @@ class TestForms:
     async def test_composite_form_updates_supplied_primary_without_replacing_members(
         self,
     ) -> None:
-        async with migrated_test_database(
-            modules=("tests_support.form_binding",)
-        ) as database:
+        async with migrated_test_database(modules=("tests_support.form_binding",)) as database:
             ContactForm = type(
                 "ContactForm",
                 (CompositeForm,),
@@ -757,9 +733,7 @@ class TestForms:
         )
         try:
             await site.require_capability(EventsCapability).subscribe(EVT_FORM, handler)
-            async with migrated_test_database(
-                modules=("tests_support.form_binding",)
-            ) as database:
+            async with migrated_test_database(modules=("tests_support.form_binding",)) as database:
                 VersionedCompositeForm = type(
                     "VersionedCompositeForm",
                     (CompositeForm,),
@@ -790,25 +764,17 @@ class TestForms:
                 saved = await stale_form.save()
 
                 assert saved.affected_count == 0
-                assert stale_form.result.errors[None] == (
-                    "This record was changed by another user.",
-                )
+                assert stale_form.result.errors[None] == ("This record was changed by another user.",)
                 assert (await FormVersionedRecord.get(id=record.id)).data == "current"
         finally:
             await site.close()
 
-        persistence_events = [
-            event
-            for event in observed
-            if isinstance(event, FormPersistenceCompletedEvent)
-        ]
+        persistence_events = [event for event in observed if isinstance(event, FormPersistenceCompletedEvent)]
         assert [event.stale_conflict for event in persistence_events] == [False, True]
         assert all(event.model_types for event in persistence_events)
 
     async def test_model_form_saves_many_to_many_multi_select(self) -> None:
-        async with migrated_test_database(
-            modules=("tests_support.form_binding",)
-        ) as database:
+        async with migrated_test_database(modules=("tests_support.form_binding",)) as database:
             first = await FormLabel.create(id=1, name="First")
             second = await FormLabel.create(id=2, name="Second")
             document = await FormDocument.create(id=1)
@@ -842,9 +808,7 @@ class TestForms:
             assert unchanged_saved.affected_count == 0
 
     async def test_composite_form_inferrs_fixed_related_members(self) -> None:
-        async with migrated_test_database(
-            modules=("tests_support.form_binding",)
-        ) as database:
+        async with migrated_test_database(modules=("tests_support.form_binding",)) as database:
             ContactForm = type(
                 "ContactForm",
                 (CompositeForm,),
@@ -938,9 +902,7 @@ class TestForms:
                     ),
                 },
             )
-            overridden = OverriddenContactForm(
-                connection=database.capability().database()
-            )
+            overridden = OverriddenContactForm(connection=database.capability().database())
             assert overridden.fields["address__street"].label == "Origin street"
 
             CollectionContactForm = type(
@@ -1079,9 +1041,7 @@ class TestForms:
             assert saved.original is not record
             assert saved.changed_fields == ("data",)
             assert saved.updated
-            assert (await SessionRecordModel.get(id="updated-session")).data == (
-                '{"after": true}'
-            )
+            assert (await SessionRecordModel.get(id="updated-session")).data == ('{"after": true}')
 
     async def test_model_form_skips_noop_existing_model_update(self) -> None:
         class MediaForm(ModelForm):
@@ -1169,16 +1129,12 @@ class TestForms:
                 calls.append("query")
                 return RelationPage((media,))
 
-            async def value(
-                raw_value: object, context: RelationQueryContext
-            ) -> object | None:
+            async def value(raw_value: object, context: RelationQueryContext) -> object | None:
                 assert context.model is MediaItem
                 calls.append(f"value:{raw_value}")
                 return media if raw_value == str(media.id) else None
 
-            async def format_option(
-                record: object, context: RelationQueryContext
-            ) -> str:
+            async def format_option(record: object, context: RelationQueryContext) -> str:
                 assert context.model is MediaItem
                 assert record is media
                 calls.append("format")
@@ -1252,9 +1208,7 @@ class TestForms:
             assert deleted.primary is resource
             assert deleted.deleted
             assert deleted.affected_count == 1
-            assert not await MediaResourceKey.filter(
-                resource_key="delete-target"
-            ).exists()
+            assert not await MediaResourceKey.filter(resource_key="delete-target").exists()
 
     async def test_model_form_delete_can_save_soft_deleted_instance(self) -> None:
         class SoftDeleteMediaForm(ModelForm):
@@ -1390,9 +1344,7 @@ class TestForms:
 
         assert form.fields["preferred_name"].value == "Submitted"
         assert form.fields["bio"].value == "Model bio"
-        assert form.fields["website_links"].value == (
-            '{"other": "preserved", "website": "https://example.test"}'
-        )
+        assert form.fields["website_links"].value == ('{"other": "preserved", "website": "https://example.test"}')
         assert form.fields["owner"].value == "system"
 
     async def test_model_form_applies_valid_values_to_existing_instance(self) -> None:
@@ -1532,16 +1484,7 @@ class TestForms:
             await site.close()
 
         assert saved.created
-        assert (
-            len(
-                [
-                    event
-                    for event in observed
-                    if isinstance(event, FormPersistenceCompletedEvent)
-                ]
-            )
-            == 1
-        )
+        assert len([event for event in observed if isinstance(event, FormPersistenceCompletedEvent)]) == 1
 
     @pytest.mark.anyio
     async def test_form_post_handler_adds_success_message_after_valid_commit(
@@ -1729,9 +1672,7 @@ class TestForms:
     async def test_form_parses_multiselect_values(self) -> None:
         form = ExampleForm(options={"interests": INTEREST_OPTIONS})
 
-        result = await form.parse(
-            {"preferred_name": "David", "interests": ["forms", "auth"]}
-        )
+        result = await form.parse({"preferred_name": "David", "interests": ["forms", "auth"]})
 
         assert result.is_valid
         assert result.values["interests"] == ("forms", "auth")
@@ -1740,9 +1681,7 @@ class TestForms:
         form = ExampleForm(options={"interests": INTEREST_OPTIONS})
         raw_interests = ["forms", "invalid"]
 
-        result = await form.parse(
-            {"preferred_name": "David", "interests": raw_interests}
-        )
+        result = await form.parse({"preferred_name": "David", "interests": raw_interests})
 
         assert not result.is_valid
         assert result.errors["interests"] == ("Select a valid option.",)
@@ -1838,9 +1777,7 @@ class TestForms:
         result = await ProtectedTextForm().parse({field_name: raw_value})
 
         assert not result.is_valid
-        assert result.errors[field_name] == (
-            "Enter plain text without HTML or markup.",
-        )
+        assert result.errors[field_name] == ("Enter plain text without HTML or markup.",)
         assert result.fields[field_name].raw_value == raw_value
         assert result.fields[field_name].value is None
         assert field_name not in result.values
@@ -1854,9 +1791,7 @@ class TestForms:
             "Use < placeholder text > here",
         ),
     )
-    async def test_text_fields_accept_non_markup_angle_bracket_text(
-        self, raw_value: str
-    ) -> None:
+    async def test_text_fields_accept_non_markup_angle_bracket_text(self, raw_value: str) -> None:
         class ProtectedTextForm(Form):
             name = TextField(required=False)
 
@@ -1874,18 +1809,14 @@ class TestForms:
             "hello\x80world",
         ),
     )
-    async def test_text_fields_reject_unsafe_control_characters(
-        self, raw_value: str
-    ) -> None:
+    async def test_text_fields_reject_unsafe_control_characters(self, raw_value: str) -> None:
         class ProtectedTextForm(Form):
             name = TextField(required=False)
 
         result = await ProtectedTextForm().parse({"name": raw_value})
 
         assert not result.is_valid
-        assert result.errors["name"] == (
-            "Enter text without unsafe control characters.",
-        )
+        assert result.errors["name"] == ("Enter text without unsafe control characters.",)
         assert result.fields["name"].raw_value == raw_value
         assert result.fields["name"].value is None
         assert "name" not in result.values
@@ -1973,10 +1904,7 @@ class TestForms:
             async def validate(self, field_name: str | None = None) -> bool:
                 inherited = await super().validate(field_name)
                 local = True
-                if (
-                    field_name == "preferred_name"
-                    and self.values.get(field_name) == "admin"
-                ):
+                if field_name == "preferred_name" and self.values.get(field_name) == "admin":
                     self.add_error(field_name, "This preferred name is reserved.")
                     local = False
                 return inherited and local
@@ -2171,9 +2099,7 @@ class TestForms:
     async def test_file_upload_field_parses_submitted_file(self) -> None:
         upload = UploadedFile(filename="document.pdf", content_type="application/pdf")
 
-        result = await ExampleForm().parse(
-            {"preferred_name": "David", "attachment": upload}
-        )
+        result = await ExampleForm().parse({"preferred_name": "David", "attachment": upload})
 
         assert result.is_valid
         assert result.values["attachment"] is upload
@@ -2275,10 +2201,7 @@ class TestForms:
             actions=("submit", "clear", "cancel"),
         )
 
-        assert (
-            '<form class="wybra-form" method="post" action="/profile" '
-            'enctype="multipart/form-data">'
-        ) in html
+        assert ('<form class="wybra-form" method="post" action="/profile" enctype="multipart/form-data">') in html
         assert 'name="csrf_token"' in html
         assert 'value="secure-token"' in html
         assert 'name="preferred_name"' in html
@@ -2360,9 +2283,7 @@ class TestForms:
             widgets={"custom-text": "forms/widgets/text.html"},
         )
 
-        html = await renderer.render_field(
-            CustomWidgetForm(values={"value": "custom"}), "value"
-        )
+        html = await renderer.render_field(CustomWidgetForm(values={"value": "custom"}), "value")
 
         assert 'name="value"' in html
         assert 'value="custom"' in html
@@ -2375,9 +2296,7 @@ class TestForms:
 
             async def render(self, field: Field, context: FormRenderContext) -> Markup:
                 self.contexts.append(context)
-                return Markup(
-                    f'<output data-renderer="{self.marker}">{field.name}</output>'
-                )
+                return Markup(f'<output data-renderer="{self.marker}">{field.name}</output>')
 
         meta_renderer: FieldRenderer = Renderer("meta")
         explicit_renderer: FieldRenderer = Renderer("explicit")
@@ -2396,12 +2315,8 @@ class TestForms:
         form = RendererForm(values={"defaulted": "ordinary"})
         renderer = TemplateFormRenderer(_forms_templates())
 
-        assert 'data-renderer="meta">configured' in await renderer.render_field(
-            form, "configured"
-        )
-        assert 'data-renderer="explicit">explicit' in await renderer.render_field(
-            form, "explicit"
-        )
+        assert 'data-renderer="meta">configured' in await renderer.render_field(form, "configured")
+        assert 'data-renderer="explicit">explicit' in await renderer.render_field(form, "explicit")
         assert 'name="defaulted"' in await renderer.render_field(form, "defaulted")
         assert isinstance(meta_renderer, Renderer)
         assert meta_renderer.contexts[0].form is form
@@ -2438,10 +2353,7 @@ class TestForms:
         )
 
         assert 'name="preferred_name"' in field_html
-        assert (
-            '<form class="wybra-form" method="post" action="/save" '
-            'enctype="multipart/form-data">'
-        ) in form_html
+        assert ('<form class="wybra-form" method="post" action="/save" enctype="multipart/form-data">') in form_html
         assert 'type="hidden"' in csrf_html
         assert 'value="secure-token"' in csrf_html
 
@@ -2570,9 +2482,7 @@ class TestForms:
         renderer = TemplateFormRenderer(_forms_templates())
         form = PhoneContactForm()
 
-        with pytest.raises(
-            PhoneContactWidgetError, match="phone_field='missing_mobile'"
-        ):
+        with pytest.raises(PhoneContactWidgetError, match="phone_field='missing_mobile'"):
             await renderer.render_phone_contact_fields(
                 form,
                 subdivision_field="region",
@@ -2654,9 +2564,7 @@ class TestForms:
             country_field="country",
             subdivision_field="region",
             phone_field="mobile",
-            subdivision_filter=lambda subdivision, _country: (
-                subdivision.code == "AU-VIC"
-            ),
+            subdivision_filter=lambda subdivision, _country: subdivision.code == "AU-VIC",
         )
         form = PhoneContactForm(
             options={
@@ -2665,9 +2573,7 @@ class TestForms:
             },
         )
         control.apply_state(form, "AU")
-        await form.parse(
-            {"country": "AU", "region": "AU-NSW", "mobile": "0412 345 678"}
-        )
+        await form.parse({"country": "AU", "region": "AU-NSW", "mobile": "0412 345 678"})
 
         validation = control.validate(form)
 
@@ -2690,9 +2596,7 @@ class TestForms:
             },
         )
         control.apply_state(form, "AU")
-        await form.parse(
-            {"country": "AU", "region": "AU-VIC", "mobile": "0412 345 678"}
-        )
+        await form.parse({"country": "AU", "region": "AU-VIC", "mobile": "0412 345 678"})
 
         validation = control.validate(form)
 
@@ -2754,10 +2658,7 @@ class TestForms:
             )
 
     async def test_form_control_discovers_declared_phone_contact_control(self) -> None:
-        assert (
-            form_control(PhoneContactForm, "phone_contact")
-            is PhoneContactForm.phone_contact
-        )
+        assert form_control(PhoneContactForm, "phone_contact") is PhoneContactForm.phone_contact
 
     async def test_phone_contact_handler_declaration_does_not_register_routes(
         self,
@@ -2784,9 +2685,7 @@ class TestForms:
             form_factory=lambda request: PhoneContactForm(
                 options={
                     "country": PhoneContactForm.phone_contact.country_options(),
-                    "region": PhoneContactForm.phone_contact.subdivision_options(
-                        request.query_params.get("country")
-                    ),
+                    "region": PhoneContactForm.phone_contact.subdivision_options(request.query_params.get("country")),
                 },
                 values={"country": request.query_params.get("country") or ""},
             ),
@@ -2824,9 +2723,7 @@ class TestForms:
             form_factory=lambda request: PhoneContactForm(
                 options={
                     "country": PhoneContactForm.phone_contact.country_options(),
-                    "region": PhoneContactForm.phone_contact.subdivision_options(
-                        request.query_params.get("country")
-                    ),
+                    "region": PhoneContactForm.phone_contact.subdivision_options(request.query_params.get("country")),
                 },
                 values={"country": request.query_params.get("country") or ""},
             ),
@@ -2956,13 +2853,8 @@ class TestForms:
 
         assert delivery_response.status_code == 200
         assert billing_response.status_code == 200
-        assert (
-            'hx-get="http://testserver/phone-contact/fields"' in delivery_response.text
-        )
-        assert (
-            'hx-get="http://testserver/billing-phone-contact/fields"'
-            in billing_response.text
-        )
+        assert 'hx-get="http://testserver/phone-contact/fields"' in delivery_response.text
+        assert 'hx-get="http://testserver/billing-phone-contact/fields"' in billing_response.text
 
     async def test_forms_rendering_context_rejects_incomplete_csrf_context(
         self,
@@ -3153,9 +3045,7 @@ class TestForms:
         )
         site.provide_capability(
             SecretsCapability,
-            FakeSecretsCapability(
-                {("keychain", CSRF_TOKEN_SECRET_KEY_CURRENT): "keychain-csrf-secret"}
-            ),
+            FakeSecretsCapability({("keychain", CSRF_TOKEN_SECRET_KEY_CURRENT): "keychain-csrf-secret"}),
         )
 
         await setup_forms_site(site)
@@ -3210,9 +3100,7 @@ class TestForms:
         )
         site.provide_capability(
             SecretsCapability,
-            FailingPreviousCsrfSecretsCapability(
-                {("keychain", CSRF_TOKEN_SECRET_KEY_CURRENT): "current-csrf-secret"}
-            ),
+            FailingPreviousCsrfSecretsCapability({("keychain", CSRF_TOKEN_SECRET_KEY_CURRENT): "current-csrf-secret"}),
         )
 
         with pytest.raises(ConfigurationError, match=CSRF_TOKEN_SECRET_KEY_PREVIOUS):
@@ -3271,9 +3159,7 @@ class TestForms:
             await setup_forms_site(site)
 
     @pytest.mark.anyio
-    async def test_forms_setup_finalises_csrf_cookie_when_requested(
-        self, tmp_path
-    ) -> None:
+    async def test_forms_setup_finalises_csrf_cookie_when_requested(self, tmp_path) -> None:
         app = FastAPI()
 
         @app.get("/form")
@@ -3311,9 +3197,7 @@ class TestForms:
             await site.close()
 
     @pytest.mark.anyio
-    async def test_forms_method_override_routes_urlencoded_post_as_patch(
-        self, tmp_path
-    ) -> None:
+    async def test_forms_method_override_routes_urlencoded_post_as_patch(self, tmp_path) -> None:
         app = FastAPI()
 
         @app.patch("/record")
@@ -3343,9 +3227,7 @@ class TestForms:
             await site.close()
 
     @pytest.mark.anyio
-    async def test_forms_method_override_preserves_ordinary_urlencoded_body(
-        self, tmp_path
-    ) -> None:
+    async def test_forms_method_override_preserves_ordinary_urlencoded_body(self, tmp_path) -> None:
         app = FastAPI()
 
         @app.post("/record")
@@ -3375,9 +3257,7 @@ class TestForms:
             await site.close()
 
     @pytest.mark.anyio
-    async def test_forms_method_override_routes_json_post_as_delete(
-        self, tmp_path
-    ) -> None:
+    async def test_forms_method_override_routes_json_post_as_delete(self, tmp_path) -> None:
         app = FastAPI()
 
         @app.delete("/record")
@@ -3407,9 +3287,7 @@ class TestForms:
             await site.close()
 
     @pytest.mark.anyio
-    async def test_forms_method_override_leaves_text_plain_post_untouched(
-        self, tmp_path
-    ) -> None:
+    async def test_forms_method_override_leaves_text_plain_post_untouched(self, tmp_path) -> None:
         app = FastAPI()
 
         @app.post("/record")
@@ -3503,9 +3381,7 @@ class TestForms:
         assert all(temporary_file.closed for temporary_file in temporary_files)
 
     @pytest.mark.anyio
-    async def test_forms_method_override_preserves_ordinary_multipart_body(
-        self, tmp_path
-    ) -> None:
+    async def test_forms_method_override_preserves_ordinary_multipart_body(self, tmp_path) -> None:
         app = FastAPI()
 
         @app.post("/record")
@@ -3537,9 +3413,7 @@ class TestForms:
         finally:
             await site.close()
 
-    async def test_validate_forms_target_is_available(
-        self, monkeypatch, tmp_path
-    ) -> None:
+    async def test_validate_forms_target_is_available(self, monkeypatch, tmp_path) -> None:
         class Settings:
             modules = ("wybra.forms",)
             config = ConfigService(
@@ -3587,10 +3461,7 @@ class TestForms:
 
         assert isinstance(result, ValidationResult)
         assert result.is_ok
-        assert any(
-            check.description.startswith("forms settings load")
-            for check in result.checks
-        )
+        assert any(check.description.startswith("forms settings load") for check in result.checks)
 
     async def test_validate_forms_accepts_keychain_backed_csrf_config(self) -> None:
         from wybra.forms.validation import validate_forms

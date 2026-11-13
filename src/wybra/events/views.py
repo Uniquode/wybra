@@ -91,9 +91,7 @@ def view_event(call: BoundArguments, outcome: EventOutcome | None) -> Event:
     )
 
 
-def generic_view_event(
-    call: BoundArguments, outcome: EventOutcome | None
-) -> Event | None:
+def generic_view_event(call: BoundArguments, outcome: EventOutcome | None) -> Event | None:
     """Build a terminal generic-view event from private view state only."""
 
     if outcome is None:
@@ -104,9 +102,7 @@ def generic_view_event(
     if not isinstance(kwargs, Mapping):
         raise TypeError("Generic view events require keyword dispatch arguments.")
     operation = _generic_operation(kwargs)
-    affected_count, skipped_count, failed_count = _event_counts(
-        getattr(view, "_event_bulk_counts", None)
-    )
+    affected_count, skipped_count, failed_count = _event_counts(getattr(view, "_event_bulk_counts", None))
     response = outcome.result
     model_type = _safe_call(view, "_model_type_identity")
     content_type = _safe_call(view, "_content_type_identifier", request)

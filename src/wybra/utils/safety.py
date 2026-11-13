@@ -37,9 +37,7 @@ SENSITIVE_COMPACT_NAMES: Final = frozenset(
         "".join((*parts[:-1], f"{parts[-1]}s")),
     )
 )
-SENSITIVE_PLURAL_ATTRIBUTE_PARTS: Final = frozenset(
-    f"{part}s" for part in SENSITIVE_ATTRIBUTE_PARTS if part != "csrf"
-)
+SENSITIVE_PLURAL_ATTRIBUTE_PARTS: Final = frozenset(f"{part}s" for part in SENSITIVE_ATTRIBUTE_PARTS if part != "csrf")
 NON_SENSITIVE_METRIC_SUFFIXES: Final = frozenset(
     {
         "changed",
@@ -59,9 +57,7 @@ MAX_SAFE_STRING_LENGTH: Final = 500
 MAX_SAFE_METADATA_DEPTH: Final = 8
 MAX_SAFE_METADATA_ITEMS: Final = 128
 MAX_SAFE_METADATA_BYTES: Final = 16_384
-_CAMEL_CASE_BOUNDARY: Final = re.compile(
-    r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
-)
+_CAMEL_CASE_BOUNDARY: Final = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _ATTRIBUTE_PART_SEPARATOR: Final = re.compile(r"[^A-Za-z0-9]+")
 
 
@@ -72,9 +68,7 @@ class SafeJsonMetadata(Mapping[str, object]):
     _encoded: bytes = field(repr=False)
 
     def __init__(self, values: Mapping[str, object]) -> None:
-        if not isinstance(values, Mapping) or any(
-            not isinstance(name, str) for name in values
-        ):
+        if not isinstance(values, Mapping) or any(not isinstance(name, str) for name in values):
             raise ValueError("metadata must be a mapping with string keys.")
         item_count = [0]
         safe = _safe_mapping(values, depth=0, item_count=item_count)
@@ -226,16 +220,12 @@ def _count_item(item_count: list[int]) -> None:
 
 def _attribute_name_parts(key: str) -> tuple[str, ...]:
     separated = _CAMEL_CASE_BOUNDARY.sub("_", key)
-    return tuple(
-        part.lower() for part in _ATTRIBUTE_PART_SEPARATOR.split(separated) if part
-    )
+    return tuple(part.lower() for part in _ATTRIBUTE_PART_SEPARATOR.split(separated) if part)
 
 
 def _is_plural_metric(parts: tuple[str, ...], index: int) -> bool:
     suffix = parts[index + 1 :]
-    return bool(suffix) and all(
-        part in NON_SENSITIVE_METRIC_SUFFIXES for part in suffix
-    )
+    return bool(suffix) and all(part in NON_SENSITIVE_METRIC_SUFFIXES for part in suffix)
 
 
 def _matches_sensitive_key_parts(

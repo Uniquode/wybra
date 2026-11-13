@@ -531,9 +531,7 @@ class RedisWorkQueue:
             self._deliveries.pop(delivery.receipt, None)
             await self._remove_consumer_if_idle(state.keys, state.consumer)
             self._consumers.discard((state.keys, state.consumer))
-            raise CacheConflictError(
-                f"Delivery {delivery.identity.value!r} is stale or no longer reserved."
-            )
+            raise CacheConflictError(f"Delivery {delivery.identity.value!r} is stale or no longer reserved.")
         visible_until = _integer(renewed[0]) / 1_000
         return WorkDelivery(
             queue=delivery.queue,
@@ -649,8 +647,7 @@ class RedisWorkQueue:
             return tuple(
                 _consumer_name(entry)
                 for entry in consumers
-                if _is_stale_consumer(entry)
-                and (keys, _consumer_name(entry)) not in self._consumers
+                if _is_stale_consumer(entry) and (keys, _consumer_name(entry)) not in self._consumers
             )
 
         stale = cast(
@@ -728,10 +725,7 @@ class RedisWorkQueue:
                             label="delayed work wake-up",
                         )
                     )
-                    positions = {
-                        keys.delay_signals: self._promoter_positions[keys]
-                        for keys in queues
-                    }
+                    positions = {keys.delay_signals: self._promoter_positions[keys] for keys in queues}
                     queues_by_signal = {keys.delay_signals: keys for keys in queues}
 
                     async def wait_for_signal(
@@ -790,9 +784,7 @@ class RedisWorkQueue:
 
         result = cast(tuple[Any, ...], await self.runtime.feature_call(next_wakeup))
         if len(result) != 3:
-            raise CacheFeatureError(
-                "Redis work queue returned an invalid wake-up time."
-            )
+            raise CacheFeatureError("Redis work queue returned an invalid wake-up time.")
         now, delayed, visible = (_integer(value) for value in result)
         candidates = [value for value in (delayed, visible) if value >= 0]
         if not candidates:
@@ -813,9 +805,7 @@ class RedisWorkQueue:
             await self.runtime.feature_call(next_delayed_wakeup),
         )
         if len(result) != 2:
-            raise CacheFeatureError(
-                "Redis work queue returned an invalid delayed wake-up time."
-            )
+            raise CacheFeatureError("Redis work queue returned an invalid delayed wake-up time.")
         now, delayed = (_integer(value) for value in result)
         if delayed < 0:
             return float("inf")
@@ -968,9 +958,7 @@ class RedisWorkQueue:
         consumer: str,
         visibility_timeout: float,
     ) -> WorkDelivery | None:
-        entry_id, identity, attempt, payload, maximum, visible_until, *previous = (
-            claimed
-        )
+        entry_id, identity, attempt, payload, maximum, visible_until, *previous = claimed
         attempt = _integer(attempt)
         maximum = _integer(maximum)
         identity = WorkIdentity(_text(identity))
@@ -1068,15 +1056,12 @@ class RedisWorkQueue:
             self._deliveries.pop(delivery.receipt, None)
             await self._remove_consumer_if_idle(keys, state.consumer)
             self._consumers.discard((keys, state.consumer))
-            raise CacheConflictError(
-                f"Delivery {delivery.identity.value!r} is stale or no longer reserved."
-            )
+            raise CacheConflictError(f"Delivery {delivery.identity.value!r} is stale or no longer reserved.")
         self._deliveries.pop(delivery.receipt, None)
         if action == "reject" and delay_milliseconds:
             self._ensure_promoter(keys)
         if not any(
-            candidate.keys == keys and candidate.consumer == state.consumer
-            for candidate in self._deliveries.values()
+            candidate.keys == keys and candidate.consumer == state.consumer for candidate in self._deliveries.values()
         ):
             await self._remove_consumer_if_idle(keys, state.consumer)
             self._consumers.discard((keys, state.consumer))
@@ -1089,9 +1074,7 @@ class RedisWorkQueue:
             or state.attempt != delivery.attempt
             or state.keys.queue != delivery.queue
         ):
-            raise CacheConflictError(
-                f"Delivery {delivery.identity.value!r} is stale or no longer reserved."
-            )
+            raise CacheConflictError(f"Delivery {delivery.identity.value!r} is stale or no longer reserved.")
         return state
 
     def _keys(self, owner: str, queue: str) -> _QueueKeys:
@@ -1198,9 +1181,7 @@ def _integer(value: object) -> int:
     try:
         return int(_text(value))
     except ValueError as error:
-        raise CacheFeatureError(
-            "Redis work queue returned an invalid integer."
-        ) from error
+        raise CacheFeatureError("Redis work queue returned an invalid integer.") from error
 
 
 def _recovery_scan_required(claimed: tuple[Any, ...]) -> bool:

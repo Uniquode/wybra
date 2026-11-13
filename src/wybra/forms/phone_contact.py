@@ -108,9 +108,7 @@ class PhoneContactControl:
                 ),
             )
         if not handlers:
-            raise PhoneContactError(
-                "Phone contact control requires at least one field handler."
-            )
+            raise PhoneContactError("Phone contact control requires at least one field handler.")
         self.handlers = handlers
         self.country_filter = country_filter
         self.subdivision_filter = subdivision_filter
@@ -120,10 +118,7 @@ class PhoneContactControl:
         return {country.code: country.name for country in self.countries()}
 
     def subdivision_options(self, country_code: str | None) -> Mapping[str, str]:
-        return {
-            subdivision.code: subdivision.name
-            for subdivision in self.subdivisions(country_code)
-        }
+        return {subdivision.code: subdivision.name for subdivision in self.subdivisions(country_code)}
 
     def countries(self) -> tuple[CountryChoice, ...]:
         return country_choices(country_filter=self.country_filter)
@@ -224,9 +219,7 @@ class PhoneContactControl:
                     is_valid = False
 
         return PhoneContactValidation(
-            country_code=(
-                country.code if country is not None else normalised_country_code
-            ),
+            country_code=(country.code if country is not None else normalised_country_code),
             subdivision_code=normalised_subdivision_code,
             number=number_value or None,
             normalised=normalised,
@@ -238,10 +231,7 @@ class PhoneContactControl:
         subdivision_code: str,
         country: CountryChoice,
     ) -> bool:
-        return any(
-            subdivision.code == subdivision_code
-            for subdivision in self.subdivisions(country.code)
-        )
+        return any(subdivision.code == subdivision_code for subdivision in self.subdivisions(country.code))
 
     def _error_field(self, message: str) -> str:
         lower_message = message.casefold()
@@ -256,9 +246,7 @@ def form_control(form_or_type: Form | type[Form], control_name: str) -> Any:
     value = getattr(form_or_type, control_name)
     if isinstance(value, PhoneContactControl):
         return value
-    raise PhoneContactError(
-        f"Form control {control_name!r} is not a PhoneContactControl."
-    )
+    raise PhoneContactError(f"Form control {control_name!r} is not a PhoneContactControl.")
 
 
 def register_phone_contact_field_handlers(
@@ -434,9 +422,7 @@ def country_flag(country_code: str) -> str:
 
 
 def dial_prefix(country_code: str) -> str:
-    phone_country_code = phonenumbers.country_code_for_region(
-        country_code_value(country_code)
-    )
+    phone_country_code = phonenumbers.country_code_for_region(country_code_value(country_code))
     return f"+{phone_country_code}" if phone_country_code else ""
 
 

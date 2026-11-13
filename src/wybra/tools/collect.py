@@ -81,11 +81,7 @@ def collect_command(
         )
         result = collect_configured_static_assets(
             project_root=project_root,
-            config_path=(
-                Path(normalise_cli_config_source(config_source))
-                if config_source is not None
-                else None
-            ),
+            config_path=(Path(normalise_cli_config_source(config_source)) if config_source is not None else None),
             delete=delete,
             root=destination,
             nginx_cors=nginx_cors,

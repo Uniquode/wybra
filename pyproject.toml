@@ -53,6 +53,10 @@ cache = [
     "nats-py>=2.15.0,<3",
     "redis>=8.0.1",
 ]
+streams = [
+    "nats-py>=2.15.0,<3",
+    "redis>=8.0.1",
+]
 postgresql = [
     "asyncpg>=0.31.0",
 ]
@@ -125,7 +129,7 @@ dev = [
 ]
 
 [tool.ruff]
-line-length = 88
+line-length = 120
 src = ["src", "tests", "tests_integration", "tests_support"]
 target-version = "py314"
 extend-exclude = ["**/migrations/*.py"]

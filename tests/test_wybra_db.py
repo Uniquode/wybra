@@ -282,9 +282,7 @@ class _RecordingMySQLConnection:
             raise AssertionError(f"No fake MySQL response for query: {query}")
         return self.fetch_values.pop(0)
 
-    async def fetchall(
-        self, query: str, *args: object
-    ) -> tuple[tuple[object, ...], ...]:
+    async def fetchall(self, query: str, *args: object) -> tuple[tuple[object, ...], ...]:
         self.queries.append((query, args))
         if not self.fetch_rows:
             raise AssertionError(f"No fake MySQL rows for query: {query}")
@@ -362,17 +360,13 @@ class _RecordingTestDatabaseConnection:
 def _recorded_mssql_statements(
     *connections: _RecordingSQLServerConnection,
 ) -> str:
-    return "\n".join(
-        query for connection in connections for query, _args in connection.executed
-    )
+    return "\n".join(query for connection in connections for query, _args in connection.executed)
 
 
 def _recorded_mssql_queries(
     *connections: _RecordingSQLServerConnection,
 ) -> str:
-    return "\n".join(
-        query for connection in connections for query, _args in connection.queries
-    )
+    return "\n".join(query for connection in connections for query, _args in connection.queries)
 
 
 def _simulate_pymysql_format(query: str, args: tuple[object, ...]) -> str:
@@ -382,15 +376,10 @@ def _simulate_pymysql_format(query: str, args: tuple[object, ...]) -> str:
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module is not None
     }
     imported_modules.update(
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
+        alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
     )
     return imported_modules
 
@@ -733,11 +722,8 @@ class TestDatabaseConfigurationAndRuntime:
                     "insert into missing_records values (1)"
                 )
 
-            _row_count, rows = await tortoise_connection(
-                database, second_writer
-            ).execute_query(
-                "select name from sqlite_master where type = 'table' "
-                "and name = 'missing_records'"
+            _row_count, rows = await tortoise_connection(database, second_writer).execute_query(
+                "select name from sqlite_master where type = 'table' and name = 'missing_records'"
             )
 
             assert rows == []
@@ -778,21 +764,14 @@ class TestDatabaseConfigurationAndRuntime:
             later_writer = database.database().for_write()
 
             async with tortoise_transaction(database, selected_writer) as connection:
-                await connection.execute_script(
-                    "create table transaction_records (value text not null)"
-                )
-                await connection.execute_query(
-                    "insert into transaction_records values (?)", ["pinned"]
-                )
+                await connection.execute_script("create table transaction_records (value text not null)")
+                await connection.execute_query("insert into transaction_records values (?)", ["pinned"])
 
-            _row_count, selected_rows = await tortoise_connection(
-                database, selected_writer
-            ).execute_query("select value from transaction_records")
-            _row_count, later_rows = await tortoise_connection(
-                database, later_writer
-            ).execute_query(
-                "select name from sqlite_master where type = 'table' "
-                "and name = 'transaction_records'"
+            _row_count, selected_rows = await tortoise_connection(database, selected_writer).execute_query(
+                "select value from transaction_records"
+            )
+            _row_count, later_rows = await tortoise_connection(database, later_writer).execute_query(
+                "select name from sqlite_master where type = 'table' and name = 'transaction_records'"
             )
 
             assert [row["value"] for row in selected_rows] == ["pinned"]
@@ -839,14 +818,11 @@ class TestDatabaseConfigurationAndRuntime:
             await tortoise_connection(database, writer_route).execute_query(
                 "insert into writer_records values (?)", ["writer"]
             )
-            _row_count, writer_rows = await tortoise_connection(
-                database, writer_route
-            ).execute_query("select value from writer_records")
-            _row_count, reader_rows = await tortoise_connection(
-                database, reader_route
-            ).execute_query(
-                "select name from sqlite_master where type = 'table' "
-                "and name = 'writer_records'"
+            _row_count, writer_rows = await tortoise_connection(database, writer_route).execute_query(
+                "select value from writer_records"
+            )
+            _row_count, reader_rows = await tortoise_connection(database, reader_route).execute_query(
+                "select name from sqlite_master where type = 'table' and name = 'writer_records'"
             )
 
             assert [row["value"] for row in writer_rows] == ["writer"]
@@ -918,10 +894,7 @@ class TestDatabaseConfigurationAndRuntime:
             assert isinstance(database, WybraDatabaseCapability)
             applications = database._database.config["apps"]
             assert isinstance(applications, dict)
-            assert {
-                application["default_connection"]
-                for application in applications.values()
-            } == {"database_primary"}
+            assert {application["default_connection"] for application in applications.values()} == {"database_primary"}
         finally:
             await database.close()
 
@@ -939,9 +912,7 @@ class TestDatabaseConfigurationAndRuntime:
 
             await connection.execute_query("select 1")
 
-            active_statements, active_transactions, latency = (
-                database._database.routes.metrics(route)
-            )
+            active_statements, active_transactions, latency = database._database.routes.metrics(route)
             assert active_statements == 0
             assert active_transactions == 0
             assert latency is not None
@@ -954,9 +925,7 @@ class TestDatabaseConfigurationAndRuntime:
             assert database._database.routes.metrics(route)[2] is not None
 
             with database._database.context:
-                async with in_transaction(
-                    database._database.routes.alias_for(route)
-                ) as transaction:
+                async with in_transaction(database._database.routes.alias_for(route)) as transaction:
                     assert database._database.routes.metrics(route)[1] == 1
                     await transaction.execute_query("select 1")
 
@@ -987,9 +956,7 @@ class TestDatabaseConfigurationAndRuntime:
                 database,
                 database.database().for_write(),
             ) as connection:
-                await connection.execute_script(
-                    "CREATE TABLE runtime_probe (id INTEGER)"
-                )
+                await connection.execute_script("CREATE TABLE runtime_probe (id INTEGER)")
 
             assert (tmp_path / "relative.sqlite3").exists()
         finally:
@@ -1010,9 +977,7 @@ class TestDatabaseConfigurationAndRuntime:
                 database,
                 database.database().for_write(),
             ) as connection:
-                await connection.execute_script(
-                    "CREATE TABLE structured_probe (id INTEGER)"
-                )
+                await connection.execute_script("CREATE TABLE structured_probe (id INTEGER)")
 
             assert (tmp_path / "structured.sqlite3").exists()
         finally:
@@ -1040,9 +1005,7 @@ class TestDatabaseConfigurationAndRuntime:
         assert connection is not None
         assert connection.tortoise_connection_config == {
             "engine": "tortoise.backends.sqlite",
-            "credentials": {
-                "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
-            },
+            "credentials": {"file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()},
         }
 
     def test_structured_sqlite_config_resolves_relative_path_from_project_root(
@@ -1075,10 +1038,7 @@ class TestDatabaseConfigurationAndRuntime:
 
         assert config_directory != project_root
         assert connection is not None
-        assert (
-            connection.credentials["file_path"]
-            == (project_root / "structured.sqlite3").resolve().as_posix()
-        )
+        assert connection.credentials["file_path"] == (project_root / "structured.sqlite3").resolve().as_posix()
 
     def test_database_configuration_rejects_structured_and_url_sources(
         self,
@@ -1308,10 +1268,7 @@ class TestDatabaseConfigurationAndRuntime:
         assert connection.aws.client.region == "ap-south-1"
         assert connection.aws.client.profile == "shared-profile"
         assert connection.aws.client.partition == "aws-us-gov"
-        assert (
-            connection.aws.client.role_arn
-            == "arn:aws-us-gov:iam::123456789012:role/wybra"
-        )
+        assert connection.aws.client.role_arn == "arn:aws-us-gov:iam::123456789012:role/wybra"
         assert connection.aws.client.role_session_name == "shared-session"
         assert connection.aws.client.sso_region == "us-east-1"
         assert connection.aws.endpoint == "rds-postgresql.example.aws"
@@ -1396,9 +1353,7 @@ class TestDatabaseConfigurationAndRuntime:
             ],
             config_defs=(db_module_config,),
         )
-        secrets = _RecordingSecretsCapability(
-            {("keychain", "aws/rds/external-id"): "resolved-external-id"}
-        )
+        secrets = _RecordingSecretsCapability({("keychain", "aws/rds/external-id"): "resolved-external-id"})
 
         runtime_connection = resolve_database_connection_from_config(
             config,
@@ -1417,9 +1372,7 @@ class TestDatabaseConfigurationAndRuntime:
         assert runtime_connection.aws.client.external_id_key == "aws/rds/external-id"
         assert service_account_connection is not None
         assert service_account_connection.aws is not None
-        assert (
-            service_account_connection.aws.client.external_id == "resolved-external-id"
-        )
+        assert service_account_connection.aws.client.external_id == "resolved-external-id"
         assert service_account_connection.aws.client.external_id_source is None
         assert service_account_connection.aws.client.external_id_key is None
         assert service_account_connection.credentials["user"] == "service_user"
@@ -1468,9 +1421,7 @@ class TestDatabaseConfigurationAndRuntime:
                 purpose="service_account",
             )
 
-    def test_shared_aws_config_error_names_app_aws_section(
-        self, tmp_path: Path
-    ) -> None:
+    def test_shared_aws_config_error_names_app_aws_section(self, tmp_path: Path) -> None:
         config = ConfigService(
             [
                 MappingConfigSource(
@@ -1845,10 +1796,9 @@ class TestDatabaseConfigurationAndRuntime:
             }
         )
 
-        assert {
-            reference.name: reference.key
-            for reference in config.credential_references()
-        }["database-user"] == "database/uniquodé/app/user"
+        assert {reference.name: reference.key for reference in config.credential_references()}[
+            "database-user"
+        ] == "database/uniquodé/app/user"
 
     @pytest.mark.parametrize("database", ("tenant/prod", "tenant prod", "tenant\nprod"))
     def test_structured_database_config_rejects_unsafe_default_key_database_segment(
@@ -1882,10 +1832,9 @@ class TestDatabaseConfigurationAndRuntime:
             }
         )
 
-        assert {
-            reference.name: reference.key
-            for reference in config.credential_references()
-        }["database-user"] == "database/tenant-prod/app/user"
+        assert {reference.name: reference.key for reference in config.credential_references()}[
+            "database-user"
+        ] == "database/tenant-prod/app/user"
 
     @pytest.mark.parametrize(
         ("credential_fields", "expected_keys"),
@@ -1896,9 +1845,7 @@ class TestDatabaseConfigurationAndRuntime:
                     "database-user": "custom/app/user",
                     "database-password": "database/uniquode/app/password",
                     "database-sa-user": ("database/uniquode/service-account/user"),
-                    "database-sa-password": (
-                        "database/uniquode/service-account/password"
-                    ),
+                    "database-sa-password": ("database/uniquode/service-account/password"),
                 },
             ),
             (
@@ -1915,9 +1862,7 @@ class TestDatabaseConfigurationAndRuntime:
                 {
                     "database-password": "custom/app/password",
                     "database-sa-user": ("database/uniquode/service-account/user"),
-                    "database-sa-password": (
-                        "database/uniquode/service-account/password"
-                    ),
+                    "database-sa-password": ("database/uniquode/service-account/password"),
                 },
             ),
         ),
@@ -1936,10 +1881,7 @@ class TestDatabaseConfigurationAndRuntime:
             }
         )
 
-        assert {
-            reference.name: reference.key
-            for reference in config.credential_references()
-        } == expected_keys
+        assert {reference.name: reference.key for reference in config.credential_references()} == expected_keys
 
     def test_structured_database_config_preserves_non_keychain_credential_source(
         self,
@@ -2050,9 +1992,7 @@ class TestDatabaseConfigurationAndRuntime:
             config_defs=(db_module_config,),
         )
 
-        connection = resolve_database_connection_from_config(
-            config, project_root=tmp_path
-        )
+        connection = resolve_database_connection_from_config(config, project_root=tmp_path)
 
         assert connection is not None
         assert connection.credentials == {
@@ -2119,14 +2059,10 @@ class TestDatabaseConfigurationAndRuntime:
             config_defs=(db_module_config,),
         )
 
-        connection = resolve_database_connection_from_config(
-            config, project_root=tmp_path
-        )
+        connection = resolve_database_connection_from_config(config, project_root=tmp_path)
 
         assert connection is not None
-        assert connection.credentials == {
-            "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
-        }
+        assert connection.credentials == {"file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()}
 
     @pytest.mark.parametrize(
         "sqlite_fields",
@@ -2156,14 +2092,10 @@ class TestDatabaseConfigurationAndRuntime:
             config_defs=(db_module_config,),
         )
 
-        connection = resolve_database_connection_from_config(
-            config, project_root=tmp_path
-        )
+        connection = resolve_database_connection_from_config(config, project_root=tmp_path)
 
         assert connection is not None
-        assert connection.credentials == {
-            "file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()
-        }
+        assert connection.credentials == {"file_path": (tmp_path / "structured.sqlite3").resolve().as_posix()}
 
     def test_service_account_credentials_are_separate_from_runtime_credentials(
         self,
@@ -2334,10 +2266,7 @@ class TestDatabaseConfigurationAndRuntime:
 
         assert connection.source == "structured"
         assert connection.backend.tortoise_scheme == "sqlite"
-        assert (
-            connection.credentials["file_path"]
-            == (tmp_path / "structured.sqlite3").as_posix()
-        )
+        assert connection.credentials["file_path"] == (tmp_path / "structured.sqlite3").as_posix()
 
     def test_provisioning_connection_rejects_application_database_url(
         self,
@@ -2398,9 +2327,7 @@ class TestDatabaseConfigurationAndRuntime:
                 database,
                 database.database().for_write(),
             ) as connection:
-                await connection.execute_script(
-                    "create table records (value text not null)"
-                )
+                await connection.execute_script("create table records (value text not null)")
                 await connection.execute_query(
                     "insert into records values (?)",
                     ["committed"],
@@ -2441,9 +2368,7 @@ class TestDatabaseConfigurationAndRuntime:
             default_connection = tortoise_connection(database, default_route)
             assert tortoise_connection(database, reader_route) is default_connection
             assert tortoise_connection(database, writer_route) is default_connection
-            async with tortoise_transaction(
-                database, writer_route
-            ) as writer_connection:
+            async with tortoise_transaction(database, writer_route) as writer_connection:
                 assert callable(writer_connection.execute_query)
         finally:
             await database.close()
@@ -2557,9 +2482,7 @@ class TestDatabaseConfigurationAndRuntime:
         site = await start(FastAPI(), config_source=_database_config_source(tmp_path))
         database = site.require_capability(DatabaseCapability)
         try:
-            with pytest.raises(
-                DatabaseCapabilityError, match="Unknown logical database"
-            ):
+            with pytest.raises(DatabaseCapabilityError, match="Unknown logical database"):
                 database.database("analytics")
         finally:
             await database.close()
@@ -2574,9 +2497,7 @@ class TestDatabaseConfigurationAndRuntime:
 
         await database.close()
 
-        with pytest.raises(
-            DatabaseCapabilityError, match="Database capability is closed"
-        ):
+        with pytest.raises(DatabaseCapabilityError, match="Database capability is closed"):
             database.database()
 
     @pytest.mark.anyio
@@ -2617,9 +2538,7 @@ class TestDatabaseConfigurationAndRuntime:
             )
 
     def test_wybra_db_package_is_included_in_build_modules(self) -> None:
-        pyproject = tomllib.loads(
-            (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-        )
+        pyproject = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
 
         assert "wybra" in pyproject["tool"]["uv"]["build-backend"]["module-name"]
 
@@ -2675,9 +2594,7 @@ class TestDatabaseConfigurationAndRuntime:
         database_url: str,
         suffix: str,
     ) -> None:
-        assert resolve_database_url(database_url, tmp_path) == (
-            f"{sqlite_file_url(tmp_path / 'app.db')}{suffix}"
-        )
+        assert resolve_database_url(database_url, tmp_path) == (f"{sqlite_file_url(tmp_path / 'app.db')}{suffix}")
 
     @pytest.mark.parametrize(
         ("database_url", "expected_error"),
@@ -2699,9 +2616,7 @@ class TestDatabaseConfigurationAndRuntime:
         database_url: str,
         expected_error: str,
     ) -> None:
-        result = validate_persistence(
-            _persistence_settings(tmp_path, database_url=database_url)
-        )
+        result = validate_persistence(_persistence_settings(tmp_path, database_url=database_url))
 
         assert any(expected_error in error for error in result.errors)
         assert not result.is_ok
@@ -2710,14 +2625,10 @@ class TestDatabaseConfigurationAndRuntime:
         self,
         tmp_path: Path,
     ) -> None:
-        result = validate_persistence(
-            _persistence_settings(tmp_path, database_url=None)
-        )
+        result = validate_persistence(_persistence_settings(tmp_path, database_url=None))
 
         assert any(
-            check.description == "database connection is not configured"
-            and not check.passed
-            for check in result.checks
+            check.description == "database connection is not configured" and not check.passed for check in result.checks
         )
         assert "Database connection must be configured." in result.errors
         assert not result.is_ok
@@ -2784,9 +2695,7 @@ class TestDatabaseConfigurationAndRuntime:
         self,
         engine: str,
     ) -> None:
-        with pytest.raises(
-            DatabaseProvisioningConfigurationError, match="Unsupported|Oracle"
-        ):
+        with pytest.raises(DatabaseProvisioningConfigurationError, match="Unsupported|Oracle"):
             database_family_for_aws_engine(engine)
 
 
@@ -2844,9 +2753,7 @@ class TestAwsDatabaseMetadata:
         self,
         tmp_path: Path,
     ) -> None:
-        runtime_connection, provisioning_connection = _aws_postgresql_connections(
-            tmp_path
-        )
+        runtime_connection, provisioning_connection = _aws_postgresql_connections(tmp_path)
         metadata_client = _RecordingAwsRdsMetadataClient(
             AwsManagedDatabaseMetadata(
                 managed=cast(Any, "RDS"),
@@ -2937,9 +2844,7 @@ class TestAwsDatabaseMetadata:
         metadata: AwsManagedDatabaseMetadata,
         expected_message: str,
     ) -> None:
-        runtime_connection, provisioning_connection = _aws_postgresql_connections(
-            tmp_path
-        )
+        runtime_connection, provisioning_connection = _aws_postgresql_connections(tmp_path)
 
         with pytest.raises(
             DatabaseProvisioningConfigurationError,
@@ -3017,8 +2922,7 @@ def _postgresql_provisioning_context(
         family="postgresql",
         runtime_connection=_database_connection(
             "postgresql",
-            runtime_credentials
-            or {"database": "app", "user": "app", "password": "secret"},
+            runtime_credentials or {"database": "app", "user": "app", "password": "secret"},
         ),
         provisioning_connection=provisioning_connection,
         project_root=Path.cwd(),
@@ -3035,8 +2939,7 @@ def _mysql_provisioning_context(
         family="mysql",
         runtime_connection=_database_connection(
             "mysql",
-            runtime_credentials
-            or {"database": "app", "user": "app", "password": "secret"},
+            runtime_credentials or {"database": "app", "user": "app", "password": "secret"},
         ),
         provisioning_connection=provisioning_connection,
         project_root=Path.cwd(),
@@ -3053,8 +2956,7 @@ def _mariadb_provisioning_context(
         family="mariadb",
         runtime_connection=_database_connection(
             "mariadb",
-            runtime_credentials
-            or {"database": "app", "user": "app", "password": "secret"},
+            runtime_credentials or {"database": "app", "user": "app", "password": "secret"},
         ),
         provisioning_connection=provisioning_connection,
         project_root=Path.cwd(),
@@ -3172,11 +3074,7 @@ class TestDatabaseProvisioning:
     ) -> None:
         provisioner = UnsupportedFamilyProvisioner("mysql")
         context = _mysql_provisioning_context(
-            provisioning_connection=(
-                None
-                if credentials is None
-                else _database_connection("mysql", credentials)
-            ),
+            provisioning_connection=(None if credentials is None else _database_connection("mysql", credentials)),
         )
 
         with pytest.raises(
@@ -3294,15 +3192,10 @@ class TestDatabaseProvisioning:
         assert "CREATE LOGIN ' + QUOTENAME(?) +" in executed_sql
         assert "WITH PASSWORD = N" in executed_sql
         assert "CREATE SCHEMA [app_schema]" in executed_sql
-        assert (
-            "CREATE USER [app] FOR LOGIN [app] WITH DEFAULT_SCHEMA = [app_schema]"
-            in executed_sql
-        )
+        assert "CREATE USER [app] FOR LOGIN [app] WITH DEFAULT_SCHEMA = [app_schema]" in executed_sql
         assert "CREATE ROLE [app_role]" in executed_sql
         assert "ALTER ROLE [app_role] ADD MEMBER [app]" in executed_sql
-        assert (
-            "GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[app_schema] TO [app_role]"
-        ) in executed_sql
+        assert ("GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[app_schema] TO [app_role]") in executed_sql
         assert "secret" not in executed_sql
         assert "secret" not in " ".join(result.message for result in results)
         assert maintenance.executed[1][1] == ("app", "secret")
@@ -3411,10 +3304,7 @@ class TestDatabaseProvisioning:
             {"database": "app", "user": "app_sa", "password": "admin_secret"},
         ]
         executed_sql = _recorded_mssql_statements(target)
-        assert (
-            "CREATE USER [app] FOR LOGIN [app] WITH DEFAULT_SCHEMA = [app_schema]"
-            in executed_sql
-        )
+        assert "CREATE USER [app] FOR LOGIN [app] WITH DEFAULT_SCHEMA = [app_schema]" in executed_sql
         assert maintenance.closed
         assert target.closed
 
@@ -3456,9 +3346,7 @@ class TestDatabaseProvisioning:
     async def test_mssql_destroy_requires_confirmed_database_and_service_database(
         self,
     ) -> None:
-        provisioner = SQLServerProvisioner(
-            connector=_RecordingSQLServerConnector(_RecordingSQLServerConnection([]))
-        )
+        provisioner = SQLServerProvisioner(connector=_RecordingSQLServerConnector(_RecordingSQLServerConnection([])))
         context = _mssql_provisioning_context(
             provisioning_connection=_database_connection(
                 "mssql",
@@ -3508,25 +3396,19 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         assert [(result.status, result.phase) for result in results] == [
             ("removed", "destroy"),
             ("removed", "destroy"),
         ]
         executed_sql = _recorded_mssql_statements(maintenance)
-        assert "ALTER DATABASE [app] SET SINGLE_USER WITH ROLLBACK IMMEDIATE" in (
-            executed_sql
-        )
+        assert "ALTER DATABASE [app] SET SINGLE_USER WITH ROLLBACK IMMEDIATE" in (executed_sql)
         assert "DROP DATABASE [app]" in executed_sql
         assert "DROP LOGIN [app]" in executed_sql
         queried_sql = _recorded_mssql_queries(maintenance)
         assert "permission_name <> ?" in queried_sql
-        assert any(
-            args == ("app", "CONNECT SQL") for _query, args in maintenance.queries
-        )
+        assert any(args == ("app", "CONNECT SQL") for _query, args in maintenance.queries)
 
     @pytest.mark.anyio
     async def test_mssql_destroy_skips_service_account_runtime_login(self) -> None:
@@ -3545,9 +3427,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         executed_sql = _recorded_mssql_statements(maintenance)
         assert "DROP DATABASE [app]" in executed_sql
@@ -3573,9 +3453,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         executed_sql = _recorded_mssql_statements(maintenance)
         assert "DROP DATABASE [app]" in executed_sql
@@ -3703,9 +3581,7 @@ class TestDatabaseProvisioning:
         def import_module(_module_name: str) -> object:
             raise ImportError("missing")
 
-        monkeypatch.setattr(
-            mssql_provisioning.importlib, "import_module", import_module
-        )
+        monkeypatch.setattr(mssql_provisioning.importlib, "import_module", import_module)
         provisioner = SQLServerProvisioner()
         context = _mssql_provisioning_context(
             provisioning_connection=_database_connection(
@@ -3767,15 +3643,11 @@ class TestDatabaseProvisioning:
         executed_sql = "\n".join(query for query, _args in connection.executed)
         assert "CREATE DATABASE `app`" in executed_sql
         assert "CREATE USER 'app'@'%%' IDENTIFIED BY %s" in executed_sql
-        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (
-            executed_sql
-        )
+        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (executed_sql)
         assert "secret" not in executed_sql
         assert "secret" not in " ".join(result.message for result in results)
         assert connection.executed[1][1] == ("secret",)
-        assert _simulate_pymysql_format(*connection.executed[1]) == (
-            "CREATE USER 'app'@'%' IDENTIFIED BY <param>"
-        )
+        assert _simulate_pymysql_format(*connection.executed[1]) == ("CREATE USER 'app'@'%' IDENTIFIED BY <param>")
         grant_query, grant_args = connection.executed[2]
         assert grant_args == ()
         assert "TO 'app'@'%'" in grant_query
@@ -3807,12 +3679,8 @@ class TestDatabaseProvisioning:
 
         await provisioner.initialise(context)
 
-        assert connection.executed[1][0] == (
-            "CREATE USER 'app%%ops'@'%%' IDENTIFIED BY %s"
-        )
-        assert _simulate_pymysql_format(*connection.executed[1]) == (
-            "CREATE USER 'app%ops'@'%' IDENTIFIED BY <param>"
-        )
+        assert connection.executed[1][0] == ("CREATE USER 'app%%ops'@'%%' IDENTIFIED BY %s")
+        assert _simulate_pymysql_format(*connection.executed[1]) == ("CREATE USER 'app%ops'@'%' IDENTIFIED BY <param>")
         grant_query, grant_args = connection.executed[2]
         assert grant_args == ()
         assert "TO 'app%ops'@'%'" in grant_query
@@ -3845,21 +3713,14 @@ class TestDatabaseProvisioning:
             "skipped",
             "noop",
         ]
-        assert any(
-            result.message == "Refreshed MySQL application user password: app"
-            for result in results
-        )
+        assert any(result.message == "Refreshed MySQL application user password: app" for result in results)
         assert any("contains 2 record" in result.message for result in results)
         executed_sql = "\n".join(query for query, _args in connection.executed)
         assert "CREATE DATABASE" not in executed_sql
         assert "CREATE USER" not in executed_sql
         assert "ALTER USER 'app'@'%%' IDENTIFIED BY %s" in executed_sql
-        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (
-            executed_sql
-        )
-        assert _simulate_pymysql_format(*connection.executed[0]) == (
-            "ALTER USER 'app'@'%' IDENTIFIED BY <param>"
-        )
+        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (executed_sql)
+        assert _simulate_pymysql_format(*connection.executed[0]) == ("ALTER USER 'app'@'%' IDENTIFIED BY <param>")
 
     @pytest.mark.anyio
     async def test_mysql_provisioner_rejects_invalid_count_result(self) -> None:
@@ -3882,9 +3743,7 @@ class TestDatabaseProvisioning:
 
     @pytest.mark.anyio
     async def test_mysql_destroy_requires_confirmed_database(self) -> None:
-        provisioner = MySQLProvisioner(
-            connector=_RecordingMySQLConnector(_RecordingMySQLConnection([]))
-        )
+        provisioner = MySQLProvisioner(connector=_RecordingMySQLConnector(_RecordingMySQLConnection([])))
         context = _mysql_provisioning_context(
             provisioning_connection=_database_connection(
                 "mysql",
@@ -3924,9 +3783,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         assert [(result.status, result.phase) for result in results] == [
             ("removed", "destroy"),
@@ -3948,19 +3805,12 @@ class TestDatabaseProvisioning:
         self,
     ) -> None:
         class ProcessListFallbackConnection(_RecordingMySQLConnection):
-            async def fetchall(
-                self, query: str, *args: object
-            ) -> tuple[tuple[object, ...], ...]:
+            async def fetchall(self, query: str, *args: object) -> tuple[tuple[object, ...], ...]:
                 self.queries.append((query, args))
                 if query == "SHOW GRANTS FOR 'app'@'%'":
                     return (
                         ("GRANT USAGE ON *.* TO 'app'@'%'",),
-                        (
-                            (
-                                "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* "
-                                "TO 'app'@'%'"
-                            ),
-                        ),
+                        (("GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'"),),
                     )
                 if "FROM performance_schema.threads" in query:
                     raise RuntimeError("performance_schema denied")
@@ -3983,9 +3833,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         assert [(result.status, result.phase) for result in results] == [
             ("removed", "destroy"),
@@ -3996,8 +3844,7 @@ class TestDatabaseProvisioning:
         processlist_queries = [
             (query, args)
             for query, args in connection.queries
-            if "performance_schema.threads" in query
-            or "INFORMATION_SCHEMA.PROCESSLIST" in query
+            if "performance_schema.threads" in query or "INFORMATION_SCHEMA.PROCESSLIST" in query
         ]
         assert processlist_queries == [
             (
@@ -4006,10 +3853,7 @@ class TestDatabaseProvisioning:
                 ("app", 99),
             ),
             (
-                (
-                    "SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST "
-                    "WHERE DB = %s AND ID <> %s"
-                ),
+                ("SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST WHERE DB = %s AND ID <> %s"),
                 ("app", 99),
             ),
         ]
@@ -4032,9 +3876,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         executed_sql = "\n".join(query for query, _args in connection.executed)
         assert "KILL 101" in executed_sql
@@ -4066,9 +3908,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         executed_sql = "\n".join(query for query, _args in connection.executed)
         assert "KILL 101" in executed_sql
@@ -4154,9 +3994,7 @@ class TestDatabaseProvisioning:
         def import_module(_module_name: str) -> object:
             raise ImportError("missing")
 
-        monkeypatch.setattr(
-            mysql_provisioning.importlib, "import_module", import_module
-        )
+        monkeypatch.setattr(mysql_provisioning.importlib, "import_module", import_module)
         provisioner = MySQLProvisioner()
         context = _mysql_provisioning_context(
             provisioning_connection=_database_connection(
@@ -4206,20 +4044,13 @@ class TestDatabaseProvisioning:
             }
         ]
         assert {result.family for result in results} == {"mariadb"}
-        assert any(
-            result.message == "Created MariaDB database: app" for result in results
-        )
-        assert any(
-            result.message == "Created MariaDB application user: app"
-            for result in results
-        )
+        assert any(result.message == "Created MariaDB database: app" for result in results)
+        assert any(result.message == "Created MariaDB application user: app" for result in results)
         executed_sql = "\n".join(query for query, _args in connection.executed)
         queried_sql = "\n".join(query for query, _args in connection.queries)
         assert "CREATE DATABASE `app`" in executed_sql
         assert "CREATE USER 'app'@'%%' IDENTIFIED BY %s" in executed_sql
-        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (
-            executed_sql
-        )
+        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON `app`.* TO 'app'@'%'" in (executed_sql)
         assert "FROM mysql.user" in queried_sql
         assert "secret" not in executed_sql
         assert "secret" not in " ".join(result.message for result in results)
@@ -4251,17 +4082,13 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         assert [(result.family, result.status, result.phase) for result in results] == [
             ("mariadb", "removed", "destroy"),
             ("mariadb", "removed", "destroy"),
         ]
-        assert any(
-            "Removed MariaDB database: app" in result.message for result in results
-        )
+        assert any("Removed MariaDB database: app" in result.message for result in results)
         executed_sql = "\n".join(query for query, _args in connection.executed)
         assert "KILL 101" in executed_sql
         assert "DROP DATABASE `app`" in executed_sql
@@ -4290,9 +4117,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         assert [(result.family, result.status, result.phase) for result in results] == [
             ("mariadb", "removed", "destroy"),
@@ -4300,10 +4125,7 @@ class TestDatabaseProvisioning:
         ]
         assert any(
             result.message
-            == (
-                "Skipped MariaDB application user removal because grant scope could "
-                "not be classified safely."
-            )
+            == ("Skipped MariaDB application user removal because grant scope could not be classified safely.")
             for result in results
         )
         executed_sql = "\n".join(query for query, _args in connection.executed)
@@ -4337,9 +4159,7 @@ class TestDatabaseProvisioning:
         def import_module(_module_name: str) -> object:
             raise ImportError("missing")
 
-        monkeypatch.setattr(
-            mysql_provisioning.importlib, "import_module", import_module
-        )
+        monkeypatch.setattr(mysql_provisioning.importlib, "import_module", import_module)
         provisioner = MariaDBProvisioner()
         context = _mariadb_provisioning_context(
             provisioning_connection=_database_connection(
@@ -4455,9 +4275,7 @@ class TestDatabaseProvisioning:
     async def test_postgresql_destroy_requires_confirmed_database_and_sa_database(
         self,
     ) -> None:
-        provisioner = PostgreSQLProvisioner(
-            connector=_RecordingPostgreSQLConnector(_RecordingPostgreSQLConnection([]))
-        )
+        provisioner = PostgreSQLProvisioner(connector=_RecordingPostgreSQLConnector(_RecordingPostgreSQLConnection([])))
         context = _postgresql_provisioning_context(
             provisioning_connection=_database_connection(
                 "postgresql",
@@ -4490,9 +4308,7 @@ class TestDatabaseProvisioning:
     async def test_postgresql_init_requires_distinct_service_account_database(
         self,
     ) -> None:
-        provisioner = PostgreSQLProvisioner(
-            connector=_RecordingPostgreSQLConnector(_RecordingPostgreSQLConnection([]))
-        )
+        provisioner = PostgreSQLProvisioner(connector=_RecordingPostgreSQLConnector(_RecordingPostgreSQLConnection([])))
         service_connection = _database_connection(
             "postgresql",
             {"database": "app", "user": "app_sa", "password": "admin_secret"},
@@ -4531,9 +4347,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         assert [(result.status, result.phase) for result in results] == [
             ("removed", "destroy"),
@@ -4561,9 +4375,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         executed_sql = "\n".join(query for query, _args in maintenance.executed)
         assert 'DROP DATABASE "app"' in executed_sql
@@ -4590,9 +4402,7 @@ class TestDatabaseProvisioning:
             ),
         )
 
-        results = await provisioner.destroy(
-            context, DestroyDatabaseRequest(confirm="app")
-        )
+        results = await provisioner.destroy(context, DestroyDatabaseRequest(confirm="app"))
 
         executed_sql = "\n".join(query for query, _args in maintenance.executed)
         assert 'DROP DATABASE "app"' in executed_sql
@@ -4856,17 +4666,11 @@ class TestDatabaseProvisioning:
 
         monkeypatch.setattr(database_urls.importlib.util, "find_spec", find_spec)
 
-        assert database_url_support_error(
-            "postgresql://user:password@host.example/app"
-        ) == (
-            "Database URL scheme postgresql:// requires the wybra[postgresql] "
-            "optional dependency."
+        assert database_url_support_error("postgresql://user:password@host.example/app") == (
+            "Database URL scheme postgresql:// requires the wybra[postgresql] optional dependency."
         )
-        assert database_url_support_error(
-            "mariadb://user:password@host.example/app"
-        ) == (
-            "Database URL scheme mariadb:// requires the wybra[mariadb] "
-            "optional dependency."
+        assert database_url_support_error("mariadb://user:password@host.example/app") == (
+            "Database URL scheme mariadb:// requires the wybra[mariadb] optional dependency."
         )
 
     @pytest.mark.anyio
@@ -4967,14 +4771,10 @@ class TestDatabaseProvisioning:
         monkeypatch.syspath_prepend(str(tmp_path))
         importlib.invalidate_caches()
 
-        result = validate_persistence(
-            _persistence_settings(tmp_path, modules=("models_with_empty_migrations",))
-        )
+        result = validate_persistence(_persistence_settings(tmp_path, modules=("models_with_empty_migrations",)))
 
         assert "At least one Tortoise migration file is required." in result.errors
-        assert (
-            "Development database initialisation requires migrations." in result.errors
-        )
+        assert "Development database initialisation requires migrations." in result.errors
         assert not _check_passed(
             result,
             "development database initialisation command is available",
@@ -4984,16 +4784,10 @@ class TestDatabaseProvisioning:
         self,
         tmp_path: Path,
     ) -> None:
-        result = validate_persistence(
-            _persistence_settings(tmp_path, modules=("missing_data_module",))
-        )
+        result = validate_persistence(_persistence_settings(tmp_path, modules=("missing_data_module",)))
 
-        assert "Module migration version location discovery failed:" in (
-            _failed_check_descriptions(result.errors)
-        )
-        assert (
-            "Development database initialisation requires migrations." in result.errors
-        )
+        assert "Module migration version location discovery failed:" in (_failed_check_descriptions(result.errors))
+        assert "Development database initialisation requires migrations." in result.errors
         assert not _check_passed(
             result,
             "development database initialisation command is available",
@@ -5019,17 +4813,10 @@ class TestDatabaseProvisioning:
         monkeypatch.syspath_prepend(str(tmp_path))
         importlib.invalidate_caches()
 
-        result = validate_persistence(
-            _persistence_settings(tmp_path, modules=("models_without_migrations",))
-        )
+        result = validate_persistence(_persistence_settings(tmp_path, modules=("models_without_migrations",)))
 
-        assert (
-            "At least one configured module migration version location is required."
-            in result.errors
-        )
-        assert (
-            "Development database initialisation requires migrations." in result.errors
-        )
+        assert "At least one configured module migration version location is required." in result.errors
+        assert "Development database initialisation requires migrations." in result.errors
         assert not _check_passed(
             result,
             "development database initialisation command is available",
@@ -5061,14 +4848,9 @@ class TestDatabaseProvisioning:
         monkeypatch.syspath_prepend(str(tmp_path))
         importlib.invalidate_caches()
 
-        result = validate_persistence(
-            _persistence_settings(tmp_path, modules=("models_with_migrations",))
-        )
+        result = validate_persistence(_persistence_settings(tmp_path, modules=("models_with_migrations",)))
 
-        assert (
-            "At least one configured module migration version location is required."
-            not in result.errors
-        )
+        assert "At least one configured module migration version location is required." not in result.errors
         assert "At least one Tortoise migration file is required." not in result.errors
         assert _check_passed(
             result,
@@ -5077,10 +4859,7 @@ class TestDatabaseProvisioning:
 
 
 def _check_passed(result: ValidationResult, description_prefix: str) -> bool:
-    return any(
-        check.description.startswith(description_prefix) and check.passed
-        for check in result.checks
-    )
+    return any(check.description.startswith(description_prefix) and check.passed for check in result.checks)
 
 
 class TestDatabaseMigrationsAndRedaction:
@@ -5093,26 +4872,19 @@ class TestDatabaseMigrationsAndRedaction:
             "?sslmode=require&password=%2A%2A%2A&token=%2A%2A%2A"
             "&application_name=app%40local"
         )
-        assert redact_database_url(
-            "postgresql://host.example/app?api_key=secret&sslmode=require"
-        ) == ("postgresql://host.example/app?api_key=%2A%2A%2A&sslmode=require")
+        assert redact_database_url("postgresql://host.example/app?api_key=secret&sslmode=require") == (
+            "postgresql://host.example/app?api_key=%2A%2A%2A&sslmode=require"
+        )
 
     def test_redact_database_urls_masks_bare_postgresql_urls_in_messages(self) -> None:
         assert redact_database_urls(
-            "failed for postgresql://user:secret@host.example/app and "
-            "mysql://admin:admin-secret@host.example/app"
-        ) == (
-            "failed for postgresql://***:***@host.example/app and "
-            "mysql://***:***@host.example/app"
-        )
+            "failed for postgresql://user:secret@host.example/app and mysql://admin:admin-secret@host.example/app"
+        ) == ("failed for postgresql://***:***@host.example/app and mysql://***:***@host.example/app")
 
     def test_safe_database_error_message_redacts_database_urls(self) -> None:
         error = RuntimeError("failed for postgresql://user:secret@host.example/app")
 
-        assert (
-            safe_database_error_message(error)
-            == "failed for postgresql://***:***@host.example/app"
-        )
+        assert safe_database_error_message(error) == "failed for postgresql://***:***@host.example/app"
 
     def test_migration_version_locations_are_discovered_from_configured_modules(
         self,
@@ -5125,9 +4897,7 @@ class TestDatabaseMigrationsAndRedaction:
         monkeypatch.syspath_prepend(str(tmp_path))
         importlib.invalidate_caches()
 
-        version_locations = migration_version_locations_from_modules(
-            ("host_app", "wybra.auth")
-        )
+        version_locations = migration_version_locations_from_modules(("host_app", "wybra.auth"))
 
         assert len(version_locations) == 2
         assert version_locations[0].as_posix().endswith("wybra/sessions/migrations")
@@ -5199,9 +4969,7 @@ class TestDatabaseMigrationsAndRedaction:
             "wybra.sessions.models",
             "models_surface_app.models",
         )
-        assert (
-            discover_model_package("models_surface_app") == "models_surface_app.models"
-        )
+        assert discover_model_package("models_surface_app") == "models_surface_app.models"
 
     def test_discover_model_package_ignores_modules_without_tortoise_models(
         self,
@@ -5211,9 +4979,7 @@ class TestDatabaseMigrationsAndRedaction:
         package_root = tmp_path / "bad_models_surface_app"
         package_root.mkdir()
         (package_root / "__init__.py").write_text("", encoding="utf-8")
-        (package_root / "models.py").write_text(
-            "metadata = object()\n", encoding="utf-8"
-        )
+        (package_root / "models.py").write_text("metadata = object()\n", encoding="utf-8")
         monkeypatch.syspath_prepend(str(tmp_path))
         importlib.invalidate_caches()
 

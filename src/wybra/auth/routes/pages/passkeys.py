@@ -84,10 +84,8 @@ async def passkey_register_options(
                 status_code=403,
             )
 
-        existing_credentials = (
-            await scope.webauthn_credentials.list_active_webauthn_credentials(
-                db_user_id,
-            )
+        existing_credentials = await scope.webauthn_credentials.list_active_webauthn_credentials(
+            db_user_id,
         )
         options = passkey_registration_options(
             _identity_options(request),
@@ -99,8 +97,7 @@ async def passkey_register_options(
         challenge = await scope.challenges.create_challenge(
             user_id=db_user_id,
             kind="webauthn",
-            expires_at=current_timestamp()
-            + _identity_options(request).passkey_timeout_seconds,
+            expires_at=current_timestamp() + _identity_options(request).passkey_timeout_seconds,
             metadata=webauthn_challenge_metadata(
                 purpose=WEBAUTHN_REGISTRATION_PURPOSE,
                 challenge=options.challenge,
@@ -234,9 +231,7 @@ async def passkey_login_options(request: Request) -> JSONResponse:
         if user is None or not _is_effectively_active_user(user):
             return _json_error(PASSKEY_UNAVAILABLE_ERROR, status_code=400)
 
-        credentials = await scope.webauthn_credentials.list_active_webauthn_credentials(
-            str(user.id)
-        )
+        credentials = await scope.webauthn_credentials.list_active_webauthn_credentials(str(user.id))
         if not credentials:
             return _json_error(PASSKEY_UNAVAILABLE_ERROR, status_code=400)
 
@@ -247,8 +242,7 @@ async def passkey_login_options(request: Request) -> JSONResponse:
         challenge = await scope.challenges.create_challenge(
             user_id=str(user.id),
             kind="webauthn",
-            expires_at=current_timestamp()
-            + _identity_options(request).passkey_timeout_seconds,
+            expires_at=current_timestamp() + _identity_options(request).passkey_timeout_seconds,
             metadata=webauthn_challenge_metadata(
                 purpose=WEBAUTHN_LOGIN_PURPOSE,
                 challenge=options.challenge,
@@ -293,15 +287,11 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
                 WEBAUTHN_LOGIN_PURPOSE,
             )
         ):
-            return await _passkey_login_outcome(
-                request, _json_error(PASSKEY_GENERIC_ERROR)
-            )
+            return await _passkey_login_outcome(request, _json_error(PASSKEY_GENERIC_ERROR))
 
         user = await _load_user_by_id(scope, challenge.user_id)
         if user is None or not _is_effectively_active_user(user):
-            return await _passkey_login_outcome(
-                request, _json_error(PASSKEY_GENERIC_ERROR, status_code=401)
-            )
+            return await _passkey_login_outcome(request, _json_error(PASSKEY_GENERIC_ERROR, status_code=401))
 
         challenge_return_to = challenge.metadata_payload.get("return_to")
         if isinstance(challenge_return_to, str) and challenge_return_to.strip():
@@ -310,21 +300,15 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
         expected_challenge = challenge_from_metadata(challenge.metadata_payload)
         credential_id = _payload_text(credential, "id")
         if expected_challenge is None or credential_id is None:
-            return await _passkey_login_outcome(
-                request, _json_error(PASSKEY_GENERIC_ERROR), user=user
-            )
+            return await _passkey_login_outcome(request, _json_error(PASSKEY_GENERIC_ERROR), user=user)
 
-        stored_credential = await scope.webauthn_credentials.get_webauthn_credential(
-            credential_id
-        )
+        stored_credential = await scope.webauthn_credentials.get_webauthn_credential(credential_id)
         if (
             stored_credential is None
             or stored_credential.user_id != str(user.id)
             or stored_credential.status != WEBAUTHN_ACTIVE_STATUS
         ):
-            return await _passkey_login_outcome(
-                request, _json_error(PASSKEY_GENERIC_ERROR), user=user
-            )
+            return await _passkey_login_outcome(request, _json_error(PASSKEY_GENERIC_ERROR), user=user)
 
         try:
             verified = verify_passkey_authentication(
@@ -340,14 +324,10 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
                 user.id,
                 exc.reason,
             )
-            return await _passkey_login_outcome(
-                request, _json_error(PASSKEY_GENERIC_ERROR), user=user
-            )
+            return await _passkey_login_outcome(request, _json_error(PASSKEY_GENERIC_ERROR), user=user)
 
         if verified.credential_id != stored_credential.credential_id:
-            return await _passkey_login_outcome(
-                request, _json_error(PASSKEY_GENERIC_ERROR), user=user
-            )
+            return await _passkey_login_outcome(request, _json_error(PASSKEY_GENERIC_ERROR), user=user)
 
         await scope.webauthn_credentials.update_webauthn_authentication(
             verified.credential_id,
@@ -356,16 +336,12 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
             credential_device_type=verified.credential_device_type,
             credential_backed_up=verified.credential_backed_up,
         )
-        active_totp_credential_id = (
-            await scope.totp_credentials.get_active_totp_credential(str(user.id))
-        )
+        active_totp_credential_id = await scope.totp_credentials.get_active_totp_credential(str(user.id))
         await scope.challenges.consume_challenge(challenge_id)
         user_verified = verified.user_verified
 
     if user is None:
-        return await _passkey_login_outcome(
-            request, _json_error(PASSKEY_GENERIC_ERROR, status_code=401), user=user
-        )
+        return await _passkey_login_outcome(request, _json_error(PASSKEY_GENERIC_ERROR, status_code=401), user=user)
 
     options = _identity_options(request)
     if (
@@ -391,9 +367,7 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
             }
         )
         set_totp_login_nonce_cookie(response, request, login_nonce)
-        return await _passkey_login_outcome(
-            request, response, user=user, outcome="challenge_required"
-        )
+        return await _passkey_login_outcome(request, response, user=user, outcome="challenge_required")
 
     ceremony_result = await complete_authentication_ceremony(
         request,
@@ -411,10 +385,7 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
             ),
         ),
     )
-    if (
-        ceremony_result.is_failure()
-        and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED
-    ):
+    if ceremony_result.is_failure() and ceremony_result.error_type == ERROR_EMAIL_VERIFICATION_REQUIRED:
         return await _passkey_login_outcome(
             request,
             _json_error(
@@ -424,10 +395,7 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
             ),
             user=user,
         )
-    if (
-        ceremony_result.is_failure()
-        and ceremony_result.error_type == ERROR_AUTHENTICATION_METHOD_REQUIRED
-    ):
+    if ceremony_result.is_failure() and ceremony_result.error_type == ERROR_AUTHENTICATION_METHOD_REQUIRED:
         return await _passkey_login_outcome(
             request,
             _json_error(
@@ -439,9 +407,7 @@ async def passkey_login_complete(request: Request) -> JSONResponse:
             outcome="challenge_required",
         )
     if ceremony_result.is_failure() or ceremony_result.value is None:
-        return await _passkey_login_outcome(
-            request, _json_error(PASSKEY_GENERIC_ERROR), user=user
-        )
+        return await _passkey_login_outcome(request, _json_error(PASSKEY_GENERIC_ERROR), user=user)
 
     await publish_credential_access(
         request,
@@ -490,9 +456,7 @@ async def revoke_passkey(
     await form.parse(await request_form_data(request))
     credential_row_id = command_text(form, "credential_id")
     if not credential_row_id:
-        return RedirectResponse(
-            url=_route_path(request, "auth:security"), status_code=303
-        )
+        return RedirectResponse(url=_route_path(request, "auth:security"), status_code=303)
 
     scope_factory = _persistence_scope_from_request(request)
     error: str | None = None

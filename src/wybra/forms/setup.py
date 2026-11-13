@@ -41,8 +41,7 @@ def _csrf_token_secret(site: Site, settings: FormsSettings) -> str | None:
     if secrets is None:
         if fallback is not None:
             logger.warning(
-                "Falling back to configured CSRF token secret because "
-                "SecretsCapability is unavailable.",
+                "Falling back to configured CSRF token secret because SecretsCapability is unavailable.",
             )
             return fallback
         local_fallback = _local_generated_fallback(site, settings)

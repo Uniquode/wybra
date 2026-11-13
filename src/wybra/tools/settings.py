@@ -166,9 +166,7 @@ class ProjectSettings(BaseSettings):
         )
         object.__setattr__(self, "debug", _required_bool(self.debug, "debug"))
         if self.debug and self.deployment_environment != "local":
-            raise ConfigurationError(
-                "app.debug is only allowed when deployment_environment is local."
-            )
+            raise ConfigurationError("app.debug is only allowed when deployment_environment is local.")
 
     @property
     def modules(self) -> tuple[str, ...]:
@@ -208,8 +206,7 @@ def load_project_settings(
         )
         if app_config is None:  # pragma: no cover - require_app_config prevents this
             raise ConfigurationError(
-                "Application config file could not be resolved; pass --config or set "
-                f"{APP_CONFIG_ENV}."
+                f"Application config file could not be resolved; pass --config or set {APP_CONFIG_ENV}."
             )
         config_defs = _project_config_defs(app_config)
         ConfigService.set_runtime_environment(env)
@@ -396,9 +393,7 @@ def _non_negative_int(value: object, field_name: str) -> int:
         try:
             parsed = int(value)
         except ValueError as exc:
-            raise ConfigurationError(
-                f"{field_name} must be a non-negative integer."
-            ) from exc
+            raise ConfigurationError(f"{field_name} must be a non-negative integer.") from exc
         if parsed >= 0:
             return parsed
     raise ConfigurationError(f"{field_name} must be a non-negative integer.")

@@ -181,9 +181,7 @@ def _resource_directory_exists(module_name: str, directory: str) -> bool:
 
 def _require_configured_module(module_name: str) -> None:
     if find_spec(module_name) is None:
-        raise CompositionError(
-            configured_module_message(module_name, "could not be imported.")
-        )
+        raise CompositionError(configured_module_message(module_name, "could not be imported."))
 
 
 def _resolve_static_root(project_root: Path, static_root: Path | None) -> Path | None:
@@ -191,13 +189,9 @@ def _resolve_static_root(project_root: Path, static_root: Path | None) -> Path |
     if resolved is None:
         return None
     if not resolved.exists():
-        raise ConfigurationError(
-            f"Configured static asset root does not exist: {resolved}"
-        )
+        raise ConfigurationError(f"Configured static asset root does not exist: {resolved}")
     if not resolved.is_dir():
-        raise ConfigurationError(
-            f"Configured static asset root is not a directory: {resolved}"
-        )
+        raise ConfigurationError(f"Configured static asset root is not a directory: {resolved}")
     return resolved
 
 
@@ -237,11 +231,7 @@ class PathCorsStaticFiles:
 
         request_paths = _request_path_candidates(scope)
         for prefixes, app in self.path_apps:
-            if any(
-                _path_matches_prefix(path, prefix)
-                for prefix in prefixes
-                for path in request_paths
-            ):
+            if any(_path_matches_prefix(path, prefix) for prefix in prefixes for path in request_paths):
                 await app(scope, receive, send)
                 return
 

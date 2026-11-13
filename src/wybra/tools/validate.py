@@ -105,13 +105,7 @@ def _merge_validation_targets(
         )
 
     merged: dict[str, ValidationTarget] = dict(builtin_targets)
-    merged.update(
-        {
-            name: target
-            for name, target in discovered_targets.items()
-            if name not in builtin_targets
-        }
-    )
+    merged.update({name: target for name, target in discovered_targets.items() if name not in builtin_targets})
     return merged
 
 
@@ -130,32 +124,16 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
             ).resolve()
         return replace(
             defaults,
-            database_url=(
-                overrides.database_url
-                if overrides.database_url is not None
-                else defaults.database_url
-            ),
+            database_url=(overrides.database_url if overrides.database_url is not None else defaults.database_url),
             database_connection=database_connection,
-            template_root=(
-                overrides.template_root
-                if overrides.template_root is not None
-                else defaults.template_root
-            ),
-            static_root=(
-                overrides.static_root
-                if overrides.static_root is not None
-                else defaults.static_root
-            ),
+            template_root=(overrides.template_root if overrides.template_root is not None else defaults.template_root),
+            static_root=(overrides.static_root if overrides.static_root is not None else defaults.static_root),
             static_root_configured=overrides.static_root is not None,
             migrations_root=(
-                overrides.migrations_root
-                if overrides.migrations_root is not None
-                else defaults.migrations_root
+                overrides.migrations_root if overrides.migrations_root is not None else defaults.migrations_root
             ),
             static_url_path=(
-                overrides.static_url_path
-                if overrides.static_url_path is not None
-                else defaults.static_url_path
+                overrides.static_url_path if overrides.static_url_path is not None else defaults.static_url_path
             ),
         )
     except ConfigurationError as exc:
@@ -165,10 +143,7 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
 @click.command(
     name="wybra-validate",
     context_settings={"help_option_names": ["-h", "--help"], "max_content_width": 120},
-    help=(
-        "Run project validation checks. Examples: wybra-validate, "
-        "wybra-validate --verbose routes persistence."
-    ),
+    help=("Run project validation checks. Examples: wybra-validate, wybra-validate --verbose routes persistence."),
 )
 @click.option(
     "-v",
@@ -192,10 +167,7 @@ def _build_settings(overrides: ValidationOverrides) -> Any:
 )
 @click.option(
     "--database-url",
-    help=(
-        "Override the configured async database URL. Verbose output "
-        "redacts embedded credentials."
-    ),
+    help=("Override the configured async database URL. Verbose output redacts embedded credentials."),
 )
 @click.option(
     "--migrations-root",
@@ -299,9 +271,7 @@ def _run_validation_targets(
     return exit_code
 
 
-def _print_verbose_checks(
-    result: ValidationResult, *, file: TextIO | None = None
-) -> None:
+def _print_verbose_checks(result: ValidationResult, *, file: TextIO | None = None) -> None:
     output = sys.stdout if file is None else file
     for check in result.checks:
         status = "ok" if check.passed else "failed"

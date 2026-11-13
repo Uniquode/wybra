@@ -133,9 +133,7 @@ class TortoiseProviderCredentialStore:
         secret_service: SecretEnvelopeService | None = None,
     ) -> None:
         self._connection = connection
-        self._secret_service = secret_service or SecretEnvelopeService.from_env(
-            os.environ
-        )
+        self._secret_service = secret_service or SecretEnvelopeService.from_env(os.environ)
 
     async def create_provider_credential(
         self,
@@ -154,11 +152,7 @@ class TortoiseProviderCredentialStore:
             provider_subject=provider_subject,
             crypt_access_token=self._encrypt_provider_token(access_token),
             expires_at=expires_at,
-            crypt_refresh_token=(
-                self._encrypt_provider_token(refresh_token)
-                if refresh_token is not None
-                else None
-            ),
+            crypt_refresh_token=(self._encrypt_provider_token(refresh_token) if refresh_token is not None else None),
             account_email=account_email,
             provider_enabled=provider_enabled,
             provider_metadata=provider_metadata,
@@ -194,9 +188,7 @@ class TortoiseProviderCredentialStore:
         provider.crypt_access_token = self._encrypt_provider_token(access_token)
         provider.expires_at = expires_at
         provider.crypt_refresh_token = (
-            self._encrypt_provider_token(refresh_token)
-            if refresh_token is not None
-            else None
+            self._encrypt_provider_token(refresh_token) if refresh_token is not None else None
         )
         provider.account_email = account_email
         provider.provider_enabled = provider_enabled
@@ -288,9 +280,7 @@ class TortoiseProviderCredentialStore:
         provider_ids = await self._provider_ids_for_user(user_id)
         if not provider_ids:
             return False
-        parsed_excluded_provider_id = (
-            parse_uuid(exclude_provider_id) if exclude_provider_id is not None else None
-        )
+        parsed_excluded_provider_id = parse_uuid(exclude_provider_id) if exclude_provider_id is not None else None
         query = IdentityProvider.filter(
             id__in=provider_ids,
             provider_enabled=True,
@@ -434,9 +424,7 @@ class TortoiseProviderCredentialStore:
         return ProviderCredentialSecrets(
             access_token=SecretEnvelope(provider.crypt_access_token),
             refresh_token=(
-                SecretEnvelope(provider.crypt_refresh_token)
-                if provider.crypt_refresh_token is not None
-                else None
+                SecretEnvelope(provider.crypt_refresh_token) if provider.crypt_refresh_token is not None else None
             ),
         )
 
@@ -480,6 +468,5 @@ class TortoiseProviderCredentialStore:
             ).value
         except SecretMaterialMissingError as exc:
             raise ProviderCredentialStorageError(
-                "Provider credential storage requires configured crypto secret "
-                "material."
+                "Provider credential storage requires configured crypto secret material."
             ) from exc

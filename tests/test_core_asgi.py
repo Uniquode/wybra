@@ -19,10 +19,7 @@ def test_load_asgi_app_reports_configuration_errors_without_traceback(
     with pytest.raises(SystemExit) as excinfo:
         load_asgi_app(raise_configuration_error)
 
-    message = (
-        "Application configuration failed: "
-        "APP_ENV must be local, staging, or production."
-    )
+    message = "Application configuration failed: APP_ENV must be local, staging, or production."
     captured = capsys.readouterr()
     assert str(excinfo.value) == message
     assert captured.err.strip() == message

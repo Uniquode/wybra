@@ -199,22 +199,16 @@ def test_view_router_expands_a_generic_view_to_resource_routes() -> None:
         async def list_objects(self, request: Request) -> dict[str, str]:
             return {"action": "list"}
 
-        async def retrieve_object(
-            self, request: Request, object_id: str
-        ) -> dict[str, str]:
+        async def retrieve_object(self, request: Request, object_id: str) -> dict[str, str]:
             return {"action": "retrieve", "id": object_id}
 
         async def create_object(self, request: Request) -> dict[str, str]:
             return {"action": "create"}
 
-        async def update_object(
-            self, request: Request, object_id: str
-        ) -> dict[str, str]:
+        async def update_object(self, request: Request, object_id: str) -> dict[str, str]:
             return {"action": "update", "id": object_id}
 
-        async def delete_object(
-            self, request: Request, object_id: str
-        ) -> dict[str, str]:
+        async def delete_object(self, request: Request, object_id: str) -> dict[str, str]:
             return {"action": "delete", "id": object_id}
 
         async def bulk_action(
@@ -277,10 +271,7 @@ def test_bulk_action_url_places_action_before_collection_state() -> None:
         }
     )
 
-    assert (
-        view._bulk_action_url(request, "delete")
-        == "/articles/bulk/delete?search=open&page=2"
-    )
+    assert view._bulk_action_url(request, "delete") == "/articles/bulk/delete?search=open&page=2"
 
 
 def test_generic_view_respects_owning_router_dependencies() -> None:
@@ -298,22 +289,16 @@ def test_generic_view_respects_owning_router_dependencies() -> None:
             invoked = True
             return {"action": "list"}
 
-        async def retrieve_object(
-            self, request: Request, object_id: str
-        ) -> dict[str, str]:
+        async def retrieve_object(self, request: Request, object_id: str) -> dict[str, str]:
             return {"action": "retrieve", "id": object_id}
 
         async def create_object(self, request: Request) -> dict[str, str]:
             return {"action": "create"}
 
-        async def update_object(
-            self, request: Request, object_id: str
-        ) -> dict[str, str]:
+        async def update_object(self, request: Request, object_id: str) -> dict[str, str]:
             return {"action": "update", "id": object_id}
 
-        async def delete_object(
-            self, request: Request, object_id: str
-        ) -> dict[str, str]:
+        async def delete_object(self, request: Request, object_id: str) -> dict[str, str]:
             return {"action": "delete", "id": object_id}
 
         async def bulk_action(self, request: Request) -> dict[str, str]:
@@ -581,9 +566,7 @@ async def test_model_generic_view_lists_and_retrieves_api_records() -> None:
         model = Article
 
     app = FastAPI()
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = create_test_site(
             {"app": {"modules": ("tests_support.content_types",)}},
             app=app,
@@ -620,9 +603,7 @@ async def test_model_generic_view_creates_and_updates_records_from_api_values() 
         model = Article
 
     app = FastAPI()
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = create_test_site(
             {"app": {"modules": ("tests_support.content_types",)}},
             app=app,
@@ -657,9 +638,7 @@ async def test_model_generic_view_accepts_an_unchanged_api_update() -> None:
         model = Article
 
     app = FastAPI()
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = create_test_site(
             {"app": {"modules": ("tests_support.content_types",)}},
             app=app,
@@ -691,9 +670,7 @@ async def test_model_generic_view_returns_api_validation_errors() -> None:
         model = Article
 
     app = FastAPI()
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = create_test_site(
             {"app": {"modules": ("tests_support.content_types",)}},
             app=app,
@@ -728,9 +705,7 @@ async def test_model_generic_view_validates_malformed_api_and_bulk_input() -> No
         ({"selected": "article-1"}, "delete", "selected"),
         ({"selected": [{}]}, "delete", "selected"),
     )
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = create_test_site(
             {"app": {"modules": ("tests_support.content_types",)}},
             app=app,
@@ -772,9 +747,7 @@ async def test_model_generic_view_deletes_only_confirmed_api_records() -> None:
         model = Article
 
     app = FastAPI()
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = create_test_site(
             {"app": {"modules": ("tests_support.content_types",)}},
             app=app,
@@ -811,9 +784,7 @@ async def test_model_generic_view_bulk_delete_uses_visible_selected_records() ->
         bulk_actions = {"delete": BulkDeleteAction()}
 
     app = FastAPI()
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = create_test_site(
             {"app": {"modules": ("tests_support.content_types",)}},
             app=app,
@@ -854,9 +825,7 @@ async def test_model_generic_view_publishes_collection_item_and_bulk_outcomes() 
         bulk_actions = {"delete": BulkDeleteAction()}
 
     app = FastAPI()
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = await start(
             app=app,
             config_source=MappingConfigSource(
@@ -935,11 +904,7 @@ async def test_model_generic_view_publishes_collection_item_and_bulk_outcomes() 
     assert isinstance(invalid_event, GenericViewCompletedEvent)
     assert invalid_event.status_code == 422
     assert invalid_event.error_type is None
-    persistence_events = [
-        event
-        for event in persistence_observed
-        if isinstance(event, FormPersistenceCompletedEvent)
-    ]
+    persistence_events = [event for event in persistence_observed if isinstance(event, FormPersistenceCompletedEvent)]
     assert len(persistence_events) == 1
     persistence_event = persistence_events[0]
     assert isinstance(persistence_event, FormPersistenceCompletedEvent)
@@ -969,9 +934,7 @@ async def test_model_generic_view_html_workspace_preserves_collection_state(
 
     monkeypatch.setattr("wybra.views.templates.render_page", fake_render_page)
     app = FastAPI()
-    async with migrated_test_database(
-        modules=("tests_support.content_types",)
-    ) as database:
+    async with migrated_test_database(modules=("tests_support.content_types",)) as database:
         site = create_test_site(
             {"app": {"modules": ("tests_support.content_types",)}},
             app=app,
@@ -1130,14 +1093,11 @@ async def test_api_view_renders_paged_api_result() -> None:
                 paging=ApiPaging(cursor="abc", limit=25, has_more=False),
             )
 
-    response = await ExampleAPIView(api=DefaultApiCapability(ApiSettings())).dispatch(
-        _request()
-    )
+    response = await ExampleAPIView(api=DefaultApiCapability(ApiSettings())).dispatch(_request())
 
     assert isinstance(response, JSONResponse)
     assert response.body == (
-        b'{"data":[{"name":"Ada"}],"links":[],"paging":{"cursor":"abc",'
-        b'"limit":25,"has_more":false}}'
+        b'{"data":[{"name":"Ada"}],"links":[],"paging":{"cursor":"abc","limit":25,"has_more":false}}'
     )
 
 

@@ -233,11 +233,7 @@ class TortoiseProfileRepository:
             )
             .values_list("normalised_number", flat=True)
         )
-        return tuple(
-            contact
-            for contact in contacts
-            if contact.normalised_number not in shared_numbers
-        )
+        return tuple(contact for contact in contacts if contact.normalised_number not in shared_numbers)
 
 
 async def _ensure_profile(connection: Any, user_id: uuid.UUID) -> UserProfile:
@@ -262,9 +258,7 @@ async def _save_profile_fields(
         try:
             setter = field_setters[field_name]
         except KeyError as exc:
-            raise ProfileInputError(
-                f"Unknown profile field submitted: {field_name}."
-            ) from exc
+            raise ProfileInputError(f"Unknown profile field submitted: {field_name}.") from exc
         setter(profile, value)
     await profile.save(using_db=connection)
     return profile

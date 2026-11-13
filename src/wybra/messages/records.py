@@ -36,9 +36,7 @@ class AlertRecord:
                 message,
                 max_message_length=max_message_length,
             ),
-            created_at=normalise_created_at(
-                time.time() if created_at is None else created_at
-            ),
+            created_at=normalise_created_at(time.time() if created_at is None else created_at),
         )
 
     @classmethod
@@ -87,8 +85,7 @@ def normalise_alert_message(value: object, *, max_message_length: int) -> str:
         raise InvalidAlertError("Alert message must not be blank.")
     if len(message) > max_message_length:
         raise InvalidAlertError(
-            "Alert message exceeds maximum length: "
-            f"length={len(message)}, max_length={max_message_length}."
+            f"Alert message exceeds maximum length: length={len(message)}, max_length={max_message_length}."
         )
     return message
 

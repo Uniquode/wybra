@@ -172,9 +172,7 @@ class VaultSecretSourceDriver:
             source=self.source,
             extra="vault",
         )
-        client = (
-            hvac.Client(url=self.settings.url) if self.settings.url else hvac.Client()
-        )
+        client = hvac.Client(url=self.settings.url) if self.settings.url else hvac.Client()
         authenticated = getattr(client, "is_authenticated", None)
         if callable(authenticated) and not authenticated():
             raise SecretSourceUnavailableError(
@@ -303,10 +301,7 @@ def environment_key_name(key: str) -> str:
         raise InvalidSecretKeyError(
             source=ENVIRONMENT_SOURCE,
             key=key,
-            message=(
-                "Environment secret key must match "
-                f"{ENVIRONMENT_KEY_PATTERN.pattern!r}."
-            ),
+            message=(f"Environment secret key must match {ENVIRONMENT_KEY_PATTERN.pattern!r}."),
         )
     value = key.strip()
     if ENVIRONMENT_KEY_PATTERN.fullmatch(value):
@@ -314,18 +309,12 @@ def environment_key_name(key: str) -> str:
     raise InvalidSecretKeyError(
         source=ENVIRONMENT_SOURCE,
         key=key,
-        message=(
-            f"Environment secret key must match {ENVIRONMENT_KEY_PATTERN.pattern!r}."
-        ),
+        message=(f"Environment secret key must match {ENVIRONMENT_KEY_PATTERN.pattern!r}."),
     )
 
 
 def _keyring_platform_available() -> bool:
-    return (
-        sys.platform == "darwin"
-        or sys.platform == "win32"
-        or sys.platform.startswith("linux")
-    )
+    return sys.platform == "darwin" or sys.platform == "win32" or sys.platform.startswith("linux")
 
 
 def _import_optional_dependency(module_name: str, *, source: str, extra: str) -> Any:

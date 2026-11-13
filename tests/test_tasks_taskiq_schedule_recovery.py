@@ -693,9 +693,7 @@ async def test_deferred_revision_is_reconsidered_after_remote_replacement() -> N
     assert await schedules.delete("taskiq-scheduler", unsupported.schedule_id)
     await peer.add_schedule(unsupported)
 
-    assert [task.task_name for task in await source.get_schedules()] == [
-        unsupported.task_name
-    ]
+    assert [task.task_name for task in await source.get_schedules()] == [unsupported.task_name]
 
 
 @pytest.mark.anyio
@@ -1019,9 +1017,7 @@ async def test_aborted_refresh_releases_staged_schedules_for_a_peer(
 
     ready = await peer.get_schedules()
 
-    assert [task.task_name for task in ready] == ["tests.once"] * (
-        2 if operation == "claim" else 1
-    )
+    assert [task.task_name for task in ready] == ["tests.once"] * (2 if operation == "claim" else 1)
 
 
 @pytest.mark.anyio
@@ -1588,25 +1584,19 @@ async def test_refresh_rotates_bounded_pending_claim_checks() -> None:
     assert await source.get_schedules() == []
     assert schedules.held_calls == 100
     assert any(
-        claim.record.identity == "schedule-100"
-        for pending in source._pending.values()
-        if (claim := pending.claim)
+        claim.record.identity == "schedule-100" for pending in source._pending.values() if (claim := pending.claim)
     )
     schedules.held_calls = 0
 
     assert await source.get_schedules() == []
     assert schedules.held_calls == 100
     assert all(
-        claim.record.identity != "schedule-100"
-        for pending in source._pending.values()
-        if (claim := pending.claim)
+        claim.record.identity != "schedule-100" for pending in source._pending.values() if (claim := pending.claim)
     )
 
 
 @pytest.mark.anyio
-async def test_failed_taskiq_enqueue_recovers_without_retaining_stale_dispatch() -> (
-    None
-):
+async def test_failed_taskiq_enqueue_recovers_without_retaining_stale_dispatch() -> None:
     clock = Clock(1_000)
     source = CacheTaskiqScheduleSource(
         InMemoryScheduleCache(clock),
@@ -1686,9 +1676,7 @@ async def test_post_send_ignores_claim_lost_after_final_check() -> None:
 
 
 @pytest.mark.anyio
-async def test_deleting_a_cron_schedule_during_advance_is_a_normal_cancellation() -> (
-    None
-):
+async def test_deleting_a_cron_schedule_during_advance_is_a_normal_cancellation() -> None:
     clock = Clock(1_000)
     schedules = InMemoryScheduleCache(clock)
     source = CacheTaskiqScheduleSource(
@@ -1756,9 +1744,7 @@ async def test_shutdown_keeps_a_claim_during_an_in_flight_broker_handoff() -> No
     await first.add_schedule(_one_time_schedule())
     dispatch = (await first.get_schedules())[0]
     broker = BlockingBroker()
-    send = asyncio.create_task(
-        TaskiqScheduler(broker, [first]).on_ready(first, dispatch)
-    )
+    send = asyncio.create_task(TaskiqScheduler(broker, [first]).on_ready(first, dispatch))
     await broker.started.wait()
 
     await first.shutdown()

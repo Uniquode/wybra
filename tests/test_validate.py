@@ -69,15 +69,10 @@ class AssetValidationOnlySettings:
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module is not None
     }
     imported_modules.update(
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
+        alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
     )
     return imported_modules
 
@@ -186,9 +181,7 @@ class TestValidation:
     def test_tools_validation_modules_do_not_import_host_or_auth_packages(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         forbidden_modules = ("wybra.auth", "host_app")
-        validation_files = sorted(
-            (project_root / "src/wybra/tools/validation").rglob("*.py")
-        )
+        validation_files = sorted((project_root / "src/wybra/tools/validation").rglob("*.py"))
 
         assert validation_files
         for path in validation_files:
@@ -227,26 +220,17 @@ class TestValidation:
         pyproject_path.write_text("[project\n", encoding="utf-8")
         monkeypatch.chdir(child)
 
-        with pytest.raises(
-            ProjectToolConfigurationError, match=re.escape(str(pyproject_path))
-        ):
+        with pytest.raises(ProjectToolConfigurationError, match=re.escape(str(pyproject_path))):
             runtime_project_root()
 
-    def test_validate_routes_checks_configured_route_modules(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validate_routes_checks_configured_route_modules(self, tmp_path: Path) -> None:
         result = validate_routes(_web_settings(tmp_path))
 
         assert result.is_ok
         assert result.name == "routes"
-        assert any(
-            check.description == "configured route modules load: wybra.assets"
-            for check in result.checks
-        )
+        assert any(check.description == "configured route modules load: wybra.assets" for check in result.checks)
 
-    def test_validate_command_reports_missing_project_configuration(
-        self, capsys
-    ) -> None:
+    def test_validate_command_reports_missing_project_configuration(self, capsys) -> None:
         exit_code = validate_main(["routes"])
 
         captured = capsys.readouterr()
@@ -273,9 +257,7 @@ class TestValidation:
         def raise_unrelated_value_error(_args: object) -> object:
             raise ValueError("programmer error")
 
-        monkeypatch.setattr(
-            validate_module, "_build_settings", raise_unrelated_value_error
-        )
+        monkeypatch.setattr(validate_module, "_build_settings", raise_unrelated_value_error)
 
         with pytest.raises(ValueError, match="programmer error"):
             validate_module.main(["routes"])
@@ -318,9 +300,7 @@ class TestValidation:
         )
         monkeypatch.syspath_prepend(str(tmp_path))
 
-        targets = discover_validation_targets(
-            ("first_validation_module", "second_validation_module")
-        )
+        targets = discover_validation_targets(("first_validation_module", "second_validation_module"))
 
         assert tuple(targets) == ("first", "second")
         assert isinstance(targets["first"](object()), ValidationResult)
@@ -465,13 +445,10 @@ class TestValidation:
 
         assert result.name == "scopes"
         assert result.errors == (
-            "Declared scope is missing from the persisted catalogue: "
-            "articles.article.update.",
+            "Declared scope is missing from the persisted catalogue: articles.article.update.",
             "Declared scope is missing from the persisted catalogue: reports.export.",
         )
-        assert result.checks[-1].description == (
-            "declared scopes exist in the persisted catalogue"
-        )
+        assert result.checks[-1].description == ("declared scopes exist in the persisted catalogue")
         assert result.checks[-1].passed is False
 
     @pytest.mark.anyio
@@ -548,31 +525,20 @@ class TestValidation:
         exit_code = validate_main(["scopes"])
 
         captured = capsys.readouterr()
-        assert validate_module.BUILTIN_VALIDATION_TARGETS["scopes"] is (
-            validate_scope_catalogue
-        )
+        assert validate_module.BUILTIN_VALIDATION_TARGETS["scopes"] is (validate_scope_catalogue)
         assert exit_code == 1
         assert captured.out == ""
         assert captured.err == (
-            "scopes: failed\n"
-            "- Declared scope is missing from the persisted catalogue: "
-            "reports.export.\n"
+            "scopes: failed\n- Declared scope is missing from the persisted catalogue: reports.export.\n"
         )
 
-    def test_validate_security_accepts_omitted_security_module(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validate_security_accepts_omitted_security_module(self, tmp_path: Path) -> None:
         result = validate_security(_web_settings(tmp_path, ("wybra.assets",)))
 
         assert result.is_ok
-        assert any(
-            check.description == "security module is not configured"
-            for check in result.checks
-        )
+        assert any(check.description == "security module is not configured" for check in result.checks)
 
-    def test_validate_security_loads_configured_security_module(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validate_security_loads_configured_security_module(self, tmp_path: Path) -> None:
         result = validate_security(
             _web_settings(
                 tmp_path,
@@ -590,9 +556,7 @@ class TestValidation:
         )
 
         assert result.is_ok
-        assert any(
-            "security settings load" in check.description for check in result.checks
-        )
+        assert any("security settings load" in check.description for check in result.checks)
 
     def test_validate_security_accepts_replacement_provider(
         self,
@@ -602,15 +566,11 @@ class TestValidation:
         _write_replacement_security_module(tmp_path, "replacement_security")
         monkeypatch.syspath_prepend(str(tmp_path))
 
-        result = validate_security(
-            _web_settings(tmp_path, ("replacement_security", "wybra.assets"))
-        )
+        result = validate_security(_web_settings(tmp_path, ("replacement_security", "wybra.assets")))
 
         assert result.is_ok
         assert any(
-            check.description
-            == "replacement security capability provider is configured"
-            for check in result.checks
+            check.description == "replacement security capability provider is configured" for check in result.checks
         )
 
     def test_validate_command_rejects_module_target_conflicting_with_builtin(
@@ -652,10 +612,7 @@ class TestValidation:
         result = validate_api(_web_settings(tmp_path, ("wybra.assets",)))
 
         assert result.is_ok
-        assert any(
-            check.description == "api module is not configured"
-            for check in result.checks
-        )
+        assert any(check.description == "api module is not configured" for check in result.checks)
 
     def test_validate_api_loads_configured_api_module(self, tmp_path: Path) -> None:
         result = validate_api(
@@ -673,10 +630,7 @@ class TestValidation:
 
         assert result.is_ok
         assert any("API settings load" in check.description for check in result.checks)
-        assert any(
-            check.description == "API path prefix is configured" and check.passed
-            for check in result.checks
-        )
+        assert any(check.description == "API path prefix is configured" and check.passed for check in result.checks)
 
     def test_validate_api_accepts_replacement_provider(
         self,
@@ -686,39 +640,22 @@ class TestValidation:
         _write_replacement_api_module(tmp_path, "replacement_api")
         monkeypatch.syspath_prepend(str(tmp_path))
 
-        result = validate_api(
-            _web_settings(tmp_path, ("replacement_api", "wybra.assets"))
-        )
+        result = validate_api(_web_settings(tmp_path, ("replacement_api", "wybra.assets")))
 
         assert result.is_ok
-        assert any(
-            check.description == "replacement API capability provider is configured"
-            for check in result.checks
-        )
+        assert any(check.description == "replacement API capability provider is configured" for check in result.checks)
 
-    def test_validate_errors_accepts_omitted_errors_module(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validate_errors_accepts_omitted_errors_module(self, tmp_path: Path) -> None:
         result = validate_errors(_web_settings(tmp_path, ("wybra.assets",)))
 
         assert result.is_ok
-        assert any(
-            check.description == "errors module is not configured"
-            for check in result.checks
-        )
+        assert any(check.description == "errors module is not configured" for check in result.checks)
 
-    def test_validate_errors_accepts_configured_errors_module(
-        self, tmp_path: Path
-    ) -> None:
-        result = validate_errors(
-            _web_settings(tmp_path, ("wybra.errors", "wybra.assets"))
-        )
+    def test_validate_errors_accepts_configured_errors_module(self, tmp_path: Path) -> None:
+        result = validate_errors(_web_settings(tmp_path, ("wybra.errors", "wybra.assets")))
 
         assert result.is_ok
-        assert any(
-            check.description == "errors module is configured"
-            for check in result.checks
-        )
+        assert any(check.description == "errors module is configured" for check in result.checks)
 
     def test_validate_command_exposes_builtin_api_target(
         self,
@@ -727,9 +664,7 @@ class TestValidation:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         settings = _web_settings(tmp_path, ("wybra.api", "wybra.assets"))
-        monkeypatch.setattr(
-            validate_module, "_build_settings", lambda _overrides: settings
-        )
+        monkeypatch.setattr(validate_module, "_build_settings", lambda _overrides: settings)
 
         exit_code = validate_main(["api"])
 
@@ -765,9 +700,7 @@ class TestValidation:
         captured = capsys.readouterr()
         assert exit_code == 1
         assert captured.out == ""
-        assert (
-            "ERROR wybra.tools.validate validation discovery: failed:" in captured.err
-        )
+        assert "ERROR wybra.tools.validate validation discovery: failed:" in captured.err
         assert "validation discovery: failed" in captured.err
         assert "must expose `validation_targets` as a mapping" in captured.err
         assert not captured.err.startswith("ERROR:wybra.tools.validate:")
@@ -801,9 +734,7 @@ class TestValidation:
         def raise_click_exception(*_args, **_kwargs) -> None:
             raise FalsyExitClickException("invalid usage")
 
-        monkeypatch.setattr(
-            validate_module.validate_command, "main", raise_click_exception
-        )
+        monkeypatch.setattr(validate_module.validate_command, "main", raise_click_exception)
 
         assert validate_main([]) == 1
 
@@ -814,9 +745,7 @@ class TestValidation:
         self,
         tmp_path: Path,
     ) -> None:
-        config = ConfigService(
-            [AppConfigSource(_app_config(tmp_path, ("wybra.assets",)))]
-        )
+        config = ConfigService([AppConfigSource(_app_config(tmp_path, ("wybra.assets",)))])
 
         settings = ProjectSettings.load_settings(
             config,
@@ -884,9 +813,7 @@ class TestValidation:
         assert not (tmp_path / "static").exists()
         static_root = (tmp_path / "static").resolve()
         assert any(
-            check.description
-            == f"static asset collection root is usable: {static_root}"
-            and check.passed
+            check.description == f"static asset collection root is usable: {static_root}" and check.passed
             for check in result.checks
         )
 
@@ -905,9 +832,7 @@ class TestValidation:
 
         assert result.is_ok
         assert any(
-            check.description == "static URL path is configured: /static/"
-            and check.passed
-            for check in result.checks
+            check.description == "static URL path is configured: /static/" and check.passed for check in result.checks
         )
 
     def test_validate_assets_reports_blank_app_config_static_url_path(
@@ -943,10 +868,7 @@ class TestValidation:
         assert not result.is_ok
         assert any(
             error
-            == (
-                "Static asset collection root cannot be created because parent is "
-                f"not writable: {tmp_path.resolve()}"
-            )
+            == (f"Static asset collection root cannot be created because parent is not writable: {tmp_path.resolve()}")
             for error in result.errors
         )
 
@@ -968,31 +890,24 @@ class TestValidation:
 
         assert not result.is_ok
         assert (
-            "Static asset collection root is not a directory: "
-            f"{(tmp_path / 'asset-file').resolve()}"
+            f"Static asset collection root is not a directory: {(tmp_path / 'asset-file').resolve()}"
         ) in result.errors
 
-    def test_validate_assets_accepts_missing_asset_provider(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validate_assets_accepts_missing_asset_provider(self, tmp_path: Path) -> None:
         result = validate_assets(_web_settings(tmp_path, ("wybra.security",)))
 
         assert result.is_ok
         assert any(
-            check.description == "static asset capability provider is not required"
-            and check.passed
+            check.description == "static asset capability provider is not required" and check.passed
             for check in result.checks
         )
 
     def test_validate_assets_accepts_configured_provider(self, tmp_path: Path) -> None:
-        result = validate_assets(
-            _web_settings(tmp_path, ("wybra.security", "wybra.assets"))
-        )
+        result = validate_assets(_web_settings(tmp_path, ("wybra.security", "wybra.assets")))
 
         assert result.is_ok
         assert any(
-            check.description == "static asset capability provider is configured"
-            and check.passed
+            check.description == "static asset capability provider is configured" and check.passed
             for check in result.checks
         )
 
@@ -1009,9 +924,7 @@ class TestValidation:
         )
         monkeypatch.syspath_prepend(str(tmp_path))
 
-        result = validate_assets(
-            _web_settings(tmp_path, ("custom_asset_provider", "wybra.security"))
-        )
+        result = validate_assets(_web_settings(tmp_path, ("custom_asset_provider", "wybra.security")))
 
         assert result.is_ok
 
@@ -1022,9 +935,7 @@ class TestValidation:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         settings = _web_settings(tmp_path, ("wybra.assets",))
-        monkeypatch.setattr(
-            validate_module, "_build_settings", lambda _overrides: settings
-        )
+        monkeypatch.setattr(validate_module, "_build_settings", lambda _overrides: settings)
 
         exit_code = validate_main(["assets"])
 
@@ -1055,15 +966,11 @@ class TestValidation:
         )
         monkeypatch.syspath_prepend(str(tmp_path))
 
-        result = validate_template(
-            _web_settings(tmp_path, ("csrf_missing_app", "wybra.template"))
-        )
+        result = validate_template(_web_settings(tmp_path, ("csrf_missing_app", "wybra.template")))
 
         assert not result.is_ok
         assert result.name == "template"
-        assert "POST form template must include CSRF field: missing_csrf.html" in (
-            result.errors
-        )
+        assert "POST form template must include CSRF field: missing_csrf.html" in (result.errors)
 
     def test_validate_template_rejects_post_form_missing_csrf_field(
         self,
@@ -1080,15 +987,11 @@ class TestValidation:
         )
         monkeypatch.syspath_prepend(str(tmp_path))
 
-        result = validate_template(
-            _web_settings(tmp_path, ("template_csrf_missing_app", "wybra.template"))
-        )
+        result = validate_template(_web_settings(tmp_path, ("template_csrf_missing_app", "wybra.template")))
 
         assert not result.is_ok
         assert result.name == "template"
-        assert "POST form template must include CSRF field: missing_csrf.html" in (
-            result.errors
-        )
+        assert "POST form template must include CSRF field: missing_csrf.html" in (result.errors)
 
     def test_validate_template_accepts_omitted_template_provider(
         self,
@@ -1111,14 +1014,10 @@ class TestValidation:
         (template_root / "page.html").write_text("<main>ok</main>", encoding="utf-8")
         monkeypatch.syspath_prepend(str(tmp_path))
 
-        result = validate_template(
-            _web_settings(tmp_path, ("replacement_template_provider",))
-        )
+        result = validate_template(_web_settings(tmp_path, ("replacement_template_provider",)))
 
         assert result.is_ok
-        assert any(
-            check.description == "template loads: page.html" for check in result.checks
-        )
+        assert any(check.description == "template loads: page.html" for check in result.checks)
 
     def test_validate_template_reuses_renderer_for_all_template_loads(
         self,
@@ -1129,12 +1028,8 @@ class TestValidation:
         template_root = package_root / "templates"
         template_root.mkdir(parents=True)
         (package_root / "__init__.py").write_text("", encoding="utf-8")
-        (template_root / "first.html").write_text(
-            "<main>first</main>", encoding="utf-8"
-        )
-        (template_root / "second.html").write_text(
-            "<main>second</main>", encoding="utf-8"
-        )
+        (template_root / "first.html").write_text("<main>first</main>", encoding="utf-8")
+        (template_root / "second.html").write_text("<main>second</main>", encoding="utf-8")
         monkeypatch.syspath_prepend(str(tmp_path))
         original_template_renderer = template_validation._template_renderer
         renderer_calls = 0
@@ -1150,19 +1045,12 @@ class TestValidation:
             count_template_renderer,
         )
 
-        result = validate_template(
-            _web_settings(tmp_path, ("multi_template_provider",))
-        )
+        result = validate_template(_web_settings(tmp_path, ("multi_template_provider",)))
 
         assert result.is_ok
         assert renderer_calls == 1
-        assert any(
-            check.description == "template loads: first.html" for check in result.checks
-        )
-        assert any(
-            check.description == "template loads: second.html"
-            for check in result.checks
-        )
+        assert any(check.description == "template loads: first.html" for check in result.checks)
+        assert any(check.description == "template loads: second.html" for check in result.checks)
 
     def test_validate_template_does_not_require_framework_stylesheet(
         self,
@@ -1187,14 +1075,9 @@ class TestValidation:
 
         assert result.is_ok
         assert any(
-            check.description
-            == "widget template exists: components/theme_selector.html"
-            for check in result.checks
+            check.description == "widget template exists: components/theme_selector.html" for check in result.checks
         )
-        assert any(
-            check.description == "widget static asset exists: styles/widgets.css"
-            for check in result.checks
-        )
+        assert any(check.description == "widget static asset exists: styles/widgets.css" for check in result.checks)
 
     def test_validate_widgets_checks_login_resources_when_enabled(
         self,
@@ -1210,30 +1093,21 @@ class TestValidation:
 
         assert result.is_ok
         assert any(
-            check.description == "widget template exists: components/login_control.html"
-            for check in result.checks
+            check.description == "widget template exists: components/login_control.html" for check in result.checks
         )
 
-    def test_validate_widgets_accepts_absent_widgets_module(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validate_widgets_accepts_absent_widgets_module(self, tmp_path: Path) -> None:
         result = validate_widgets(_web_settings(tmp_path, ("wybra.assets",)))
 
         assert result.is_ok
-        assert any(
-            check.description == "wybra.widgets is not configured"
-            for check in result.checks
-        )
+        assert any(check.description == "wybra.widgets is not configured" for check in result.checks)
 
-    def test_validate_routes_reports_missing_configured_module(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validate_routes_reports_missing_configured_module(self, tmp_path: Path) -> None:
         result = validate_routes(_web_settings(tmp_path, ("missing_validation_app",)))
 
         assert not result.is_ok
         assert any(
-            "Configured module 'missing_validation_app' could not be imported" in error
-            for error in result.errors
+            "Configured module 'missing_validation_app' could not be imported" in error for error in result.errors
         )
 
     def test_validate_command_reports_host_configuration_error(
@@ -1244,9 +1118,7 @@ class TestValidation:
         def raise_configuration_error(_overrides: object) -> object:
             raise ProjectToolConfigurationError("host adapter is invalid")
 
-        monkeypatch.setattr(
-            validate_module, "_build_settings", raise_configuration_error
-        )
+        monkeypatch.setattr(validate_module, "_build_settings", raise_configuration_error)
 
         exit_code = validate_main(["routes"])
 

@@ -100,9 +100,7 @@ def load_required_app_config(
 def _required_runserver_value(value: str | None, option_name: str) -> str:
     if value is not None and value.strip():
         return value.strip()
-    raise ProjectToolConfigurationError(
-        f"{option_name} must be configured in the selected app config file."
-    )
+    raise ProjectToolConfigurationError(f"{option_name} must be configured in the selected app config file.")
 
 
 def normalise_config_source(config_source: str) -> str:
@@ -116,9 +114,7 @@ def normalise_cli_config_source(config_source: str) -> str:
     try:
         return normalise_config_source(config_source)
     except ProjectToolConfigurationError as exc:
-        raise ProjectToolConfigurationError(
-            f"{CONFIG_SOURCE_OPTION} must not be blank."
-        ) from exc
+        raise ProjectToolConfigurationError(f"{CONFIG_SOURCE_OPTION} must not be blank.") from exc
 
 
 def config_source_from_click_context(

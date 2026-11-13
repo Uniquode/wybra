@@ -356,9 +356,7 @@ class NatsCoordination:
         )
         if reply[0] != _REPLY_COUNTER or len(reply) != 3:
             _raise_reply_error(reply, label="internal counter")
-        return CounterCacheValue(
-            _reply_integer(reply[1]), CacheRevision(_reply_integer(reply[2]))
-        )
+        return CounterCacheValue(_reply_integer(reply[1]), CacheRevision(_reply_integer(reply[2])))
 
     async def append_stream(
         self,
@@ -426,12 +424,8 @@ class NatsCoordination:
         except CacheFeatureError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream feature request failed (%s).", type(exc).__name__
-            )
-            raise CacheFeatureError(
-                "NATS JetStream feature operation failed."
-            ) from None
+            logger.warning("NATS JetStream feature request failed (%s).", type(exc).__name__)
+            raise CacheFeatureError("NATS JetStream feature operation failed.") from None
         finally:
             with suppress(Exception):
                 await subscription.unsubscribe()
@@ -442,9 +436,7 @@ class NatsCoordination:
             return
         while True:
             try:
-                messages = await subscription.fetch(
-                    1, timeout=_COORDINATOR_FETCH_TIMEOUT_SECONDS
-                )
+                messages = await subscription.fetch(1, timeout=_COORDINATOR_FETCH_TIMEOUT_SECONDS)
             except asyncio.CancelledError:
                 raise
             except TimeoutError:
@@ -497,8 +489,7 @@ class NatsCoordination:
                     raise
                 except Exception as exc:
                     logger.warning(
-                        "NATS JetStream feature coordinator acknowledgement failed "
-                        "(%s).",
+                        "NATS JetStream feature coordinator acknowledgement failed (%s).",
                         type(exc).__name__,
                     )
 
@@ -530,14 +521,10 @@ class NatsCoordination:
         try:
             await self._write_operation_reply(operation, reply)
         except CacheFeatureError as exc:
-            raise _OperationReplayRequired(
-                "NATS JetStream feature outcome requires replay."
-            ) from exc
+            raise _OperationReplayRequired("NATS JetStream feature outcome requires replay.") from exc
         return operation, reply_to, reply
 
-    async def _apply_acquire(
-        self, operation: bytes, guard: int, parts: list[bytes]
-    ) -> tuple[bytes, ...]:
+    async def _apply_acquire(self, operation: bytes, guard: int, parts: list[bytes]) -> tuple[bytes, ...]:
         if len(parts) != 3:
             raise CacheFeatureError("NATS JetStream lease command is invalid.")
         subject_value, holder, ttl_value = parts
@@ -559,14 +546,10 @@ class NatsCoordination:
             str(guard).encode(),
             repr(ttl).encode(),
         )
-        written = await self._write_state(
-            subject, record, ttl=ttl, guard_sequence=guard
-        )
+        written = await self._write_state(subject, record, ttl=ttl, guard_sequence=guard)
         return _lease_reply(_unpack(written.data), written.timestamp)
 
-    async def _apply_renew(
-        self, operation: bytes, guard: int, parts: list[bytes]
-    ) -> tuple[bytes, ...]:
+    async def _apply_renew(self, operation: bytes, guard: int, parts: list[bytes]) -> tuple[bytes, ...]:
         if len(parts) != 5:
             raise CacheFeatureError("NATS JetStream lease command is invalid.")
         subject_value, holder, token, fencing_token, ttl_value = parts
@@ -582,9 +565,7 @@ class NatsCoordination:
         if not live:
             raise CacheConflictError("Lease is stale or no longer held.")
         _require_lease_state(state, holder, token, fencing_token)
-        record = _pack(
-            _STATE_LEASE, operation, holder, token, fencing_token, repr(ttl).encode()
-        )
+        record = _pack(_STATE_LEASE, operation, holder, token, fencing_token, repr(ttl).encode())
         lease_guard = _LeaseGuard(subject, current.sequence)
         written = await self._write_state(
             subject,
@@ -595,9 +576,7 @@ class NatsCoordination:
         )
         return _lease_reply(_unpack(written.data), written.timestamp)
 
-    async def _apply_release(
-        self, operation: bytes, guard: int, parts: list[bytes]
-    ) -> tuple[bytes, ...]:
+    async def _apply_release(self, operation: bytes, guard: int, parts: list[bytes]) -> tuple[bytes, ...]:
         if len(parts) != 4:
             raise CacheFeatureError("NATS JetStream lease command is invalid.")
         subject_value, holder, token, fencing_token = parts
@@ -619,9 +598,7 @@ class NatsCoordination:
         )
         return (_REPLY_DELETED,)
 
-    async def _apply_create(
-        self, operation: bytes, guard: int, parts: list[bytes]
-    ) -> tuple[bytes, ...]:
+    async def _apply_create(self, operation: bytes, guard: int, parts: list[bytes]) -> tuple[bytes, ...]:
         if len(parts) != 7:
             raise CacheFeatureError("NATS JetStream atomic command is invalid.")
         subject_value, value, ttl_value, *lease_values = parts
@@ -646,9 +623,7 @@ class NatsCoordination:
         )
         return (_REPLY_CREATED, str(written.sequence).encode())
 
-    async def _apply_swap(
-        self, operation: bytes, guard: int, parts: list[bytes]
-    ) -> tuple[bytes, ...]:
+    async def _apply_swap(self, operation: bytes, guard: int, parts: list[bytes]) -> tuple[bytes, ...]:
         if len(parts) != 8:
             raise CacheFeatureError("NATS JetStream atomic command is invalid.")
         subject_value, expected, value, ttl_value, *lease_values = parts
@@ -664,11 +639,7 @@ class NatsCoordination:
             return (_REPLY_UPDATED, str(current.sequence).encode())
         if state[0] == _STATE_COUNTER:
             raise CacheConflictError("The requested atomic key contains a counter.")
-        if (
-            len(state) != 4
-            or state[0] != _STATE_VALUE
-            or current.sequence != _command_integer(expected)
-        ):
+        if len(state) != 4 or state[0] != _STATE_VALUE or current.sequence != _command_integer(expected):
             return (_REPLY_NONE,)
         lease_guard = await self._require_lease(lease_values)
         written = await self._write_state(
@@ -680,9 +651,7 @@ class NatsCoordination:
         )
         return (_REPLY_UPDATED, str(written.sequence).encode())
 
-    async def _apply_delete(
-        self, operation: bytes, guard: int, parts: list[bytes]
-    ) -> tuple[bytes, ...]:
+    async def _apply_delete(self, operation: bytes, guard: int, parts: list[bytes]) -> tuple[bytes, ...]:
         if len(parts) != 6:
             raise CacheFeatureError("NATS JetStream atomic command is invalid.")
         subject_value, expected, *lease_values = parts
@@ -708,17 +677,13 @@ class NatsCoordination:
         )
         return (_REPLY_DELETED,)
 
-    async def _apply_increment(
-        self, operation: bytes, guard: int, parts: list[bytes]
-    ) -> tuple[bytes, ...]:
+    async def _apply_increment(self, operation: bytes, guard: int, parts: list[bytes]) -> tuple[bytes, ...]:
         if len(parts) != 3:
             raise CacheFeatureError("NATS JetStream counter command is invalid.")
         subject_value, amount_value, ttl_value = parts
         amount = _command_integer(amount_value)
         ttl = _positive_ttl(ttl_value, label="counter TTL")
-        subject = self._command_state_subject(
-            subject_value, "atomic", "internal-counter"
-        )
+        subject = self._command_state_subject(subject_value, "atomic", "internal-counter")
         current = await self._read_state(subject)
         value = 0
         if current is not None:
@@ -728,9 +693,7 @@ class NatsCoordination:
             elif state[0] == _STATE_COUNTER and state[1] == operation:
                 return (_REPLY_COUNTER, state[2], str(current.sequence).encode())
             if state and state[0] == _STATE_VALUE:
-                raise CacheConflictError(
-                    "The requested counter key contains an atomic byte value."
-                )
+                raise CacheConflictError("The requested counter key contains an atomic byte value.")
             if state and state[0] == _STATE_COUNTER:
                 if len(state) != 4:
                     raise CacheFeatureError("NATS JetStream counter state is invalid.")
@@ -744,9 +707,7 @@ class NatsCoordination:
         )
         return (_REPLY_COUNTER, str(value).encode(), str(written.sequence).encode())
 
-    async def _apply_append_stream(
-        self, operation: bytes, parts: list[bytes]
-    ) -> tuple[bytes, ...]:
+    async def _apply_append_stream(self, operation: bytes, parts: list[bytes]) -> tuple[bytes, ...]:
         if len(parts) != 7:
             raise CacheFeatureError("NATS JetStream stream command is invalid.")
         stream_name, subject, payload, *lease_values = parts
@@ -767,15 +728,11 @@ class NatsCoordination:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream stream append failed (%s).", type(exc).__name__
-            )
+            logger.warning("NATS JetStream stream append failed (%s).", type(exc).__name__)
             raise CacheFeatureError("NATS JetStream stream append failed.") from None
         sequence = getattr(acknowledgement, "seq", None)
         if not isinstance(sequence, int) or sequence <= 0:
-            raise CacheFeatureError(
-                "NATS JetStream stream append returned invalid state."
-            )
+            raise CacheFeatureError("NATS JetStream stream append returned invalid state.")
         return (_REPLY_STREAM_POSITION, str(sequence).encode())
 
     async def _require_lease(self, values: list[bytes]) -> _LeaseGuard | None:
@@ -797,9 +754,7 @@ class NatsCoordination:
     async def _lease_live(self, state: tuple[bytes, ...], timestamp: float) -> bool:
         if len(state) != 6 or state[0] != _STATE_LEASE:
             return False
-        return timestamp + _positive_ttl(state[5], label="lease TTL") > (
-            await self.runtime.refresh_time()
-        )
+        return timestamp + _positive_ttl(state[5], label="lease TTL") > (await self.runtime.refresh_time())
 
     async def _feature_state_expired(
         self,
@@ -812,9 +767,7 @@ class NatsCoordination:
             return False
         if len(state) != 4:
             raise CacheFeatureError("NATS JetStream atomic state is invalid.")
-        return timestamp + _positive_ttl(state[3], label="feature TTL") <= (
-            await self.runtime.refresh_time()
-        )
+        return timestamp + _positive_ttl(state[3], label="feature TTL") <= (await self.runtime.refresh_time())
 
     async def _claim_guard(self, operation: bytes) -> int:
         jetstream = await self.runtime.coordination_jetstream()
@@ -835,27 +788,19 @@ class NatsCoordination:
             sequence = getattr(acknowledgement, "seq", None)
             if isinstance(sequence, int) and sequence > 0:
                 return sequence
-        raise CacheFeatureError(
-            "NATS JetStream feature coordinator could not claim work."
-        )
+        raise CacheFeatureError("NATS JetStream feature coordinator could not claim work.")
 
     async def _read_state(self, subject: str) -> _StateRecord | None:
         jetstream = await self.runtime.coordination_jetstream()
         try:
-            message = await jetstream.get_last_msg(
-                self.runtime.coordination_state_stream_name, subject, direct=True
-            )
+            message = await jetstream.get_last_msg(self.runtime.coordination_state_stream_name, subject, direct=True)
         except self.runtime.not_found_error():
             return None
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream feature state read failed (%s).", type(exc).__name__
-            )
-            raise CacheFeatureError(
-                "NATS JetStream feature operation failed."
-            ) from None
+            logger.warning("NATS JetStream feature state read failed (%s).", type(exc).__name__)
+            raise CacheFeatureError("NATS JetStream feature operation failed.") from None
         sequence = getattr(message, "seq", None)
         timestamp = getattr(message, "time", None)
         data = getattr(message, "data", None)
@@ -915,20 +860,14 @@ class NatsCoordination:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
-                "NATS JetStream feature state write failed (%s).", type(exc).__name__
-            )
+            logger.warning("NATS JetStream feature state write failed (%s).", type(exc).__name__)
             try:
                 recovered = await self._read_state(subject)
             except CacheFeatureError:
-                raise _OperationReplayRequired(
-                    "NATS JetStream feature state write requires replay."
-                ) from None
+                raise _OperationReplayRequired("NATS JetStream feature state write requires replay.") from None
             if recovered is not None and recovered.data == data:
                 return recovered
-            raise CacheFeatureError(
-                "NATS JetStream feature operation failed."
-            ) from None
+            raise CacheFeatureError("NATS JetStream feature operation failed.") from None
         sequence = getattr(acknowledgement, "seq", None)
         if not isinstance(sequence, int) or sequence <= 0:
             raise CacheFeatureError("NATS JetStream feature state is invalid.")
@@ -956,9 +895,7 @@ class NatsCoordination:
                 subject,
                 data,
                 stream=self.runtime.coordination_state_stream_name,
-                headers={
-                    "Nats-TTL": nats_feature_ttl_header(_OPERATION_RESULT_TTL_SECONDS)
-                },
+                headers={"Nats-TTL": nats_feature_ttl_header(_OPERATION_RESULT_TTL_SECONDS)},
             )
         except asyncio.CancelledError:
             raise
@@ -967,9 +904,7 @@ class NatsCoordination:
                 "NATS JetStream operation result write failed (%s).",
                 type(exc).__name__,
             )
-            raise CacheFeatureError(
-                "NATS JetStream feature operation failed."
-            ) from None
+            raise CacheFeatureError("NATS JetStream feature operation failed.") from None
         sequence = getattr(acknowledgement, "seq", None)
         if not isinstance(sequence, int) or sequence <= 0:
             raise CacheFeatureError("NATS JetStream operation result is invalid.")
@@ -977,33 +912,24 @@ class NatsCoordination:
     def _state_subject(self, kind: str, owner: str | bytes, key: str | bytes) -> str:
         owner_value = owner.encode() if isinstance(owner, str) else owner
         key_value = key.encode() if isinstance(key, str) else key
-        digest = sha256(
-            kind.encode() + b"\0" + owner_value + b"\0" + key_value
-        ).hexdigest()
+        digest = sha256(kind.encode() + b"\0" + owner_value + b"\0" + key_value).hexdigest()
         return f"{self.runtime.coordination_state_subject_prefix}.{kind}.{digest}"
 
     def _operation_subject(self, operation: bytes) -> str:
         if len(operation) != 16:
             raise CacheFeatureError("NATS JetStream feature command is invalid.")
-        return (
-            f"{self.runtime.coordination_state_subject_prefix}.operation."
-            f"{operation.hex()}"
-        )
+        return f"{self.runtime.coordination_state_subject_prefix}.operation.{operation.hex()}"
 
     def _command_state_subject(self, value: bytes, *kinds: str) -> str:
         try:
             subject = value.decode()
         except UnicodeDecodeError as exc:
-            raise CacheFeatureError(
-                "NATS JetStream feature command is invalid."
-            ) from exc
+            raise CacheFeatureError("NATS JetStream feature command is invalid.") from exc
         prefix = next(
             (
                 f"{self.runtime.coordination_state_subject_prefix}.{kind}."
                 for kind in kinds
-                if subject.startswith(
-                    f"{self.runtime.coordination_state_subject_prefix}.{kind}."
-                )
+                if subject.startswith(f"{self.runtime.coordination_state_subject_prefix}.{kind}.")
             ),
             None,
         )
@@ -1015,14 +941,10 @@ class NatsCoordination:
         try:
             int(digest, 16)
         except ValueError as exc:
-            raise CacheFeatureError(
-                "NATS JetStream feature command is invalid."
-            ) from exc
+            raise CacheFeatureError("NATS JetStream feature command is invalid.") from exc
         return subject
 
-    def _lease_parts(
-        self, lease: LeaseToken | None
-    ) -> tuple[bytes, bytes, bytes, bytes]:
+    def _lease_parts(self, lease: LeaseToken | None) -> tuple[bytes, bytes, bytes, bytes]:
         if lease is None:
             return (b"", b"", b"", b"")
         lease = validate_lease_token(lease)
@@ -1034,9 +956,7 @@ class NatsCoordination:
         )
 
 
-def _lease_from_reply(
-    owner: str, resource: str, holder: str, reply: tuple[bytes, ...]
-) -> LeaseToken:
+def _lease_from_reply(owner: str, resource: str, holder: str, reply: tuple[bytes, ...]) -> LeaseToken:
     return LeaseToken(
         owner=owner,
         resource=resource,
@@ -1090,9 +1010,7 @@ def _lease_guard_headers(lease_guard: _LeaseGuard) -> dict[str, str]:
     }
 
 
-def _require_lease_state(
-    state: tuple[bytes, ...], holder: bytes, token: bytes, fencing_token: bytes
-) -> None:
+def _require_lease_state(state: tuple[bytes, ...], holder: bytes, token: bytes, fencing_token: bytes) -> None:
     if (
         len(state) != 6
         or state[0] != _STATE_LEASE
@@ -1152,9 +1070,7 @@ def _raise_reply_error(reply: tuple[bytes, ...], *, label: str) -> None:
     if reply and reply[0] == _REPLY_CONFLICT:
         if label == "lease":
             raise CacheConflictError("Lease is stale or no longer held.")
-        raise CacheConflictError(
-            f"NATS JetStream {label} operation conflicts with current state."
-        )
+        raise CacheConflictError(f"NATS JetStream {label} operation conflicts with current state.")
     raise CacheFeatureError(f"NATS JetStream {label} operation failed.")
 
 
@@ -1198,11 +1114,7 @@ def _pack(*parts: bytes) -> bytes:
 
 
 def _unpack(value: bytes) -> tuple[bytes, ...]:
-    if (
-        not isinstance(value, bytes)
-        or len(value) < len(_FRAME_MAGIC) + 1
-        or not value.startswith(_FRAME_MAGIC)
-    ):
+    if not isinstance(value, bytes) or len(value) < len(_FRAME_MAGIC) + 1 or not value.startswith(_FRAME_MAGIC):
         raise CacheFeatureError("NATS JetStream feature message is invalid.")
     count = value[len(_FRAME_MAGIC)]
     offset = len(_FRAME_MAGIC) + 1

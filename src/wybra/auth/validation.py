@@ -16,9 +16,7 @@ from wybra.core.runtime import (
 )
 from wybra.tools.validation.core import ValidationCheck, ValidationResult, record_check
 
-AUTH_SETTINGS_VALIDATION_DESCRIPTION = (
-    "auth settings are valid for the current environment"
-)
+AUTH_SETTINGS_VALIDATION_DESCRIPTION = "auth settings are valid for the current environment"
 
 
 class AuthValidationSettings(Protocol):
@@ -64,16 +62,12 @@ def validate_auth(settings: AuthValidationSettings) -> ValidationResult:
     )
     auth_environment_names = supported_auth_environment_names()
     counts = Counter(auth_environment_names)
-    duplicate_auth_environment_names = sorted(
-        name for name, count in counts.items() if count > 1
-    )
+    duplicate_auth_environment_names = sorted(name for name, count in counts.items() if count > 1)
     uniqueness_description = "auth environment variable names are unique"
     uniqueness_error = "Auth environment variable names must be unique."
     if duplicate_auth_environment_names:
         duplicate_description = ", ".join(duplicate_auth_environment_names)
-        uniqueness_description = (
-            f"{uniqueness_description} (duplicates: {duplicate_description})"
-        )
+        uniqueness_description = f"{uniqueness_description} (duplicates: {duplicate_description})"
         uniqueness_error = f"{uniqueness_error} Duplicates: {duplicate_description}"
 
     record_check(

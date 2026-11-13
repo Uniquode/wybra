@@ -19,9 +19,7 @@ from wybra.site import Site
 
 @runtime_checkable
 class ErrorHandlingCapability(Protocol):
-    async def response_for_exception(
-        self, request: Request, exc: Exception
-    ) -> Response: ...
+    async def response_for_exception(self, request: Request, exc: Exception) -> Response: ...
 
 
 async def setup_site(site: Site) -> None:
@@ -57,7 +55,5 @@ def discover_error_mappings(module_names: tuple[str, ...]) -> tuple[ErrorMapping
             continue
         raw_mappings = getattr(module, "error_mappings", ())
         if isinstance(raw_mappings, tuple | list):
-            mappings.extend(
-                mapping for mapping in raw_mappings if isinstance(mapping, ErrorMapping)
-            )
+            mappings.extend(mapping for mapping in raw_mappings if isinstance(mapping, ErrorMapping))
     return tuple(mappings)

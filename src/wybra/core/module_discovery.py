@@ -12,9 +12,7 @@ from wybra.core.diagnostics import configured_module_message, surface_message
 
 def require_configured_module(module_name: str) -> None:
     if find_module_spec(module_name) is None:
-        raise CompositionError(
-            configured_module_message(module_name, "could not be imported.")
-        )
+        raise CompositionError(configured_module_message(module_name, "could not be imported."))
 
 
 def find_module_spec(module_name: str) -> object | None:
@@ -51,9 +49,7 @@ def missing_configured_package(
     package_name: str,
 ) -> bool:
     missing_name = exc.name
-    return missing_name is not None and (
-        missing_name == package_name or package_name.startswith(f"{missing_name}.")
-    )
+    return missing_name is not None and (missing_name == package_name or package_name.startswith(f"{missing_name}."))
 
 
 __all__ = (

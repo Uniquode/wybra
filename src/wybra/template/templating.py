@@ -18,9 +18,7 @@ def build_template_loader(
     if template_root is not None:
         loaders.append(FileSystemLoader(str(template_root)))
 
-    loaders.extend(
-        PackageLoader(source.package, source.directory) for source in template_sources
-    )
+    loaders.extend(PackageLoader(source.package, source.directory) for source in template_sources)
     if not loaders:
         return DictLoader({})
     if len(loaders) == 1:

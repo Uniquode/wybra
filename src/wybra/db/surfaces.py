@@ -121,9 +121,7 @@ def discover_migration_version_locations(module_name: str) -> tuple[Path, ...]:
     if not isinstance(package_file, str) or not package_file:
         return ()
 
-    version_location = (
-        Path(package_file).resolve().parent / MIGRATION_RESOURCE_DIRECTORY
-    )
+    version_location = Path(package_file).resolve().parent / MIGRATION_RESOURCE_DIRECTORY
     if version_location.is_dir():
         return (version_location,)
 
@@ -150,9 +148,7 @@ def _model_package_has_model(package_name: str) -> bool:
 
 def _require_configured_module(module_name: str) -> None:
     if _find_module_spec(module_name) is None:
-        raise DataCompositionError(
-            configured_module_message(module_name, "could not be imported.")
-        )
+        raise DataCompositionError(configured_module_message(module_name, "could not be imported."))
 
 
 def _data_modules(module_names: tuple[str, ...]) -> tuple[str, ...]:
@@ -175,13 +171,10 @@ def _find_module_spec(module_name: str) -> object | None:
 
 def _missing_configured_package(exc: ModuleNotFoundError, package_name: str) -> bool:
     missing_name = exc.name
-    return missing_name is not None and (
-        missing_name == package_name or package_name.startswith(f"{missing_name}.")
-    )
+    return missing_name is not None and (missing_name == package_name or package_name.startswith(f"{missing_name}."))
 
 
 def _has_tortoise_model(module: object) -> bool:
     return any(
-        isinstance(value, type) and issubclass(value, Model) and value is not Model
-        for value in vars(module).values()
+        isinstance(value, type) and issubclass(value, Model) and value is not Model for value in vars(module).values()
     )

@@ -147,9 +147,7 @@ class TaskiqLifecyclePolicy:
     queue: str
     active_status_timeout_seconds: float = DEFAULT_ACTIVE_STATUS_TIMEOUT_SECONDS
     lifecycle_lease_ttl_seconds: float = DEFAULT_LIFECYCLE_LEASE_TTL_SECONDS
-    lifecycle_lease_wait_timeout_seconds: float = (
-        DEFAULT_LIFECYCLE_LEASE_WAIT_TIMEOUT_SECONDS
-    )
+    lifecycle_lease_wait_timeout_seconds: float = DEFAULT_LIFECYCLE_LEASE_WAIT_TIMEOUT_SECONDS
     projection_cas_max_attempts: int = DEFAULT_PROJECTION_CAS_MAX_ATTEMPTS
     worker_id: str | None = None
     schema_version: int = 1
@@ -163,25 +161,16 @@ class TaskiqLifecyclePolicy:
         ):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{label} must be a non-blank string.")
-        if self.worker_id is not None and (
-            not isinstance(self.worker_id, str) or not self.worker_id.strip()
-        ):
+        if self.worker_id is not None and (not isinstance(self.worker_id, str) or not self.worker_id.strip()):
             raise ValueError("Worker ID must be a non-blank string when configured.")
-        if (
-            isinstance(self.schema_version, bool)
-            or not isinstance(self.schema_version, int)
-            or self.schema_version < 1
-        ):
+        if isinstance(self.schema_version, bool) or not isinstance(self.schema_version, int) or self.schema_version < 1:
             raise ValueError("Schema version must be a positive integer.")
         if (
             isinstance(self.replay_page_limit, bool)
             or not isinstance(self.replay_page_limit, int)
             or not 1 <= self.replay_page_limit <= MAX_CACHE_FEATURE_LIMIT
         ):
-            raise ValueError(
-                "Replay page limit must be a positive integer no greater than "
-                f"{MAX_CACHE_FEATURE_LIMIT}."
-            )
+            raise ValueError(f"Replay page limit must be a positive integer no greater than {MAX_CACHE_FEATURE_LIMIT}.")
         if (
             isinstance(self.projection_cas_max_attempts, bool)
             or not isinstance(self.projection_cas_max_attempts, int)
@@ -203,12 +192,7 @@ class TaskiqLifecyclePolicy:
                 self.lifecycle_lease_wait_timeout_seconds,
             ),
         ):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int | float)
-                or not isfinite(value)
-                or value <= 0
-            ):
+            if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(value) or value <= 0:
                 raise ValueError(f"{label} must be a positive finite number.")
         object.__setattr__(self, "owner", self.owner.strip())
         object.__setattr__(self, "stream", self.stream.strip())
@@ -311,11 +295,7 @@ class CacheTaskLifecycle:
                 else:
                     existing = None
                     recovered_position = None
-        if (
-            existing is not None
-            and not refresh_abandoned_start
-            and _is_duplicate_start(existing, event)
-        ):
+        if existing is not None and not refresh_abandoned_start and _is_duplicate_start(existing, event):
             if recovered_position is None:
                 return existing
         try:
@@ -388,9 +368,7 @@ class CacheTaskLifecycle:
                 return lease
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise CacheConflictError(
-                    "Timed out waiting for task lifecycle projection."
-                )
+                raise CacheConflictError("Timed out waiting for task lifecycle projection.")
             await sleep(min(delay, remaining))
             delay = min(delay * 2, 0.25)
 
@@ -462,9 +440,7 @@ class CacheTaskLifecycle:
                 )
             except CachePositionExpiredError:
                 if restarted:
-                    raise TaskLifecycleError(
-                        "Task lifecycle history changed during replay."
-                    ) from None
+                    raise TaskLifecycleError("Task lifecycle history changed during replay.") from None
                 events.clear()
                 position = None
                 restarted = True
@@ -495,9 +471,7 @@ class CacheTaskLifecycle:
                 )
             except CachePositionExpiredError:
                 if restarted:
-                    raise TaskLifecycleError(
-                        "Task lifecycle stream changed during replay."
-                    ) from None
+                    raise TaskLifecycleError("Task lifecycle stream changed during replay.") from None
                 self._position = None
                 restarted = True
                 continue
@@ -545,8 +519,7 @@ class CacheTaskLifecycle:
             except CacheConflictError:
                 if attempt + 1 == DEFAULT_REPLAY_CONFLICT_MAX_ATTEMPTS:
                     _LOGGER.warning(
-                        "Task lifecycle replay could not acquire a projection lease "
-                        "after %s attempts.",
+                        "Task lifecycle replay could not acquire a projection lease after %s attempts.",
                         DEFAULT_REPLAY_CONFLICT_MAX_ATTEMPTS,
                     )
                     raise
@@ -570,11 +543,7 @@ class CacheTaskLifecycle:
             self._pending_failed_attempts.discard(task_id)
         for task_id in tuple(self._pending_dead_letters):
             status = await self.recovered_status(task_id)
-            if (
-                status is not None
-                and status.state is TaskState.FAILED
-                and self._retention_ttl(status) > 0
-            ):
+            if status is not None and status.state is TaskState.FAILED and self._retention_ttl(status) > 0:
                 await self.record_repair(
                     _dead_letter_event(status),
                     preserve_occurred_at=True,
@@ -630,14 +599,8 @@ class CacheTaskLifecycle:
             if status is None:
                 if previous is not None:
                     return previous
-                raise TaskLifecycleError(
-                    "Task lifecycle stream has no valid task state."
-                )
-            if (
-                current is not None
-                and previous == status
-                and previous_position == target
-            ):
+                raise TaskLifecycleError("Task lifecycle stream has no valid task state.")
+            if current is not None and previous == status and previous_position == target:
                 return status
             ttl = self._retention_ttl(status)
             if ttl == 0:
@@ -709,9 +672,7 @@ class CacheTaskLifecycle:
                 )
             except CachePositionExpiredError:
                 if position is None:
-                    raise TaskLifecycleError(
-                        "Task lifecycle stream position expired."
-                    ) from None
+                    raise TaskLifecycleError("Task lifecycle stream position expired.") from None
                 position = None
                 projection = TaskStatusProjection(retention_seconds=None)
                 if status is not None:
@@ -769,9 +730,7 @@ class CacheTaskLifecycle:
                 )
             except CachePositionExpiredError:
                 if restarted:
-                    raise TaskLifecycleError(
-                        "Task lifecycle stream changed during recovery."
-                    ) from None
+                    raise TaskLifecycleError("Task lifecycle stream changed during recovery.") from None
                 position = None
                 projection = TaskStatusProjection(retention_seconds=None)
                 if status is not None:
@@ -795,9 +754,7 @@ class CacheTaskLifecycle:
         retention = self.policy.status_retention_seconds
         if status.state not in _TERMINAL_STATES:
             retention = self.policy.active_status_timeout_seconds
-        retention_anchor = (
-            status.terminal_at if status.terminal_at is not None else status.updated_at
-        )
+        retention_anchor = status.terminal_at if status.terminal_at is not None else status.updated_at
         elapsed = max(0, self.cache_time.now() - retention_anchor)
         return max(0, retention - elapsed)
 
@@ -815,9 +772,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
             raise ValueError("Taskiq submission must not supply lifecycle metadata.")
         metadata = _metadata(message, self._lifecycle.policy)
         if retries == 0 and not metadata["submitted"]:
-            await self._lifecycle.record(
-                _event_from_metadata(metadata, TaskLifecycleKind.SUBMITTED)
-            )
+            await self._lifecycle.record(_event_from_metadata(metadata, TaskLifecycleKind.SUBMITTED))
             metadata["submitted"] = True
         elif retries:
             if not metadata["submitted"]:
@@ -852,9 +807,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
         if status is None:
             return
         if status.state is TaskState.SUBMITTED:
-            status = await self._lifecycle.record(
-                _failed_event(status, error_type="CacheWorkQueueRejectedError")
-            )
+            status = await self._lifecycle.record(_failed_event(status, error_type="CacheWorkQueueRejectedError"))
         if status.state is TaskState.FAILED:
             await self._lifecycle.record(_dead_letter_event(status))
 
@@ -900,10 +853,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
                 delivery_attempt is None
                 or delivery_identity is None
                 or status._delivery_identity != delivery_identity
-                or (
-                    status.delivery_attempt is not None
-                    and delivery_attempt < status.delivery_attempt
-                )
+                or (status.delivery_attempt is not None and delivery_attempt < status.delivery_attempt)
             )
         ):
             return
@@ -923,9 +873,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
         metadata["retry_pending"] = False
         _clear_retry_origin(metadata)
         message.labels[_LABEL] = _encode_metadata(metadata)
-        await self._lifecycle.record(
-            _event_from_metadata(metadata, TaskLifecycleKind.STARTED)
-        )
+        await self._lifecycle.record(_event_from_metadata(metadata, TaskLifecycleKind.STARTED))
         _CURRENT_EXECUTION_CONTEXT.set(self._execution_context(metadata, message))
         return message
 
@@ -964,15 +912,11 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
             return not (
                 status.attempt == origin_attempt
                 and status.delivery_attempt == origin_delivery
-                and status._delivery_identity
-                == metadata["retry_origin_delivery_identity"]
+                and status._delivery_identity == metadata["retry_origin_delivery_identity"]
                 and status.worker_id == origin_worker
                 and status.state in {TaskState.RUNNING, TaskState.RETRY_SCHEDULED}
             )
-        return not (
-            status.state is TaskState.RETRY_SCHEDULED
-            and status.attempt == metadata["attempt"] - 1
-        )
+        return not (status.state is TaskState.RETRY_SCHEDULED and status.attempt == metadata["attempt"] - 1)
 
     async def on_error(
         self,
@@ -1006,9 +950,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
         """Record successful completion when a handler intentionally omits a result."""
 
         metadata = _metadata(message, self._lifecycle.policy)
-        await self._lifecycle.record(
-            _event_from_metadata(metadata, TaskLifecycleKind.SUCCEEDED)
-        )
+        await self._lifecycle.record(_event_from_metadata(metadata, TaskLifecycleKind.SUCCEEDED))
 
     async def retry_handoff_rejected(
         self,
@@ -1060,9 +1002,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
 
         metadata = _metadata(message, self._lifecycle.policy)
         if not result.is_err:
-            await self._lifecycle.record(
-                _event_from_metadata(metadata, TaskLifecycleKind.SUCCEEDED)
-            )
+            await self._lifecycle.record(_event_from_metadata(metadata, TaskLifecycleKind.SUCCEEDED))
             return
         if not metadata["terminal_pending"]:
             return
@@ -1114,11 +1054,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
             schema_version=metadata["schema_version"],
             attempt=metadata["attempt"],
             correlation_id=UUID(metadata["correlation_id"]),
-            causation_id=(
-                UUID(metadata["causation_id"])
-                if metadata["causation_id"] is not None
-                else None
-            ),
+            causation_id=(UUID(metadata["causation_id"]) if metadata["causation_id"] is not None else None),
             idempotency_key=_optional_label_string(
                 message.labels.get(TASK_IDEMPOTENCY_KEY_LABEL),
                 label="Task idempotency key",
@@ -1145,34 +1081,22 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
             if isinstance(middleware, (SimpleRetryMiddleware, SmartRetryMiddleware))
         ]
         if len(retry_middlewares) > 1:
-            raise RuntimeError(
-                "CacheTaskiqLifecycleMiddleware supports one Taskiq retry middleware."
-            )
+            raise RuntimeError("CacheTaskiqLifecycleMiddleware supports one Taskiq retry middleware.")
         if retry_middlewares and not isinstance(
             retry_middlewares[0],
             (CacheTaskiqSimpleRetryMiddleware, CacheTaskiqSmartRetryMiddleware),
         ):
-            raise RuntimeError(
-                "CacheTaskiqLifecycleMiddleware requires a cache-aware Taskiq retry "
-                "middleware."
-            )
+            raise RuntimeError("CacheTaskiqLifecycleMiddleware requires a cache-aware Taskiq retry middleware.")
         if (
             retry_middlewares
             and isinstance(retry_middlewares[0], SmartRetryMiddleware)
             and retry_middlewares[0].schedule_source is not None
         ):
             raise RuntimeError(
-                "CacheTaskiqLifecycleMiddleware does not support SmartRetryMiddleware "
-                "scheduled retries."
+                "CacheTaskiqLifecycleMiddleware does not support SmartRetryMiddleware scheduled retries."
             )
-        if (
-            retry_middlewares
-            and middlewares.index(retry_middlewares[0]) > lifecycle_index
-        ):
-            raise RuntimeError(
-                "CacheTaskiqLifecycleMiddleware must be installed after "
-                "Taskiq retry middleware."
-            )
+        if retry_middlewares and middlewares.index(retry_middlewares[0]) > lifecycle_index:
+            raise RuntimeError("CacheTaskiqLifecycleMiddleware must be installed after Taskiq retry middleware.")
 
     def _will_retry(self, message: TaskiqMessage, exception: BaseException) -> bool:
         retry_middleware = self._retry_middleware()
@@ -1195,9 +1119,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
         if not retry_on_error:
             return False
         retries = _retries(message) + 1
-        max_retries = int(
-            message.labels.get("max_retries", retry_middleware.default_retry_count)
-        )
+        max_retries = int(message.labels.get("max_retries", retry_middleware.default_retry_count))
         return retries < max_retries
 
     def _retry_middleware(self) -> SimpleRetryMiddleware | SmartRetryMiddleware | None:
@@ -1215,12 +1137,8 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
     async def _record_retry_scheduled(self, metadata: Mapping[str, Any]) -> None:
         retry_metadata = dict(metadata)
         retry_metadata["attempt"] = retry_metadata["retry_origin_attempt"]
-        retry_metadata["delivery_attempt"] = retry_metadata[
-            "retry_origin_delivery_attempt"
-        ]
-        retry_metadata["delivery_identity"] = retry_metadata[
-            "retry_origin_delivery_identity"
-        ]
+        retry_metadata["delivery_attempt"] = retry_metadata["retry_origin_delivery_attempt"]
+        retry_metadata["delivery_identity"] = retry_metadata["retry_origin_delivery_identity"]
         retry_metadata["worker_id"] = retry_metadata["retry_origin_worker_id"]
         task_id = UUID(retry_metadata["task_id"])
         status = await self._lifecycle.recovered_status(task_id)
@@ -1234,9 +1152,7 @@ class CacheTaskiqLifecycleMiddleware(TaskiqMiddleware):
             or status.worker_id != retry_metadata["worker_id"]
         ):
             return
-        await self._lifecycle.record(
-            _event_from_metadata(retry_metadata, TaskLifecycleKind.RETRY_SCHEDULED)
-        )
+        await self._lifecycle.record(_event_from_metadata(retry_metadata, TaskLifecycleKind.RETRY_SCHEDULED))
 
 
 class CacheTaskiqSimpleRetryMiddleware(SimpleRetryMiddleware):
@@ -1460,25 +1376,15 @@ def _validate_metadata(
         or attempt < 1
         or (
             delivery_attempt is not None
-            and (
-                isinstance(delivery_attempt, bool)
-                or not isinstance(delivery_attempt, int)
-                or delivery_attempt < 1
-            )
+            and (isinstance(delivery_attempt, bool) or not isinstance(delivery_attempt, int) or delivery_attempt < 1)
         )
         or not _valid_optional_delivery_identity(delivery_identity)
         or not isinstance(metadata.get("submitted"), bool)
         or not isinstance(metadata.get("retry_pending"), bool)
         or not isinstance(terminal_pending, bool)
-        or (
-            terminal_pending
-            and (not isinstance(terminal_error_type, str) or not terminal_error_type)
-        )
+        or (terminal_pending and (not isinstance(terminal_error_type, str) or not terminal_error_type))
         or (not terminal_pending and terminal_error_type is not None)
-        or (
-            worker_id is not None
-            and (not isinstance(worker_id, str) or not worker_id.strip())
-        )
+        or (worker_id is not None and (not isinstance(worker_id, str) or not worker_id.strip()))
         or not _valid_retry_origin(
             retry_pending=metadata.get("retry_pending"),
             attempt=retry_origin_attempt,
@@ -1570,12 +1476,7 @@ def _valid_retry_origin(
     worker_id: object,
 ) -> bool:
     if retry_pending is False:
-        return (
-            attempt is None
-            and delivery_attempt is None
-            and delivery_identity is None
-            and worker_id is None
-        )
+        return attempt is None and delivery_attempt is None and delivery_identity is None and worker_id is None
     return (
         isinstance(attempt, int)
         and not isinstance(attempt, bool)
@@ -1587,9 +1488,7 @@ def _valid_retry_origin(
 
 
 def _valid_optional_delivery_attempt(value: object) -> bool:
-    return value is None or (
-        not isinstance(value, bool) and isinstance(value, int) and value >= 1
-    )
+    return value is None or (not isinstance(value, bool) and isinstance(value, int) and value >= 1)
 
 
 def _valid_optional_delivery_identity(value: object) -> bool:
@@ -1636,9 +1535,7 @@ def _event_from_metadata(
             schema_version=metadata["schema_version"],
             queue=metadata["queue"],
             correlation_id=UUID(metadata["correlation_id"]),
-            causation_id=UUID(metadata["causation_id"])
-            if metadata["causation_id"]
-            else None,
+            causation_id=UUID(metadata["causation_id"]) if metadata["causation_id"] else None,
             attempt=metadata["attempt"],
             delivery_attempt=metadata["delivery_attempt"],
             _delivery_identity=metadata["delivery_identity"],
@@ -1747,11 +1644,7 @@ def _validate_event_data(data: Mapping[str, object]) -> None:
     if progress is not None and not isinstance(progress, Mapping):
         raise ValueError("Task lifecycle envelope is invalid.")
     occurred_at = data.get("occurred_at")
-    if (
-        isinstance(occurred_at, bool)
-        or not isinstance(occurred_at, int | float)
-        or not isfinite(occurred_at)
-    ):
+    if isinstance(occurred_at, bool) or not isinstance(occurred_at, int | float) or not isfinite(occurred_at):
         raise ValueError("Task lifecycle envelope is invalid.")
 
 
@@ -1774,11 +1667,7 @@ def _validate_status_data(data: Mapping[str, object]) -> None:
     ):
         if value is None:
             continue
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int | float)
-            or not isfinite(value)
-        ):
+        if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(value):
             raise ValueError("Task status envelope is invalid.")
 
 
@@ -1788,11 +1677,7 @@ def _validate_identity_data(data: Mapping[str, object]) -> None:
         if not isinstance(value, str) or not value.strip():
             raise ValueError("Task lifecycle envelope is invalid.")
     schema_version = data.get("schema_version")
-    if (
-        isinstance(schema_version, bool)
-        or not isinstance(schema_version, int)
-        or schema_version < 1
-    ):
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int) or schema_version < 1:
         raise ValueError("Task lifecycle envelope is invalid.")
 
 
@@ -1808,9 +1693,7 @@ def _validate_optional_string(value: object) -> None:
 
 
 def _validate_optional_delivery_attempt(value: object) -> None:
-    if value is not None and (
-        isinstance(value, bool) or not isinstance(value, int) or value < 1
-    ):
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
         raise ValueError("Task lifecycle envelope is invalid.")
 
 
@@ -1863,11 +1746,7 @@ def _decode(payload: bytes, *, fields: frozenset[str]) -> dict[str, Any]:
         value = json.loads(payload)
     except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Task lifecycle envelope is invalid.") from exc
-    if (
-        not isinstance(value, dict)
-        or set(value) != fields
-        or value.get("version") != _ENVELOPE_VERSION
-    ):
+    if not isinstance(value, dict) or set(value) != fields or value.get("version") != _ENVELOPE_VERSION:
         raise ValueError("Task lifecycle envelope is invalid.")
     return value
 
@@ -1949,10 +1828,7 @@ def _is_abandoned_active_status(
     now: float,
     policy: TaskiqLifecyclePolicy,
 ) -> bool:
-    return (
-        status.state not in _TERMINAL_STATES
-        and now - status.updated_at >= policy.active_status_timeout_seconds
-    )
+    return status.state not in _TERMINAL_STATES and now - status.updated_at >= policy.active_status_timeout_seconds
 
 
 def _is_later_delivery(
@@ -1960,10 +1836,7 @@ def _is_later_delivery(
     delivery_attempt: object,
     delivery_identity: object,
 ) -> bool:
-    if (
-        status._delivery_identity is not None
-        and status._delivery_identity != delivery_identity
-    ):
+    if status._delivery_identity is not None and status._delivery_identity != delivery_identity:
         return True
     return (
         isinstance(delivery_attempt, int)

@@ -64,9 +64,7 @@ class CacheInstance:
         )
         metadata_names = tuple(metadata.name for metadata in self.feature_metadata)
         if self.features != metadata_names:
-            raise ValueError(
-                "Cache instance feature names must match its feature metadata."
-            )
+            raise ValueError("Cache instance feature names must match its feature metadata.")
 
     def optional(self, feature: type[FeatureT]) -> FeatureT | None:
         implementation = self._feature_implementations.get(feature)
@@ -83,8 +81,7 @@ class CacheInstance:
             return implementation
         feature_name = getattr(feature, "__name__", repr(feature))
         message = (
-            f"Cache {self.name!r} using backend {self.backend!r} does not provide "
-            f"required feature {feature_name!r}"
+            f"Cache {self.name!r} using backend {self.backend!r} does not provide required feature {feature_name!r}"
         )
         if consumer is not None:
             message += f" for consumer {consumer!r}"
@@ -220,13 +217,10 @@ class DefaultCachesCapability:
 
             try:
                 errors = await close_all(
-                    (lambda index=index, close=close: tracked_close(index, close))
-                    for index, close in reversed(closers)
+                    (lambda index=index, close=close: tracked_close(index, close)) for index, close in reversed(closers)
                 )
             finally:
-                self._closers = tuple(
-                    close for index, close in closers if index not in completed
-                )
+                self._closers = tuple(close for index, close in closers if index not in completed)
                 self._closed = not self._closers
             if errors:
                 raise BaseExceptionGroup("Named cache shutdown failed.", errors)
@@ -256,19 +250,14 @@ async def build_caches(
             if factories is None and instance_settings.backend == "redis":
                 factory = partial(
                     _redis_backend,
-                    url=(
-                        redis_urls.get(instance_settings.name)
-                        if redis_urls is not None
-                        else None
-                    ),
+                    url=(redis_urls.get(instance_settings.name) if redis_urls is not None else None),
                 )
             else:
                 try:
                     factory = backend_factories[instance_settings.backend]
                 except KeyError as exc:
                     raise ConfigurationError(
-                        f"No cache backend factory is registered for "
-                        f"{instance_settings.backend!r}."
+                        f"No cache backend factory is registered for {instance_settings.backend!r}."
                     ) from exc
             try:
                 backend = await factory(instance_settings)
@@ -319,10 +308,7 @@ def _registered_features(
     implementations: dict[type[object], object] = {}
     metadata_by_name: dict[str, CacheFeatureMetadata] = {}
     for registration in registrations:
-        if (
-            settings.features is not None
-            and registration.metadata.name not in settings.features
-        ):
+        if settings.features is not None and registration.metadata.name not in settings.features:
             continue
         if registration.protocol in implementations:
             raise ConfigurationError(
@@ -341,8 +327,7 @@ def _registered_features(
             )
         except TypeError as exc:
             raise ConfigurationError(
-                f"Cache feature protocol {registration.protocol.__name__!r} must "
-                "support runtime structural validation."
+                f"Cache feature protocol {registration.protocol.__name__!r} must support runtime structural validation."
             ) from exc
         if not implementation_matches:
             raise ConfigurationError(
@@ -359,9 +344,7 @@ def _registered_features(
                 f"Cache {settings.name!r} backend {settings.backend!r} did not "
                 "register configured feature(s): " + ", ".join(unavailable) + "."
             )
-    ordered_metadata = tuple(
-        metadata_by_name[name] for name in sorted(metadata_by_name)
-    )
+    ordered_metadata = tuple(metadata_by_name[name] for name in sorted(metadata_by_name))
     return MappingProxyType(implementations), ordered_metadata
 
 
@@ -383,14 +366,11 @@ async def _redis_backend(
 ) -> CacheBackend:
     if url is None and settings.requires_secret_resolution:
         raise ConfigurationError(
-            f"{settings.name!r} cache Redis connection material must be resolved "
-            "before backend construction."
+            f"{settings.name!r} cache Redis connection material must be resolved before backend construction."
         )
     resolved_url = url or settings.url
     if resolved_url is None:
-        raise ConfigurationError(
-            f"{settings.name!r} cache URL is required for the Redis backend."
-        )
+        raise ConfigurationError(f"{settings.name!r} cache URL is required for the Redis backend.")
     runtime = RedisCacheRuntime(resolved_url, settings.resolved_namespace)
     features = RedisCacheFeatures(runtime)
     selected_features = frozenset(
@@ -435,10 +415,7 @@ async def _redis_backend(
 
 async def _nats_jetstream_backend(settings: CacheSettings) -> CacheBackend:
     if not settings.servers:
-        raise ConfigurationError(
-            f"{settings.name!r} cache servers are required for the NATS JetStream "
-            "backend."
-        )
+        raise ConfigurationError(f"{settings.name!r} cache servers are required for the NATS JetStream backend.")
     runtime = NatsJetStreamRuntime(settings.servers, settings.resolved_namespace)
     features = NatsJetStreamCacheFeatures(runtime)
     registrations = features.registrations()
@@ -447,13 +424,9 @@ async def _nats_jetstream_backend(settings: CacheSettings) -> CacheBackend:
         for registration in registrations
         if settings.features is None or registration.metadata.name in settings.features
     )
-    selected_feature_names = {
-        registration.metadata.name for registration in selected_features
-    }
+    selected_feature_names = {registration.metadata.name for registration in selected_features}
     try:
-        await runtime.health_check(
-            advanced_features="schedule" in selected_feature_names
-        )
+        await runtime.health_check(advanced_features="schedule" in selected_feature_names)
         if selected_feature_names & {
             "atomic",
             "lease",
@@ -519,11 +492,7 @@ def _register_backend_closer(
 ) -> None:
     if backend.close is None:
         return
-    lifecycle_owner = (
-        backend.lifecycle_owner
-        if backend.lifecycle_owner is not None
-        else backend.close
-    )
+    lifecycle_owner = backend.lifecycle_owner if backend.lifecycle_owner is not None else backend.close
     if any(lifecycle_owner is existing_owner for existing_owner in lifecycle_owners):
         return
     lifecycle_owners.append(lifecycle_owner)

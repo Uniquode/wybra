@@ -56,8 +56,7 @@ def reject_extra_app_target(
         if _same_app_target(arg, app_target):
             continue
         raise click.UsageError(
-            "wybra-runserver owns the Uvicorn app target; pass Uvicorn options "
-            "after `--`, not another app target."
+            "wybra-runserver owns the Uvicorn app target; pass Uvicorn options after `--`, not another app target."
         )
 
 
@@ -68,9 +67,7 @@ def uvicorn_logging_config(logging_config: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(root, Mapping):
         configured_handlers = root.get("handlers")
         if isinstance(configured_handlers, list) and configured_handlers:
-            root_handlers = [
-                handler for handler in configured_handlers if isinstance(handler, str)
-            ] or root_handlers
+            root_handlers = [handler for handler in configured_handlers if isinstance(handler, str)] or root_handlers
 
     loggers = config.setdefault("loggers", {})
     if not isinstance(loggers, dict):
@@ -144,12 +141,7 @@ def effective_client_endpoint(
     if not trusted_proxy:
         return direct
 
-    return (
-        _forwarded_client_endpoint(
-            headers, fallback_port=direct.port if direct else None
-        )
-        or direct
-    )
+    return _forwarded_client_endpoint(headers, fallback_port=direct.port if direct else None) or direct
 
 
 def _direct_client_endpoint(client: tuple[str, int] | None) -> ClientEndpoint | None:
@@ -203,9 +195,7 @@ def _endpoint_from_forwarded(
     return None
 
 
-def _endpoint_from_host(
-    value: str, *, fallback_port: int | None
-) -> ClientEndpoint | None:
+def _endpoint_from_host(value: str, *, fallback_port: int | None) -> ClientEndpoint | None:
     host = value.strip()
     if not host or host.lower() == "unknown":
         return None

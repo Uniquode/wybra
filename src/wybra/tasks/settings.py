@@ -65,10 +65,7 @@ class TasksSettings(BaseSettings):
                 if not isinstance(self.cache_name, str):
                     raise ValueError("cache_name must be a string.")
                 cache_name = self.cache_name
-            if (
-                not isinstance(self.default_queue, str)
-                or not self.default_queue.strip()
-            ):
+            if not isinstance(self.default_queue, str) or not self.default_queue.strip():
                 raise ValueError("default_queue must not be blank.")
             default_queue = self.default_queue.strip()
             retry = RetryPolicy(
@@ -79,14 +76,10 @@ class TasksSettings(BaseSettings):
                 jitter_seconds=self.jitter_seconds,
             )
             if isinstance(self.status_retention_seconds, bool):
-                raise ValueError(
-                    "status_retention_seconds must be a positive finite number."
-                )
+                raise ValueError("status_retention_seconds must be a positive finite number.")
             retention = float(self.status_retention_seconds)
             if retention <= 0 or not isfinite(retention):
-                raise ValueError(
-                    "status_retention_seconds must be a positive finite number."
-                )
+                raise ValueError("status_retention_seconds must be a positive finite number.")
             if (
                 isinstance(self.worker_concurrency, bool)
                 or not isinstance(self.worker_concurrency, int)
@@ -104,13 +97,9 @@ class TasksSettings(BaseSettings):
                     raise ValueError(f"{field_name} must be a positive finite number.")
                 if value <= 0 or not isfinite(value):
                     raise ValueError(f"{field_name} must be a positive finite number.")
-            if (
-                self.visibility_timeout_seconds
-                < MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS
-            ):
+            if self.visibility_timeout_seconds < MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS:
                 raise ValueError(
-                    "visibility_timeout_seconds must be at least "
-                    f"{MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS} seconds."
+                    f"visibility_timeout_seconds must be at least {MINIMUM_TASK_VISIBILITY_TIMEOUT_SECONDS} seconds."
                 )
             for field_name, value in (
                 ("max_delivery_attempts", self.max_delivery_attempts),
@@ -119,14 +108,9 @@ class TasksSettings(BaseSettings):
                 if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                     raise ValueError(f"{field_name} must be a positive integer.")
             if self.max_delivery_attempts > MAX_TASK_DELIVERY_ATTEMPTS:
-                raise ValueError(
-                    "max_delivery_attempts must not exceed "
-                    f"{MAX_TASK_DELIVERY_ATTEMPTS}."
-                )
+                raise ValueError(f"max_delivery_attempts must not exceed {MAX_TASK_DELIVERY_ATTEMPTS}.")
             if self.max_result_bytes > MAX_TASK_RESULT_BYTES:
-                raise ValueError(
-                    f"max_result_bytes must not exceed {MAX_TASK_RESULT_BYTES}."
-                )
+                raise ValueError(f"max_result_bytes must not exceed {MAX_TASK_RESULT_BYTES}.")
             worker_id = _optional_string(self.worker_id, "worker_id")
         except ConfigurationError:
             raise

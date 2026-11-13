@@ -34,13 +34,9 @@ def _cors_headers(policy: CorsPolicy) -> tuple[tuple[str, str], ...]:
         ("Access-Control-Max-Age", str(policy.max_age)),
     ]
     if policy.allow_headers:
-        headers.append(
-            ("Access-Control-Allow-Headers", ", ".join(policy.allow_headers))
-        )
+        headers.append(("Access-Control-Allow-Headers", ", ".join(policy.allow_headers)))
     if policy.expose_headers:
-        headers.append(
-            ("Access-Control-Expose-Headers", ", ".join(policy.expose_headers))
-        )
+        headers.append(("Access-Control-Expose-Headers", ", ".join(policy.expose_headers)))
     if policy.allow_credentials:
         headers.append(("Access-Control-Allow-Credentials", "true"))
     return tuple(headers)

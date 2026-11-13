@@ -135,8 +135,7 @@ def _validate_named_cache_queue_size(
     message_max_length: int,
 ) -> None:
     maximum_item_bytes = (
-        message_max_length * WORST_CASE_JSON_BYTES_PER_CHARACTER
-        + NAMED_CACHE_QUEUE_ITEM_OVERHEAD_BYTES
+        message_max_length * WORST_CASE_JSON_BYTES_PER_CHARACTER + NAMED_CACHE_QUEUE_ITEM_OVERHEAD_BYTES
     )
     maximum_queue_bytes = 2 + queue_depth * maximum_item_bytes
     if maximum_queue_bytes > MAX_CACHE_FEATURE_PAYLOAD_BYTES:

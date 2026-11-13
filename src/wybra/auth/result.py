@@ -16,12 +16,8 @@ ERROR_INVALID_TOKEN: Final[ResultErrorType] = "invalid_token"
 ERROR_INVALID_PASSWORD: Final[ResultErrorType] = "invalid_password"
 ERROR_PASSWORD_TOO_SHORT: Final[ResultErrorType] = "password_too_short"
 ERROR_PASSWORD_TOO_WEAK: Final[ResultErrorType] = "password_too_weak"
-ERROR_AUTHENTICATION_METHOD_REQUIRED: Final[ResultErrorType] = (
-    "authentication_method_required"
-)
-ERROR_EMAIL_VERIFICATION_REQUIRED: Final[ResultErrorType] = (
-    "email_verification_required"
-)
+ERROR_AUTHENTICATION_METHOD_REQUIRED: Final[ResultErrorType] = "authentication_method_required"
+ERROR_EMAIL_VERIFICATION_REQUIRED: Final[ResultErrorType] = "email_verification_required"
 ERROR_POLICY_DISABLED: Final[ResultErrorType] = "policy_disabled"
 ERROR_TOTP_CODE_REQUIRED: Final[ResultErrorType] = "totp_code_required"
 ERROR_TOTP_INVALID: Final[ResultErrorType] = "totp_invalid"

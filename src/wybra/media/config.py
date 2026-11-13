@@ -47,9 +47,7 @@ module_config: Final = ConfigDef(
     {
         "wybra.media": ConfigGroup(
             fields=(
-                ConfigField(
-                    name="root", default=DEFAULT_MEDIA_ROOT, env=ENV_MEDIA_ROOT
-                ),
+                ConfigField(name="root", default=DEFAULT_MEDIA_ROOT, env=ENV_MEDIA_ROOT),
                 ConfigField(
                     name="mount_path",
                     default=DEFAULT_MEDIA_MOUNT_PATH,

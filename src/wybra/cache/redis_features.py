@@ -7,7 +7,6 @@ from wybra.cache.feature_contracts import (
     AtomicCacheCapability,
     CacheTimeCapability,
     LeaseCacheCapability,
-    PubSubCacheCapability,
     ScheduleCacheCapability,
     StreamCacheCapability,
     WorkQueueCacheCapability,
@@ -20,7 +19,6 @@ from wybra.cache.feature_models import (
 from wybra.cache.lifecycle import close_all, raise_cleanup_errors
 from wybra.cache.redis_atomic import RedisAtomicCache
 from wybra.cache.redis_leases import RedisLeaseCache
-from wybra.cache.redis_pubsub import RedisPubSubCache
 from wybra.cache.redis_queues import RedisWorkQueue
 from wybra.cache.redis_runtime import RedisCacheRuntime
 from wybra.cache.redis_schedules import RedisScheduleCache
@@ -55,16 +53,6 @@ REDIS_TIME_FEATURE = CacheFeatureMetadata(
         restart_recovery=False,
         horizontal_consumers=True,
         ordering_scope="provider-clock",
-    ),
-)
-REDIS_PUBSUB_FEATURE = CacheFeatureMetadata(
-    "pub-sub",
-    CacheFeatureGuarantees(
-        scope="shared",
-        durable=False,
-        restart_recovery=False,
-        horizontal_consumers=True,
-        ordering_scope="topic",
     ),
 )
 REDIS_WORK_QUEUE_FEATURE = CacheFeatureMetadata(
@@ -109,7 +97,6 @@ REDIS_CACHE_FEATURES = frozenset(
         REDIS_ATOMIC_FEATURE,
         REDIS_LEASE_FEATURE,
         REDIS_TIME_FEATURE,
-        REDIS_PUBSUB_FEATURE,
         REDIS_WORK_QUEUE_FEATURE,
         REDIS_STREAM_FEATURE,
         REDIS_SCHEDULE_FEATURE,
@@ -123,11 +110,9 @@ class RedisCacheFeatures:
     atomic: RedisAtomicCache = field(init=False)
     leases: RedisLeaseCache = field(init=False)
     time: RedisCacheTime = field(init=False)
-    pubsub: RedisPubSubCache = field(init=False)
     work_queue: RedisWorkQueue = field(init=False)
     streams: RedisStreamCache = field(init=False)
     schedules: RedisScheduleCache = field(init=False)
-    _pubsub_closed: bool = field(default=False, init=False, repr=False)
     _work_queue_closed: bool = field(default=False, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     _close_lock: asyncio.Lock = field(
@@ -140,7 +125,6 @@ class RedisCacheFeatures:
         object.__setattr__(self, "atomic", RedisAtomicCache(self.runtime))
         object.__setattr__(self, "leases", RedisLeaseCache(self.runtime))
         object.__setattr__(self, "time", RedisCacheTime(self.runtime))
-        object.__setattr__(self, "pubsub", RedisPubSubCache(self.runtime))
         object.__setattr__(self, "work_queue", RedisWorkQueue(self.runtime))
         object.__setattr__(self, "streams", RedisStreamCache(self.runtime))
         object.__setattr__(self, "schedules", RedisScheduleCache(self.runtime))
@@ -161,11 +145,6 @@ class RedisCacheFeatures:
                 CacheTimeCapability,
                 self.time,
                 REDIS_TIME_FEATURE,
-            ),
-            CacheFeatureRegistration(
-                PubSubCacheCapability,
-                self.pubsub,
-                REDIS_PUBSUB_FEATURE,
             ),
             CacheFeatureRegistration(
                 WorkQueueCacheCapability,
@@ -189,24 +168,18 @@ class RedisCacheFeatures:
             if self._closed:
                 return
 
-            async def close_pubsub() -> None:
-                await self.pubsub.close()
-                object.__setattr__(self, "_pubsub_closed", True)
-
             async def close_work_queue() -> None:
                 await self.work_queue.close()
                 object.__setattr__(self, "_work_queue_closed", True)
 
             closers = []
-            if not self._pubsub_closed:
-                closers.append(close_pubsub)
             if not self._work_queue_closed:
                 closers.append(close_work_queue)
             errors = await close_all(closers)
             object.__setattr__(
                 self,
                 "_closed",
-                self._pubsub_closed and self._work_queue_closed,
+                self._work_queue_closed,
             )
             raise_cleanup_errors("Redis cache feature cleanup failed.", errors)
 
@@ -215,7 +188,6 @@ __all__ = (
     "REDIS_ATOMIC_FEATURE",
     "REDIS_CACHE_FEATURES",
     "REDIS_LEASE_FEATURE",
-    "REDIS_PUBSUB_FEATURE",
     "REDIS_SCHEDULE_FEATURE",
     "REDIS_STREAM_FEATURE",
     "REDIS_TIME_FEATURE",

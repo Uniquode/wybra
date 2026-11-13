@@ -8,9 +8,7 @@ from fastapi.responses import Response
 from wybra.forms.capabilities import FormsCapability
 from wybra.site import Site, get_site
 
-FORMS_RESPONSE_FINALISATION_MIDDLEWARE_STATE_ATTRIBUTE = (
-    "wybra_forms_response_finalisation_middleware_registered"
-)
+FORMS_RESPONSE_FINALISATION_MIDDLEWARE_STATE_ATTRIBUTE = "wybra_forms_response_finalisation_middleware_registered"
 
 
 def register_forms_response_finalisation_middleware(site: Site) -> None:

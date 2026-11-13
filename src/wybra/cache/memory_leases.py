@@ -146,9 +146,7 @@ class InMemoryLeaseCache:
             or current.fencing_token != lease.fencing_token
             or current.holder != lease.holder
         ):
-            raise CacheConflictError(
-                f"Lease for resource {lease.resource!r} is stale or no longer held."
-            )
+            raise CacheConflictError(f"Lease for resource {lease.resource!r} is stale or no longer held.")
         return lease_key, current
 
     def _live_lease(self, lease_key: LeaseKey) -> _LeaseState | None:
@@ -160,18 +158,12 @@ class InMemoryLeaseCache:
 
     def _ensure_capacity(self) -> None:
         now = self.clock()
-        expired = [
-            lease_key
-            for lease_key, state in self._leases.items()
-            if state.expires_at <= now
-        ]
+        expired = [lease_key for lease_key, state in self._leases.items() if state.expires_at <= now]
         for lease_key in expired:
             self._leases.pop(lease_key, None)
             self._discard_idle_resource_lock(lease_key)
         if len(self._leases) >= self.max_leases:
-            raise CacheFeatureError(
-                "The in-memory lease cache has reached its configured lease capacity."
-            )
+            raise CacheFeatureError("The in-memory lease cache has reached its configured lease capacity.")
 
 
 def _lease_key(owner: str, resource: str) -> LeaseKey:

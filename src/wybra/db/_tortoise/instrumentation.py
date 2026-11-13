@@ -95,9 +95,7 @@ def _instrument_query_method(
 def _instrument_transaction_factory(
     method: _TransactionFactory,
 ) -> _TransactionFactory:
-    def wrapped(
-        *args: Any, **kwargs: Any
-    ) -> AbstractAsyncContextManager[BaseDBAsyncClient]:
+    def wrapped(*args: Any, **kwargs: Any) -> AbstractAsyncContextManager[BaseDBAsyncClient]:
         return _InstrumentedTransactionContext(method(*args, **kwargs))
 
     return wrapped

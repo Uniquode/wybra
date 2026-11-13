@@ -158,9 +158,7 @@ class TestEventDispatcher:
         selector = event_scope("sql")
 
         assert str(selector) == "sql"
-        assert (selector, "Database statement and transaction diagnostics.") in (
-            available_event_scopes()
-        )
+        assert (selector, "Database statement and transaction diagnostics.") in (available_event_scopes())
 
     @pytest.mark.anyio
     async def test_dispatches_matching_handlers_in_registration_order(self) -> None:
@@ -176,11 +174,7 @@ class TestEventDispatcher:
         await dispatcher.subscribe(EVT_SQL, root_handler)
         await dispatcher.subscribe(EVT_SQL(TRANSACTION), transaction_handler)
 
-        await dispatcher.publish(
-            TransactionStarted(
-                topic=EVT_SQL(TRANSACTION, BEGIN), transaction_id="transaction-1"
-            )
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(TRANSACTION, BEGIN), transaction_id="transaction-1"))
         await _drain_events(dispatcher)
 
         assert observed == [
@@ -198,11 +192,7 @@ class TestEventDispatcher:
 
         await dispatcher.subscribe(EVT_SQL(TRANSACTION), transaction_handler)
 
-        await dispatcher.publish(
-            TransactionOnly(
-                topic=EVT_SQL("transactionsonly"), transaction_id="transaction-1"
-            )
-        )
+        await dispatcher.publish(TransactionOnly(topic=EVT_SQL("transactionsonly"), transaction_id="transaction-1"))
 
         assert observed == []
 
@@ -223,9 +213,7 @@ class TestEventDispatcher:
         await dispatcher.subscribe(EVT_SQL, failing_handler)
         await dispatcher.subscribe(EVT_SQL, later_handler)
 
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1"))
         await _drain_events(dispatcher)
 
         assert observed == ["sql.begin"]
@@ -246,9 +234,7 @@ class TestEventDispatcher:
         await dispatcher.subscribe(EVT_SQL, waiting_handler)
 
         publication = asyncio.create_task(
-            dispatcher.publish(
-                TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
-            )
+            dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1"))
         )
         await handler_started.wait()
         assert await publication is None
@@ -269,9 +255,7 @@ class TestEventDispatcher:
         await dispatcher.subscribe(EVT_SQL, blocking_handler)
 
         started = asyncio.get_running_loop().time()
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1"))
 
         assert asyncio.get_running_loop().time() - started < 0.04
         await _drain_events(dispatcher)
@@ -292,9 +276,7 @@ class TestEventDispatcher:
             await release_handler.wait()
 
         await dispatcher.subscribe(EVT_SQL, waiting_handler)
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="first")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="first"))
         await handler_started.wait()
 
         close = asyncio.create_task(dispatcher.close())
@@ -303,9 +285,7 @@ class TestEventDispatcher:
 
         release_handler.set()
         await close
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="second")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="second"))
 
         assert delivered == ["first"]
 
@@ -332,19 +312,13 @@ class TestEventDispatcher:
                 await release_first_handler.wait()
 
         await dispatcher.subscribe(EVT_SQL, slow_handler)
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="first")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="first"))
         await first_handler_started.wait()
 
         for transaction_id in ("second", "third", "fourth"):
-            await dispatcher.publish(
-                TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id=transaction_id)
-            )
+            await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id=transaction_id))
 
-        assert any(
-            "Event delivery backlog is full" in message for message in caplog.messages
-        )
+        assert any("Event delivery backlog is full" in message for message in caplog.messages)
         release_first_handler.set()
         await _drain_events(dispatcher)
 
@@ -366,16 +340,12 @@ class TestEventDispatcher:
             description="Event handler failure",
             level="trace",
         ):
-            await dispatcher.publish(
-                TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="secret-value")
-            )
+            await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="secret-value"))
             await _drain_events(dispatcher)
 
         events = diagnostics.snapshots(EVT_EVENTS_ERRORS)[0].events
 
-        handler_failure = next(
-            event for event in events if event["name"] == "errors.handler.failed"
-        )
+        handler_failure = next(event for event in events if event["name"] == "errors.handler.failed")
         attributes = cast(dict[str, object], handler_failure["attributes"])
         assert attributes["error_type"] == "RuntimeError"
         assert "secret-value" not in str(handler_failure)
@@ -412,11 +382,7 @@ class TestEventDispatcher:
                 kind="event_test",
                 description="Default diagnostics settings",
             ):
-                await dispatcher.publish(
-                    TransactionStarted(
-                        topic=EVT_EVENTS(BEGIN), transaction_id="transaction-1"
-                    )
-                )
+                await dispatcher.publish(TransactionStarted(topic=EVT_EVENTS(BEGIN), transaction_id="transaction-1"))
                 await _drain_events(dispatcher)
 
             events = diagnostics.snapshots(EVT_EVENTS_ERRORS)[0].events
@@ -442,11 +408,7 @@ class TestEventDispatcher:
             description="Dispatch result",
             level="trace",
         ):
-            await dispatcher.publish(
-                TransactionStarted(
-                    topic=EVT_EVENTS(BEGIN), transaction_id="transaction-1"
-                )
-            )
+            await dispatcher.publish(TransactionStarted(topic=EVT_EVENTS(BEGIN), transaction_id="transaction-1"))
             await _drain_events(dispatcher)
 
         events = diagnostics.snapshots(EVT_EVENTS)[0].events
@@ -464,9 +426,7 @@ class TestEventDispatcher:
 
         await dispatcher.subscribe(EVT_EVENTS, handler)
 
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_EVENTS(BEGIN), transaction_id="transaction-1")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_EVENTS(BEGIN), transaction_id="transaction-1"))
         await _drain_events(dispatcher)
 
         assert observed == ["events.begin"]
@@ -497,35 +457,25 @@ class TestEventDispatcher:
             replayed.append(event.transaction_id)
 
         for index in range(EVENT_HISTORY_LIMIT + 1):
-            await dispatcher.publish(
-                TransactionStarted(
-                    topic=EVT_SQL(BEGIN), transaction_id=f"transaction-{index}"
-                )
-            )
+            await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id=f"transaction-{index}"))
 
         await dispatcher.subscribe(EVT_SQL, handler, history=True)
 
-        assert replayed == [
-            f"transaction-{index}" for index in range(1, EVENT_HISTORY_LIMIT + 1)
-        ]
+        assert replayed == [f"transaction-{index}" for index in range(1, EVENT_HISTORY_LIMIT + 1)]
 
     @pytest.mark.anyio
     async def test_ordinary_subscription_remains_live_only(self) -> None:
         dispatcher = EventDispatcher()
         observed: list[str] = []
 
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="before")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="before"))
 
         async def handler(event: Event) -> None:
             assert isinstance(event, TransactionStarted)
             observed.append(event.transaction_id)
 
         await dispatcher.subscribe(EVT_SQL, handler)
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="after")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="after"))
         await _drain_events(dispatcher)
 
         assert observed == ["after"]
@@ -539,9 +489,7 @@ class TestEventDispatcher:
         release_replay = asyncio.Event()
         observed: list[str] = []
 
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="retained")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="retained"))
 
         async def handler(event: Event) -> None:
             assert isinstance(event, TransactionStarted)
@@ -550,13 +498,9 @@ class TestEventDispatcher:
                 await release_replay.wait()
             observed.append(event.transaction_id)
 
-        registration = asyncio.create_task(
-            dispatcher.subscribe(EVT_SQL, handler, history=True)
-        )
+        registration = asyncio.create_task(dispatcher.subscribe(EVT_SQL, handler, history=True))
         await replay_started.wait()
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="live")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="live"))
         release_replay.set()
         await registration
         await _drain_events(dispatcher)
@@ -566,9 +510,7 @@ class TestEventDispatcher:
     @pytest.mark.anyio
     async def test_diagnostics_projection_replays_retained_events(self) -> None:
         dispatcher = EventDispatcher()
-        await dispatcher.publish(
-            TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="startup")
-        )
+        await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="startup"))
         diagnostics = DiagnosticsCapability(allowed_scopes=(EVT_SQL,), level="trace")
         activate_process_diagnostics(diagnostics)
         try:
@@ -586,9 +528,7 @@ class TestEventsSiteIntegration:
     async def test_rejects_a_second_live_site_in_the_same_process(self) -> None:
         first_site = await start(
             FastAPI(),
-            config_source=MappingConfigSource(
-                {"app": {"modules": (), "deployment_environment": "local"}}
-            ),
+            config_source=MappingConfigSource({"app": {"modules": (), "deployment_environment": "local"}}),
         )
         try:
             with pytest.raises(EventRuntimeError, match="Only one Wybra Site"):
@@ -748,9 +688,7 @@ class TestEventsSiteIntegration:
 
             await dispatcher.subscribe(EVT_SQL, handler)
 
-            await dispatcher.publish(
-                TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
-            )
+            await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1"))
         finally:
             await site.close()
 
@@ -780,9 +718,7 @@ class TestEventsSiteIntegration:
 
             await dispatcher.subscribe(EVT_SQL, handler)
 
-            await dispatcher.publish(
-                TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
-            )
+            await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1"))
         finally:
             await site.close()
 
@@ -820,11 +756,7 @@ class TestEventsSiteIntegration:
                 request_id = uuid7()
                 token = _CURRENT_CONTEXT.set(EventContext(request_id=request_id))
                 try:
-                    await dispatcher.publish(
-                        TransactionStarted(
-                            topic=EVT_SQL(BEGIN), transaction_id="transaction-1"
-                        )
-                    )
+                    await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1"))
                 finally:
                     _CURRENT_CONTEXT.reset(token)
                 await _drain_events(dispatcher)
@@ -942,9 +874,7 @@ class TestEventsSiteIntegration:
         async def cancelling_handler(event: Event) -> None:
             raise asyncio.CancelledError()
 
-        await site.require_capability(EventsCapability).subscribe(
-            EVT_REQUEST, cancelling_handler
-        )
+        await site.require_capability(EventsCapability).subscribe(EVT_REQUEST, cancelling_handler)
         try:
             with WybraTestClient(app) as client:
                 response = client.get("/events")
@@ -1055,9 +985,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        await site.require_capability(EventsCapability).subscribe(
-            EVT_CREDENTIAL, handler
-        )
+        await site.require_capability(EventsCapability).subscribe(EVT_CREDENTIAL, handler)
         user_id = str(uuid7())
         try:
             result = await verify_totp_code_for_credential(
@@ -1240,18 +1168,12 @@ class TestEventsSiteIntegration:
             ),
         )
         try:
-            await site.require_capability(EventsCapability).subscribe(
-                EVT_TEMPLATE, handler
-            )
+            await site.require_capability(EventsCapability).subscribe(EVT_TEMPLATE, handler)
             templates = DefaultTemplateCapability(template_root=tmp_path)
 
-            assert await templates.render_template("page.html", {"name": "Wybra"}) == (
-                "Hello Wybra"
-            )
+            assert await templates.render_template("page.html", {"name": "Wybra"}) == ("Hello Wybra")
             with pytest.raises(TemplateNotFound):
-                await templates.render_template(
-                    "missing.html", {"secret": "not exposed"}
-                )
+                await templates.render_template("missing.html", {"secret": "not exposed"})
         finally:
             await site.close()
 
@@ -1364,9 +1286,7 @@ class TestEventsSiteIntegration:
         async def handler(event: Event) -> None:
             observed.append(event)
 
-        await site.require_capability(EventsCapability).subscribe(
-            EVT_SITE(CAPABILITY), handler
-        )
+        await site.require_capability(EventsCapability).subscribe(EVT_SITE(CAPABILITY), handler)
         available_proxy = site.capability_proxy(ProxyTestCapability)
         unavailable_proxy = site.capability_proxy(UnavailableProxyCapability)
         capability = ProxyTestCapability()
@@ -1424,9 +1344,7 @@ class TestEventsSiteIntegration:
         try:
             dispatcher = site.require_capability(EventsCapability)
 
-            await dispatcher.publish(
-                TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1")
-            )
+            await dispatcher.publish(TransactionStarted(topic=EVT_SQL(BEGIN), transaction_id="transaction-1"))
         finally:
             await site.close()
 
@@ -1447,9 +1365,7 @@ class TestEventsSiteIntegration:
             async def handler(event: Event) -> None:
                 if not isinstance(
                     event,
-                    ModuleSetupEvent
-                    | ModuleSetupFinalisationEvent
-                    | ModulePostSetupEvent,
+                    ModuleSetupEvent | ModuleSetupFinalisationEvent | ModulePostSetupEvent,
                 ):
                     return
                 observed.append(
@@ -1644,20 +1560,17 @@ class TestEventsSiteIntegration:
         await site.close()
 
         assert any(
-            isinstance(event, CapabilityProvidedEvent)
-            and event.capability_type.endswith("ProxyTestCapability")
+            isinstance(event, CapabilityProvidedEvent) and event.capability_type.endswith("ProxyTestCapability")
             for event in observed
         )
         assert any(
-            isinstance(event, CapabilityProvidedEvent)
-            and event.capability_type.endswith("DiagnosticsCapability")
+            isinstance(event, CapabilityProvidedEvent) and event.capability_type.endswith("DiagnosticsCapability")
             for event in observed
         )
-        assert [
-            (event.phase, event.error_count)
-            for event in observed
-            if isinstance(event, SiteLifecycleEvent)
-        ] == [("startup", 0), ("shutdown", 0)]
+        assert [(event.phase, event.error_count) for event in observed if isinstance(event, SiteLifecycleEvent)] == [
+            ("startup", 0),
+            ("shutdown", 0),
+        ]
 
     @pytest.mark.anyio
     async def test_cancelling_shutdown_observer_cannot_abort_site_close(self) -> None:
@@ -1675,9 +1588,7 @@ class TestEventsSiteIntegration:
             if isinstance(event, SiteLifecycleEvent) and event.phase == "shutdown":
                 raise asyncio.CancelledError()
 
-        await site.require_capability(EventsCapability).subscribe(
-            EVT_SITE, cancelling_handler
-        )
+        await site.require_capability(EventsCapability).subscribe(EVT_SITE, cancelling_handler)
 
         await site.close()
 
@@ -1728,10 +1639,6 @@ class TestEventsSiteIntegration:
         assert scopes.index("request.started") < scopes.index("sql.statement")
         assert scopes.index("sql.statement") < scopes.index("request.completed")
         assert any(isinstance(event, DatabaseStatementEvent) for event in observed)
-        request_ids = {
-            event.context.request_id
-            for event in observed
-            if event.context and event.context.request_id
-        }
+        request_ids = {event.context.request_id for event in observed if event.context and event.context.request_id}
         assert len(request_ids) == 1
         assert next(iter(request_ids)).version == 7

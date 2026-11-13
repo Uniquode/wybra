@@ -16,9 +16,7 @@ from wybra.template.context import (
 )
 from wybra.template.discovery import context_providers_from_modules
 
-TEMPLATE_CONTEXT_MIDDLEWARE_STATE_ATTRIBUTE = (
-    "wybra_template_context_middleware_registered"
-)
+TEMPLATE_CONTEXT_MIDDLEWARE_STATE_ATTRIBUTE = "wybra_template_context_middleware_registered"
 TEMPLATE_CONTEXT_PROVIDERS_STATE_ATTRIBUTE = "wybra_template_context_providers"
 API_PATH_PREFIX = "/api"
 
@@ -55,9 +53,7 @@ async def template_context_middleware(
 
 async def _should_resolve_template_context(request: Request) -> bool:
     path = request.url.path
-    static_mount_path = await _optional_static_mount_path(
-        get_site(request.app).capability_proxy(StaticAssetCapability)
-    )
+    static_mount_path = await _optional_static_mount_path(get_site(request.app).capability_proxy(StaticAssetCapability))
     is_static_path = static_mount_path is not None and _matches_path_prefix(
         path,
         static_mount_path,
